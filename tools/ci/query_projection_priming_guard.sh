@@ -58,7 +58,15 @@ identity_oauth_hits="$(
     || true
 )"
 
-if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${chat_route_policy_endpoint_hits}${identity_oauth_hits}" ]]; then
+responses_completion_polling_hits="$(
+  rg -n "LlmSessionCompletionObserver|WaitForCompletionAsync|RecordCompletionAndReadAsync|response_completion_not_observed|Task\\.Delay\\([^\\n]*50" \
+    src/platform/Aevatar.GAgentService.Application/Responses \
+    test/Aevatar.GAgentService.Tests/Application/ResponsesCommandFacadeTests.cs \
+    test/Aevatar.Hosting.Tests/MainnetResponsesEndpointsTests.cs \
+    || true
+)"
+
+if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${chat_route_policy_endpoint_hits}${identity_oauth_hits}${responses_completion_polling_hits}" ]]; then
   if [[ -n "${hits}" ]]; then
     echo "${hits}"
   fi
@@ -81,6 +89,10 @@ if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${
   if [[ -n "${identity_oauth_hits}" ]]; then
     echo "${identity_oauth_hits}"
     echo "Identity OAuth endpoints/bootstrap must use typed CQRS dispatch and accepted/pending ACKs, not projection readiness, rebuild observation, or readmodel polling."
+  fi
+  if [[ -n "${responses_completion_polling_hits}" ]]; then
+    echo "${responses_completion_polling_hits}"
+    echo "Responses completion record is a write-side command; create request paths must not poll read models for completion."
   fi
   echo "Query/read paths must not trigger projection priming, activation, or lifecycle control."
   exit 1
