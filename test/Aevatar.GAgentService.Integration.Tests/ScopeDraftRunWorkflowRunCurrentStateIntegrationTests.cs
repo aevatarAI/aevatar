@@ -33,6 +33,9 @@ namespace Aevatar.GAgentService.Integration.Tests;
 
 public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
 {
+    private static readonly TimeSpan ReadModelVisibilityTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ReadModelVisibilityPollInterval = TimeSpan.FromMilliseconds(50);
+
     [Fact]
     public async Task DraftRunEndpoint_ShouldExposeCompletedWorkflowActorCurrentStateViaWorkflowActorCurrentState()
     {
@@ -50,18 +53,54 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         var actorId = ExtractRunContextActorId(body);
         actorId.Should().NotBeNullOrWhiteSpace();
 
-        using var snapshotResponse = await host.Client.GetAsync($"/api/workflow-actors/{Uri.EscapeDataString(actorId!)}/current-state");
-        var snapshot = await snapshotResponse.Content.ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>();
-
-        snapshotResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var snapshot = await WaitForCompletedSnapshotAsync(host.Client, actorId!, CancellationToken.None);
         snapshot.Should().NotBeNull();
-        snapshot!.ActorId.Should().Be(actorId);
+        snapshot.ActorId.Should().Be(actorId);
         snapshot.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.Completed);
         snapshot.LastSuccess.Should().BeTrue();
         snapshot.LastOutput.Should().Be("y\nz");
         snapshot.LastError.Should().BeEmpty();
         snapshot.RequestedSteps.Should().Be(0);
         snapshot.CompletedSteps.Should().Be(0);
+    }
+
+    private static async Task<WorkflowActorCurrentStateHttpResponse> WaitForCompletedSnapshotAsync(
+        HttpClient client,
+        string actorId,
+        CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(ReadModelVisibilityTimeout);
+
+        WorkflowActorCurrentStateHttpResponse? lastSnapshot = null;
+        HttpStatusCode? lastStatus = null;
+        try
+        {
+            while (true)
+            {
+                using var snapshotResponse = await client.GetAsync(
+                    $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state",
+                    timeout.Token);
+                lastStatus = snapshotResponse.StatusCode;
+                if (snapshotResponse.StatusCode == HttpStatusCode.OK)
+                {
+                    lastSnapshot = await snapshotResponse.Content
+                        .ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>(timeout.Token);
+                    if (lastSnapshot?.CompletionStatus == WorkflowRunCompletionStatus.Completed)
+                        return lastSnapshot;
+                }
+
+                await Task.Delay(ReadModelVisibilityPollInterval, timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                "Timed out waiting for workflow actor current-state read model to reach Completed. " +
+                $"actor_id={actorId}, last_status={(int?)lastStatus}, " +
+                $"last_completion_status={lastSnapshot?.CompletionStatus.ToString() ?? "<none>"}, " +
+                $"last_state_version={lastSnapshot?.StateVersion.ToString() ?? "<none>"}");
+        }
     }
 
     private static string? ExtractRunContextActorId(string sseBody)
