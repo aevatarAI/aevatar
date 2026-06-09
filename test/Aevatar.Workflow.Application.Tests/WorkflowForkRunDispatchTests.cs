@@ -96,6 +96,28 @@ public sealed class WorkflowForkRunDispatchTests
         provisioningPort.CreateRunBindings.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task DispatchAsync_WhenTargetDispatchThrows_ShouldDestroyCreatedActorsInReverseDistinctOrder()
+    {
+        var seedPort = new StaticSeedQueryPort(CreateSeedView());
+        var provisioningPort = new RecordingRunProvisioningPort
+        {
+            CreatedActorIds = ["definition-actor-1", "run-actor-1", "run-actor-1"],
+        };
+        var dispatchPort = new ThrowingActorDispatchPort(new InvalidOperationException("inbox closed"));
+        var service = CreateDispatchService(seedPort, provisioningPort, dispatchPort);
+
+        var result = await service.DispatchAsync(
+            new WorkflowForkRunCommand("source-run", "step-b"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Code.Should().Be(WorkflowForkRunStartErrorCode.DispatchFailed);
+        result.Error.Reason.Should().Contain("inbox closed");
+        provisioningPort.CreateRunBindings.Should().ContainSingle();
+        provisioningPort.DestroyedActorIds.Should().Equal("run-actor-1", "definition-actor-1");
+    }
+
     private static ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> CreateDispatchService(
         IWorkflowRunSeedQueryPort seedPort,
         RecordingRunProvisioningPort provisioningPort,
@@ -144,6 +166,8 @@ public sealed class WorkflowForkRunDispatchTests
     private sealed class RecordingRunProvisioningPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public List<WorkflowDefinitionBinding> CreateRunBindings { get; } = [];
+        public List<string> CreatedActorIds { get; init; } = ["run-actor-1"];
+        public List<string> DestroyedActorIds { get; } = [];
 
         public Task<WorkflowRunCreationReceipt> CreateRunAsync(
             WorkflowDefinitionBinding definition,
@@ -154,11 +178,15 @@ public sealed class WorkflowForkRunDispatchTests
             return Task.FromResult(new WorkflowRunCreationReceipt(
                 "run-actor-1",
                 "definition-actor-1",
-                ["run-actor-1"]));
+                CreatedActorIds));
         }
 
-        public Task DestroyAsync(string actorId, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task DestroyAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            DestroyedActorIds.Add(actorId);
+            return Task.CompletedTask;
+        }
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
             string workflowYaml,
@@ -186,6 +214,20 @@ public sealed class WorkflowForkRunDispatchTests
                 DateTimeOffset.UtcNow,
                 actorId,
                 envelope.Propagation?.CorrelationId ?? string.Empty));
+        }
+    }
+
+    private sealed class ThrowingActorDispatchPort(Exception exception) : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            throw exception;
         }
     }
 }

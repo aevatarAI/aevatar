@@ -11,7 +11,6 @@ using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Application.RunForks;
@@ -216,9 +215,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandTargetResolver<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunStartError>) &&
             x.ImplementationType == typeof(WorkflowForkRunCommandTargetResolver));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowRunSeedQueryPort) &&
-            x.ImplementationType == typeof(WorkflowRunSeedQueryPort));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(IWorkflowRunSeedQueryPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
             x.ImplementationType == typeof(WorkflowForkRunDispatchPipeline));
@@ -447,66 +445,6 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public async Task WorkflowRunSeedQueryPort_ShouldBuildSeedFromBindingAndRunArtifactReadModels()
-    {
-        var bindingReader = new StaticRunBindingReader([
-            new WorkflowActorBinding(
-                WorkflowActorKind.Run,
-                "run-actor-1",
-                "definition-actor-1",
-                "source-run",
-                "direct",
-                "name: direct",
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["child"] = "name: child",
-                },
-                "scope-1"),
-        ]);
-        var reportPort = new StaticArtifactQueryPort(new WorkflowRunReport
-        {
-            WorkflowName = "direct",
-            CompletionStatus = WorkflowRunCompletionStatus.Failed,
-            Input = "seed-input",
-            FinalError = "boom",
-            Steps =
-            [
-                new WorkflowRunStepTrace
-                {
-                    StepId = "step-a",
-                    CompletedAt = DateTimeOffset.UtcNow,
-                    Success = true,
-                    AssignedVariable = "step-a-output",
-                    AssignedValue = "alpha",
-                },
-                new WorkflowRunStepTrace
-                {
-                    StepId = "step-b",
-                    CompletedAt = DateTimeOffset.UtcNow.AddSeconds(1),
-                    Success = false,
-                },
-            ],
-        });
-        var port = new WorkflowRunSeedQueryPort(bindingReader, reportPort);
-
-        var seed = await port.GetResumeSeedAsync(" source-run ", CancellationToken.None);
-
-        seed.Should().NotBeNull();
-        seed!.SourceRunId.Should().Be("source-run");
-        seed.WorkflowName.Should().Be("direct");
-        seed.WorkflowYaml.Should().Be("name: direct");
-        seed.InlineWorkflowYamls.Should().Contain("child", "name: child");
-        seed.Variables.Should().Contain("input", "seed-input");
-        seed.Variables.Should().Contain("step-a-output", "alpha");
-        seed.CompletedStepIds.Should().BeEquivalentTo(["step-a", "step-b"]);
-        seed.LastFailedStepId.Should().Be("step-b");
-        seed.Status.Should().Be("failed");
-        seed.FinalError.Should().Be("boom");
-        seed.ScopeId.Should().Be("scope-1");
-        reportPort.RequestedWorkflowRunIds.Should().ContainSingle().Which.Should().Be("run-actor-1");
-    }
-
-    [Fact]
     public void EnvelopeFactory_ShouldMaterializeTrustedControlAsTypedProtoFields_NotMetadata()
     {
         var services = new ServiceCollection();
@@ -636,57 +574,4 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         whiteSpaceSession.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-3");
     }
 
-    private sealed class StaticRunBindingReader(IReadOnlyList<WorkflowActorBinding> bindings) : IWorkflowRunBindingReader
-    {
-        public Task<IReadOnlyList<WorkflowActorBinding>> ListByRunIdAsync(
-            string runId,
-            int take = 20,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(bindings);
-        }
-
-        public Task<IReadOnlyList<WorkflowActorBinding>> QueryAsync(
-            WorkflowRunBindingQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorBinding>>([]);
-    }
-
-    private sealed class StaticArtifactQueryPort(WorkflowRunReport? report) : IWorkflowExecutionArtifactQueryPort
-    {
-        public List<string> RequestedWorkflowRunIds { get; } = [];
-
-        public bool WorkflowArtifactQueryEnabled => true;
-
-        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(
-            string workflowRunId,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            RequestedWorkflowRunIds.Add(workflowRunId);
-            return Task.FromResult(report);
-        }
-
-        public Task<IReadOnlyList<WorkflowRunTimelineExportItem>> ListWorkflowRunTimelineExportAsync(
-            string workflowRunId,
-            int take = 200,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowRunTimelineExportItem>>([]);
-
-        public Task<IReadOnlyList<WorkflowRunGraphExportEdge>> GetWorkflowRunGraphExportEdgesAsync(
-            string workflowRunId,
-            int take = 200,
-            WorkflowRunGraphExportQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowRunGraphExportEdge>>([]);
-
-        public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(
-            string workflowRunId,
-            int depth = 2,
-            int take = 200,
-            WorkflowRunGraphExportQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowRunGraphExportSubgraph());
-    }
 }

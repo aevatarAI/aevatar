@@ -116,8 +116,8 @@ public sealed class IdempotentStepExecutionTests
             },
         };
         start.ResumeSeed.Variables["input"] = "seed-input";
-        start.ResumeSeed.Variables["step-a-output"] = "alpha";
-        start.Parameters["topic"] = "fresh-topic";
+        start.ResumeSeed.Variables["step_a_output"] = "alpha";
+        start.ResumeSeed.Variables["topic"] = "seed-topic";
 
         await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
 
@@ -128,11 +128,13 @@ public sealed class IdempotentStepExecutionTests
             .Single();
         request.StepId.Should().Be("step-b");
         request.Input.Should().Be("seed-input");
+        request.Parameters["summary"].Should().Be("alpha:seed-topic:seed-input");
+        StepRequests(ctx).Should().NotContain(x => x.StepId == "step-a");
 
         var state = host.States["workflow_execution_kernel"].Unpack<WorkflowExecutionKernelState>();
-        state.Variables["step-a-output"].Should().Be("alpha");
+        state.Variables["step_a_output"].Should().Be("alpha");
         state.Variables["input"].Should().Be("seed-input");
-        state.Variables["topic"].Should().Be("fresh-topic");
+        state.Variables["topic"].Should().Be("seed-topic");
     }
 
     [Fact]
