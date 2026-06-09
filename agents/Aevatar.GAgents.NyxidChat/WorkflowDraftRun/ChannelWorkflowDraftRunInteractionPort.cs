@@ -1,9 +1,6 @@
-using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.Workflow.Application.Abstractions.Runs;
-using Google.Protobuf;
+using Aevatar.GAgents.NyxidChat;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -11,23 +8,20 @@ namespace Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 
 public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDraftRunInteractionPort
 {
-    private readonly IWorkflowChatRunInteractionPort? _workflowInteractionPort;
+    private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
-    private readonly WorkflowDraftRunReplyRenderer _renderer;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ChannelWorkflowDraftRunInteractionPort> _logger;
 
     public ChannelWorkflowDraftRunInteractionPort(
+        IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
-        WorkflowDraftRunReplyRenderer renderer,
         ILogger<ChannelWorkflowDraftRunInteractionPort> logger,
-        IWorkflowChatRunInteractionPort? workflowInteractionPort = null,
         TimeProvider? timeProvider = null)
     {
+        _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
-        _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _workflowInteractionPort = workflowInteractionPort;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -35,176 +29,49 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        if (_workflowInteractionPort is null)
+        var runId = ChannelWorkflowDraftRunId.Parse(request.RunId, nameof(request.RunId));
+        var actorId = ChannelWorkflowDraftRunActorIds.ForRun(runId);
+        var actor = await _actorRuntime.CreateAsync<ChannelWorkflowDraftRunGAgent>(actorId, ct).ConfigureAwait(false);
+
+        var commandId = BuildStartCommandId(runId);
+        var command = new ChannelWorkflowDraftRunStartRequested
         {
-            await DispatchReadyAsync(
-                request,
-                BuildFailure("workflow_interaction_port_unavailable", "Workflow interaction service is unavailable."),
-                ct).ConfigureAwait(false);
-            return;
-        }
+            Request = request.Clone(),
+            RunId = runId.Value,
+        };
+        command.Request.RunId = runId.Value;
 
-        var command = BuildCommand(request);
-        var accumulatedText = string.Empty;
-        try
+        var envelope = new EventEnvelope
         {
-            var result = await _workflowInteractionPort.ExecuteAsync(
-                    command,
-                    async (frame, token) =>
-                    {
-                        var rendered = _renderer.Render(frame, accumulatedText);
-                        if (rendered is null)
-                            return;
-
-                        accumulatedText = rendered.Text;
-                        if (rendered.IsTerminal)
-                        {
-                            await DispatchReadyAsync(request, rendered, token).ConfigureAwait(false);
-                            return;
-                        }
-
-                        await DispatchChunkAsync(request, accumulatedText, token).ConfigureAwait(false);
-                    },
-                    onAcceptedAsync: null,
-                    ct)
-                .ConfigureAwait(false);
-
-            if (!result.Succeeded)
+            Id = commandId,
+            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            Payload = Any.Pack(command),
+            Route = EnvelopeRouteSemantics.CreateDirect("channel-workflow-draft-run-dispatcher", actor.Id),
+            Propagation = new EnvelopePropagation
             {
-                await DispatchReadyAsync(
-                    request,
-                    BuildFailure(
-                        $"workflow_start_failed:{result.Error}",
-                        $"Workflow start failed: {result.Error}"),
-                    ct).ConfigureAwait(false);
-                return;
-            }
-
-            if (result.FinalizeResult is null || !result.FinalizeResult.Completed)
-            {
-                await DispatchReadyAsync(
-                    request,
-                    BuildFailure("workflow_completion_unknown", "Workflow ended without a terminal frame."),
-                    ct).ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "Workflow draft-run interaction failed: runId={RunId} correlation={CorrelationId}",
-                request.RunId,
-                request.CorrelationId);
-            await DispatchReadyAsync(
-                request,
-                BuildFailure("workflow_draft_run_exception", "Workflow draft-run failed."),
-                CancellationToken.None).ConfigureAwait(false);
-        }
-    }
-
-    private static WorkflowChatRunRequest BuildCommand(NeedsWorkflowDraftRunEvent request)
-    {
-        var source = request.WorkflowSource ?? new ChannelWorkflowDraftRunSource();
-        var headers = request.Headers.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-        return new WorkflowChatRunRequest(
-            Prompt: request.Prompt ?? string.Empty,
-            Source: WorkflowChatSource.DefinitionActor(source.DefinitionActorId, source.WorkflowName),
-            SessionId: request.RunId,
-            Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["channel.registration_id"] = request.RegistrationId ?? string.Empty,
-                ["channel.correlation_id"] = request.CorrelationId ?? string.Empty,
+                CorrelationId = string.IsNullOrWhiteSpace(request.CorrelationId)
+                    ? runId.Value
+                    : request.CorrelationId.Trim(),
             },
-            ScopeId: source.ScopeId,
-            CallerCredential: new WorkflowCallerCredential(request.NyxUserAccessToken),
-            Headers: headers,
-            CommandIdSeed: request.RunId,
-            CorrelationIdSeed: request.CorrelationId);
-    }
-
-    private async Task DispatchChunkAsync(
-        NeedsWorkflowDraftRunEvent request,
-        string accumulatedText,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(accumulatedText))
-            return;
-
-        await DispatchToConversationAsync(
-            request,
-            new LlmReplyStreamChunkEvent
+            Runtime = new EnvelopeRuntime
             {
-                CorrelationId = request.CorrelationId,
-                RegistrationId = request.RegistrationId,
-                Activity = request.Activity?.Clone() ?? new ChatActivity(),
-                AccumulatedText = accumulatedText,
-                ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                ReplyToken = request.ReplyToken,
-                ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
+                Deduplication = new DeliveryDeduplication
+                {
+                    OperationId = commandId,
+                },
             },
-            ct).ConfigureAwait(false);
-    }
-
-    private async Task DispatchReadyAsync(
-        NeedsWorkflowDraftRunEvent request,
-        WorkflowDraftRunRenderedFrame rendered,
-        CancellationToken ct)
-    {
-        var ready = new LlmReplyReadyEvent
-        {
-            CorrelationId = request.CorrelationId,
-            RunId = request.RunId,
-            RegistrationId = request.RegistrationId,
-            Activity = request.Activity?.Clone() ?? new ChatActivity(),
-            Outbound = new MessageContent { Text = rendered.Text },
-            TerminalState = rendered.IsFailure ? LlmReplyTerminalState.Failed : LlmReplyTerminalState.Completed,
-            ErrorCode = rendered.ErrorCode,
-            ErrorSummary = rendered.IsFailure ? rendered.Text : string.Empty,
-            ReadyAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-            ReplyToken = request.ReplyToken,
-            ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
         };
 
-        if (!rendered.IsFailure)
-        {
-            ready.AppendedHistory.Add(new ConversationHistoryEntry
-            {
-                Role = "assistant",
-                Content = rendered.Text,
-            });
-        }
+        await _actorDispatchPort.DispatchAsync(actor.Id, envelope, ct).ConfigureAwait(false);
 
-        await DispatchToConversationAsync(request, ready, ct).ConfigureAwait(false);
+        _logger.LogInformation(
+            "Accepted workflow draft run for actor dispatch: runId={RunId} actorId={ActorId} commandId={CommandId} target={TargetActorId}",
+            runId.Value,
+            actor.Id,
+            commandId,
+            request.TargetActorId);
     }
 
-    private async Task DispatchToConversationAsync(
-        NeedsWorkflowDraftRunEvent request,
-        IMessage payload,
-        CancellationToken ct)
-    {
-        var targetActorId = request.TargetActorId;
-        if (string.IsNullOrWhiteSpace(targetActorId))
-            throw new InvalidOperationException("Workflow draft-run request target actor id is required.");
-
-        await _actorDispatchPort.DispatchAsync(
-                targetActorId,
-                new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-                    Payload = Any.Pack(payload),
-                    Route = EnvelopeRouteSemantics.CreateDirect(
-                        "channel-workflow-draft-run-interaction-port",
-                        targetActorId),
-                    Propagation = new EnvelopePropagation
-                    {
-                        CorrelationId = request.CorrelationId,
-                    },
-                },
-                ct)
-            .ConfigureAwait(false);
-    }
-
-    private static WorkflowDraftRunRenderedFrame BuildFailure(string errorCode, string text) =>
-        new(text, true, true, errorCode);
+    private static string BuildStartCommandId(ChannelWorkflowDraftRunId runId) =>
+        $"workflow-draft-run-start:{runId.Value}";
 }

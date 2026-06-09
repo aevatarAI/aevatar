@@ -854,9 +854,9 @@ ConversationGAgent.HandleTurnCompletedAsync(cmd: ConversationTurnCompleted):
 
 Nyx relay 中明确的 workflow-run 文本意图不走普通 LLM / tool selection，也不复用 accepted-only `aevatar_start_workflow` 结果作为用户可见完成态。`ChannelConversationTurnRunner` 只负责确定性 admission：解析窄语法、读取 scope 内 workflow 定义、确认 runtime-only Nyx 用户凭据存在，然后产出强类型 `NeedsWorkflowDraftRunEvent`。不匹配或不满足准入条件时，runner 只能返回普通回复或继续既有路径，不能偷偷降级成工具选择。
 
-`ConversationGAgent` 是 draft-run channel reply lifecycle 的权威拥有者。它把 `NeedsWorkflowDraftRunEvent` 写入 `pending_workflow_draft_run_requests` 时只保留可持久化字段：conversation、workflow source、prompt、headers、run id 等；reply token 与 Nyx user access token 只能留在 dispatch copy 中，通过 `IChannelWorkflowDraftRunInteractionPort` 发给 NyxidChat runtime。actor 重新激活后，如果只剩 scrubbed pending state，就必须诚实失败并清理 pending，而不是用 query fallback 或 event replay 临时重建 token。
+`ConversationGAgent` 是 draft-run channel reply lifecycle 的权威拥有者。它把 `NeedsWorkflowDraftRunEvent` 写入 `pending_workflow_draft_run_requests` 时只保留可持久化字段：conversation、workflow source、prompt、headers、run id 等；reply token 与 Nyx user access token 只能留在 dispatch copy 中，通过 accepted-only `IChannelWorkflowDraftRunInteractionPort` 投递给 NyxidChat runtime。actor 重新激活后，如果只剩 scrubbed pending state，就必须诚实失败并清理 pending，而不是用 query fallback 或 event replay 临时重建 token。
 
-NyxidChat 的 draft-run interaction port 只调用现有 `IWorkflowChatRunInteractionPort`，并把 workflow frames 渲染成已有 channel streaming carriers：增量帧回投 `LlmReplyStreamChunkEvent`，终态帧回投 `LlmReplyReadyEvent`。这些事件都发回同一个 `ConversationGAgent` actor，由它继续执行去重、流式合并、最终回复发送、history append 与 pending cleanup；workflow runtime 不直接操作 channel outbound，也不新增第二条 relay 回复链路。
+NyxidChat 的 draft-run interaction port 不在 `ConversationGAgent` turn 内执行 workflow；它创建/定位 run-scoped `ChannelWorkflowDraftRunGAgent` 并投递 `ChannelWorkflowDraftRunStartRequested` 后返回 accepted。`ChannelWorkflowDraftRunGAgent` 作为单次 draft-run owner 调用现有 `IWorkflowChatRunInteractionPort`，并把 workflow frames 渲染成已有 channel streaming carriers：增量帧回投 `LlmReplyStreamChunkEvent`，终态帧回投 `LlmReplyReadyEvent`。这些事件都发回同一个 `ConversationGAgent` actor，由它继续执行去重、流式合并、最终回复发送、history append 与 pending cleanup；workflow runtime 不直接操作 channel outbound，也不新增第二条 relay 回复链路。
 
 ### 5.7 Middleware Pipeline（窄范围）
 

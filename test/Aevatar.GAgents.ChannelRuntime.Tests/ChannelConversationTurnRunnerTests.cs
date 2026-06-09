@@ -34,8 +34,6 @@ public sealed class ChannelConversationTurnRunnerTests
     [Theory]
     [InlineData("/workflow run daily-greeting")]
     [InlineData("/run-workflow daily-greeting")]
-    [InlineData("跑一下 daily-greeting 的 workflow")]
-    [InlineData("run daily-greeting workflow")]
     public async Task RunInboundAsync_ShouldRequestWorkflowDraftRun_ForExplicitWorkflowIntent(string text)
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -93,8 +91,11 @@ public sealed class ChannelConversationTurnRunnerTests
         adapter.Replies[0].ReplyText.Should().Contain("NyxID");
     }
 
-    [Fact]
-    public async Task RunInboundAsync_ShouldUseNormalLlmPath_ForAevatarStartWorkflowToolMention()
+    [Theory]
+    [InlineData("aevatar_start_workflow daily-greeting")]
+    [InlineData("跑一下 daily-greeting 的 workflow")]
+    [InlineData("run daily-greeting workflow")]
+    public async Task RunInboundAsync_ShouldUseNormalLlmPath_ForUnregisteredWorkflowText(string text)
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -103,7 +104,7 @@ public sealed class ChannelConversationTurnRunnerTests
 
         var result = await runner.RunInboundAsync(
             BuildInboundActivity(
-                "aevatar_start_workflow daily-greeting",
+                text,
                 "msg-workflow-tool-name",
                 transportExtras: new TransportExtras
                 {
@@ -3061,6 +3062,8 @@ public sealed class ChannelConversationTurnRunnerTests
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
             .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory())
+            .AddSingleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>()
+            .AddSingleton<ChannelSlashCommandRegistry>()
             .AddSingleton<ChannelWorkflowDraftRunIntentParser>()
             .AddSingleton(sp => new ChannelWorkflowDraftRunAdmission(
                 sp.GetRequiredService<ChannelWorkflowDraftRunIntentParser>(),
