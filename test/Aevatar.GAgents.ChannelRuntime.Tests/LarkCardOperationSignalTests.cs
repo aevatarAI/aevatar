@@ -329,12 +329,15 @@ public sealed class LarkCardOperationSignalTests
         var scheduler = new RecordingCallbackScheduler();
         var runner = new RecordingCardRunner();
         var store = new InMemoryEventStore();
+        var eventPublisher = new SelfHandlingEventPublisher(autoHandleSelfEvents: false);
         var agent = CreateAgent(
             "conv-lark-card-finalize-ready-token",
             runner,
             new RecordingActorDispatchPort(),
             store,
-            scheduler);
+            scheduler,
+            eventPublisher);
+        eventPublisher.SelfTarget = agent;
         var chunk = CreateCardStreamChunk("corr-card-finalize-ready-token", "relay-msg-1", "hello");
 
         await agent.HandleEventAsync(Envelope(agent.Id, chunk));
@@ -373,6 +376,16 @@ public sealed class LarkCardOperationSignalTests
             ReadyAtUnixMs = 100,
         });
 
+        runner.FinalizeCalls.Should().BeEmpty();
+        var finalizeStep = eventPublisher.Sent
+            .OfType<ReplyOperationStepEvent>()
+            .Single(step => step.LarkCard.Operation == LarkCardOperationPhase.Finalize);
+        finalizeStep.OperationName.Should().Be("lark-card-finalize");
+        finalizeStep.LarkCard.Activity.TransportExtras.NyxUserAccessToken.Should()
+            .Be("runtime-ready-user-access-token");
+
+        await agent.HandleReplyOperationStepAsync(finalizeStep);
+
         var finalizeCall = await runner.WaitForFinalizeCallAsync();
         finalizeCall.ActivityUserAccessToken.Should().Be("runtime-ready-user-access-token");
         finalizeCall.RuntimeUserAccessToken.Should().Be("runtime-ready-user-access-token");
@@ -392,7 +405,8 @@ public sealed class LarkCardOperationSignalTests
         IConversationCardTurnRunner cardRunner,
         IActorDispatchPort dispatch,
         IEventStore store,
-        IActorRuntimeCallbackScheduler? callbackScheduler = null)
+        IActorRuntimeCallbackScheduler? callbackScheduler = null,
+        SelfHandlingEventPublisher? eventPublisher = null)
     {
         var services = new ServiceCollection()
             .AddSingleton(store)
@@ -410,7 +424,9 @@ public sealed class LarkCardOperationSignalTests
                 services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
         SetId(agent, id);
-        agent.EventPublisher = new SelfHandlingEventPublisher(agent);
+        eventPublisher ??= new SelfHandlingEventPublisher();
+        eventPublisher.SelfTarget = agent;
+        agent.EventPublisher = eventPublisher;
         agent.ActivateAsync().GetAwaiter().GetResult();
         return agent;
     }
@@ -717,8 +733,12 @@ public sealed class LarkCardOperationSignalTests
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class SelfHandlingEventPublisher(ConversationGAgent agent) : IEventPublisher
+    private sealed class SelfHandlingEventPublisher(bool autoHandleSelfEvents = true) : IEventPublisher
     {
+        public ConversationGAgent? SelfTarget { get; set; }
+
+        public List<IMessage> Sent { get; } = [];
+
         public Task PublishAsync<TEvent>(
             TEvent evt,
             TopologyAudience audience = TopologyAudience.Children,
@@ -735,8 +755,17 @@ public sealed class LarkCardOperationSignalTests
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage =>
-            string.Equals(targetActorId, agent.Id, StringComparison.Ordinal)
-                ? agent.HandleEventAsync(Envelope(targetActorId, evt))
+            SendToSelfIfConfiguredAsync(targetActorId, evt);
+
+        private Task SendToSelfIfConfiguredAsync<TEvent>(string targetActorId, TEvent evt)
+            where TEvent : IMessage
+        {
+            Sent.Add(evt);
+            return autoHandleSelfEvents &&
+                   SelfTarget is not null &&
+                   string.Equals(targetActorId, SelfTarget.Id, StringComparison.Ordinal)
+                ? SelfTarget.HandleEventAsync(Envelope(targetActorId, evt))
                 : Task.CompletedTask;
+        }
     }
 }

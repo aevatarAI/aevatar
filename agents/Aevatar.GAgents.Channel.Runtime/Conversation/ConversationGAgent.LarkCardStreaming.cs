@@ -574,28 +574,34 @@ public sealed partial class ConversationGAgent
         bool finalDiffers,
         IReadOnlyList<ConversationHistoryEntry> appendedHistory,
         long sequence,
-        long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        long generation)
     {
         var cardId = state.CardId ?? string.Empty;
         var cardMessageId = state.CardMessageId ?? string.Empty;
         var streamingElementId = state.StreamingElementId;
         var lastFlushedText = state.LastFlushedText;
-        return ExecuteLarkCardFinalizeOperationAsync(
-            ResolveCardRunner(),
-            activityForToken.Clone(),
+        var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Finalize, sequence, generation);
+        return PublishReplyOperationStepAsync(
+            workItemId,
+            "lark-card-finalize",
             correlationId,
-            commandId,
-            cardId,
-            cardMessageId,
-            streamingElementId,
-            finalText,
-            lastFlushedText,
-            finalDiffers,
-            appendedHistory.Select(entry => entry.Clone()).ToArray(),
-            sequence,
             generation,
-            runtimeContext,
+            ReplyOperationStepEvent.PayloadOneofCase.LarkCard,
+            new LarkCardOperationStepPayload
+            {
+                Operation = LarkCardOperationPhase.Finalize,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Activity = activityForToken.Clone(),
+                CommandId = commandId,
+                FinalText = finalText,
+                LastFlushedText = lastFlushedText,
+                CardId = cardId,
+                CardMessageId = cardMessageId,
+                StreamingElementId = streamingElementId,
+                FinalDiffers = finalDiffers,
+                AppendedHistory = { appendedHistory.Select(entry => entry.Clone()) },
+            },
             CancellationToken.None);
     }
 
@@ -1010,8 +1016,7 @@ public sealed partial class ConversationGAgent
             finalDiffers,
             evt.AppendedHistory.ToArray(),
             nextSequence,
-            generation,
-            runtimeContext);
+            generation);
         return true;
     }
 
@@ -1474,8 +1479,7 @@ public sealed partial class ConversationGAgent
                 finalDiffers,
                 state.PendingAppendedHistory,
                 nextSequence,
-                generation,
-                runtimeContext);
+                generation);
             return;
         }
 
