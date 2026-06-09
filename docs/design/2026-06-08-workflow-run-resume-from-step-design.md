@@ -32,7 +32,9 @@ Run binding remains definition/run binding only: definition actor id, workflow n
 
 ## Command Surface
 
-`WorkflowForkRunCommand` carries source run id, start step id, optional inline YAML, variable overrides, optional input, command identity seeds, correlation identity seed, typed scope id, typed caller credential, and transport headers. The fork dispatch target resolver creates a run from the selected workflow definition and builds a seeded `WorkflowChatRunRequest`; the generic command dispatch pipeline owns command context, envelope creation, inbox admission, receipt mapping, and cleanup on dispatch failure.
+`WorkflowForkRunCommand` carries source run id, start step id, optional inline YAML, variable overrides, optional input, command identity seed, correlation identity seed, typed scope id, and typed caller credential. The fork dispatch target resolver creates a run from the selected workflow definition and prepares a seeded `WorkflowChatRunRequest`; the command dispatch pipeline owns command context, envelope creation, inbox admission, receipt mapping, and cleanup on dispatch failure.
+
+Caller credential handling is intentionally narrow. Fork dispatch can use the current typed caller credential from the request or continuation command, but it must not recover historical bearer tokens from public read models, metadata bags, query-time replay, or event-store side reads.
 
 ## Verification
 

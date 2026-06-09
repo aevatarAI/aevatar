@@ -170,9 +170,9 @@ public sealed record WorkflowForkRunInput
     public IDictionary<string, string>? InlineSubYamls { get; init; }
     public IDictionary<string, string>? VariableOverrides { get; init; }
     public string? Input { get; init; }
+    public string? ScopeId { get; init; }
     public string? CommandId { get; init; }
     public string? CorrelationId { get; init; }
-    public string? ScopeId { get; init; }
 }
 
 internal sealed record ChatWsCommand

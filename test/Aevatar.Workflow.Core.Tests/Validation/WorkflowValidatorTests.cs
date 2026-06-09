@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using FluentAssertions;
@@ -79,6 +80,27 @@ public sealed class WorkflowValidatorTests
         var errors = WorkflowValidator.Validate(WorkflowWith(Step("lease-1", "lease", new())));
 
         errors.Should().Contain(x => x.Contains("key", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_WhenNonNotifyStepCarriesInteractionTemplateSpec_ShouldReject()
+    {
+        var step = Step("transform-1", "transform", new());
+        step = new StepDefinition
+        {
+            Id = step.Id,
+            Type = step.Type,
+            Parameters = step.Parameters,
+            Presentation = new StepPresentation
+            {
+                InteractionTemplateSpec = new InteractionTemplateSpec { TemplateId = "tpl-1" },
+            },
+        };
+
+        var errors = WorkflowValidator.Validate(WorkflowWith(step));
+
+        errors.Should().Contain(x => x.Contains("interaction_template_spec", StringComparison.Ordinal) &&
+                                     x.Contains("notify", StringComparison.Ordinal));
     }
 
     private static WorkflowDefinition WorkflowWith(StepDefinition step) =>

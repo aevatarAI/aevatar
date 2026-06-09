@@ -52,7 +52,14 @@ public sealed class ChatEndpointsInternalTests
         var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
         {
             Result = CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Success(
-                new WorkflowForkRunAcceptedReceipt("source-run", "new-run-actor", "direct", "cmd-1", "corr-1")),
+                new WorkflowForkRunAcceptedReceipt(
+                    "source-run",
+                    "new-run-actor",
+                    "direct",
+                    true,
+                    "cmd-1",
+                    "corr-1",
+                    new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero))),
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleForkRun(
@@ -1110,7 +1117,14 @@ public sealed class ChatEndpointsInternalTests
         var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
         {
             Result = CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Success(
-                new WorkflowForkRunAcceptedReceipt("source-run", "new-run-actor", "workflow-1", "cmd-1", "corr-1")),
+                new WorkflowForkRunAcceptedReceipt(
+                    "source-run",
+                    "new-run-actor",
+                    "workflow-1",
+                    true,
+                    "cmd-1",
+                    "corr-1",
+                    new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero))),
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleForkRun(
@@ -1128,11 +1142,13 @@ public sealed class ChatEndpointsInternalTests
                     [" topic "] = "recovered",
                 },
                 Input = "resume input",
+                ScopeId = " scope-1 ",
                 CommandId = " cmd-1 ",
                 CorrelationId = " corr-1 ",
             },
             service,
-            ct: CancellationToken.None);
+            CreateHttpContext("Bearer trusted-token"),
+            CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -1150,6 +1166,8 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().InlineSubYamls.Should().ContainKey("helper").WhoseValue.Should().Be("name: helper");
         service.Commands.Single().VariableOverrides.Should().ContainKey("topic").WhoseValue.Should().Be("recovered");
         service.Commands.Single().Input.Should().Be("resume input");
+        service.Commands.Single().ScopeId.Should().Be("scope-1");
+        service.Commands.Single().CallerCredential!.BearerToken.Should().Be("trusted-token");
         service.Commands.Single().CommandId.Should().Be("cmd-1");
         service.Commands.Single().CorrelationId.Should().Be("corr-1");
     }
@@ -1167,7 +1185,8 @@ public sealed class ChatEndpointsInternalTests
                 StartAtStepId = startAtStepId,
             },
             service,
-            ct: CancellationToken.None);
+            null,
+            CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -1194,7 +1213,8 @@ public sealed class ChatEndpointsInternalTests
                 StartAtStepId = "missing-step",
             },
             service,
-            ct: CancellationToken.None);
+            null,
+            CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -1272,7 +1292,7 @@ public sealed class ChatEndpointsInternalTests
         return await reader.ReadToEndAsync();
     }
 
-    private static DefaultHttpContext CreateHttpContext()
+    private static DefaultHttpContext CreateHttpContext(string? authorization = null)
     {
         var http = new DefaultHttpContext
         {
@@ -1281,6 +1301,8 @@ public sealed class ChatEndpointsInternalTests
                 .AddOptions()
                 .BuildServiceProvider(),
         };
+        if (!string.IsNullOrWhiteSpace(authorization))
+            http.Request.Headers.Authorization = authorization;
         http.Response.Body = new MemoryStream();
         return http;
     }

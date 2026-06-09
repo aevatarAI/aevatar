@@ -14,8 +14,25 @@ public sealed record WorkflowForkRunCommand(
     string? CorrelationId = null,
     int Attempt = 0,
     string? ScopeId = null,
-    WorkflowCallerCredential? CallerCredential = null,
-    IReadOnlyDictionary<string, string>? Headers = null) : ICommandContextSeed;
+    WorkflowCallerCredential? CallerCredential = null) : ICommandContextSeed
+{
+    private WorkflowChatRunRequest? _preparedRequest;
+
+    string? ICommandContextSeed.CommandId => CommandId;
+
+    string? ICommandContextSeed.CorrelationId => CorrelationId;
+
+    IReadOnlyDictionary<string, string>? ICommandContextSeed.Headers => null;
+
+    public void AttachPreparedRequest(WorkflowChatRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        _preparedRequest = request;
+    }
+
+    public WorkflowChatRunRequest ToWorkflowChatRunRequest() =>
+        _preparedRequest ?? throw new InvalidOperationException("Workflow fork command was not prepared for dispatch.");
+}
 
 public enum WorkflowForkRunStartErrorCode
 {
@@ -26,6 +43,7 @@ public enum WorkflowForkRunStartErrorCode
     StartStepNotFound = 4,
     RunCreationFailed = 5,
     DispatchFailed = 6,
+    InvalidCallerCredential = 7,
 }
 
 public sealed record WorkflowForkRunStartError(
@@ -96,11 +114,22 @@ public sealed record WorkflowForkRunStartError(
             string.IsNullOrWhiteSpace(reason)
                 ? "Workflow fork dispatch failed."
                 : reason);
+
+    public static WorkflowForkRunStartError InvalidCallerCredential(
+        string sourceRunId,
+        string startAtStepId) =>
+        new(
+            WorkflowForkRunStartErrorCode.InvalidCallerCredential,
+            sourceRunId ?? string.Empty,
+            startAtStepId ?? string.Empty,
+            "Caller credential is invalid.");
 }
 
 public sealed record WorkflowForkRunAcceptedReceipt(
     string SourceRunId,
     string NewRunActorId,
     string WorkflowName,
+    bool Accepted,
     string CommandId,
-    string CorrelationId);
+    string CorrelationId,
+    DateTimeOffset AckedAt);

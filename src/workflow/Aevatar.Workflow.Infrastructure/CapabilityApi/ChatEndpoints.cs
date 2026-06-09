@@ -376,13 +376,13 @@ public static class WorkflowCapabilityEndpoints
 
     public static async Task<IResult> HandleForkRun(
         WorkflowForkRunInput input,
-        [FromServices] ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> forkRunService,
+        [FromServices] ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> forkDispatchService,
         HttpContext? http = null,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(forkRunService);
+        ArgumentNullException.ThrowIfNull(forkDispatchService);
 
         try
         {
@@ -397,14 +397,14 @@ public static class WorkflowCapabilityEndpoints
 
             var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
             if (!callerCredential.Succeeded)
-                return MapForkRunFailure(
-                    WorkflowForkRunStartError.InvalidWorkflowYaml(
-                        sourceRunId,
-                        startAtStepId,
-                        "Caller credential is invalid."),
-                    scope);
+            {
+                scope.MarkResult(StatusCodes.Status400BadRequest);
+                return Results.Json(
+                    new { error = "Caller credential is invalid.", code = "INVALID_CALLER_CREDENTIAL" },
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
 
-            var dispatch = await forkRunService.DispatchAsync(
+            var dispatch = await forkDispatchService.DispatchAsync(
                 new WorkflowForkRunCommand(
                     sourceRunId,
                     startAtStepId,
@@ -526,10 +526,13 @@ public static class WorkflowCapabilityEndpoints
                 StatusCodes.Status400BadRequest,
                 error.Reason),
             WorkflowForkRunStartErrorCode.RunCreationFailed => (
-                StatusCodes.Status500InternalServerError,
+                StatusCodes.Status502BadGateway,
                 error.Reason),
             WorkflowForkRunStartErrorCode.DispatchFailed => (
                 StatusCodes.Status502BadGateway,
+                error.Reason),
+            WorkflowForkRunStartErrorCode.InvalidCallerCredential => (
+                StatusCodes.Status400BadRequest,
                 error.Reason),
             _ => (
                 StatusCodes.Status500InternalServerError,
