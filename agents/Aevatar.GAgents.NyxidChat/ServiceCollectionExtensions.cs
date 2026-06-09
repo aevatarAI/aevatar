@@ -19,6 +19,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
+using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.Configuration;
@@ -53,6 +54,19 @@ public static class ServiceCollectionExtensions
 
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
+        services.TryAddSingleton<ChannelWorkflowDraftRunIntentParser>();
+        services.TryAddSingleton<ChannelWorkflowDraftRunAdmission>(sp =>
+            new ChannelWorkflowDraftRunAdmission(
+                sp.GetRequiredService<ChannelWorkflowDraftRunIntentParser>(),
+                sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>()));
+        services.TryAddSingleton<WorkflowDraftRunReplyRenderer>();
+        services.TryAddSingleton<IChannelWorkflowDraftRunInteractionPort>(sp =>
+            new ChannelWorkflowDraftRunInteractionPort(
+                sp.GetRequiredService<Aevatar.Foundation.Abstractions.IActorDispatchPort>(),
+                sp.GetRequiredService<WorkflowDraftRunReplyRenderer>(),
+                sp.GetRequiredService<ILogger<ChannelWorkflowDraftRunInteractionPort>>(),
+                sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowChatRunInteractionPort>(),
+                sp.GetService<TimeProvider>()));
         // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
         //   Old pattern: Mainnet Host/API composed the voice demo agent bootstrap workflow directly.
         //   New principle: NyxID chat owns the actor-targeted bootstrap command port; hosts only opt into the module.

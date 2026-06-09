@@ -16,6 +16,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -76,6 +77,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
     private readonly ChannelPlatformReplyService? _replyService;
     private readonly ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? _workflowResumeService;
+    private readonly ChannelWorkflowDraftRunAdmission? _workflowDraftRunAdmission;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
 
     public ChannelConversationTurnRunner(
@@ -96,7 +98,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IUserLlmOptionsRenderer<MessageContent>? userLlmOptionsRenderer = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
         ChannelPlatformReplyService? replyService = null,
-        ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null)
+        ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
+        ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -115,6 +118,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _userConfigQueryPort = userConfigQueryPort;
         _replyService = replyService;
         _workflowResumeService = workflowResumeService;
+        _workflowDraftRunAdmission = workflowDraftRunAdmission;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -145,6 +149,20 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
             return workflowResumeResult;
 
+        var inboundEvent = ToInboundEvent(activity, registration, inbound);
+
+        if (activity.Type != ActivityType.CardAction &&
+            await TryHandleWorkflowDraftRunAsync(
+                activity,
+                inbound,
+                registration,
+                inboundEvent,
+                runtimeContext,
+                ct).ConfigureAwait(false) is { } workflowDraftRunResult)
+        {
+            return workflowDraftRunResult;
+        }
+
         if (activity.Type != ActivityType.CardAction &&
             await TryHandleSlashCommandAsync(activity, inbound, registration, runtimeContext, ct) is { } slashResult)
             return slashResult;
@@ -157,8 +175,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
-
-        var inboundEvent = ToInboundEvent(activity, registration, inbound);
 
         if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, typingReactionTask, ct) is { } agentBuilderResult)
             return agentBuilderResult;
@@ -1402,6 +1418,43 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             sentActivityId: $"workflow-resume:{dispatch.Receipt.CommandId}",
             outbound: new MessageContent(),
             authPrincipal: "bot");
+    }
+
+    private async Task<ConversationTurnResult?> TryHandleWorkflowDraftRunAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ChannelInboundEvent inboundEvent,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        var admission = _workflowDraftRunAdmission;
+        if (admission is null)
+            return null;
+
+        var result = await admission.TryAdmitAsync(
+                activity,
+                registration,
+                inboundEvent,
+                runtimeContext,
+                ct)
+            .ConfigureAwait(false);
+        if (!result.Matched)
+            return null;
+
+        if (result.Request is not null)
+            return ConversationTurnResult.WorkflowDraftRunRequested(result.Request);
+
+        var rejection = result.Rejection ?? new MessageContent { Text = "暂不能运行 workflow,请稍后重试。" };
+        return await SendReplyAsync(
+                rejection,
+                string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id,
+                activity.Conversation,
+                inbound,
+                registration,
+                runtimeContext,
+                ct)
+            .ConfigureAwait(false);
     }
 
     private async Task<IReadOnlyDictionary<string, string>> BuildReplyMetadataAsync(

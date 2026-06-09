@@ -31,20 +31,65 @@ public sealed class ConversationGAgentTargetActorIdTests
         agent.State.PendingLlmReplyRequests[0].TargetActorId.Should().Be(actorId);
     }
 
+    [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_ShouldDispatchWorkflowDraftRunWithRuntimeCredentialsAndPersistScrubbedState()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var runner = new DeferredWorkflowDraftRunTurnRunner();
+        var dispatcher = new RecordingWorkflowDraftRunInteractionPort();
+        var agent = await CreateAgentAsync(actorId, runner, new RecordingLlmReplyRunDispatcher(), dispatcher);
+        var activity = BuildInboundActivity("msg-workflow-1");
+        activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-message-1",
+            CorrelationId = "msg-workflow-1",
+        };
+        activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "runtime-user-token",
+        };
+
+        await agent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = activity,
+            CorrelationId = "msg-workflow-1",
+            ReplyToken = "runtime-reply-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+
+        dispatcher.Requests.Should().ContainSingle();
+        dispatcher.Requests[0].TargetActorId.Should().Be(actorId);
+        dispatcher.Requests[0].ReplyToken.Should().Be("runtime-reply-token");
+        dispatcher.Requests[0].NyxUserAccessToken.Should().Be("runtime-user-token");
+        dispatcher.Requests[0].Activity.TransportExtras.NyxUserAccessToken.Should().Be("runtime-user-token");
+
+        agent.State.PendingWorkflowDraftRunRequests.Should().ContainSingle();
+        var persisted = agent.State.PendingWorkflowDraftRunRequests[0];
+        persisted.TargetActorId.Should().Be(actorId);
+        persisted.ReplyToken.Should().BeEmpty();
+        persisted.ReplyTokenExpiresAtUnixMs.Should().Be(0);
+        persisted.NyxUserAccessToken.Should().BeEmpty();
+        persisted.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
+    }
+
     private static async Task<ConversationGAgent> CreateAgentAsync(
         string id,
         IConversationTurnRunner runner,
-        IChannelLlmReplyRunDispatcher dispatcher)
+        IChannelLlmReplyRunDispatcher dispatcher,
+        IChannelWorkflowDraftRunInteractionPort? workflowDispatcher = null)
     {
-        var services = new ServiceCollection()
+        var servicesCollection = new ServiceCollection()
             .AddSingleton<IEventStore, InMemoryEventStore>()
             .AddSingleton<IActorDispatchPort, NoopActorDispatchPort>()
             .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
             .AddSingleton(runner)
             .AddSingleton(dispatcher)
             .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
-            .BuildServiceProvider();
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+        if (workflowDispatcher is not null)
+            servicesCollection.AddSingleton(workflowDispatcher);
+
+        var services = servicesCollection.BuildServiceProvider();
 
         var agent = new ConversationGAgent
         {
@@ -135,11 +180,71 @@ public sealed class ConversationGAgentTargetActorIdTests
             Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId));
     }
 
+    private sealed class DeferredWorkflowDraftRunTurnRunner : IConversationTurnRunner
+    {
+        private static readonly NeedsWorkflowDraftRunEvent Request = new()
+        {
+            CorrelationId = "msg-workflow-1",
+            RunId = "workflow-draft-run-1",
+            RegistrationId = "reg-1",
+            Activity = BuildInboundActivity("msg-workflow-1"),
+            WorkflowSource = new ChannelWorkflowDraftRunSource
+            {
+                Kind = ChannelWorkflowDraftRunSourceKind.DefinitionActor,
+                ScopeId = "scope-1",
+                WorkflowId = "daily-greeting",
+                WorkflowName = "daily-greeting",
+                DefinitionActorId = "workflow-actor-1",
+            },
+            Prompt = "/workflow run daily-greeting",
+            RequestedAtUnixMs = 10,
+        };
+
+        public Task<ConversationTurnResult> RunInboundAsync(
+            ChatActivity activity,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationTurnResult.WorkflowDraftRunRequested(Request));
+
+        public Task<ConversationTurnResult> RunLlmReplyAsync(
+            LlmReplyReadyEvent reply,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationTurnResult.Sent(
+                "sent",
+                reply.Outbound?.Clone() ?? new MessageContent(),
+                "bot"));
+
+        public Task<ConversationTurnResult> RunContinueAsync(
+            ConversationContinueRequestedEvent command,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationTurnResult.Ignored("not-used", command.CommandId));
+
+        public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+            LlmReplyStreamChunkEvent chunk,
+            string? currentPlatformMessageId,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId));
+    }
+
     private sealed class RecordingLlmReplyRunDispatcher : IChannelLlmReplyRunDispatcher
     {
         public List<NeedsLlmReplyEvent> Requests { get; } = [];
 
         public Task DispatchAsync(NeedsLlmReplyEvent request, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request.Clone());
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingWorkflowDraftRunInteractionPort : IChannelWorkflowDraftRunInteractionPort
+    {
+        public List<NeedsWorkflowDraftRunEvent> Requests { get; } = [];
+
+        public Task DispatchAsync(NeedsWorkflowDraftRunEvent request, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             Requests.Add(request.Clone());
