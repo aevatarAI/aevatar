@@ -117,6 +117,11 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         var callerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var credential)
             ? credential
             : new WorkflowCallerCredential();
+        var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
+            ctx,
+            ctx.AgentId ?? string.Empty,
+            request.RunId ?? string.Empty,
+            request.StepId ?? string.Empty);
         return tool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
                 ArgumentsJson: argumentsJson,
@@ -125,7 +130,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 ExecutionId: request.ExecutionId ?? string.Empty,
                 CallId: callId,
                 ScopeId: ctx.ScopeId ?? string.Empty,
-                CallerCredential: callerCredential),
+                CallerCredential: callerCredential,
+                RuntimeContext: runtimeContext),
             ct);
     }
 

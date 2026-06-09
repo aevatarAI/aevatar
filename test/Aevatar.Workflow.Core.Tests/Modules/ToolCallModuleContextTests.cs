@@ -103,6 +103,14 @@ public sealed class ToolCallModuleContextTests
         {
             BearerToken = " typed-token ",
         };
+        ctx.ExecutionContextState.WorkflowRuntime = new WorkflowToolRuntimeContextState
+        {
+            ParentActorId = "parent-actor",
+            ParentRunId = "parent-run",
+            ParentStepId = "parent-step",
+            RootRunId = "root-run",
+            Depth = 2,
+        };
         ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["connector.http.authorization"] = "Bearer metadata-token",
@@ -123,6 +131,11 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.CallId.Should().Be("workflow:run-1:call_proxy:exec-1");
         tool.LastRequest.ScopeId.Should().Be("scope-1");
         tool.LastRequest.CallerCredential.BearerToken.Should().Be("typed-token");
+        tool.LastRequest.RuntimeContext.ParentActorId.Should().Be("agent-1");
+        tool.LastRequest.RuntimeContext.ParentRunId.Should().Be("run-1");
+        tool.LastRequest.RuntimeContext.ParentStepId.Should().Be("call_proxy");
+        tool.LastRequest.RuntimeContext.RootRunId.Should().Be("root-run");
+        tool.LastRequest.RuntimeContext.Depth.Should().Be(2);
         LastCompleted(ctx).Success.Should().BeTrue();
     }
 

@@ -24,6 +24,21 @@ public static class AgentToolExecutionContextMapper
         LLMRequestMetadataKeys.ConnectedServicesContext,
         LLMRequestMetadataKeys.SenderBindingId,
         LLMRequestMetadataKeys.SenderNyxIdAccessToken,
+        "workflow.parent_actor_id",
+        "workflow.parent_run_id",
+        "workflow.parent_step_id",
+        "workflow.root_run_id",
+        "workflow.depth",
+        "workflow_call.parent_actor_id",
+        "workflow_call.parent_run_id",
+        "workflow_call.parent_step_id",
+        "workflow_call.root_run_id",
+        "workflow_call.depth",
+        "aevatar.workflow.parent_actor_id",
+        "aevatar.workflow.parent_run_id",
+        "aevatar.workflow.parent_step_id",
+        "aevatar.workflow.root_run_id",
+        "aevatar.workflow.depth",
         "platform",
         "channel.platform",
         "sender_id",
@@ -134,6 +149,7 @@ public static class AgentToolExecutionContextMapper
                 payload.Routing?.HasMaxToolRoundsOverride == true ? payload.Routing.MaxToolRoundsOverride : null,
                 AgentToolExecutionContext.Normalize(payload.Routing?.UserMemoryPrompt)),
             new AgentToolConnectedServicesContext(AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
+            FromWorkflowRuntimePayload(payload.WorkflowRuntime),
             FromSkillRecoveryPayload(payload.SkillRecovery),
             StripOwnedControlKeys(payload.ExternalMetadata));
     }
@@ -183,6 +199,7 @@ public static class AgentToolExecutionContextMapper
             {
                 ContextJson = context.ConnectedServices.ContextJson ?? string.Empty,
             },
+            WorkflowRuntime = ToWorkflowRuntimePayload(context.WorkflowRuntime),
             SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
         };
 
@@ -221,6 +238,29 @@ public static class AgentToolExecutionContextMapper
             AgentToolExecutionContext.Normalize(payload.CommandArguments),
             payload.DiscoveryRequested);
     }
+
+    private static AgentWorkflowRuntimeContext FromWorkflowRuntimePayload(AgentWorkflowRuntimeContextPayload? payload)
+    {
+        if (payload == null)
+            return AgentWorkflowRuntimeContext.Empty;
+
+        return new AgentWorkflowRuntimeContext(
+            AgentToolExecutionContext.Normalize(payload.ParentActorId),
+            AgentToolExecutionContext.Normalize(payload.ParentRunId),
+            AgentToolExecutionContext.Normalize(payload.ParentStepId),
+            AgentToolExecutionContext.Normalize(payload.RootRunId),
+            Math.Max(0, payload.Depth));
+    }
+
+    private static AgentWorkflowRuntimeContextPayload ToWorkflowRuntimePayload(AgentWorkflowRuntimeContext context) =>
+        new()
+        {
+            ParentActorId = context.ParentActorId ?? string.Empty,
+            ParentRunId = context.ParentRunId ?? string.Empty,
+            ParentStepId = context.ParentStepId ?? string.Empty,
+            RootRunId = context.RootRunId ?? string.Empty,
+            Depth = Math.Max(0, context.Depth),
+        };
 
     private static AgentSkillRecoveryContextPayload ToSkillRecoveryPayload(AgentSkillRecoveryContext context) =>
         new()

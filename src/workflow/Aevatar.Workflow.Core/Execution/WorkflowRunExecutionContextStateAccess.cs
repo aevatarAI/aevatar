@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Modules;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -120,6 +121,71 @@ internal static class WorkflowRunExecutionContextStateAccess
                !string.IsNullOrWhiteSpace(llm.UserMemoryPrompt) ||
                !string.IsNullOrWhiteSpace(llm.RoutePreference) ||
                llm.HasMaxToolRoundsOverride;
+    }
+
+    public static WorkflowRunExecutionContextDelta ClearWorkflowRuntimeDelta() =>
+        new()
+        {
+            ClearWorkflowRuntime = true,
+        };
+
+    public static WorkflowRunExecutionContextDelta BuildWorkflowRuntimeDelta(WorkflowToolRuntimeContextPayload? runtimeContext)
+    {
+        var delta = ClearWorkflowRuntimeDelta();
+        if (runtimeContext == null)
+            return delta;
+
+        var parentActorId = Normalize(runtimeContext.ParentActorId);
+        var parentRunId = Normalize(runtimeContext.ParentRunId);
+        var parentStepId = Normalize(runtimeContext.ParentStepId);
+        if (string.IsNullOrWhiteSpace(parentActorId) ||
+            string.IsNullOrWhiteSpace(parentRunId) ||
+            string.IsNullOrWhiteSpace(parentStepId))
+        {
+            return delta;
+        }
+
+        var normalizedParentRunId = WorkflowRunIdNormalizer.Normalize(parentRunId);
+        delta.WorkflowRuntime = new WorkflowToolRuntimeContextPayload
+        {
+            ParentActorId = parentActorId,
+            ParentRunId = normalizedParentRunId,
+            ParentStepId = parentStepId,
+            RootRunId = string.IsNullOrWhiteSpace(runtimeContext.RootRunId)
+                ? normalizedParentRunId
+                : WorkflowRunIdNormalizer.Normalize(runtimeContext.RootRunId),
+            Depth = Math.Max(0, runtimeContext.Depth),
+        };
+        return delta;
+    }
+
+    public static WorkflowToolRuntimeContext GetWorkflowRuntimeContext(
+        IWorkflowExecutionContext ctx,
+        string parentActorId,
+        string runId,
+        string stepId)
+    {
+        var runtime = Get(ctx).WorkflowRuntime;
+        if (runtime == null ||
+            string.IsNullOrWhiteSpace(runtime.ParentActorId) ||
+            string.IsNullOrWhiteSpace(runtime.ParentRunId) ||
+            string.IsNullOrWhiteSpace(runtime.ParentStepId))
+        {
+            var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
+            return new WorkflowToolRuntimeContext(
+                parentActorId?.Trim() ?? string.Empty,
+                normalizedRunId,
+                stepId?.Trim() ?? string.Empty,
+                normalizedRunId,
+                0);
+        }
+
+        return new WorkflowToolRuntimeContext(
+            parentActorId?.Trim() ?? string.Empty,
+            WorkflowRunIdNormalizer.Normalize(runId),
+            stepId?.Trim() ?? string.Empty,
+            WorkflowRunIdNormalizer.Normalize(runtime.RootRunId),
+            Math.Max(0, runtime.Depth));
     }
 
     public static WorkflowRunExecutionContextState RedactedClone(WorkflowRunExecutionContextState? source)

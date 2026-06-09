@@ -36,6 +36,39 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
+    [Fact]
+    public async Task WorkflowTool_ShouldMapRuntimeContextToAgentToolExecutionContext()
+    {
+        var agentTool = new CapturingAgentTool();
+        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential { BearerToken = "token-123" },
+                RuntimeContext: new WorkflowToolRuntimeContext(
+                    " parent-actor ",
+                    " parent-run ",
+                    " parent-step ",
+                    " root-run ",
+                    2)),
+            CancellationToken.None);
+
+        agentTool.ObservedWorkflowRuntime.ParentActorId.Should().Be("parent-actor");
+        agentTool.ObservedWorkflowRuntime.ParentRunId.Should().Be("parent-run");
+        agentTool.ObservedWorkflowRuntime.ParentStepId.Should().Be("parent-step");
+        agentTool.ObservedWorkflowRuntime.RootRunId.Should().Be("root-run");
+        agentTool.ObservedWorkflowRuntime.Depth.Should().Be(2);
+        agentTool.ObservedWorkflowRuntime.HasManagedParent.Should().BeTrue();
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
     [Theory]
     [InlineData(null, null, null, null)]
     [InlineData("", "", null, null)]
@@ -70,7 +103,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     [Theory]
     [InlineData("")]
     [InlineData("  ")]
-    public async Task WorkflowTool_ShouldUseEmptyAgentToolContextWhenWorkflowCredentialIsMissing(string authorization)
+    public async Task WorkflowTool_ShouldPreserveRuntimeContextWhenWorkflowCredentialIsMissing(string authorization)
     {
         var agentTool = new CapturingAgentTool();
         var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
@@ -84,11 +117,23 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential { BearerToken = authorization }),
+                CallerCredential: new WorkflowCallerCredential { BearerToken = authorization },
+                RuntimeContext: new WorkflowToolRuntimeContext(
+                    " parent-actor ",
+                    " parent-run ",
+                    " parent-step ",
+                    " root-run ",
+                    -1)),
             CancellationToken.None);
 
         agentTool.ObservedAccessToken.Should().BeNull();
         agentTool.ObservedOrgToken.Should().BeNull();
+        agentTool.ObservedWorkflowRuntime.ParentActorId.Should().Be("parent-actor");
+        agentTool.ObservedWorkflowRuntime.ParentRunId.Should().Be("parent-run");
+        agentTool.ObservedWorkflowRuntime.ParentStepId.Should().Be("parent-step");
+        agentTool.ObservedWorkflowRuntime.RootRunId.Should().Be("root-run");
+        agentTool.ObservedWorkflowRuntime.Depth.Should().Be(0);
+        agentTool.ObservedWorkflowRuntime.HasManagedParent.Should().BeTrue();
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -141,6 +186,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         public IReadOnlyDictionary<string, string> ObservedExternalMetadata { get; private set; } =
             new Dictionary<string, string>(StringComparer.Ordinal);
 
+        public AgentWorkflowRuntimeContext ObservedWorkflowRuntime { get; private set; } =
+            AgentWorkflowRuntimeContext.Empty;
+
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -165,6 +213,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ObservedCallId = AgentToolRequestContext.CallId;
             ObservedExternalMetadata = AgentToolRequestContext.Current?.ExternalMetadata
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime
+                ?? AgentWorkflowRuntimeContext.Empty;
         }
     }
 

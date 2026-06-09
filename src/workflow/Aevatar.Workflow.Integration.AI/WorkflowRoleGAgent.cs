@@ -131,7 +131,15 @@ public class WorkflowRoleGAgent(
 
     private static ChatRequestEvent BuildChatRequestFromWorkflowIntent(WorkflowLlmExecutionIntent intent)
     {
-        var toolContext = WorkflowCallerCredentialToolContextMapper.FromCredential(intent.CallerCredential);
+        var workflowRuntimeContext = new AgentWorkflowRuntimeContext(
+            Normalize(intent.WorkflowRuntimeContext?.ParentActorId),
+            Normalize(intent.WorkflowRuntimeContext?.ParentRunId),
+            Normalize(intent.WorkflowRuntimeContext?.ParentStepId),
+            Normalize(intent.WorkflowRuntimeContext?.RootRunId),
+            Math.Max(0, intent.WorkflowRuntimeContext?.Depth ?? 0));
+        var toolContext = WorkflowCallerCredentialToolContextMapper.FromCredential(
+            intent.CallerCredential,
+            workflowRuntimeContext);
         if (!string.IsNullOrWhiteSpace(intent.RoutePreference))
         {
             toolContext = toolContext with
@@ -261,6 +269,9 @@ public class WorkflowRoleGAgent(
 
     private static string SanitizeWorkflowFailureMessage(string? message) =>
         string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private sealed record WorkflowIntentReplayRecord(
         string Content,

@@ -99,6 +99,7 @@ message AgentToolExecutionContextPayload {
   AgentToolConnectedServicesContextPayload connected_services = 7;
   map<string, string> external_metadata = 8;
   AgentSkillRecoveryContextPayload skill_recovery = 9;
+  AgentWorkflowRuntimeContextPayload workflow_runtime = 10;
 }
 
 message AgentSkillRecoveryContextPayload {
@@ -150,6 +151,14 @@ message LLMRequestRoutingContextPayload {
 
 message AgentToolConnectedServicesContextPayload {
   string context_json = 1;
+}
+
+message AgentWorkflowRuntimeContextPayload {
+  string parent_actor_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string root_run_id = 4;
+  int32 depth = 5;
 }
 
 message TextMessageStartEvent   { string session_id = 1; string agent_id = 2; }

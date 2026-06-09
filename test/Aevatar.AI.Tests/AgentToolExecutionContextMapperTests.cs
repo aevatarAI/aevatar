@@ -39,6 +39,8 @@ public sealed class AgentToolExecutionContextMapperTests
                 [LLMRequestMetadataKeys.NyxIdRoutePreference] = "legacy-route",
                 [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "4",
                 [LLMRequestMetadataKeys.UserMemoryPrompt] = "legacy-memory",
+                ["workflow.parent_actor_id"] = "forged-parent",
+                ["workflow.root_run_id"] = "forged-root",
                 ["external-trace"] = "trace-1",
             },
         };
@@ -56,6 +58,7 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Routing.NyxIdRoutePreference.Should().Be("typed-route");
         context.Routing.MaxToolRoundsOverride.Should().Be(9);
         context.Routing.UserMemoryPrompt.Should().Be("typed-memory");
+        context.WorkflowRuntime.Should().Be(AgentWorkflowRuntimeContext.Empty);
         context.ExternalMetadata.Should().ContainSingle();
         context.ExternalMetadata["external-trace"].Should().Be("trace-1");
     }
@@ -199,6 +202,13 @@ public sealed class AgentToolExecutionContextMapperTests
             ["lark.open_id"] = "ou-lark",
             ["lark.message_id"] = "msg-lark",
             ["telegram.chat_id"] = "10001",
+            ["workflow.parent_actor_id"] = "forged-parent",
+            ["workflow.parent_run_id"] = "forged-run",
+            ["workflow.parent_step_id"] = "forged-step",
+            ["workflow.root_run_id"] = "forged-root",
+            ["workflow.depth"] = "99",
+            ["workflow_call.parent_actor_id"] = "forged-parent-2",
+            ["aevatar.workflow.root_run_id"] = "forged-root-2",
             ["trace-id"] = "trace-1",
         });
 
@@ -221,6 +231,7 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Routing.MaxToolRoundsOverride.Should().BeNull();
         context.Routing.UserMemoryPrompt.Should().BeNull();
         context.ConnectedServices.ContextJson.Should().BeNull();
+        context.WorkflowRuntime.Should().Be(AgentWorkflowRuntimeContext.Empty);
         context.ExternalMetadata.Should().ContainSingle();
         context.ExternalMetadata["trace-id"].Should().Be("trace-1");
     }
@@ -255,6 +266,7 @@ public sealed class AgentToolExecutionContextMapperTests
             new AgentToolSenderBindingContext(" binding-1 "),
             new LLMRequestRoutingContext(" model-1 ", " route-1 ", 7, " memory-1 "),
             new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
+            new AgentWorkflowRuntimeContext(" parent-actor ", " parent-run ", " parent-step ", " root-run ", 3),
             new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: true,
                 RequireOrnnSearchOnBlocker: true,
@@ -294,6 +306,12 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Routing.MaxToolRoundsOverride.Should().Be(7);
         copy.Routing.UserMemoryPrompt.Should().Be("memory-1");
         copy.ConnectedServices.ContextJson.Should().Be("""{"service":"telegram"}""");
+        copy.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
+        copy.WorkflowRuntime.ParentRunId.Should().Be("parent-run");
+        copy.WorkflowRuntime.ParentStepId.Should().Be("parent-step");
+        copy.WorkflowRuntime.RootRunId.Should().Be("root-run");
+        copy.WorkflowRuntime.Depth.Should().Be(3);
+        copy.WorkflowRuntime.HasManagedParent.Should().BeTrue();
         copy.SkillRecovery.RequireInitialOrnnSearch.Should().BeTrue();
         copy.SkillRecovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
         copy.SkillRecovery.CommandName.Should().Be("goal");

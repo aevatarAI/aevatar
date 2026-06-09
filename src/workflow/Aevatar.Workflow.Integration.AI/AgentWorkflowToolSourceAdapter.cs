@@ -31,7 +31,15 @@ public sealed class AgentWorkflowToolSourceAdapter(IEnumerable<IAgentToolSource>
         {
             ArgumentNullException.ThrowIfNull(request);
 
-            var credentialContext = WorkflowCallerCredentialToolContextMapper.FromCredential(request.CallerCredential);
+            var workflowRuntimeContext = new AgentWorkflowRuntimeContext(
+                Normalize(request.RuntimeContext.ParentActorId),
+                Normalize(request.RuntimeContext.ParentRunId),
+                Normalize(request.RuntimeContext.ParentStepId),
+                Normalize(request.RuntimeContext.RootRunId),
+                Math.Max(0, request.RuntimeContext.Depth));
+            var credentialContext = WorkflowCallerCredentialToolContextMapper.FromCredential(
+                request.CallerCredential,
+                workflowRuntimeContext);
             var toolContext = credentialContext with
             {
                 Request = credentialContext.Request with

@@ -381,6 +381,19 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
             StepId = stepId,
         };
+        var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
+            ctx,
+            ctx.AgentId ?? string.Empty,
+            request.RunId ?? string.Empty,
+            stepId);
+        intent.WorkflowRuntimeContext = new WorkflowToolRuntimeContextPayload
+        {
+            ParentActorId = runtimeContext.ParentActorId,
+            ParentRunId = runtimeContext.ParentRunId,
+            ParentStepId = runtimeContext.ParentStepId,
+            RootRunId = runtimeContext.RootRunId,
+            Depth = runtimeContext.Depth,
+        };
         if (WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm))
         {
             intent.Model = Normalize(llm.ModelOverride) ?? string.Empty;
