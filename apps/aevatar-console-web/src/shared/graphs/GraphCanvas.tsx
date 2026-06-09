@@ -180,7 +180,7 @@ function StudioWorkflowNode({
               whiteSpace: 'nowrap',
             }}
           >
-            {data.stepType}
+            {data.subtitle}
           </div>
         </div>
         {executionStatus && executionStatus !== 'idle' ? (

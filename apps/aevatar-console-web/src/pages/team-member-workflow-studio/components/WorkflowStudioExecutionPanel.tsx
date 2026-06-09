@@ -22,7 +22,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
 
   return (
     <aside
-      aria-label="Workflow execution console"
+      aria-label="Member run console"
       style={{
         background: "#ffffff",
         borderTop: "1px solid #e5e7eb",
@@ -35,7 +35,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
       }}
     >
       <section
-        data-testid="workflow-execution-result-panel"
+        data-testid="member-run-result-panel"
         style={{
           display: "grid",
           gap: 8,
@@ -117,8 +117,8 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
               ) : (
                 <Typography.Text style={{ color: "#6b7280", fontSize: 12 }}>
                   {rawFrames.length
-                    ? `${rawFrames.length} raw execution frame(s) received.`
-                    : "Execution logs will appear here after a workflow run returns frames."}
+                    ? "Run events were received, but no step logs are available yet."
+                    : "Run logs will appear here after the active member returns events."}
                 </Typography.Text>
               )}
             </div>

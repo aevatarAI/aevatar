@@ -1,0 +1,77 @@
+import { Button, Input, Space, Typography } from "antd";
+import React from "react";
+
+type WorkflowStudioRunOptionsPanelProps = {
+  readonly onClose: () => void;
+  readonly onRunInputChange: (input: string) => void;
+  readonly open: boolean;
+  readonly runInput: string;
+};
+
+const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps> = ({
+  onClose,
+  onRunInputChange,
+  open,
+  runInput,
+}) => {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <aside
+      aria-label="Run options panel"
+      style={{
+        background: "#ffffff",
+        borderLeft: "1px solid #e5e7eb",
+        display: "flex",
+        flexDirection: "column",
+        flexShrink: 0,
+        minHeight: 0,
+        width: 420,
+      }}
+    >
+      <header
+        style={{
+          borderBottom: "1px solid #e5e7eb",
+          padding: "16px 18px",
+        }}
+      >
+        <Space align="start" style={{ justifyContent: "space-between", width: "100%" }}>
+          <div style={{ minWidth: 0 }}>
+            <Typography.Text strong style={{ color: "#111827", fontSize: 16 }}>
+              Run options
+            </Typography.Text>
+          </div>
+          <Button onClick={onClose} size="small">
+            Close
+          </Button>
+        </Space>
+      </header>
+      <div
+        style={{
+          display: "grid",
+          gap: 14,
+          overflow: "auto",
+          padding: 18,
+        }}
+      >
+        <section>
+          <Typography.Text strong>Run input</Typography.Text>
+          <Input.TextArea
+            aria-label="Run input"
+            autoSize={{ minRows: 8, maxRows: 16 }}
+            onChange={(event) => onRunInputChange(event.target.value)}
+            placeholder="Optional input for this active member run"
+            style={{
+              marginTop: 8,
+            }}
+            value={runInput}
+          />
+        </section>
+      </div>
+    </aside>
+  );
+};
+
+export default WorkflowStudioRunOptionsPanel;
