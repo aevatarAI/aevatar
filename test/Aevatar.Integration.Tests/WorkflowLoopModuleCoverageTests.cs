@@ -65,6 +65,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             {
                 Id = "s1",
                 Type = "connector_call",
+                Next = "s2",
                 TargetRole = "coordinator",
                 Parameters = new Dictionary<string, string> { ["connector"] = "conn-a" },
             },
@@ -87,7 +88,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = true, Output = "next-input" }),
             ctx,
             CancellationToken.None);
-        var secondRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        var secondRequest = SingleStepRequest(ctx);
         secondRequest.StepId.Should().Be("s2");
         secondRequest.Input.Should().Be("next-input");
         ctx.Published.Clear();
@@ -458,6 +459,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             {
                 Id = "s1",
                 Type = "llm_call",
+                Next = "s2",
                 OnError = new StepErrorPolicy
                 {
                     Strategy = "skip",
@@ -483,7 +485,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var nextRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        var nextRequest = SingleStepRequest(ctx);
         nextRequest.StepId.Should().Be("s2");
         nextRequest.Input.Should().Be("skip-next-input");
     }
@@ -823,6 +825,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             {
                 Id = "s1",
                 Type = "llm_call",
+                Next = "s2",
                 TimeoutMs = 2000,
             },
             new StepDefinition
@@ -843,7 +846,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var next = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        var next = SingleStepRequest(ctx);
         next.StepId.Should().Be("s2");
         ctx.Canceled.Should().ContainSingle(x =>
             x.CallbackId.StartsWith("workflow-step-timeout:run-cancel-timeout:s1:", StringComparison.Ordinal));
@@ -945,6 +948,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             {
                 Id = "s1",
                 Type = "assign",
+                Next = "s2",
             },
             new StepDefinition
             {
@@ -984,7 +988,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var conditionalRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        var conditionalRequest = SingleStepRequest(ctx);
         conditionalRequest.StepId.Should().Be("s2");
         conditionalRequest.Parameters["condition"].Should().Be("true");
     }
@@ -1053,6 +1057,12 @@ public sealed class WorkflowLoopModuleCoverageTests
             .Where(x => x.direction == direction)
             .Select(x => x.evt)
             .OfType<WorkflowCompletedEvent>()
+            .Single();
+
+    private static StepRequestEvent SingleStepRequest(TestEventHandlerContext ctx) =>
+        ctx.Published
+            .Select(x => x.evt)
+            .OfType<StepRequestEvent>()
             .Single();
 
     private static EventEnvelope Envelope(IMessage evt)

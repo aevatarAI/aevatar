@@ -4,16 +4,18 @@ import { t } from "@/shared/i18n/messages";
 
 type WorkflowStudioRunOptionsPanelProps = {
   readonly onClose: () => void;
-  readonly onRunInputChange: (input: string) => void;
+  readonly onRunMessageChange: (message: string) => void;
   readonly open: boolean;
-  readonly runInput: string;
+  readonly runMessage: string;
+  readonly width?: number;
 };
 
 const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps> = ({
   onClose,
-  onRunInputChange,
+  onRunMessageChange,
   open,
-  runInput,
+  runMessage,
+  width = 420,
 }) => {
   if (!open) {
     return null;
@@ -32,7 +34,7 @@ const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps
         flexDirection: "column",
         flexShrink: 0,
         minHeight: 0,
-        width: 420,
+        width,
       }}
     >
       <header
@@ -62,20 +64,26 @@ const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps
       >
         <section>
           <Typography.Text strong>
-            {t("teamMemberWorkflowStudio.header.runInput", "Run input")}
+            {t(
+              "teamMemberWorkflowStudio.runOptionsPanel.messageLabel",
+              "Message to active member",
+            )}
           </Typography.Text>
           <Input.TextArea
-            aria-label={t("teamMemberWorkflowStudio.header.runInput", "Run input")}
+            aria-label={t(
+              "teamMemberWorkflowStudio.runOptionsPanel.messageLabel",
+              "Message to active member",
+            )}
             autoSize={{ minRows: 8, maxRows: 16 }}
-            onChange={(event) => onRunInputChange(event.target.value)}
+            onChange={(event) => onRunMessageChange(event.target.value)}
             placeholder={t(
-              "teamMemberWorkflowStudio.runOptionsPanel.inputPlaceholder",
-              "Optional input for this active member run",
+              "teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder",
+              "Optional message sent with this active member run",
             )}
             style={{
               marginTop: 8,
             }}
-            value={runInput}
+            value={runMessage}
           />
         </section>
       </div>

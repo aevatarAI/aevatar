@@ -219,7 +219,7 @@ public sealed class WorkflowValidatorTests
     }
 
     [Fact]
-    public void Validate_ShouldReportWarning_WhenImplicitSequentialOrdering()
+    public void Validate_ShouldAllowAdjacentDisconnectedSteps()
     {
         var doc = new WorkflowDocument
         {
@@ -232,7 +232,8 @@ public sealed class WorkflowValidatorTests
             ],
         };
         var findings = _validator.Validate(doc);
-        findings.Should().Contain(f => f.Code == "implicit_next");
+        findings.Should().NotContain(f => f.Code == "implicit_next");
+        findings.Where(f => f.Level == ValidationLevel.Error).Should().BeEmpty();
     }
 
     [Fact]
