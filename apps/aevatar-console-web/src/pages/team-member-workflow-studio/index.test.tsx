@@ -786,6 +786,75 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(within(inspector).queryByText("triage")).toBeNull();
   });
 
+  it("resizes the node inspector with keyboard controls and clamps width", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha/members/member-alpha/workflow",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockBranchingWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByText("nodes:2")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+    const inspector = screen.getByLabelText("Node inspector");
+    const resizeHandle = screen.getByLabelText("Resize node inspector");
+    expect(inspector).toHaveStyle({ width: "420px" });
+    expect(resizeHandle).toHaveAttribute("aria-valuemin", "360");
+    expect(resizeHandle).toHaveAttribute("aria-valuemax", "500");
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "420");
+
+    for (let index = 0; index < 10; index += 1) {
+      fireEvent.keyDown(resizeHandle, { key: "ArrowLeft" });
+    }
+
+    expect(inspector).toHaveStyle({ width: "500px" });
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "500");
+
+    for (let index = 0; index < 20; index += 1) {
+      fireEvent.keyDown(resizeHandle, { key: "ArrowRight" });
+    }
+
+    expect(inspector).toHaveStyle({ width: "360px" });
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
+  });
+
   it("shows a node inspector error for invalid parameter JSON", async () => {
     window.history.replaceState(
       {},

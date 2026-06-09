@@ -263,6 +263,9 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             "Resize node inspector",
           )}
           aria-orientation="vertical"
+          aria-valuemax={MAX_PANEL_WIDTH}
+          aria-valuemin={MIN_PANEL_WIDTH}
+          aria-valuenow={panelWidth}
           className="workflow-studio-node-inspector__resize"
           onKeyDown={resizeWithKeyboard}
           onPointerCancel={stopResize}
