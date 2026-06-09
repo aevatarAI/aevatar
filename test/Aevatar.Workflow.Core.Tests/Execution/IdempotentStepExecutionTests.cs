@@ -100,7 +100,7 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
-    public async Task StartWorkflow_WithResumeSeed_ShouldDispatchSeedStartStepAndHydrateVariables()
+    public async Task StartWorkflow_WithForkSeed_ShouldPersistHydratedSeedVariables()
     {
         var ctx = new RecordingEventHandlerContext();
         var host = new RecordingStateHost();
@@ -109,15 +109,15 @@ public sealed class IdempotentStepExecutionTests
         {
             RunId = "run-1",
             Input = "fresh-input",
-            ResumeSeed = new WorkflowRunResumeSeed
+            ForkSeed = new WorkflowRunForkSeed
             {
                 SourceRunId = "source-run",
                 StartAtStepId = "step-b",
             },
         };
-        start.ResumeSeed.Variables["input"] = "seed-input";
-        start.ResumeSeed.Variables["step_a_output"] = "alpha";
-        start.ResumeSeed.Variables["topic"] = "seed-topic";
+        start.ForkSeed.Variables["input"] = "seed-input";
+        start.ForkSeed.Variables["step_a_output"] = "alpha";
+        start.ForkSeed.Variables["topic"] = "seed-topic";
 
         await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
 
@@ -138,7 +138,7 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
-    public async Task StartWorkflow_WithResumeSeedMissingStep_ShouldPublishFailureWithoutDispatch()
+    public async Task StartWorkflow_WithForkSeedMissingStep_ShouldPublishFailureWithoutDispatch()
     {
         var ctx = new RecordingEventHandlerContext();
         var host = new RecordingStateHost();
@@ -149,7 +149,7 @@ public sealed class IdempotentStepExecutionTests
             {
                 RunId = "run-1",
                 Input = "hello",
-                ResumeSeed = new WorkflowRunResumeSeed
+                ForkSeed = new WorkflowRunForkSeed
                 {
                     SourceRunId = "source-run",
                     StartAtStepId = "missing-step",
@@ -457,7 +457,7 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
-    public async Task StartWorkflow_WithResumeSeedMissingStartStep_ShouldPublishFailureWithoutDispatch()
+    public async Task StartWorkflow_WithForkSeed_ShouldDispatchSeedStartStepAndHydrateVariables()
     {
         var ctx = new RecordingEventHandlerContext();
         var host = new RecordingStateHost();
@@ -466,13 +466,49 @@ public sealed class IdempotentStepExecutionTests
         {
             RunId = "run-resume",
             Input = "fresh-input",
-            ResumeSeed = new WorkflowRunResumeSeed
+            ForkSeed = new WorkflowRunForkSeed
+            {
+                SourceRunId = "run-source",
+                StartAtStepId = "step-b",
+            },
+        };
+        start.ForkSeed.Variables["input"] = "seed-input";
+        start.ForkSeed.Variables["step_a_output"] = "alpha";
+        start.ForkSeed.Variables["topic"] = "seed-topic";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var requests = StepRequests(ctx);
+        requests.Should().ContainSingle();
+        requests[0].StepId.Should().Be("step-b");
+        requests[0].Input.Should().Be("seed-input");
+        requests[0].Parameters["summary"].Should().Be("alpha:seed-topic:seed-input");
+        requests.Should().NotContain(x => x.StepId == "step-a");
+
+        var state = LoadKernelState(host);
+        state.CurrentStepId.Should().Be("step-b");
+        state.CurrentStepInput.Should().Be("seed-input");
+        state.Variables["step_a_output"].Should().Be("alpha");
+        state.Variables["topic"].Should().Be("seed-topic");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithForkSeedMissingStartStep_ShouldPublishFailureWithoutDispatch()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "run-resume",
+            Input = "fresh-input",
+            ForkSeed = new WorkflowRunForkSeed
             {
                 SourceRunId = "run-source",
                 StartAtStepId = "missing-step",
             },
         };
-        start.ResumeSeed.Variables["step_a_output"] = "alpha";
+        start.ForkSeed.Variables["step_a_output"] = "alpha";
 
         await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
 
@@ -481,12 +517,12 @@ public sealed class IdempotentStepExecutionTests
         completions.Should().HaveCount(2);
         completions.Should().OnlyContain(x => !x.Success);
         completions.Should().OnlyContain(
-            x => x.Error == "resume seed start step 'missing-step' was not found");
+            x => x.Error == "fork seed start step 'missing-step' was not found");
         host.GetExecutionState("workflow_execution_kernel").Should().BeNull();
     }
 
     [Fact]
-    public async Task StartWorkflow_WithResumeSeed_ShouldLetStartParametersOverrideSeedVariables()
+    public async Task StartWorkflow_WithForkSeed_ShouldLetStartParametersOverrideSeedVariables()
     {
         var ctx = new RecordingEventHandlerContext();
         var host = new RecordingStateHost();
@@ -495,15 +531,15 @@ public sealed class IdempotentStepExecutionTests
         {
             RunId = "run-resume",
             Input = "fresh-input",
-            ResumeSeed = new WorkflowRunResumeSeed
+            ForkSeed = new WorkflowRunForkSeed
             {
                 SourceRunId = "run-source",
                 StartAtStepId = "step-b",
             },
         };
-        start.ResumeSeed.Variables["input"] = "seed-input";
-        start.ResumeSeed.Variables["step_a_output"] = "alpha";
-        start.ResumeSeed.Variables["topic"] = "seed-topic";
+        start.ForkSeed.Variables["input"] = "seed-input";
+        start.ForkSeed.Variables["step_a_output"] = "alpha";
+        start.ForkSeed.Variables["topic"] = "seed-topic";
         start.Parameters["topic"] = "parameter-topic";
 
         await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
@@ -519,7 +555,7 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
-    public async Task StartWorkflow_WithoutResumeSeed_ShouldDispatchFirstStepWithFreshVariables()
+    public async Task StartWorkflow_WithoutForkSeed_ShouldDispatchFirstStepWithFreshVariables()
     {
         var ctx = new RecordingEventHandlerContext();
         var host = new RecordingStateHost();

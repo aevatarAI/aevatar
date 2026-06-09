@@ -53,9 +53,9 @@ message WorkflowExecutionCurrentStateDocument {
   google.protobuf.BoolValue success_wrapper = 17;
   string workflow_yaml = 18;
   map<string, string> inline_workflow_yaml_entries = 19;
-  map<string, string> resume_seed_variable_entries = 20;
-  repeated string resume_seed_completed_step_id_entries = 21;
-  string resume_seed_last_failed_step_id = 22;
+  map<string, string> fork_seed_variable_entries = 20;
+  repeated string fork_seed_completed_step_id_entries = 21;
+  string fork_seed_last_failed_step_id = 22;
   string scope_id = 23;
 }
 

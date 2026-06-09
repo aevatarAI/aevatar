@@ -16,13 +16,13 @@ internal sealed class WorkflowForkRunCommandTargetResolver
         "stopped",
     };
 
-    private readonly IWorkflowRunSeedQueryPort _seedQueryPort;
+    private readonly IWorkflowRunForkSeedQueryPort _seedQueryPort;
     private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
     private readonly IWorkflowDefinitionParser _definitionParser;
     private readonly WorkflowParser _workflowParser = new();
 
     public WorkflowForkRunCommandTargetResolver(
-        IWorkflowRunSeedQueryPort seedQueryPort,
+        IWorkflowRunForkSeedQueryPort seedQueryPort,
         IWorkflowRunProvisioningPort runProvisioningPort,
         IWorkflowDefinitionParser definitionParser)
     {
@@ -45,7 +45,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                 WorkflowForkRunStartError.InvalidCallerCredential(sourceRunId, startAtStepId));
         }
 
-        var seedView = await _seedQueryPort.GetResumeSeedAsync(sourceRunId, ct).ConfigureAwait(false);
+        var seedView = await _seedQueryPort.GetForkSeedAsync(sourceRunId, ct).ConfigureAwait(false);
         if (seedView == null)
         {
             return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
@@ -173,7 +173,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
             CallerCredential: command.CallerCredential,
             CommandIdSeed: command.CommandId,
             CorrelationIdSeed: command.CorrelationId,
-            ResumeSeed: new WorkflowChatRunResumeSeed(
+            ForkSeed: new WorkflowChatRunForkSeed(
                 sourceRunId,
                 startAtStepId,
                 variables,
@@ -226,7 +226,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
 
     private static string ResolveWorkflowYaml(
         WorkflowForkRunCommand command,
-        WorkflowRunResumeSeedView seedView) =>
+        WorkflowRunForkSeedView seedView) =>
         string.IsNullOrWhiteSpace(command.InlineYaml)
             ? seedView.WorkflowYaml
             : command.InlineYaml!;

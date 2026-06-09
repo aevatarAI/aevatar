@@ -65,7 +65,7 @@ owner: eanzhao
   - 按 `roles` 创建 run-scoped role actor 树；`agent_kind` 由 Foundation runtime 解析，省略时默认 `workflow.role-agent`
    - 通过依赖推导（`IWorkflowModuleDependencyExpander`）确定所需模块，经 `WorkflowModuleFactory` 创建并安装
    - 收到 `ChatRequestEvent` envelope 后发布 `StartWorkflowEvent`
-   - fork/resume-from-step seed 只走 request-level `WorkflowChatRequestEvent.resume_seed -> StartWorkflowEvent.resume_seed`；run bind 只表达 definition/run binding，不携带 seed。
+   - fork/resume-from-step seed 只走 request-level `WorkflowChatRequestEvent.fork_seed -> StartWorkflowEvent.fork_seed`；run bind 只表达 definition/run binding，不携带 seed。
    - 由 `WorkflowExecutionKernel` 推进 `StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`
 
 ```
@@ -109,7 +109,7 @@ BindWorkflowDefinition(yaml)
 - 定时唤醒走 `ScheduleSelfDurableTimeoutAsync`，在 Orleans runtime 下由 durable callback/reminder 机制承载；回调只向 schedule actor 发 fire command，不在中间层保存 schedule 状态。
 - schedule actor 只负责计算下一次 fire、生成幂等 key 并投递 prepared target envelope；workflow、GAgent service invocation 与 scripting 目标准备由 application/infrastructure adapter 承载，不进入 schedule actor core。
 - workflow schedule 的 `WorkflowName`、`Prompt`、`ScopeId` 仅存在 typed workflow target descriptor 中；service invocation 与 envelope target 使用各自 typed target descriptor；dispatch `Headers` 只保留传输扩展。
-- workflow fork 的 HTTP/automation 入口只构造 typed `WorkflowForkRunCommand` 并走 `ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>`；seed 来源读取 `IWorkflowRunSeedQueryPort` read model，不走 event-store replay 或 actor state side-read。
+- workflow fork 的 HTTP/automation 入口只构造 typed `WorkflowForkRunCommand` 并走 `ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>`；seed 来源读取 `IWorkflowRunForkSeedQueryPort` read model，不走 event-store replay 或 actor state side-read。
 - public API identity fields 必须显式区分 `ScheduleActorId` 与 `TargetActorId`：`ScheduleActorId` 表示持有定时配置与 fire 事实的 schedule actor receipt，`TargetActorId` 表示最近一次或摘要中的投递目标；不得用一个 `ActorId` 混用 schedule actor receipt 和目标摘要。
 - 幂等 key 格式固定为 `schedule:{scheduleId}:fire:{scheduledFireAtUtc:o}`，并随 scheduled fire dispatch headers 透传。
 - schedule 查询只读取 `ScheduledDispatchDocument` read model；API 不读取 actor state，不在 query path replay event store。

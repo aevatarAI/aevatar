@@ -30,8 +30,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         if (command.LlmControl != null)
             chatRequest.LlmControl = ToProto(command.LlmControl);
         chatRequest.CallerCredential = ToProto(command.CallerCredential);
-        if (command.ResumeSeed != null)
-            chatRequest.ResumeSeed = ToProto(command.ResumeSeed);
+        if (command.ForkSeed != null)
+            chatRequest.ForkSeed = ToProto(command.ForkSeed);
 
         var envelope = new EventEnvelope
         {
@@ -100,10 +100,10 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         };
     }
 
-    private static Aevatar.Workflow.Abstractions.WorkflowRunResumeSeed ToProto(
-        WorkflowChatRunResumeSeed source)
+    private static Aevatar.Workflow.Abstractions.WorkflowRunForkSeed ToProto(
+        WorkflowChatRunForkSeed source)
     {
-        var payload = new Aevatar.Workflow.Abstractions.WorkflowRunResumeSeed
+        var payload = new Aevatar.Workflow.Abstractions.WorkflowRunForkSeed
         {
             SourceRunId = Normalize(source.SourceRunId),
             StartAtStepId = Normalize(source.StartAtStepId),

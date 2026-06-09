@@ -9,10 +9,10 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Tests;
 
-public sealed class WorkflowRunSeedQueryPortTests
+public sealed class WorkflowRunForkSeedQueryPortTests
 {
     [Fact]
-    public void ResumeSeedReadModelMapper_ShouldMapCompletedRunSeed()
+    public void ForkSeedReadModelMapper_ShouldMapCompletedRunForkSeed()
     {
         var state = BuildWorkflowRunState("run-completed", "completed", finalError: string.Empty);
         state.ExecutionStates["kernel-state"] = Any.Pack(new WorkflowExecutionKernelState
@@ -30,7 +30,7 @@ public sealed class WorkflowRunSeedQueryPortTests
             },
         });
 
-        var mapper = new WorkflowRunResumeSeedReadModelMapper();
+        var mapper = new WorkflowRunForkSeedReadModelMapper();
         var snapshot = mapper.ToProjectionSnapshot(state);
         var document = BuildDocument(state, snapshot);
         var view = mapper.ToSeedView(document);
@@ -48,7 +48,7 @@ public sealed class WorkflowRunSeedQueryPortTests
     }
 
     [Fact]
-    public async Task GetResumeSeedAsync_ShouldReadFailedRunSeedThroughCurrentStateReadModel()
+    public async Task GetForkSeedAsync_ShouldReadFailedRunForkSeedThroughCurrentStateReadModel()
     {
         var state = BuildWorkflowRunState("run-failed", "failed", "step boom");
         state.ExecutionStates["kernel-state"] = Any.Pack(new WorkflowExecutionKernelState
@@ -63,7 +63,7 @@ public sealed class WorkflowRunSeedQueryPortTests
             },
         });
 
-        var mapper = new WorkflowRunResumeSeedReadModelMapper();
+        var mapper = new WorkflowRunForkSeedReadModelMapper();
         var currentStateReader = new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>
         {
             Item = BuildDocument(state, mapper.ToProjectionSnapshot(state)),
@@ -77,12 +77,12 @@ public sealed class WorkflowRunSeedQueryPortTests
                 "demo",
                 "name: demo\nsteps: []",
                 new Dictionary<string, string>(StringComparer.Ordinal)));
-        var port = new WorkflowRunSeedQueryPort(
+        var port = new WorkflowRunForkSeedQueryPort(
             currentStateReader,
             bindingReader,
             mapper);
 
-        var view = await port.GetResumeSeedAsync("run-failed", CancellationToken.None);
+        var view = await port.GetForkSeedAsync("run-failed", CancellationToken.None);
 
         view.Should().NotBeNull();
         view!.Status.Should().Be("failed");
@@ -114,7 +114,7 @@ public sealed class WorkflowRunSeedQueryPortTests
 
     private static WorkflowExecutionCurrentStateDocument BuildDocument(
         WorkflowRunState state,
-        WorkflowRunResumeSeedProjectionSnapshot seedSnapshot) =>
+        WorkflowRunForkSeedProjectionSnapshot seedSnapshot) =>
         new()
         {
             Id = $"actor-{state.RunId}",
@@ -129,12 +129,12 @@ public sealed class WorkflowRunSeedQueryPortTests
                 x => x.Key,
                 x => x.Value,
                 StringComparer.Ordinal),
-            ResumeSeedVariables = seedSnapshot.Variables.ToDictionary(
+            ForkSeedVariables = seedSnapshot.Variables.ToDictionary(
                 x => x.Key,
                 x => x.Value,
                 StringComparer.Ordinal),
-            ResumeSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
-            ResumeSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
+            ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
+            ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
         };
 
     private sealed class FakeWorkflowRunBindingReader(params WorkflowActorBinding[] bindings)

@@ -10,7 +10,7 @@ owner: workflow
 
 Forking a workflow run is a command surface, not a private application service. HTTP adapters and automatic coordinators construct a typed `WorkflowForkRunCommand` and dispatch it through `ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>`.
 
-The source run seed is read through `IWorkflowRunSeedQueryPort`, which is a read-model query contract. The fork path does not read actor state, replay the event store, or attach seed data to `WorkflowDefinitionBinding`.
+The source run seed is read through `IWorkflowRunForkSeedQueryPort`, which is a read-model query contract. The fork path does not read actor state, replay the event store, or attach seed data to `WorkflowDefinitionBinding`.
 
 ## Seed Path
 
@@ -18,17 +18,17 @@ The only authoritative seed ingress for a new run is request-level:
 
 ```text
 WorkflowForkRunCommand
-  -> WorkflowChatRunRequest.ResumeSeed
-  -> WorkflowChatRequestEvent.resume_seed
-  -> StartWorkflowEvent.resume_seed
+  -> WorkflowChatRunRequest.ForkSeed
+  -> WorkflowChatRequestEvent.fork_seed
+  -> StartWorkflowEvent.fork_seed
   -> WorkflowExecutionKernel
 ```
 
-Run binding remains definition/run binding only: definition actor id, workflow name, workflow YAML, inline workflow YAMLs, run id, and scope id. It must not carry resume seed variables.
+Run binding remains definition/run binding only: definition actor id, workflow name, workflow YAML, inline workflow YAMLs, run id, and scope id. It must not carry fork seed variables.
 
 ## Runtime Semantics
 
-`WorkflowExecutionKernel` applies `StartWorkflowEvent.resume_seed.variables` before normal start parameters, starts from `resume_seed.start_at_step_id` when present, and publishes a failed `WorkflowCompletedEvent` if that step is missing. This keeps topology validation inside the workflow core, where step identity is owned.
+`WorkflowExecutionKernel` applies `StartWorkflowEvent.fork_seed.variables` before normal start parameters, starts from `fork_seed.start_at_step_id` when present, and publishes a failed `WorkflowCompletedEvent` if that step is missing. This keeps topology validation inside the workflow core, where step identity is owned.
 
 ## Command Surface
 
@@ -38,4 +38,4 @@ Caller credential handling is intentionally narrow. Fork dispatch can use the cu
 
 ## Verification
 
-Coverage must assert that the HTTP fork endpoint calls the typed command dispatch service, the chat request envelope carries `resume_seed`, the run actor forwards it onto `StartWorkflowEvent`, and core execution resumes at the requested step.
+Coverage must assert that the HTTP fork endpoint calls the typed command dispatch service, the chat request envelope carries `fork_seed`, the run actor forwards it onto `StartWorkflowEvent`, and core execution forks at the requested step.

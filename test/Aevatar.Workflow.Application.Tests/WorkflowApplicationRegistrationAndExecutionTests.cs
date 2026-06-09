@@ -220,7 +220,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
         services.Should().NotContain(x =>
-            x.ServiceType == typeof(IWorkflowRunSeedQueryPort));
+            x.ServiceType == typeof(IWorkflowRunForkSeedQueryPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>));
@@ -399,7 +399,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldCarryResumeSeed()
+    public void EnvelopeFactory_ShouldCarryForkSeed()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -408,7 +408,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "resume-input",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
-            ResumeSeed: new WorkflowChatRunResumeSeed(
+            ForkSeed: new WorkflowChatRunForkSeed(
                 "source-run",
                 "step-b",
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -425,14 +425,14 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
 
         request.Prompt.Should().Be("resume-input");
-        request.ResumeSeed.SourceRunId.Should().Be("source-run");
-        request.ResumeSeed.StartAtStepId.Should().Be("step-b");
-        request.ResumeSeed.Variables.Should().Contain("input", "seed-input");
-        request.ResumeSeed.Variables.Should().Contain("step-a", "alpha");
+        request.ForkSeed.SourceRunId.Should().Be("source-run");
+        request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.Variables.Should().Contain("input", "seed-input");
+        request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldCarryResumeSeedOnRequestLevel()
+    public void EnvelopeFactory_ShouldCarryForkSeedOnRequestLevel()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -441,7 +441,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "resume-input",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
-            ResumeSeed: new WorkflowChatRunResumeSeed(
+            ForkSeed: new WorkflowChatRunForkSeed(
                 "source-run",
                 "step-b",
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -458,11 +458,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             new Dictionary<string, string>()));
         var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
 
-        request.ResumeSeed.SourceRunId.Should().Be("source-run");
-        request.ResumeSeed.StartAtStepId.Should().Be("step-b");
-        request.ResumeSeed.Attempt.Should().Be(2);
-        request.ResumeSeed.Variables.Should().Contain("input", "seed-input");
-        request.ResumeSeed.Variables.Should().Contain("step-a", "alpha");
+        request.ForkSeed.SourceRunId.Should().Be("source-run");
+        request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.Attempt.Should().Be(2);
+        request.ForkSeed.Variables.Should().Contain("input", "seed-input");
+        request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
     }
 
     [Fact]

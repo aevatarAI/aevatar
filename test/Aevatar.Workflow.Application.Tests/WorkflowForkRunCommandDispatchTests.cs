@@ -163,7 +163,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldLetVariableOverridesWinInRequestLevelResumeSeed()
+    public async Task DispatchAsync_ShouldLetVariableOverridesWinInRequestLevelForkSeed()
     {
         var seedPort = new RecordingSeedQueryPort
         {
@@ -194,14 +194,14 @@ public sealed class WorkflowForkRunCommandDispatchTests
 
         result.Succeeded.Should().BeTrue();
         var request = dispatchPort.DispatchedRequest();
-        request.ResumeSeed.Variables["topic"].Should().Be("override-topic");
-        request.ResumeSeed.Variables["extra"].Should().Be("override-extra");
-        request.ResumeSeed.Variables["step-a"].Should().Be("alpha");
+        request.ForkSeed.Variables["topic"].Should().Be("override-topic");
+        request.ForkSeed.Variables["extra"].Should().Be("override-extra");
+        request.ForkSeed.Variables["step-a"].Should().Be("alpha");
         request.Prompt.Should().Be("seed-input");
     }
 
     [Fact]
-    public async Task DispatchAsync_HappyPath_ShouldCreateRunWithChosenYamlAndDispatchTypedSeedAndScope()
+    public async Task DispatchAsync_HappyPath_ShouldCreateRunWithChosenYamlAndDispatchTypedForkSeedAndScope()
     {
         var sourceYaml = WorkflowYaml("source");
         var editedYaml = WorkflowYaml("edited");
@@ -273,11 +273,11 @@ public sealed class WorkflowForkRunCommandDispatchTests
         request.Prompt.Should().Be("override-input");
         request.ScopeId.Should().Be("scope-1");
         request.CallerCredential.BearerToken.Should().Be("typed-token");
-        request.ResumeSeed.SourceRunId.Should().Be("source-run");
-        request.ResumeSeed.StartAtStepId.Should().Be("step-b");
-        request.ResumeSeed.Variables.Should().Contain("step-a", "alpha");
-        request.ResumeSeed.Variables.Should().Contain("topic", "seed-topic");
-        request.ResumeSeed.Variables.Should().Contain("input", "override-input");
+        request.ForkSeed.SourceRunId.Should().Be("source-run");
+        request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
+        request.ForkSeed.Variables.Should().Contain("topic", "seed-topic");
+        request.ForkSeed.Variables.Should().Contain("input", "override-input");
     }
 
     [Fact]
@@ -371,14 +371,15 @@ public sealed class WorkflowForkRunCommandDispatchTests
         return new WorkflowForkRunCommandDispatchService(pipeline);
     }
 
-    private static WorkflowRunResumeSeedView CreateSeedView(
+    private static WorkflowRunForkSeedView CreateSeedView(
         string status,
         string? workflowYaml = null,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         IReadOnlyDictionary<string, string>? variables = null,
         string scopeId = "") =>
-        new WorkflowRunResumeSeedView(
+        new WorkflowRunForkSeedView(
             SourceRunId: "source-run",
+            Status: status,
             WorkflowYaml: workflowYaml ?? WorkflowYaml("source"),
             InlineWorkflowYamls: inlineWorkflowYamls ?? new Dictionary<string, string>(StringComparer.Ordinal),
             Variables: variables ?? new Dictionary<string, string>(StringComparer.Ordinal)
@@ -388,7 +389,6 @@ public sealed class WorkflowForkRunCommandDispatchTests
             },
             CompletedStepIds: ["step-a"],
             LastFailedStepId: "step-b",
-            Status: status,
             FinalError: status.Equals("failed", StringComparison.OrdinalIgnoreCase) ? "boom" : string.Empty,
             ScopeId: scopeId);
 
@@ -403,12 +403,12 @@ public sealed class WorkflowForkRunCommandDispatchTests
             type: transform
         """;
 
-    private sealed class RecordingSeedQueryPort : IWorkflowRunSeedQueryPort
+    private sealed class RecordingSeedQueryPort : IWorkflowRunForkSeedQueryPort
     {
-        public WorkflowRunResumeSeedView? View { get; set; }
+        public WorkflowRunForkSeedView? View { get; set; }
         public List<string> RequestedRunIds { get; } = [];
 
-        public Task<WorkflowRunResumeSeedView?> GetResumeSeedAsync(
+        public Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
             string runId,
             CancellationToken ct = default)
         {

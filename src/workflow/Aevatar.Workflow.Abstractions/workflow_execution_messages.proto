@@ -45,10 +45,10 @@ message WorkflowChatRequestEvent {
   map<string, string> metadata = 7;
   WorkflowLlmControlContext llm_control = 8;
   WorkflowCallerCredential caller_credential = 10;
-  WorkflowRunResumeSeed resume_seed = 11;
+  WorkflowRunForkSeed fork_seed = 11;
 }
 
-message WorkflowRunResumeSeed
+message WorkflowRunForkSeed
 {
   string source_run_id = 1;
   string start_at_step_id = 2;
@@ -70,7 +70,7 @@ message StartWorkflowEvent
   string input = 2;
   map<string, string> parameters = 3;
   string run_id = 4;
-  WorkflowRunResumeSeed resume_seed = 5;
+  WorkflowRunForkSeed fork_seed = 5;
 }
 message BindWorkflowRunDefinitionEvent
 {

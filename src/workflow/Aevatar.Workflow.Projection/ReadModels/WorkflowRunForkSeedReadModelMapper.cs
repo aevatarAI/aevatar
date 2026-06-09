@@ -4,7 +4,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
 
-public sealed class WorkflowRunResumeSeedReadModelMapper
+public sealed class WorkflowRunForkSeedReadModelMapper
 {
     private const string InputVariableKey = "input";
     private const string WorkflowCallInvocationIdVariableKey = "workflow_call.invocation_id";
@@ -12,23 +12,23 @@ public sealed class WorkflowRunResumeSeedReadModelMapper
     private const string StepMirrorVariablePrefix = "steps.";
     private const string FailedStatus = "failed";
 
-    public WorkflowRunResumeSeedView ToSeedView(WorkflowExecutionCurrentStateDocument source)
+    public WorkflowRunForkSeedView ToSeedView(WorkflowExecutionCurrentStateDocument source)
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        return new WorkflowRunResumeSeedView(
+        return new WorkflowRunForkSeedView(
             source.RunId ?? string.Empty,
+            source.Status ?? string.Empty,
             source.WorkflowYaml ?? string.Empty,
             CopyMap(source.InlineWorkflowYamls),
-            CopyMap(source.ResumeSeedVariables),
-            source.ResumeSeedCompletedStepIds.ToList(),
-            source.ResumeSeedLastFailedStepId ?? string.Empty,
-            source.Status ?? string.Empty,
+            CopyMap(source.ForkSeedVariables),
+            source.ForkSeedCompletedStepIds.ToList(),
+            source.ForkSeedLastFailedStepId ?? string.Empty,
             source.FinalError ?? string.Empty,
             source.ScopeId ?? string.Empty);
     }
 
-    public WorkflowRunResumeSeedProjectionSnapshot ToProjectionSnapshot(WorkflowRunState state)
+    public WorkflowRunForkSeedProjectionSnapshot ToProjectionSnapshot(WorkflowRunState state)
     {
         ArgumentNullException.ThrowIfNull(state);
 
@@ -41,7 +41,7 @@ public sealed class WorkflowRunResumeSeedReadModelMapper
             ? kernelState?.CurrentStepId?.Trim() ?? string.Empty
             : string.Empty;
 
-        return new WorkflowRunResumeSeedProjectionSnapshot(
+        return new WorkflowRunForkSeedProjectionSnapshot(
             state.WorkflowYaml ?? string.Empty,
             CopyMap(state.InlineWorkflowYamls),
             variables,
@@ -84,7 +84,7 @@ public sealed class WorkflowRunResumeSeedReadModelMapper
             StringComparer.Ordinal);
 }
 
-public sealed record WorkflowRunResumeSeedProjectionSnapshot(
+public sealed record WorkflowRunForkSeedProjectionSnapshot(
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
     IReadOnlyDictionary<string, string> Variables,

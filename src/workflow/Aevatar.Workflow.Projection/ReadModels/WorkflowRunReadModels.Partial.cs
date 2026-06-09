@@ -182,16 +182,16 @@ public sealed partial class WorkflowExecutionCurrentStateDocument : IProjectionR
         set => WorkflowExecutionReadModelCollections.ReplaceMap(InlineWorkflowYamlEntries, value);
     }
 
-    public IDictionary<string, string> ResumeSeedVariables
+    public IDictionary<string, string> ForkSeedVariables
     {
-        get => ResumeSeedVariableEntries;
-        set => WorkflowExecutionReadModelCollections.ReplaceMap(ResumeSeedVariableEntries, value);
+        get => ForkSeedVariableEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(ForkSeedVariableEntries, value);
     }
 
-    public IList<string> ResumeSeedCompletedStepIds
+    public IList<string> ForkSeedCompletedStepIds
     {
-        get => ResumeSeedCompletedStepIdEntries;
-        set => WorkflowExecutionReadModelCollections.ReplaceCollection(ResumeSeedCompletedStepIdEntries, value);
+        get => ForkSeedCompletedStepIdEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(ForkSeedCompletedStepIdEntries, value);
     }
 }
 
