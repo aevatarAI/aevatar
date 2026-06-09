@@ -1729,11 +1729,7 @@ jest.mock("./components/StudioBuildPanels", () => {
     );
     const selectedStep = mockReact.useMemo(() => {
       const selectedStepId = String(props.selectedGraphNodeId || "").replace(/^step:/, "");
-      return (
-        props.workflowGraph?.steps?.find((step: any) => step.id === selectedStepId) ||
-        props.workflowGraph?.steps?.[0] ||
-        null
-      );
+      return props.workflowGraph?.steps?.find((step: any) => step.id === selectedStepId) || null;
     }, [props.selectedGraphNodeId, props.workflowGraph?.steps]);
     const selectedStepDraftSeed = mockReact.useMemo(() => ({
       kind: "step",
@@ -4989,7 +4985,7 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByLabelText("Step ID")).toHaveValue("draft_step");
+      expect(mockLastWorkflowBuildPanelProps?.workflowGraph?.steps?.length).toBeGreaterThan(0);
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Add step" }));
@@ -5101,10 +5097,23 @@ describe("StudioPage", () => {
     });
   });
 
-  it("applies workflow step changes without requiring a manual graph selection first", async () => {
+  it("applies workflow step changes after a graph node is selected", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        mockLastWorkflowBuildPanelProps?.workflowGraph?.nodes?.some(
+          (node: any) => node.id === "step:draft_step",
+        ),
+      ).toBe(true);
+    });
+    act(() => {
+      mockLastWorkflowBuildPanelProps?.onSelectGraphNode?.("step:draft_step");
+    });
+    await waitFor(() => {
+      expect(mockLastWorkflowBuildPanelProps?.selectedGraphNodeId).toBe("step:draft_step");
+    });
     await waitFor(() => {
       expect(screen.getByLabelText("Step ID")).toHaveValue("draft_step");
     });

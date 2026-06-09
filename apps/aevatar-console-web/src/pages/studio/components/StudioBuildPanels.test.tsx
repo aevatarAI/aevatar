@@ -277,6 +277,19 @@ function buildWorkflowYaml(document: WorkflowBuildHarnessDocument): string {
   ].join('\n');
 }
 
+function dispatchPointerLikeEvent(
+  target: EventTarget,
+  type: string,
+  clientX: number,
+): void {
+  const event = new Event(type, { bubbles: true });
+  Object.defineProperty(event, 'clientX', {
+    configurable: true,
+    value: clientX,
+  });
+  target.dispatchEvent(event);
+}
+
 function WorkflowBuildHarness({
   buildWorkflowYamlsOverride,
   initialDocumentOverride,
@@ -284,6 +297,7 @@ function WorkflowBuildHarness({
   onContinueToBind,
   onSaveDraft,
   runtimePrimitivesOverride,
+  selectedGraphNodeIdOverride,
 }: {
   readonly buildWorkflowYamlsOverride?: BuildWorkflowYamlsForTest;
   readonly initialDocumentOverride?: WorkflowBuildHarnessDocument;
@@ -291,6 +305,7 @@ function WorkflowBuildHarness({
   readonly onContinueToBind: jest.Mock;
   readonly onSaveDraft: jest.Mock;
   readonly runtimePrimitivesOverride?: readonly WorkflowPrimitiveTestDescriptor[];
+  readonly selectedGraphNodeIdOverride?: string;
 }) {
   const documentSeed = initialDocumentOverride ?? initialDocument;
   const [document, setDocument] = React.useState(() => cloneValue(documentSeed));
@@ -298,7 +313,7 @@ function WorkflowBuildHarness({
     buildWorkflowYaml(documentSeed),
   );
   const [selectedGraphNodeId, setSelectedGraphNodeId] = React.useState(
-    'step:draft_step',
+    selectedGraphNodeIdOverride ?? 'step:draft_step',
   );
   const [layout, setLayout] = React.useState<unknown>(null);
   const [runPrompt, setRunPrompt] = React.useState('Please triage the refund request.');
@@ -1240,6 +1255,101 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(handleContinueToBind).toHaveBeenCalledWith(
       expect.stringContaining('review_step'),
     );
+  });
+
+  it('renders the step detail as an overlay without resizing the editor workspace', async () => {
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    const workspace = screen.getByTestId('workflow-editor-workspace');
+    const primaryColumn = screen.getByTestId('workflow-build-primary-column');
+    const stepDetailPanel = await screen.findByTestId('workflow-step-detail-panel');
+    const resizeHandle = screen.getByTestId('workflow-step-detail-resize-handle');
+
+    expect(workspace).toHaveStyle({
+      display: 'grid',
+      position: 'relative',
+    });
+    expect(primaryColumn).toHaveStyle({
+      width: '100%',
+    });
+    expect(stepDetailPanel).toHaveStyle({
+      position: 'absolute',
+      width: '420px',
+    });
+    expect(resizeHandle).toHaveStyle({
+      cursor: 'ew-resize',
+    });
+  });
+
+  it('does not render the step detail inspector until a node is selected', () => {
+    render(
+      <WorkflowBuildHarness
+        selectedGraphNodeIdOverride=""
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId('workflow-step-detail-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mock-graph-selected-node')).toHaveTextContent('');
+  });
+
+  it('keeps the inspector open and swaps content when the selected node changes', async () => {
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    const stepDetailPanel = await screen.findByTestId('workflow-step-detail-panel');
+    expect(within(stepDetailPanel).getByText('draft_step')).toBeInTheDocument();
+    expect(screen.getByLabelText('Step ID')).toHaveValue('draft_step');
+
+    fireEvent.click(screen.getByRole('button', { name: 'approve_step' }));
+
+    expect(screen.getByTestId('workflow-step-detail-panel')).toBe(stepDetailPanel);
+    await waitFor(() => {
+      expect(screen.getByLabelText('Step ID')).toHaveValue('approve_step');
+    });
+    expect(within(stepDetailPanel).getByText('approve_step')).toBeInTheDocument();
+  });
+
+  it('keeps the inspector resize width between the desktop limits', async () => {
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    const stepDetailPanel = await screen.findByTestId('workflow-step-detail-panel');
+    const resizeHandle = screen.getByTestId('workflow-step-detail-resize-handle');
+
+    act(() => {
+      dispatchPointerLikeEvent(resizeHandle, 'pointerdown', 700);
+      dispatchPointerLikeEvent(window, 'pointermove', 0);
+      window.dispatchEvent(new Event('pointerup'));
+    });
+
+    expect(stepDetailPanel).toHaveStyle({
+      width: '500px',
+    });
+
+    act(() => {
+      dispatchPointerLikeEvent(resizeHandle, 'pointerdown', 700);
+      dispatchPointerLikeEvent(window, 'pointermove', 1200);
+      window.dispatchEvent(new Event('pointerup'));
+    });
+
+    expect(stepDetailPanel).toHaveStyle({
+      width: '360px',
+    });
   });
 
   it('writes llm_call prompt edits to prompt_prefix when runtime exposes prompt', async () => {

@@ -4125,12 +4125,7 @@ const StudioPage: React.FC = () => {
       return currentNodeId;
     }
 
-    const firstStepId = trimOptional(workflowGraph.steps[0]?.id);
-    if (firstStepId) {
-      return `step:${firstStepId}`;
-    }
-
-    return trimOptional(workflowGraph.nodes[0]?.id);
+    return '';
   }, [selectedGraphNodeId, workflowGraph.nodes, workflowGraph.steps]);
   const workflowRoleOptions = useMemo(
     () =>
@@ -4150,14 +4145,6 @@ const StudioPage: React.FC = () => {
   useEffect(() => {
     setSelectedGraphNodeId('');
   }, [activeWorkflowSourceKey]);
-
-  useEffect(() => {
-    if (trimOptional(selectedGraphNodeId) === effectiveSelectedGraphNodeId) {
-      return;
-    }
-
-    setSelectedGraphNodeId(effectiveSelectedGraphNodeId);
-  }, [effectiveSelectedGraphNodeId, selectedGraphNodeId]);
 
   const isDraftDirty =
     Boolean(activeWorkflowSourceKey) &&

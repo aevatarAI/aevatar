@@ -114,6 +114,10 @@ const workflowWorkbenchLayoutStyle: React.CSSProperties = {
 };
 
 const workflowEditingSurfaceHeight = 'clamp(560px, calc(100vh - 320px), 760px)';
+const WORKFLOW_STEP_INSPECTOR_MIN_WIDTH = 360;
+const WORKFLOW_STEP_INSPECTOR_DEFAULT_WIDTH = 420;
+const WORKFLOW_STEP_INSPECTOR_MAX_WIDTH = 500;
+const WORKFLOW_STEP_INSPECTOR_COMPACT_QUERY = '(max-width: 900px)';
 const SCRIPT_SAVE_OBSERVATION_POLL_DELAYS_MS = [
   1000,
   2000,
@@ -177,10 +181,10 @@ function createScriptStarterPackage() {
 
 const workflowWorkspaceRowStyle: React.CSSProperties = {
   alignItems: 'stretch',
-  display: 'flex',
-  gap: 16,
+  display: 'grid',
   minHeight: workflowEditingSurfaceHeight,
   minWidth: 0,
+  position: 'relative',
 };
 
 const buildSurfaceCardStyle: React.CSSProperties = {
@@ -286,21 +290,22 @@ const workflowCanvasSurfaceStyle: React.CSSProperties = {
   background: '#fdfaf4',
   border: '1px solid #ede5d8',
   borderRadius: 22,
-  flex: '1 1 auto',
+  height: '100%',
   minHeight: 0,
   overflow: 'hidden',
   padding: 12,
+  position: 'relative',
 };
 
 const workflowCanvasPanelStyle: React.CSSProperties = {
   ...buildSurfaceCardStyle,
   display: 'grid',
-  flex: '8 1 0',
   gap: 16,
   gridTemplateRows: 'auto minmax(0, 1fr)',
   height: '100%',
   minWidth: 0,
   overflow: 'hidden',
+  width: '100%',
 };
 
 const workflowCanvasBodyStyle: React.CSSProperties = {
@@ -308,18 +313,18 @@ const workflowCanvasBodyStyle: React.CSSProperties = {
   flexDirection: 'column',
   gap: 16,
   minHeight: 0,
+  position: 'relative',
 };
 
 const workflowStepDetailCardStyle: React.CSSProperties = {
   ...buildSurfaceCardStyle,
   display: 'grid',
-  flex: '2 1 320px',
   gap: 16,
   gridTemplateRows: 'auto auto minmax(0, 1fr)',
-  height: '100%',
-  maxWidth: 360,
   minWidth: 0,
   overflow: 'hidden',
+  position: 'absolute',
+  zIndex: 4,
 };
 
 const workflowStepDetailBodyStyle: React.CSSProperties = {
@@ -433,6 +438,17 @@ const workflowAdvancedSectionStyle: React.CSSProperties = {
   border: '1px solid #efe7da',
   borderRadius: 16,
   padding: 12,
+};
+
+const workflowStepInspectorResizeHandleStyle: React.CSSProperties = {
+  bottom: 16,
+  cursor: 'ew-resize',
+  left: 0,
+  outline: 'none',
+  position: 'absolute',
+  top: 16,
+  width: 10,
+  zIndex: 5,
 };
 
 const dryRunAsideStyle: React.CSSProperties = {
@@ -599,6 +615,64 @@ function tryParseStepParameters(
   } catch {
     return null;
   }
+}
+
+function clampWorkflowStepInspectorWidth(width: number): number {
+  return Math.min(
+    WORKFLOW_STEP_INSPECTOR_MAX_WIDTH,
+    Math.max(WORKFLOW_STEP_INSPECTOR_MIN_WIDTH, width),
+  );
+}
+
+function useWorkflowStepInspectorCompactViewport(): boolean {
+  const [isCompact, setIsCompact] = React.useState(false);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia(WORKFLOW_STEP_INSPECTOR_COMPACT_QUERY);
+    const handleChange = (event: MediaQueryList | MediaQueryListEvent) => {
+      setIsCompact(event.matches);
+    };
+
+    handleChange(mediaQuery);
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
+
+  return isCompact;
+}
+
+function getWorkflowStepInspectorStyle(
+  width: number,
+  isCompact: boolean,
+): React.CSSProperties {
+  if (isCompact) {
+    return {
+      ...workflowStepDetailCardStyle,
+      bottom: 12,
+      left: 12,
+      maxHeight: 'min(76%, 520px)',
+      right: 12,
+      width: 'auto',
+    };
+  }
+
+  return {
+    ...workflowStepDetailCardStyle,
+    bottom: 12,
+    minWidth: WORKFLOW_STEP_INSPECTOR_MIN_WIDTH,
+    right: 12,
+    top: 12,
+    width,
+  };
 }
 
 function normalizePrimitiveParameterDescriptor(
@@ -1096,6 +1170,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   const [stepDraft, setStepDraft] = React.useState<StudioStepInspectorDraft | null>(
     null,
   );
+  const [stepInspectorWidth, setStepInspectorWidth] = React.useState(
+    WORKFLOW_STEP_INSPECTOR_DEFAULT_WIDTH,
+  );
   const [stepMutationPending, setStepMutationPending] = React.useState<
     '' | 'add' | 'apply' | 'remove'
   >('');
@@ -1104,6 +1181,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   const runPendingRef = React.useRef(false);
   const stepMutationPendingRef = React.useRef(false);
   const stepDraftRef = React.useRef<StudioStepInspectorDraft | null>(null);
+  const isStepInspectorCompact = useWorkflowStepInspectorCompactViewport();
   const updateStepDraft = React.useCallback(
     (
       updater:
@@ -1126,16 +1204,11 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     const stepId = selectedGraphNodeId.startsWith('step:')
       ? selectedGraphNodeId.slice('step:'.length)
       : '';
-    return (
-      workflowGraph.steps.find((item) => item.id === stepId) ||
-      workflowGraph.steps[0] ||
-      null
-    );
+    return workflowGraph.steps.find((item) => item.id === stepId) || null;
   }, [selectedGraphNodeId, workflowGraph.steps]);
   const selectedNodeId = React.useMemo(
     () =>
-      selectedGraphNodeId ||
-      (selectedStep ? `step:${selectedStep.id}` : ''),
+      selectedStep ? `step:${selectedStep.id}` : selectedGraphNodeId,
     [selectedGraphNodeId, selectedStep],
   );
   const selectedStepId = React.useMemo(
@@ -1223,16 +1296,14 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         : null,
     [stepDraft],
   );
-
-  React.useEffect(() => {
-    if (selectedNodeId) {
-      return;
-    }
-
-    if (selectedStep) {
-      onSelectGraphNode(`step:${selectedStep.id}`);
-    }
-  }, [onSelectGraphNode, selectedNodeId, selectedStep]);
+  const stepInspectorStyle = React.useMemo(
+    () =>
+      getWorkflowStepInspectorStyle(
+        stepInspectorWidth,
+        isStepInspectorCompact,
+      ),
+    [isStepInspectorCompact, stepInspectorWidth],
+  );
 
   React.useEffect(() => {
     if (!selectedStepDraftSeed) {
@@ -1453,6 +1524,41 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       setStepMutationPending('');
     }
   }, [onDeleteWorkflowNodes]);
+  const handleStepInspectorResizeStart = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (isStepInspectorCompact) {
+        return;
+      }
+
+      event.preventDefault();
+      const startClientX = Number(event.clientX);
+      if (!Number.isFinite(startClientX)) {
+        return;
+      }
+
+      const startWidth = stepInspectorWidth;
+      const handlePointerMove = (moveEvent: PointerEvent) => {
+        const nextClientX = Number(moveEvent.clientX);
+        if (!Number.isFinite(nextClientX)) {
+          return;
+        }
+
+        setStepInspectorWidth(
+          clampWorkflowStepInspectorWidth(
+            startWidth + startClientX - nextClientX,
+          ),
+        );
+      };
+      const handlePointerUp = () => {
+        window.removeEventListener('pointermove', handlePointerMove);
+        window.removeEventListener('pointerup', handlePointerUp);
+      };
+
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+    },
+    [isStepInspectorCompact, stepInspectorWidth],
+  );
 
   const workflowCanvasAutoFitKey = React.useMemo(
     () =>
@@ -1660,10 +1766,22 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           </div>
         </section>
 
+        {selectedStep && stepDraft ? (
         <section
+          aria-label={t("pages.studio.studiobuildpanels.step.detail.2", "Step Detail")}
           data-testid="workflow-step-detail-panel"
-          style={workflowStepDetailCardStyle}
+          style={stepInspectorStyle}
         >
+          {!isStepInspectorCompact ? (
+            <div
+              aria-label={t("pages.studio.studiobuildpanels.resize.step.detail", "Resize step detail")}
+              data-testid="workflow-step-detail-resize-handle"
+              role="separator"
+              tabIndex={0}
+              style={workflowStepInspectorResizeHandleStyle}
+              onPointerDown={handleStepInspectorResizeStart}
+            />
+          ) : null}
           <div
             style={{
               alignItems: 'center',
@@ -1680,8 +1798,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           </div>
           {stepMutationError ? <Alert message={stepMutationError} showIcon type="error" /> : null}
           <div style={workflowStepDetailBodyStyle}>
-            {selectedStep && stepDraft ? (
-              <>
+            <>
                 <div style={workflowDetailsGridStyle}>
                 <div style={workflowFieldStyle}>
                   <div style={workflowSectionHeadingStyle}>{t("pages.studio.studiobuildpanels.basics.2", "Basics")}</div>
@@ -1945,11 +2062,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   {t("pages.studio.studiobuildpanels.apply.changes.2", "Apply changes")}</Button>
               </div>
             </>
-          ) : (
-            <Empty description={t("pages.studio.studiobuildpanels.select.step.from.the.dag.2", "Select a step from the DAG canvas first.")} />
-          )}
           </div>
         </section>
+        ) : null}
       </div>
 
       <section data-testid="workflow-dry-run-panel" style={workflowDryRunSectionStyle}>
