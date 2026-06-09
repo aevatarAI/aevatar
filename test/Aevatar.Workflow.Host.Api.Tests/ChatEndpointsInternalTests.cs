@@ -1172,6 +1172,30 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().CorrelationId.Should().Be("corr-1");
     }
 
+    [Fact]
+    public async Task HandleForkRun_ShouldRejectMalformedBearerBeforeDispatch()
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>();
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = "source-run",
+                StartAtStepId = "step-b",
+            },
+            service,
+            CreateHttpContext("Bearer token 123"),
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_CALLER_CREDENTIAL");
+        service.Commands.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("", "step-b")]
     [InlineData("source-run", "   ")]

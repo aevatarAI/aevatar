@@ -93,6 +93,30 @@ public sealed class WorkflowForkRunCommandDispatchTests
     }
 
     [Fact]
+    public async Task ResolveAsync_WhenCoreWorkflowParserRejectsYaml_ShouldReturnInvalidYamlWithoutCreate()
+    {
+        var seedPort = new RecordingSeedQueryPort
+        {
+            View = CreateSeedView("failed", workflowYaml: "name: broken\nsteps:\n  - type: transform"),
+        };
+        var runPort = new RecordingRunProvisioningPort
+        {
+            ParseResult = WorkflowYamlParseResult.Success("broken"),
+        };
+        var resolver = CreateResolver(seedPort, runPort);
+
+        var result = await resolver.ResolveAsync(new WorkflowForkRunCommand(
+            "source-run",
+            "step-b"));
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Code.Should().Be(WorkflowForkRunStartErrorCode.InvalidWorkflowYaml);
+        result.Error.Reason.Should().Contain("step");
+        runPort.ParseRequests.Should().ContainSingle();
+        runPort.CreateRunBindings.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ResolveAsync_WhenStartAtStepIdIsAbsent_ShouldReturnStructuredErrorWithoutCreate()
     {
         var seedPort = new RecordingSeedQueryPort
@@ -257,6 +281,26 @@ public sealed class WorkflowForkRunCommandDispatchTests
     }
 
     [Fact]
+    public async Task DispatchAsync_WhenCommandScopeMissing_ShouldInheritSourceScopeFromSeedReadModel()
+    {
+        var seedPort = new RecordingSeedQueryPort
+        {
+            View = CreateSeedView("failed", scopeId: "source-scope-1"),
+        };
+        var runPort = new RecordingRunProvisioningPort();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateDispatchService(seedPort, runPort, dispatchPort);
+
+        var result = await service.DispatchAsync(new WorkflowForkRunCommand(
+            SourceRunId: "source-run",
+            StartAtStepId: "step-b"));
+
+        result.Succeeded.Should().BeTrue();
+        runPort.CreateRunBindings.Should().ContainSingle().Which.ScopeId.Should().Be("source-scope-1");
+        dispatchPort.DispatchedRequest().ScopeId.Should().Be("source-scope-1");
+    }
+
+    [Fact]
     public async Task ResolveAsync_WhenRunCreationFails_ShouldReturnStructuredErrorWithoutDispatchPreparation()
     {
         var seedPort = new RecordingSeedQueryPort
@@ -331,7 +375,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
         string status,
         string? workflowYaml = null,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-        IReadOnlyDictionary<string, string>? variables = null) =>
+        IReadOnlyDictionary<string, string>? variables = null,
+        string scopeId = "") =>
         new WorkflowRunResumeSeedView(
             SourceRunId: "source-run",
             WorkflowName: "source",
@@ -345,7 +390,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
             CompletedStepIds: ["step-a"],
             LastFailedStepId: "step-b",
             Status: status,
-            FinalError: status.Equals("failed", StringComparison.OrdinalIgnoreCase) ? "boom" : string.Empty);
+            FinalError: status.Equals("failed", StringComparison.OrdinalIgnoreCase) ? "boom" : string.Empty,
+            ScopeId: scopeId);
 
     private static string WorkflowYaml(string name) =>
         $$"""
