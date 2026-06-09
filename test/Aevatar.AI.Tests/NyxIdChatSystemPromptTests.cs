@@ -24,4 +24,14 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("api-github");
         prompt.Should().NotContain("deadline-monitor");
     }
+
+    [Fact]
+    public void Value_ShouldStateScheduledAgentCreationDoesNotRequestRemoteApproval()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value;
+
+        prompt.Should().Contain("This write command does not request remote approval");
+        prompt.Should().Contain("Do not say it is waiting for remote approval");
+        prompt.Should().NotContain("waiting for NyxID approval");
+    }
 }

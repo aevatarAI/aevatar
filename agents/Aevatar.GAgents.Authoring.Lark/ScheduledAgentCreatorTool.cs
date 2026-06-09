@@ -127,7 +127,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         }
         """;
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
 
