@@ -529,6 +529,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
   'teamMemberWorkflowStudio.header.editWorkflowName': 'Edit workflow name',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow identity',
+  'teamMemberWorkflowStudio.header.inputSet': 'input set',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow draft and node actions',
   'teamMemberWorkflowStudio.header.primaryActionsAria':

@@ -4,6 +4,8 @@ test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionOrleans3ClusterConsisten
 test/Aevatar.Integration.Tests/ScriptEvolutionIntegrationTestKit.cs
 test/Aevatar.Integration.Tests/ScriptReadModelVisibilityTestHelper.cs
 test/Aevatar.GAgentService.Integration.Tests/ScopeScriptSaveObservationRuntimeTests.cs
+# Workflow draft-run SSE completion and current-state read model visibility are eventually consistent.
+test/Aevatar.GAgentService.Integration.Tests/ScopeDraftRunWorkflowRunCurrentStateIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedMixedVersionClusterIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansMassTransitRuntimeIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansKafkaProviderRuntimeIntegrationTests.cs

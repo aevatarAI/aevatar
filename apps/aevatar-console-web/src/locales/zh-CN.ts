@@ -503,6 +503,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
   'teamMemberWorkflowStudio.header.editWorkflowName': '编辑 Workflow 名称',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
+  'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow 草稿和节点操作',
   'teamMemberWorkflowStudio.header.primaryActionsAria':

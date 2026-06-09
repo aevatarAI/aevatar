@@ -1249,7 +1249,6 @@ describe("TeamMemberWorkflowStudioPage", () => {
       screen.queryByLabelText("Member run console"),
     ).toBeNull();
     expect(screen.queryByLabelText("Message to active member")).toBeNull();
-    expect(screen.queryByLabelText("Run input")).toBeNull();
     expect(
       screen.queryByLabelText("Run options panel"),
     ).toBeNull();
@@ -1269,7 +1268,6 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.getByLabelText("Message to active member")).toHaveValue(
       "Run the workflow",
     );
-    expect(screen.queryByLabelText("Run input")).toBeNull();
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     fireEvent.click(runActiveMemberButton);
     const resultPanel = await screen.findByTestId("member-run-result-panel");
@@ -1370,7 +1368,6 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     expect(resultPanel).not.toHaveTextContent("Member run");
     expect(screen.queryByLabelText("Message to active member")).toBeNull();
-    expect(screen.queryByLabelText("Run input")).toBeNull();
     expect(
       screen.queryByLabelText("Run options panel"),
     ).toBeNull();
