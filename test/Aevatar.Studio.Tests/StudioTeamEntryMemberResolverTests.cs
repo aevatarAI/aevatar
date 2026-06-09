@@ -35,7 +35,10 @@ public sealed class StudioTeamEntryMemberResolverTests
     {
         var teamPort = new TeamQueryPort(NewTeam());
         var memberPort = new MemberQueryPort(NewMember());
-        var resolver = new StudioTeamEntryMemberResolver(teamPort, memberPort);
+        var resolver = new StudioTeamEntryMemberResolver(
+            teamPort,
+            memberPort,
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
         var result = await resolver.ResolveAsync(ScopeId, TeamId);
 
