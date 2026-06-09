@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Queries;
 
 namespace Aevatar.GAgentService.Abstractions.Ports;
@@ -23,7 +24,7 @@ public interface ILlmSessionRegistrationPort
         LlmSessionForwardedToolCall call,
         CancellationToken ct = default);
 
-    Task RecordCompletionAsync(
+    Task<DispatchAdmission> RecordCompletionAsync(
         string sessionActorId,
         string responseId,
         LlmSessionCompletion completion,
