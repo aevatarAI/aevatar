@@ -13,6 +13,19 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowRunForkCoordinatorTests
 {
     [Fact]
+    public async Task BeforePublishAsync_WhenCommittedEventIsNotForkRequest_ShouldNotDispatchForkCommand()
+    {
+        var forkDispatchService = new RecordingForkDispatchService();
+        var coordinator = new WorkflowRunForkCoordinator(forkDispatchService);
+
+        await coordinator.BeforePublishAsync(
+            CreateContext(new StringValue { Value = "ignored" }),
+            CancellationToken.None);
+
+        forkDispatchService.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task BeforePublishAsync_WhenCommittedForkRequestedEvent_ShouldDispatchForkCommand()
     {
         var forkDispatchService = new RecordingForkDispatchService();

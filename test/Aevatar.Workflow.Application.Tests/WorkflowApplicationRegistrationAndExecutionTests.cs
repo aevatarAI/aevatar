@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -220,6 +221,23 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
             x.ImplementationType == typeof(WorkflowForkRunDispatchPipeline));
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_ShouldResolvePublicationHooksWithoutForkReadModelDependencies()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = false,
+            ValidateScopes = true,
+        });
+
+        provider.GetServices<ICommittedStatePublicationHook>()
+            .Should()
+            .ContainSingle(hook => hook.GetType().Name == "WorkflowRunForkCoordinator");
     }
 
     [Fact]

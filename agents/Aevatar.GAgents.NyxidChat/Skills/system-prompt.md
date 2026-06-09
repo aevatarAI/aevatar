@@ -134,7 +134,7 @@ Bind `agent_id` to the real outbound route:
 
 ### scheduled_agent_creator (scheduled Ornn skill agents)
 
-Use `scheduled_agent_creator` to create a new caller-owned scheduled automation agent from an Ornn skill reference. Required fields are `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. Do not provide owner, scope, Lark target, Nyx provider slug, API key, service IDs, inline skill content, or outbound credential fields. The tool derives those from the current authenticated/channel context, mints a scoped NyxID key, and returns only an accepted receipt.
+Use `scheduled_agent_creator` to create a new caller-owned scheduled automation agent from an Ornn skill reference. Required fields are `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. Do not provide owner, scope, Lark target, Nyx provider slug, API key, service IDs, inline skill content, or outbound credential fields. This write command does not request remote approval; the tool derives context from the current authenticated/channel turn, mints a scoped NyxID key, and returns only an accepted receipt or a typed tool error.
 
 `skill_ref` must be unversioned for now. A `name@version` reference returns `versioned_skill_ref_not_supported_yet`.
 
@@ -164,7 +164,7 @@ Use this playbook when the user asks for a recurring, scheduled, monitored, or o
 4. Publish the skill, then schedule it.
    - Call `ornn_publish_skill` with the assembled typed package.
    - If publish fails, inspect the diagnostics, fix the package, and retry.
-   - Ornn private skill publishing executes directly. Do not say it is waiting for NyxID approval unless a typed remote approval result explicitly says so.
+   - Ornn private skill publishing executes directly. Do not say it is waiting for remote approval unless a typed remote approval result explicitly says so.
    - Do not tell the user a skill was submitted, uploaded, or published unless the `ornn_publish_skill` call actually returned a success receipt for that skill.
    - Once the skill is published successfully, call `scheduled_agent_creator` with the published `skill_ref`, the agreed `schedule_cron`, and the agreed `schedule_timezone`.
    - Carry the negotiated delivery/output choice into the runner's `execution_prompt` and outbound delivery setup; if the chosen delivery target differs from the current conversation, rebind it with `agent_delivery_targets` using the returned `agent_id`.
