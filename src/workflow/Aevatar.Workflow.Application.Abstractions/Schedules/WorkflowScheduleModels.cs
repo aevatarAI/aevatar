@@ -14,7 +14,20 @@ public sealed record WorkflowScheduleConfiguration(
     string? AppId = null,
     string? Namespace = null,
     string? ServiceId = null,
-    string? RevisionId = null);
+    string? RevisionId = null,
+    WorkflowScheduleAuth? Auth = null);
+
+public sealed record WorkflowScheduleNyxIdSubjectRef(
+    string Platform,
+    string Tenant,
+    string ExternalUserId);
+
+public sealed record WorkflowScheduleNyxIdCredentialSource(
+    WorkflowScheduleNyxIdSubjectRef Subject,
+    string Scope);
+
+public sealed record WorkflowScheduleAuth(
+    WorkflowScheduleNyxIdCredentialSource? SenderNyxId = null);
 
 public sealed record WorkflowScheduleSummary(
     string ScheduleId,
