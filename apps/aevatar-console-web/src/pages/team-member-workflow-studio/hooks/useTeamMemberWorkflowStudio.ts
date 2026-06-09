@@ -10,7 +10,11 @@ import {
 } from "@/shared/agui/runtimeEventSemantics";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
-import { history } from "@/shared/navigation/history";
+import {
+  getLocationSnapshot,
+  history,
+  subscribeToLocationChanges,
+} from "@/shared/navigation/history";
 import {
   buildTeamDetailHref,
   buildTeamMemberWorkflowStudioHref,
@@ -512,7 +516,12 @@ async function saveWorkflowDraft(input: {
 }
 
 export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
-  const route = React.useMemo(readPathSegments, []);
+  const locationSnapshot = React.useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    getLocationSnapshot,
+  );
+  const route = React.useMemo(readPathSegments, [locationSnapshot]);
   const [dirty, setDirty] = React.useState(false);
   const [editableDocument, setEditableDocument] =
     React.useState<StudioWorkflowDocument | null>(null);
