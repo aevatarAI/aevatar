@@ -329,14 +329,18 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldResolveRegistrationByNyxAgentApiKeyId_WhenBotIdDoesNotMatch()
+    public async Task RunInboundAsync_ShouldResolveRegistrationByNyxAgentApiKeyId_WhenCandidatesCollapseToOneScope()
     {
+        var first = BuildRegistrationEntry("reg-1a");
+        first.NyxAgentApiKeyId = "nyx-key-1";
+        var second = BuildRegistrationEntry("reg-1b");
+        second.NyxAgentApiKeyId = "nyx-key-1";
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         registrationQueryPort.GetAsync("missing-reg", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
         var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
-        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(BuildRegistrationEntry()));
+        registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([first, second]));
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(
             registrationQueryPort,
@@ -359,25 +363,29 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
-        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-1");
+        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-1a");
         result.LlmReplyRequest.Activity.TransportExtras?.NyxAgentApiKeyId.Should().Be("nyx-key-1");
         await registrationByNyxIdentityPort.Received(1)
-            .GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>());
+            .ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>());
         await registrationQueryPort.DidNotReceive()
             .GetAsync("missing-reg", Arg.Any<CancellationToken>());
+        await registrationQueryPort.DidNotReceive()
+            .QueryAllAsync(Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldFallbackToBoundedRegistrationScan_ForRelayTurnWhenIdentityQueryMisses()
+    public async Task RunInboundAsync_ShouldResolveCanonicalScopeCandidate_ByNyxAgentApiKeyId()
     {
-        var registration = BuildRegistrationEntry();
+        var wrongScope = BuildRegistrationEntry("reg-wrong-scope");
+        wrongScope.NyxAgentApiKeyId = "nyx-key-1";
+        wrongScope.ScopeId = "scope-other";
+        var registration = BuildRegistrationEntry("reg-canonical");
         registration.NyxAgentApiKeyId = "nyx-key-1";
+        registration.ScopeId = "scope-canonical";
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        registrationQueryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([registration]));
         var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
-        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([wrongScope, registration]));
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(
             registrationQueryPort,
@@ -398,6 +406,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 {
                     NyxAgentApiKeyId = "nyx-key-1",
                     NyxMessageId = "nyx-msg-1",
+                    NyxRegistrationScopeId = "scope-canonical",
                     NyxPlatform = "lark",
                     NyxConversationId = "nyx-conv-1",
                 }),
@@ -405,29 +414,28 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
-        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-1");
+        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-canonical");
         await registrationByNyxIdentityPort.Received(1)
-            .GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>());
-        await registrationQueryPort.Received(1)
-            .QueryAllAsync(Arg.Any<CancellationToken>());
+            .ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>());
         await registrationQueryPort.DidNotReceive()
             .GetAsync("nyx-key-1", Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task RunInboundAsync_BoundedRegistrationScan_ReturnsFirstMatchWhenMultipleShareNyxKey()
+    public async Task RunInboundAsync_ShouldFailClosed_WhenCanonicalScopeDoesNotMatchApiKeyCandidates()
     {
-        var stale = BuildRegistrationEntry("reg-old");
-        stale.NyxAgentApiKeyId = "nyx-key-1";
-        var fresh = BuildRegistrationEntry("reg-new");
-        fresh.NyxAgentApiKeyId = "nyx-key-1";
-
+        var wrongScope = BuildRegistrationEntry("reg-wrong-scope");
+        wrongScope.NyxAgentApiKeyId = "nyx-key-1";
+        wrongScope.ScopeId = "scope-other";
+        var fallback = BuildRegistrationEntry("reg-canonical");
+        fallback.ScopeId = "scope-canonical";
+        fallback.NyxAgentApiKeyId = "nyx-key-1";
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        registrationQueryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([stale, fresh]));
+        registrationQueryPort.GetAsync("reg-canonical", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(fallback));
         var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
-        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([wrongScope]));
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(
             registrationQueryPort,
@@ -438,7 +446,7 @@ public sealed class ChannelConversationTurnRunnerTests
             BuildInboundActivity(
                 "hello from relay",
                 "msg-nyx-dup-1",
-                botId: "nyx-key-1",
+                botId: "reg-canonical",
                 outboundDelivery: new OutboundDeliveryContext
                 {
                     ReplyMessageId = "relay-msg-1",
@@ -447,34 +455,34 @@ public sealed class ChannelConversationTurnRunnerTests
                 transportExtras: new TransportExtras
                 {
                     NyxAgentApiKeyId = "nyx-key-1",
+                    NyxRegistrationScopeId = "scope-canonical",
                     NyxPlatform = "lark",
                 }),
             CancellationToken.None);
 
-        // Bounded scan has no ordering guarantee across duplicates sharing NyxAgentApiKeyId
-        // and returns the first hit from the projection. The stale entry can shadow the live one.
-        result.Success.Should().BeTrue();
-        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-old");
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("registration_not_found");
+        await registrationQueryPort.DidNotReceive()
+            .GetAsync("reg-canonical", Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task RunInboundAsync_BoundedRegistrationScan_FallsThroughToBotIdLookup_WhenScanMisses()
+    public async Task RunInboundAsync_ShouldFailClosed_WhenApiKeyCandidatesHaveMultipleScopesWithoutCanonicalScope()
     {
+        var first = BuildRegistrationEntry("reg-scope-1");
+        first.NyxAgentApiKeyId = "nyx-key-1";
+        first.ScopeId = "scope-1";
+        var second = BuildRegistrationEntry("reg-scope-2");
+        second.NyxAgentApiKeyId = "nyx-key-1";
+        second.ScopeId = "scope-2";
+        var fallback = BuildRegistrationEntry("reg-fallback");
+        fallback.ScopeId = "scope-fallback";
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        registrationQueryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
-            [
-                new ChannelBotRegistrationEntry
-                {
-                    Id = "reg-other",
-                    NyxAgentApiKeyId = "different-key",
-                },
-            ]));
-        registrationQueryPort.GetAsync("nyx-key-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        registrationQueryPort.GetAsync("reg-fallback", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(fallback));
         var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
-        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([first, second]));
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(
             registrationQueryPort,
@@ -485,7 +493,7 @@ public sealed class ChannelConversationTurnRunnerTests
             BuildInboundActivity(
                 "hello from relay",
                 "msg-nyx-miss-scan-1",
-                botId: "nyx-key-1",
+                botId: "reg-fallback",
                 outboundDelivery: new OutboundDeliveryContext
                 {
                     ReplyMessageId = "relay-msg-1",
@@ -500,19 +508,27 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("registration_not_found");
-        await registrationQueryPort.Received(1).QueryAllAsync(Arg.Any<CancellationToken>());
-        await registrationQueryPort.Received(1).GetAsync("nyx-key-1", Arg.Any<CancellationToken>());
+        await registrationQueryPort.DidNotReceive()
+            .GetAsync("reg-fallback", Arg.Any<CancellationToken>());
+        await registrationQueryPort.DidNotReceive()
+            .QueryAllAsync(Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldSkipBoundedRegistrationScan_WhenOutboundDeliveryMissing()
+    public async Task RunInboundAsync_ShouldFailClosed_WhenApiKeyCandidatesHaveOnlyEmptyScopes()
     {
+        var empty = BuildRegistrationEntry("reg-empty");
+        empty.NyxAgentApiKeyId = "nyx-key-1";
+        empty.ScopeId = string.Empty;
+        var whitespace = BuildRegistrationEntry("reg-whitespace");
+        whitespace.NyxAgentApiKeyId = "nyx-key-1";
+        whitespace.ScopeId = "   ";
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        registrationQueryPort.GetAsync("nyx-key-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        registrationQueryPort.GetAsync("reg-fallback", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(BuildRegistrationEntry("reg-fallback")));
         var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
-        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([empty, whitespace]));
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(
             registrationQueryPort,
@@ -521,9 +537,9 @@ public sealed class ChannelConversationTurnRunnerTests
 
         var result = await runner.RunInboundAsync(
             BuildInboundActivity(
-                "hello without relay",
-                "msg-no-delivery-1",
-                botId: "nyx-key-1",
+                "hello from relay",
+                "msg-empty-scopes-1",
+                botId: "reg-fallback",
                 transportExtras: new TransportExtras
                 {
                     NyxAgentApiKeyId = "nyx-key-1",
@@ -533,18 +549,21 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("registration_not_found");
-        await registrationQueryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
+        await registrationQueryPort.DidNotReceive()
+            .GetAsync("reg-fallback", Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldSkipBoundedRegistrationScan_ForNonRelayIdentityMiss()
+    public async Task RunInboundAsync_ShouldUseBotIdFallback_WhenApiKeyListHasNoCandidates()
     {
+        var fallback = BuildRegistrationEntry("reg-fallback");
+        fallback.NyxAgentApiKeyId = "nyx-key-1";
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        registrationQueryPort.GetAsync("missing-reg", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        registrationQueryPort.GetAsync("reg-fallback", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(fallback));
         var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
-        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(Array.Empty<ChannelBotRegistrationEntry>()));
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(
             registrationQueryPort,
@@ -555,7 +574,7 @@ public sealed class ChannelConversationTurnRunnerTests
             BuildInboundActivity(
                 "hello from relay",
                 "msg-nyx-miss-1",
-                botId: "missing-reg",
+                botId: "reg-fallback",
                 transportExtras: new TransportExtras
                 {
                     NyxAgentApiKeyId = "nyx-key-1",
@@ -565,12 +584,86 @@ public sealed class ChannelConversationTurnRunnerTests
                 }),
             CancellationToken.None);
 
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-fallback");
+        await registrationByNyxIdentityPort.Received(1)
+            .ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>());
+        await registrationQueryPort.Received(1)
+            .GetAsync("reg-fallback", Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("nyx-key-1")]
+    public async Task RunInboundAsync_ShouldUseBotIdFallbackWithCanonicalScope_WhenFallbackApiKeyIsEmptyOrMatches(string fallbackApiKeyId)
+    {
+        var fallback = BuildRegistrationEntry("reg-fallback");
+        fallback.ScopeId = "scope-canonical";
+        fallback.NyxAgentApiKeyId = fallbackApiKeyId;
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.GetAsync("reg-fallback", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(fallback));
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(Array.Empty<ChannelBotRegistrationEntry>()));
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello from relay",
+                "msg-canonical-fallback-1",
+                botId: "reg-fallback",
+                transportExtras: new TransportExtras
+                {
+                    NyxAgentApiKeyId = "nyx-key-1",
+                    NyxRegistrationScopeId = "scope-canonical",
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-fallback");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRejectBotIdFallbackWithCanonicalScope_WhenFallbackApiKeyDiffers()
+    {
+        var fallback = BuildRegistrationEntry("reg-fallback");
+        fallback.ScopeId = "scope-canonical";
+        fallback.NyxAgentApiKeyId = "different-key";
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.GetAsync("reg-fallback", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(fallback));
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(Array.Empty<ChannelBotRegistrationEntry>()));
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello from relay",
+                "msg-canonical-fallback-reject-1",
+                botId: "reg-fallback",
+                transportExtras: new TransportExtras
+                {
+                    NyxAgentApiKeyId = "nyx-key-1",
+                    NyxRegistrationScopeId = "scope-canonical",
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("registration_not_found");
-        await registrationQueryPort.DidNotReceive()
-            .QueryAllAsync(Arg.Any<CancellationToken>());
-        await registrationQueryPort.Received(1)
-            .GetAsync("missing-reg", Arg.Any<CancellationToken>());
     }
 
     [Fact]
