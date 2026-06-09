@@ -66,6 +66,34 @@ message NeedsLlmReplyEvent {
   repeated ConversationHistoryEntry prior_history = 13;
 }
 
+enum ChannelWorkflowDraftRunSourceKind {
+  CHANNEL_WORKFLOW_DRAFT_RUN_SOURCE_KIND_UNSPECIFIED = 0;
+  CHANNEL_WORKFLOW_DRAFT_RUN_SOURCE_KIND_DEFINITION_ACTOR = 1;
+}
+
+message ChannelWorkflowDraftRunSource {
+  ChannelWorkflowDraftRunSourceKind kind = 1;
+  string scope_id = 2;
+  string workflow_id = 3;
+  string workflow_name = 4;
+  string definition_actor_id = 5;
+}
+
+message NeedsWorkflowDraftRunEvent {
+  string correlation_id = 1;
+  string target_actor_id = 2;
+  string registration_id = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  ChannelWorkflowDraftRunSource workflow_source = 5;
+  string prompt = 6;
+  map<string, string> headers = 7;
+  int64 requested_at_unix_ms = 8;
+  string run_id = 9;
+  string reply_token = 10;
+  int64 reply_token_expires_at_unix_ms = 11;
+  string nyx_user_access_token = 12;
+}
+
 message ConversationHistoryEntry {
   string role = 1;
   string content = 2;

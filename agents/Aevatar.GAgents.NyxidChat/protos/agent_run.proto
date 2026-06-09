@@ -343,6 +343,102 @@ message AgentRunCleanupCompletedEvent {
   int64 completed_at_unix_ms = 3;
 }
 
+enum ChannelWorkflowDraftRunStatus {
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_UNSPECIFIED = 0;
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_STARTED = 1;
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_REPLY_HANDED_OFF = 2;
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_FAILED = 3;
+}
+
+message ChannelWorkflowDraftRunGAgentState {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  ChannelWorkflowDraftRunStatus status = 4;
+  int64 started_at_unix_ms = 5;
+  int64 completed_at_unix_ms = 6;
+  string error_code = 7;
+  string error_summary = 8;
+  string accumulated_text = 9;
+}
+
+message ChannelWorkflowDraftRunStartRequested {
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent request = 1;
+  string run_id = 2;
+}
+
+message ChannelWorkflowDraftRunStartedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 started_at_unix_ms = 4;
+}
+
+message ChannelWorkflowDraftRunFrame {
+  oneof frame {
+    ChannelWorkflowDraftRunTextMessageContentFrame text_message_content = 1;
+    ChannelWorkflowDraftRunFinishedFrame run_finished = 2;
+    ChannelWorkflowDraftRunErrorFrame run_error = 3;
+    ChannelWorkflowDraftRunStoppedFrame run_stopped = 4;
+  }
+}
+
+message ChannelWorkflowDraftRunTextMessageContentFrame {
+  string delta = 1;
+}
+
+message ChannelWorkflowDraftRunFinishedFrame {
+  string result_output = 1;
+}
+
+message ChannelWorkflowDraftRunErrorFrame {
+  string message = 1;
+  string code = 2;
+}
+
+message ChannelWorkflowDraftRunStoppedFrame {
+  string reason = 1;
+}
+
+message ChannelWorkflowDraftRunFrameObserved {
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent request = 1;
+  ChannelWorkflowDraftRunFrame frame = 2;
+  int64 observed_at_unix_ms = 3;
+}
+
+message ChannelWorkflowDraftRunInteractionCompleted {
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent request = 1;
+  bool succeeded = 2;
+  bool completed = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int64 completed_at_unix_ms = 6;
+}
+
+message ChannelWorkflowDraftRunFrameRenderedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string accumulated_text = 4;
+  int64 rendered_at_unix_ms = 5;
+}
+
+message ChannelWorkflowDraftRunReplyHandedOffEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 handed_off_at_unix_ms = 4;
+}
+
+message ChannelWorkflowDraftRunFailedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int64 failed_at_unix_ms = 6;
+}
+
 message NyxIdChatConversationCreationCompensationRequested {
   string scope_id = 1;
   string actor_id = 2;
