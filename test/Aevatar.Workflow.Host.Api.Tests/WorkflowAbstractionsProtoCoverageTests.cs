@@ -18,7 +18,7 @@ public class WorkflowAbstractionsProtoCoverageTests
             {
                 SourceRunId = "run-source",
                 StartAtStepId = "step-b",
-                Attempt = 1,
+                Attempt = 2,
             },
         };
         evt.Parameters["k"] = "v";
@@ -33,7 +33,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsed.Parameters["k"].Should().Be("v");
         parsed.ForkSeed.SourceRunId.Should().Be("run-source");
         parsed.ForkSeed.StartAtStepId.Should().Be("step-b");
-        parsed.ForkSeed.Attempt.Should().Be(1);
+        parsed.ForkSeed.Attempt.Should().Be(2);
         parsed.ForkSeed.Variables["step-a"].Should().Be("alpha");
     }
 

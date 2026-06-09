@@ -125,24 +125,20 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var forkSeed = evt.ForkSeed;
         var hasForkSeedStart = forkSeed != null && !string.IsNullOrWhiteSpace(forkSeed.StartAtStepId);
         if (hasForkSeedStart)
-        {
-            foreach (var (key, value) in forkSeed!.Variables)
-                state.Variables[key] = value ?? string.Empty;
-        }
-
+            MergeStartParametersIntoVariables(state.Variables, forkSeed!.Variables);
         state.Variables["input"] = evt.Input ?? string.Empty;
         MirrorRunUsageVariables(state);
         MergeStartParametersIntoVariables(state.Variables, evt.Parameters);
         await SaveStateAsync(state, ctx, ct);
 
         var entry = hasForkSeedStart
-            ? _workflow.Steps.FirstOrDefault(s => string.Equals(s.Id, forkSeed!.StartAtStepId, StringComparison.Ordinal))
+            ? _workflow.GetStep(forkSeed!.StartAtStepId)
             : _workflow.Steps.FirstOrDefault();
         if (entry == null)
         {
             await CleanupRunAsync(state, ctx, ct);
             var error = hasForkSeedStart
-                ? $"fork start step '{forkSeed!.StartAtStepId}' not found in workflow"
+                ? $"fork seed start step '{forkSeed!.StartAtStepId}' was not found"
                 : "无步骤";
             await PublishWorkflowCompletedAsync(
                 ctx,
@@ -158,9 +154,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
 
         var startInput = hasForkSeedStart && forkSeed!.Variables.TryGetValue("input", out var seedInput)
-            ? seedInput
+            ? seedInput ?? string.Empty
             : evt.Input ?? string.Empty;
-        await DispatchStepAsync(entry, startInput ?? string.Empty, state, ctx, ct);
+        await DispatchStepAsync(entry, startInput, state, ctx, ct);
     }
 
     private async Task HandleTimeoutFiredAsync(

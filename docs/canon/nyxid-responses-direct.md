@@ -143,6 +143,8 @@ llm-anthropic/claude-haiku-4-5
 
 chat-route policy 指定 `tool_set_ref` 或 `tool_choice_hint` 时，三条直连入口都会使用同一个 direct tool plan：同一个 tool set 会被注入，同一个 trusted prefilled arguments 合并规则会生效。不要为 `/v1/messages` 或 `/v1/chat/completions` 另建工具白名单。
 
+直连工具的失败语义按边界分层处理。客户端声明但未被 Aevatar substitute 的 forwarded tools 仍然由客户端执行；这类工具不会在 Aevatar 内被降级。Aevatar 本地 direct tools 执行失败时，actor 会把失败转成合法 JSON tool output，并继续把结果送回模型，避免一个可选本地工具异常终止整次 response。该 JSON 只暴露稳定错误码、工具名和异常类型，不透出 token、请求头或内部路径。调用方取消仍然取消整次 run，不会被转成 tool output。chat-route `tool_set_ref` 解析错误仍然 fail closed 返回配置错误；但已经解析出的 tool source、全局 provider、skills/Ornn discovery 如果单个 source 失败，会记录 warning 并跳过该 source，其他可用工具继续进入本次计划。
+
 ## 6. 显式 Skill 触发
 
 直连入口支持同一套显式 skill 触发语法：

@@ -44,6 +44,7 @@ public sealed class WorkflowRunForkSeedQueryPortTests
         view.CompletedStepIds.Should().Equal("step-a", "step-b");
         view.LastFailedStepId.Should().BeEmpty();
         view.FinalError.Should().BeEmpty();
+        view.ScopeId.Should().Be("scope-1");
     }
 
     [Fact]
@@ -91,6 +92,7 @@ public sealed class WorkflowRunForkSeedQueryPortTests
         view.CompletedStepIds.Should().Equal("step-a", "step-b");
         view.LastFailedStepId.Should().Be("step-failed");
         view.FinalError.Should().Be("step boom");
+        view.ScopeId.Should().Be("scope-1");
         bindingReader.RequestedRunIds.Should().ContainSingle().Which.Should().Be("run-failed");
         currentStateReader.GetKeys.Should().ContainSingle().Which.Should().Be("actor-run-failed");
     }
@@ -106,6 +108,7 @@ public sealed class WorkflowRunForkSeedQueryPortTests
             WorkflowName = "demo",
             WorkflowYaml = "name: demo\nsteps: []",
             FinalError = finalError,
+            ScopeId = "scope-1",
             InlineWorkflowYamls = { ["child"] = "name: child" },
         };
 
@@ -119,6 +122,7 @@ public sealed class WorkflowRunForkSeedQueryPortTests
             RunId = state.RunId,
             WorkflowName = state.WorkflowName,
             Status = state.Status,
+            ScopeId = seedSnapshot.ScopeId,
             FinalError = state.FinalError,
             WorkflowYaml = seedSnapshot.WorkflowYaml,
             InlineWorkflowYamls = seedSnapshot.InlineWorkflowYamls.ToDictionary(

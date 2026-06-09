@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
@@ -8,15 +9,24 @@ namespace Aevatar.Workflow.Application.RunForks;
 
 internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHook
 {
-    private readonly Func<IWorkflowForkRunService> _forkRunServiceFactory;
+    private readonly Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>> _forkDispatchService;
     private readonly ILogger<WorkflowRunForkCoordinator> _logger;
 
     public WorkflowRunForkCoordinator(
-        Func<IWorkflowForkRunService> forkRunServiceFactory,
+        Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>> forkDispatchService,
         ILogger<WorkflowRunForkCoordinator>? logger = null)
     {
-        _forkRunServiceFactory = forkRunServiceFactory ?? throw new ArgumentNullException(nameof(forkRunServiceFactory));
+        _forkDispatchService = forkDispatchService ?? throw new ArgumentNullException(nameof(forkDispatchService));
         _logger = logger ?? NullLogger<WorkflowRunForkCoordinator>.Instance;
+    }
+
+    internal WorkflowRunForkCoordinator(
+        ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> forkDispatchService,
+        ILogger<WorkflowRunForkCoordinator>? logger = null)
+        : this(new Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>(
+            () => forkDispatchService ?? throw new ArgumentNullException(nameof(forkDispatchService))),
+            logger)
+    {
     }
 
     public async Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
@@ -40,13 +50,13 @@ internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHoo
 
         try
         {
-            var forkRunService = _forkRunServiceFactory();
-            var result = await forkRunService.ForkAsync(
+            var result = await _forkDispatchService.Value.DispatchAsync(
                 new WorkflowForkRunCommand(
                     SourceRunId: requested.SourceRunId,
                     StartAtStepId: requested.StartAtStepId,
                     InlineYaml: null,
-                    Attempt: Math.Max(0, requested.Attempt)),
+                    Attempt: Math.Max(0, requested.Attempt),
+                    ScopeId: requested.ScopeId),
                 ct).ConfigureAwait(false);
 
             if (!result.Succeeded)

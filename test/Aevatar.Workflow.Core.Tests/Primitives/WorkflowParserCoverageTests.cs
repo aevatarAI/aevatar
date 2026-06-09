@@ -273,6 +273,30 @@ public sealed class WorkflowParserCoverageTests
     }
 
     [Fact]
+    public void Parse_WhenNonNotifyStepHasInteractionTemplateSpec_ShouldKeepOrdinaryParameter()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: transform_template
+            roles: []
+            steps:
+              - id: transform
+                type: transform
+                parameters:
+                  interaction_template_spec:
+                    template_id: tpl-1
+                    template_variable:
+                      title: "Deploy"
+            """);
+
+        var step = workflow.Steps[0];
+
+        step.Presentation?.InteractionTemplateSpec.Should().BeNull();
+        step.Parameters.Should().ContainKey("interaction_template_spec");
+        step.Parameters["interaction_template_spec"].Should().Contain("tpl-1");
+    }
+
+    [Fact]
     public void Parse_WhenNotifyUsesCamelCaseDeliveryTargetAlias_ShouldLeaveItAsOrdinaryParameter()
     {
         var workflow = new WorkflowParser().Parse(

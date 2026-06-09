@@ -1,12 +1,13 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core.Primitives;
 
 namespace Aevatar.Workflow.Application.RunForks;
 
-public sealed class WorkflowForkRunService : IWorkflowForkRunService
+internal sealed class WorkflowForkRunCommandTargetResolver
+    : ICommandTargetResolver<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunStartError>
 {
     private static readonly HashSet<string> TerminalStatuses = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -18,28 +19,19 @@ public sealed class WorkflowForkRunService : IWorkflowForkRunService
     private readonly IWorkflowRunForkSeedQueryPort _seedQueryPort;
     private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
     private readonly IWorkflowDefinitionParser _definitionParser;
-    private readonly ICommandContextPolicy _contextPolicy;
-    private readonly ICommandEnvelopeFactory<WorkflowChatRunRequest> _envelopeFactory;
-    private readonly IActorDispatchPort _dispatchPort;
     private readonly WorkflowParser _workflowParser = new();
 
-    public WorkflowForkRunService(
+    public WorkflowForkRunCommandTargetResolver(
         IWorkflowRunForkSeedQueryPort seedQueryPort,
         IWorkflowRunProvisioningPort runProvisioningPort,
-        IWorkflowDefinitionParser definitionParser,
-        ICommandContextPolicy contextPolicy,
-        ICommandEnvelopeFactory<WorkflowChatRunRequest> envelopeFactory,
-        IActorDispatchPort dispatchPort)
+        IWorkflowDefinitionParser definitionParser)
     {
         _seedQueryPort = seedQueryPort ?? throw new ArgumentNullException(nameof(seedQueryPort));
         _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
         _definitionParser = definitionParser ?? throw new ArgumentNullException(nameof(definitionParser));
-        _contextPolicy = contextPolicy ?? throw new ArgumentNullException(nameof(contextPolicy));
-        _envelopeFactory = envelopeFactory ?? throw new ArgumentNullException(nameof(envelopeFactory));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
     }
 
-    public async Task<WorkflowForkRunResult> ForkAsync(
+    public async Task<CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>> ResolveAsync(
         WorkflowForkRunCommand command,
         CancellationToken ct = default)
     {
@@ -47,27 +39,38 @@ public sealed class WorkflowForkRunService : IWorkflowForkRunService
 
         var sourceRunId = Normalize(command.SourceRunId);
         var startAtStepId = Normalize(command.StartAtStepId);
+        if (WorkflowCallerCredentialTokens.ParseOptional(command.CallerCredential?.BearerToken).IsInvalid)
+        {
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.InvalidCallerCredential(sourceRunId, startAtStepId));
+        }
+
         var seedView = await _seedQueryPort.GetForkSeedAsync(sourceRunId, ct).ConfigureAwait(false);
         if (seedView == null)
-            return WorkflowForkRunResult.Failure(WorkflowForkRunStartError.SourceRunNotFound(sourceRunId));
+        {
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.SourceRunNotFound(sourceRunId));
+        }
 
         if (!IsTerminal(seedView.Status))
         {
-            return WorkflowForkRunResult.Failure(
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
                 WorkflowForkRunStartError.SourceRunNotTerminal(sourceRunId, seedView.Status));
         }
 
-        var workflowYaml = string.IsNullOrWhiteSpace(command.InlineYaml)
-            ? seedView.WorkflowYaml
-            : command.InlineYaml!;
+        var workflowYaml = ResolveWorkflowYaml(command, seedView);
         var inlineWorkflowYamls = CopyDictionary(command.InlineSubYamls ?? seedView.InlineWorkflowYamls);
         var variables = MergeVariables(seedView.Variables, command.VariableOverrides);
         var validation = await ValidateWorkflowAsync(sourceRunId, startAtStepId, workflowYaml, ct)
             .ConfigureAwait(false);
         if (!validation.Succeeded)
-            return WorkflowForkRunResult.Failure(validation.Error!);
+        {
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
+                validation.Error!);
+        }
 
         WorkflowRunCreationReceipt creationReceipt;
+        var scopeId = ResolveScopeId(command.ScopeId, seedView.ScopeId);
         try
         {
             creationReceipt = await _runProvisioningPort.CreateRunAsync(
@@ -75,58 +78,36 @@ public sealed class WorkflowForkRunService : IWorkflowForkRunService
                     DefinitionActorId: string.Empty,
                     WorkflowName: validation.WorkflowName,
                     WorkflowYaml: workflowYaml,
-                    InlineWorkflowYamls: inlineWorkflowYamls),
+                    InlineWorkflowYamls: inlineWorkflowYamls,
+                    ScopeId: scopeId),
                 ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            return WorkflowForkRunResult.Failure(
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
                 WorkflowForkRunStartError.RunCreationFailed(sourceRunId, startAtStepId, ex.Message));
         }
 
-        var resumeInput = ResolveResumeInput(variables, command.Input);
-        var request = new WorkflowChatRunRequest(
-            Prompt: resumeInput,
-            Source: WorkflowChatSource.DefinitionActor(creationReceipt.ActorId, validation.WorkflowName),
-            CommandIdSeed: command.CommandId,
-            CorrelationIdSeed: command.CorrelationId,
-            ForkSeed: new WorkflowChatRunForkSeed(
+        var source = WorkflowChatSource.DefinitionActor(creationReceipt.ActorId, validation.WorkflowName);
+        var target = new WorkflowForkRunCommandTarget(
+            sourceRunId,
+            startAtStepId,
+            creationReceipt.ActorId,
+            validation.WorkflowName,
+            BuildChatRunRequest(
+                command,
                 sourceRunId,
                 startAtStepId,
-                variables,
-                Math.Max(0, command.Attempt)),
-            TargetSeed: new WorkflowRunTargetSeed(
                 creationReceipt.ActorId,
                 validation.WorkflowName,
                 creationReceipt.CreatedActorIds,
-                WorkflowChatSource.DefinitionActor(creationReceipt.ActorId, validation.WorkflowName)));
-        var context = _contextPolicy.Create(
-            creationReceipt.ActorId,
-            commandId: command.CommandId,
-            correlationId: command.CorrelationId);
-        var envelope = _envelopeFactory.CreateEnvelope(request, context);
+                source,
+                variables,
+                scopeId),
+            creationReceipt.CreatedActorIds,
+            _runProvisioningPort);
 
-        DispatchAdmission admission;
-        try
-        {
-            admission = await _dispatchPort.DispatchAsync(creationReceipt.ActorId, envelope, ct)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            await TryDestroyCreatedActorsAsync(creationReceipt.CreatedActorIds).ConfigureAwait(false);
-            return WorkflowForkRunResult.Failure(
-                WorkflowForkRunStartError.DispatchFailed(sourceRunId, startAtStepId, ex.Message));
-        }
-
-        return WorkflowForkRunResult.Accepted(new WorkflowForkRunAcceptedReceipt(
-            sourceRunId,
-            creationReceipt.ActorId,
-            validation.WorkflowName,
-            admission.Accepted,
-            admission.CommandId,
-            admission.CorrelationId,
-            admission.AckedAt));
+        return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Success(target);
     }
 
     private async Task<WorkflowForkRunValidationResult> ValidateWorkflowAsync(
@@ -174,21 +155,34 @@ public sealed class WorkflowForkRunService : IWorkflowForkRunService
         return WorkflowForkRunValidationResult.Success(parseResult.WorkflowName);
     }
 
-    private async Task TryDestroyCreatedActorsAsync(IReadOnlyList<string> actorIds)
+    private static WorkflowChatRunRequest BuildChatRunRequest(
+        WorkflowForkRunCommand command,
+        string sourceRunId,
+        string startAtStepId,
+        string actorId,
+        string workflowName,
+        IReadOnlyList<string>? createdActorIds,
+        WorkflowChatSource source,
+        IReadOnlyDictionary<string, string> variables,
+        string scopeId)
     {
-        foreach (var actorId in actorIds
-                     .Where(static x => !string.IsNullOrWhiteSpace(x))
-                     .Distinct(StringComparer.Ordinal)
-                     .Reverse())
-        {
-            try
-            {
-                await _runProvisioningPort.DestroyAsync(actorId, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch
-            {
-            }
-        }
+        return new WorkflowChatRunRequest(
+            Prompt: ResolveResumeInput(variables, command.Input),
+            Source: source,
+            ScopeId: scopeId,
+            CallerCredential: command.CallerCredential,
+            CommandIdSeed: command.CommandId,
+            CorrelationIdSeed: command.CorrelationId,
+            ForkSeed: new WorkflowChatRunForkSeed(
+                sourceRunId,
+                startAtStepId,
+                variables,
+                Math.Max(0, command.Attempt)),
+            TargetSeed: new WorkflowRunTargetSeed(
+                actorId,
+                workflowName,
+                createdActorIds,
+                source));
     }
 
     private static IReadOnlyDictionary<string, string> MergeVariables(
@@ -230,15 +224,24 @@ public sealed class WorkflowForkRunService : IWorkflowForkRunService
         return destination;
     }
 
+    private static string ResolveWorkflowYaml(
+        WorkflowForkRunCommand command,
+        WorkflowRunForkSeedView seedView) =>
+        string.IsNullOrWhiteSpace(command.InlineYaml)
+            ? seedView.WorkflowYaml
+            : command.InlineYaml!;
+
     private static string ResolveResumeInput(
         IReadOnlyDictionary<string, string> variables,
-        string? commandInput)
-    {
-        if (variables.TryGetValue("input", out var seedInput))
-            return seedInput ?? string.Empty;
+        string? commandInput) =>
+        variables.TryGetValue("input", out var seedInput)
+            ? seedInput ?? string.Empty
+            : commandInput ?? string.Empty;
 
-        return commandInput ?? string.Empty;
-    }
+    private static string ResolveScopeId(string? commandScopeId, string? sourceScopeId) =>
+        !string.IsNullOrWhiteSpace(commandScopeId)
+            ? commandScopeId.Trim()
+            : sourceScopeId?.Trim() ?? string.Empty;
 
     private static bool IsTerminal(string status) =>
         !string.IsNullOrWhiteSpace(status) && TerminalStatuses.Contains(status.Trim());
