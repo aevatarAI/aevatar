@@ -17,6 +17,7 @@ import {
   connectStepToTarget,
   createStepInspectorDraft,
   insertStepByType,
+  removeStepConnection,
   removeStep,
   type StudioStepInspectorDraft,
 } from "@/shared/studio/document";
@@ -56,7 +57,7 @@ type SavedWorkflowDraft = {
 
 type RunActiveMemberVariables = {
   readonly memberId: string;
-  readonly runInput: string;
+  readonly runMessage: string;
   readonly publishedServiceId: string;
   readonly title: string;
   readonly workflowId?: string;
@@ -87,6 +88,7 @@ type TeamMemberWorkflowStudioState = {
   readonly canSave: boolean;
   readonly closeNodeLibrary: () => void;
   readonly connectNodes: (sourceNodeId: string, targetNodeId: string) => void;
+  readonly deleteSelectedConnection: () => void;
   readonly deleteSelectedNode: () => void;
   readonly dirty: boolean;
   readonly emptyDescription: string;
@@ -95,7 +97,7 @@ type TeamMemberWorkflowStudioState = {
   readonly activeMemberRunPlaceholderReason: string;
   readonly executionDetail: StudioExecutionDetail | null;
   readonly executionError: string;
-  readonly executionRunInput: string;
+  readonly executionRunMessage: string;
   readonly executionStatus: WorkflowExecutionStatus;
   readonly memberRuns: readonly StudioExecutionSummary[];
   readonly memberRunsEmptyReason: string;
@@ -116,15 +118,17 @@ type TeamMemberWorkflowStudioState = {
   readonly savePending: boolean;
   readonly savePlaceholderReason: string;
   readonly runOptionsOpen: boolean;
+  readonly selectedEdgeId: string;
   readonly selectedNodeId: string;
   readonly selectedStepDraft: StudioStepInspectorDraft | null;
-  readonly selectedStepParameterError: string;
+  readonly selectedStepConfigurationError: string;
   readonly selectedTab: "editor" | "runs";
   readonly setSelectedTab: (tab: "editor" | "runs") => void;
-  readonly updateSelectedStepParameters: (parametersText: string) => void;
+  readonly updateSelectedStepConfiguration: (parametersText: string) => void;
   readonly selectCanvas: () => void;
+  readonly selectEdge: (edgeId: string) => void;
   readonly selectNode: (nodeId: string) => void;
-  readonly setExecutionRunInput: (input: string) => void;
+  readonly setExecutionRunMessage: (message: string) => void;
   readonly setWorkflowTitle: (title: string) => void;
   readonly teamName: string;
   readonly workflowTitle: string;
@@ -204,6 +208,54 @@ function readStepIdFromGraphNodeId(nodeId: string): string {
   return normalized.startsWith("step:")
     ? normalized.slice("step:".length).trim()
     : normalized;
+}
+
+function readConnectionFromGraphEdgeId(edgeId: string): {
+  readonly branchLabel: string | null;
+  readonly sourceStepId: string;
+  readonly targetStepId: string;
+} | null {
+  const normalized = trimOptional(edgeId);
+  if (!normalized.startsWith("edge:")) {
+    return null;
+  }
+
+  const [, sourceStepId, targetStepId, edgeKind, ...labelParts] =
+    normalized.split(":");
+  if (!sourceStepId || !targetStepId) {
+    return null;
+  }
+
+  if (edgeKind === "linear") {
+    return {
+      branchLabel: null,
+      sourceStepId,
+      targetStepId,
+    };
+  }
+
+  if (edgeKind === "branch") {
+    const branchLabel = labelParts.join(":");
+    if (!branchLabel) {
+      return null;
+    }
+
+    return {
+      branchLabel,
+      sourceStepId,
+      targetStepId,
+    };
+  }
+
+  const legacyEdgeLabel = [edgeKind, ...labelParts]
+    .filter(Boolean)
+    .join(":");
+  return {
+    branchLabel:
+      legacyEdgeLabel && legacyEdgeLabel !== "next" ? legacyEdgeLabel : null,
+    sourceStepId,
+    targetStepId,
+  };
 }
 
 function waitForBindingRunPollTick(): Promise<void> {
@@ -493,16 +545,17 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [executionDetail, setExecutionDetail] =
     React.useState<StudioExecutionDetail | null>(null);
   const [executionError, setExecutionError] = React.useState("");
-  const [executionRunInput, setExecutionRunInput] = React.useState("");
+  const [executionRunMessage, setExecutionRunMessage] = React.useState("");
   const [publishBindingRun, setPublishBindingRun] =
     React.useState<StudioMemberBindingRunStatusResponse | null>(null);
   const [publishError, setPublishError] = React.useState("");
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [runOptionsOpen, setRunOptionsOpen] = React.useState(false);
+  const [selectedEdgeId, setSelectedEdgeId] = React.useState("");
   const [selectedNodeId, setSelectedNodeId] = React.useState("");
   const [selectedTab, setSelectedTab] =
     React.useState<"editor" | "runs">("editor");
-  const [selectedStepParameterError, setSelectedStepParameterError] =
+  const [selectedStepConfigurationError, setSelectedStepConfigurationError] =
     React.useState("");
   const [workflowTitle, setWorkflowTitleState] =
     React.useState("Untitled member");
@@ -643,6 +696,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     });
     setEditableLayout(workflowQuery.data?.layout ?? null);
     setWorkflowTitleState(nextTitle);
+    setSelectedEdgeId("");
     setSelectedNodeId("");
     setRunOptionsOpen(false);
     setDirty(false);
@@ -685,7 +739,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     mutationFn: async ({
       memberId,
       publishedServiceId,
-      runInput,
+      runMessage,
       title,
       workflowId,
     }: RunActiveMemberVariables): Promise<StudioExecutionDetail> => {
@@ -694,7 +748,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
 
       const normalizedTitle = trimOptional(title) || "Member run";
-      const runMessage = trimOptional(runInput) || `Run ${normalizedTitle}`;
+      const resolvedRunMessage = trimOptional(runMessage) || `Run ${normalizedTitle}`;
       const startedAtUtc = new Date().toISOString();
       const executionId = `invoke:${memberId}:${Date.now().toString(36)}`;
       const frames: StudioExecutionFrame[] = [];
@@ -711,7 +765,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           error,
           executionId,
           frames,
-          runMessage,
+          runMessage: resolvedRunMessage,
           serviceId: publishedServiceId,
           startedAtUtc,
           status,
@@ -729,7 +783,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
                   workflowId,
                 }
               : undefined,
-            prompt: runMessage,
+            prompt: resolvedRunMessage,
           },
           controller.signal,
           {
@@ -1099,6 +1153,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
       setEditableDocument(nextDocument);
       setEditableLayout(nextLayout);
+      setSelectedEdgeId("");
       setSelectedNodeId(result.nodeId);
       setNodeLibraryOpen(false);
       setDirty(true);
@@ -1130,6 +1185,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         targetStepId,
       );
       setEditableDocument(result.document);
+      setSelectedEdgeId("");
       setSelectedNodeId(result.nodeId);
       setDirty(true);
     },
@@ -1159,10 +1215,32 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
     const result = removeStep(editableDocument, selectedStepId);
     setEditableDocument(result.document);
+    setSelectedEdgeId("");
     setSelectedNodeId(result.nodeId);
     setDirty(true);
   }, [editableDocument, selectedNodeId]);
-  const updateSelectedStepParameters = React.useCallback(
+  const deleteSelectedConnection = React.useCallback(() => {
+    if (!editableDocument || !selectedEdgeId) {
+      return;
+    }
+
+    const connection = readConnectionFromGraphEdgeId(selectedEdgeId);
+    if (!connection) {
+      return;
+    }
+
+    const result = removeStepConnection(
+      editableDocument,
+      connection.sourceStepId,
+      connection.targetStepId,
+      connection.branchLabel,
+    );
+    setEditableDocument(result.document);
+    setSelectedEdgeId("");
+    setSelectedNodeId(result.nodeId);
+    setDirty(true);
+  }, [editableDocument, selectedEdgeId]);
+  const updateSelectedStepConfiguration = React.useCallback(
     (parametersText: string) => {
       if (!editableDocument || !selectedStepDraft) {
         return;
@@ -1178,14 +1256,15 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           },
         );
         setEditableDocument(result.document);
+        setSelectedEdgeId("");
         setSelectedNodeId(result.nodeId);
-        setSelectedStepParameterError("");
+        setSelectedStepConfigurationError("");
         setDirty(true);
       } catch (error) {
-        setSelectedStepParameterError(
+        setSelectedStepConfigurationError(
           error instanceof Error
             ? error.message
-            : "Step parameters must be a JSON object.",
+            : "Raw node configuration must be a JSON object.",
         );
       }
     },
@@ -1216,6 +1295,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     canSave,
     closeNodeLibrary: () => setNodeLibraryOpen(false),
     connectNodes,
+    deleteSelectedConnection,
     deleteSelectedNode,
     dirty,
     emptyDescription:
@@ -1229,7 +1309,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         activeMemberRunMutation.mutate({
           memberId: route.memberId,
           publishedServiceId: memberPublishedServiceId,
-          runInput: trimOptional(executionRunInput),
+          runMessage: trimOptional(executionRunMessage),
           title: workflowTitle,
           workflowId: stableWorkflowId || undefined,
         });
@@ -1239,7 +1319,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     activeMemberRunPlaceholderReason,
     executionDetail,
     executionError,
-    executionRunInput,
+    executionRunMessage,
     executionStatus,
     memberRuns: scopedMemberRuns,
     memberRunsEmptyReason,
@@ -1280,6 +1360,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     openNodeLibrary: () => setNodeLibraryOpen(true),
     openRunOptions: () => {
       setSelectedTab("editor");
+      setSelectedEdgeId("");
       setSelectedNodeId("");
       setRunOptionsOpen(true);
     },
@@ -1298,23 +1379,31 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     savePending: saveMutation.isPending,
     savePlaceholderReason,
     runOptionsOpen,
+    selectedEdgeId,
     selectedNodeId,
     selectedStepDraft,
-    selectedStepParameterError,
+    selectedStepConfigurationError,
     selectedTab,
     selectCanvas: () => {
+      setSelectedEdgeId("");
+      setSelectedNodeId("");
+      setRunOptionsOpen(false);
+    },
+    selectEdge: (edgeId: string) => {
+      setSelectedEdgeId(edgeId);
       setSelectedNodeId("");
       setRunOptionsOpen(false);
     },
     selectNode: (nodeId: string) => {
+      setSelectedEdgeId("");
       setSelectedNodeId(nodeId);
       setRunOptionsOpen(false);
     },
-    setExecutionRunInput,
+    setExecutionRunMessage,
     setSelectedTab,
     setWorkflowTitle,
     teamName,
-    updateSelectedStepParameters,
+    updateSelectedStepConfiguration,
     workflowTitle,
   };
 }

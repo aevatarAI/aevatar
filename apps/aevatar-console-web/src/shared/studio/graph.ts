@@ -75,6 +75,21 @@ export type StudioWorkflowLayoutDocument = {
   readonly entryWorkflow?: string;
 };
 
+function buildStudioGraphNextEdgeId(
+  sourceStepId: string,
+  targetStepId: string,
+): string {
+  return `edge:${sourceStepId}:${targetStepId}:linear`;
+}
+
+function buildStudioGraphBranchEdgeId(
+  sourceStepId: string,
+  targetStepId: string,
+  branchLabel: string,
+): string {
+  return `edge:${sourceStepId}:${targetStepId}:branch:${branchLabel}`;
+}
+
 type WorkflowDocumentLike = {
   readonly name?: string;
   readonly description?: string;
@@ -393,19 +408,10 @@ function buildAutoLayoutPositions(
     incomingCount.set(stepId, 0);
   }
 
-  steps.forEach((step, index) => {
+  steps.forEach((step) => {
     const nextTargets: string[] = [];
     if (step.next && validStepIds.has(step.next)) {
       nextTargets.push(step.next);
-    } else if (
-      !step.next &&
-      Object.keys(step.branches).length === 0 &&
-      index < steps.length - 1
-    ) {
-      const fallbackNext = steps[index + 1]?.id;
-      if (fallbackNext && validStepIds.has(fallbackNext)) {
-        nextTargets.push(fallbackNext);
-      }
     }
 
     const branchTargets = Object.entries(step.branches)
@@ -644,7 +650,7 @@ export function buildStudioGraphElements(
     nodes.map((node) => [node.data.stepId, node] as const),
   );
   const edges: Edge<StudioGraphEdgeData>[] = [];
-  steps.forEach((step, index) => {
+  steps.forEach((step) => {
     const sourceNode = stepNodeById.get(step.id);
     if (!sourceNode) {
       return;
@@ -654,7 +660,7 @@ export function buildStudioGraphElements(
       const targetNode = stepNodeById.get(step.next);
       if (targetNode) {
         edges.push({
-          id: `edge:${step.id}:${step.next}:next`,
+          id: buildStudioGraphNextEdgeId(step.id, step.next),
           source: sourceNode.id,
           target: targetNode.id,
           type: 'smoothstep',
@@ -663,32 +669,6 @@ export function buildStudioGraphElements(
           data: {
             kind: 'next',
             implicit: false,
-          },
-          style: {
-            stroke: '#2F6FEC',
-            strokeWidth: 2.5,
-          },
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            width: 11,
-            height: 11,
-            color: '#2F6FEC',
-          },
-          zIndex: 4,
-        });
-      }
-    } else if (Object.keys(step.branches).length === 0 && index < steps.length - 1) {
-      const fallbackTarget = steps[index + 1]?.id;
-      const targetNode = fallbackTarget ? stepNodeById.get(fallbackTarget) : null;
-      if (targetNode) {
-        edges.push({
-          id: `edge:${step.id}:${fallbackTarget}:next`,
-          source: sourceNode.id,
-          target: targetNode.id,
-          type: 'smoothstep',
-          data: {
-            kind: 'next',
-            implicit: true,
           },
           style: {
             stroke: '#2F6FEC',
@@ -714,7 +694,11 @@ export function buildStudioGraphElements(
         }
 
         edges.push({
-          id: `edge:${step.id}:${targetStepId}:${branchLabel}`,
+          id: buildStudioGraphBranchEdgeId(
+            step.id,
+            targetStepId,
+            branchLabel,
+          ),
           source: sourceNode.id,
           target: targetNode.id,
           type: 'smoothstep',
