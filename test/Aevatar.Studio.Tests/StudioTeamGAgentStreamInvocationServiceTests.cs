@@ -161,10 +161,29 @@ public sealed class StudioTeamGAgentStreamInvocationServiceTests
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(team ?? NewTeam()),
-            new MemberQueryPort(member ?? NewMember()));
+            new MemberQueryPort(member ?? NewMember()),
+            new ReadyScopeBindingReadinessQueryPort());
         return new StudioTeamGAgentStreamInvocationService(
             resolver,
             staticPort);
+    }
+
+    private sealed class ReadyScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    {
+        public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
+            ScopeBindingReadinessRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ScopeBindingReadinessSnapshot(
+                request.ScopeId,
+                request.ServiceId,
+                ScopeBindingReadinessStatus.Ready,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: true,
+                RevisionId: request.ExpectedRevisionId ?? "rev-1",
+                DeploymentId: "dep-1",
+                ObservedAtUtc: DateTimeOffset.UtcNow));
     }
 
     private static StudioTeamStreamInvocationRequest NewRequest() =>

@@ -15,6 +15,8 @@ import type {
   ScopeServiceBindingCatalogSnapshot,
   ScopeServiceBindingInput,
   ScopeServiceEndpointContract,
+  ScopeServiceInvocationReadiness,
+  ScopeServiceInvocationReadinessStatus,
   ScopeServiceRevisionActionResult,
   ScopeServiceRevisionCatalogSnapshot,
   ScopeServiceRunAuditReport,
@@ -559,12 +561,67 @@ function decodeScopeServiceRevisionActionResult(
   };
 }
 
+function normalizeInvocationReadinessStatus(
+  value: string | number | null | undefined,
+): ScopeServiceInvocationReadinessStatus {
+  return normalizeEnumValue(value ?? "unknown", "invocationReadiness.status", {
+    "0": "unknown",
+    "1": "service_catalog_missing",
+    "2": "serving_set_missing",
+    "3": "eligible_serving_target_missing",
+    "4": "service_catalog_target_missing",
+    "5": "ready",
+    "6": "traffic_view_target_missing",
+    "7": "prepared_artifact_missing",
+    ready: "ready",
+    service_catalog_missing: "service_catalog_missing",
+    servicecatalogmissing: "service_catalog_missing",
+    serving_set_missing: "serving_set_missing",
+    servingsetmissing: "serving_set_missing",
+    eligible_serving_target_missing: "eligible_serving_target_missing",
+    eligibleservingtargetmissing: "eligible_serving_target_missing",
+    service_catalog_target_missing: "service_catalog_target_missing",
+    servicecatalogtargetmissing: "service_catalog_target_missing",
+    traffic_view_target_missing: "traffic_view_target_missing",
+    trafficviewtargetmissing: "traffic_view_target_missing",
+    prepared_artifact_missing: "prepared_artifact_missing",
+    preparedartifactmissing: "prepared_artifact_missing",
+    unknown: "unknown",
+  }) as ScopeServiceInvocationReadinessStatus;
+}
+
+function decodeInvocationReadiness(
+  value: unknown,
+  label = "ScopeServiceInvocationReadiness",
+): ScopeServiceInvocationReadiness {
+  const record = expectRecord(value, label);
+  const status = normalizeInvocationReadinessStatus(
+    readOptionalScalar(record, ["status", "Status"]),
+  );
+  return {
+    canInvoke: readBoolean(record, ["canInvoke", "CanInvoke", "callable", "Callable"], `${label}.canInvoke`),
+    status,
+    reasonCode:
+      readNullableString(record, ["reasonCode", "ReasonCode", "reason", "Reason"], `${label}.reasonCode`) ??
+      status,
+    message:
+      readNullableString(record, ["message", "Message"], `${label}.message`) ?? "",
+    revisionId:
+      readNullableString(record, ["revisionId", "RevisionId"], `${label}.revisionId`) ?? null,
+    deploymentId:
+      readNullableString(record, ["deploymentId", "DeploymentId"], `${label}.deploymentId`) ?? null,
+    observedAtUtc:
+      readNullableString(record, ["observedAtUtc", "ObservedAtUtc"], `${label}.observedAtUtc`) ?? null,
+  };
+}
+
 function decodeScopeServiceEndpointContract(
   value: unknown,
   label = "ScopeServiceEndpointContract",
 ): ScopeServiceEndpointContract {
   const record = expectRecord(value, label);
   const serviceId = readOptionalString(record, ["serviceId", "ServiceId"]);
+  const invocationReadinessValue = record.invocationReadiness ?? record.InvocationReadiness;
   return {
     scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
     serviceId: serviceId || "",
@@ -654,6 +711,13 @@ function decodeScopeServiceEndpointContract(
       ["revisionId", "RevisionId"],
       `${label}.revisionId`,
     ),
+    invocationReadiness:
+      invocationReadinessValue == null
+        ? null
+        : decodeInvocationReadiness(
+            invocationReadinessValue,
+            `${label}.invocationReadiness`,
+          ),
     curlExample: readNullableString(
       record,
       ["curlExample", "CurlExample"],

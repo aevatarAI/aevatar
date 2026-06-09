@@ -271,6 +271,7 @@ public sealed class StudioMemberServiceBindingTests
             bindingRunQueryPort ?? new InMemoryBindingRunQueryPort(null),
             new InertTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
+            new ReadyScopeBindingReadinessQueryPort(),
             new ThrowingServiceCommandPort());
 
     private sealed class InertTeamQueryPort : IStudioTeamQueryPort
@@ -410,6 +411,24 @@ public sealed class StudioMemberServiceBindingTests
             OperationsInOrder.Add("PatchTeamAssignment");
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class ReadyScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    {
+        public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
+            ScopeBindingReadinessRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ScopeBindingReadinessSnapshot(
+                request.ScopeId,
+                request.ServiceId,
+                ScopeBindingReadinessStatus.Ready,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: true,
+                RevisionId: request.ExpectedRevisionId,
+                DeploymentId: "dep-1",
+                ObservedAtUtc: DateTimeOffset.UtcNow));
     }
 
     private sealed class ThrowingServiceLifecycleQueryPort : IServiceLifecycleQueryPort

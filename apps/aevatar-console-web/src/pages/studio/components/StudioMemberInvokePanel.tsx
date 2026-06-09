@@ -130,6 +130,26 @@ function getRunStatusLabel(status: InvokeResultState['status']): string {
   }
 }
 
+function getInvocationReadinessMessage(
+  readiness: ScopeServiceEndpointContract['invocationReadiness'],
+): string {
+  switch (readiness?.reasonCode || readiness?.status) {
+    case 'prepared_artifact_missing':
+      return '绑定已完成，但当前版本的运行时 artifact 尚未准备好，暂时不能 Invoke。请重新 Bind 或等待后端完成准备。';
+    case 'service_catalog_missing':
+      return '成员服务尚未同步到服务目录，暂时不能 Invoke。';
+    case 'serving_set_missing':
+    case 'eligible_serving_target_missing':
+      return '成员服务尚未进入可调用 serving target，暂时不能 Invoke。';
+    case 'traffic_view_target_missing':
+      return '运行时还未观测到可调用流量目标，暂时不能 Invoke。';
+    case 'service_catalog_target_missing':
+      return '当前 endpoint 尚未同步到服务目录，暂时不能 Invoke。';
+    default:
+      return readiness?.message || '后端尚未确认该成员可调用，暂时不能 Invoke。';
+  }
+}
+
 function getLifecycleLabel(
   revision: StudioMemberBindingRevision | null | undefined,
 ): string {
@@ -457,9 +477,18 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(selectedService?.displayName) ||
     trimOptional(selectedService?.serviceId) ||
     t("pages.studio.studiomemberinvokepanel.current.members", "current members");
+  const invocationReadiness = endpointContract?.invocationReadiness ?? null;
+  const invocationReady = invocationReadiness?.canInvoke === true;
   const canInvoke = Boolean(
-    scopeId && normalizedMemberId && selectedService && selectedEndpoint,
+    scopeId &&
+      normalizedMemberId &&
+      selectedService &&
+      selectedEndpoint &&
+      invocationReady,
   );
+  const readinessBlockMessage = invocationReady
+    ? ''
+    : getInvocationReadinessMessage(invocationReadiness);
   const invokeRouteTarget = useMemo(
     () =>
       normalizedTeamId
@@ -885,6 +914,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       !selectedService ||
       !selectedEndpoint
     ) {
+      return;
+    }
+
+    if (!invocationReady) {
+      setFormError(readinessBlockMessage);
       return;
     }
 
@@ -1329,6 +1363,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     payloadTypeUrl,
     prompt,
     invokeRouteTarget,
+    invocationReady,
+    readinessBlockMessage,
     scopeId,
     selectedEndpoint,
     selectedService,
@@ -1412,6 +1448,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               {getRunStatusLabel(invokeResult.status)}
             </div>
           </div>
+
+          {!invocationReady ? (
+            <Alert
+              showIcon
+              type="warning"
+              message="成员暂不可调用"
+              description={readinessBlockMessage}
+            />
+          ) : null}
 
           <div
             data-testid="studio-invoke-composer-dock"

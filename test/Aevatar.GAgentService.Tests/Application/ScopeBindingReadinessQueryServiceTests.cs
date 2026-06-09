@@ -217,6 +217,66 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     }
 
     [Fact]
+    public async Task GetReadinessAsync_WhenPreparedArtifactMissing_ShouldReturnPreparedArtifactMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a", activeRevisionId: "rev-ready"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort, new FakeServiceRevisionArtifactStore());
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-ready"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.PreparedArtifactMissing);
+        snapshot.ServiceCatalogVisible.Should().BeTrue();
+        snapshot.ServingSetVisible.Should().BeTrue();
+        snapshot.EligibleServingTargetVisible.Should().BeTrue();
+        snapshot.InvokeReady.Should().BeFalse();
+        snapshot.RevisionId.Should().Be("rev-ready");
+        snapshot.DeploymentId.Should().Be("deployment-rev-ready");
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenPreparedArtifactDoesNotExposeExpectedEndpoint_ShouldReturnPreparedArtifactMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a", activeRevisionId: "rev-ready", endpoints: [CreateServiceEndpoint("chat")]),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100, enabledEndpointIds: ["chat"]),
+            ]),
+        };
+        var artifactStore = new FakeServiceRevisionArtifactStore(new Dictionary<string, PreparedServiceRevisionArtifact>(StringComparer.Ordinal)
+        {
+            ["scope-a:default:default:service-a:rev-ready"] = CreateArtifact("rev-ready", ["command"]),
+        });
+        var service = CreateService(lifecyclePort, servingPort, artifactStore);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-ready",
+            ExpectedEndpointIds: ["chat"]));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.PreparedArtifactMissing);
+        snapshot.InvokeReady.Should().BeFalse();
+        snapshot.RevisionId.Should().Be("rev-ready");
+        snapshot.DeploymentId.Should().Be("deployment-rev-ready");
+    }
+
+    [Fact]
     public async Task GetReadinessAsync_WhenTrafficViewHasStaleTargets_ShouldReturnTrafficViewTargetMissing()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort
@@ -350,8 +410,45 @@ public sealed class ScopeBindingReadinessQueryServiceTests
 
     private static ScopeBindingReadinessQueryService CreateService(
         FakeServiceLifecycleQueryPort lifecyclePort,
-        FakeServiceServingQueryPort servingPort) =>
-        new(lifecyclePort, servingPort, Options.Create(DefaultOptions));
+        FakeServiceServingQueryPort servingPort,
+        FakeServiceRevisionArtifactStore? artifactStore = null) =>
+        new(lifecyclePort, servingPort, artifactStore ?? CreateArtifactStore(), Options.Create(DefaultOptions));
+
+    private static FakeServiceRevisionArtifactStore CreateArtifactStore() =>
+        new(new Dictionary<string, PreparedServiceRevisionArtifact>(StringComparer.Ordinal)
+        {
+            ["scope-a:default:default:service-a:rev-1"] = CreateArtifact("rev-1", ["chat"]),
+            ["scope-a:default:default:service-a:rev-new"] = CreateArtifact("rev-new", ["chat"]),
+            ["scope-a:default:default:service-a:rev-ready"] = CreateArtifact("rev-ready", ["chat", "command"]),
+            ["scope-a:default:default:service-a:rev-zero"] = CreateArtifact("rev-zero", ["chat"]),
+        });
+
+    private static PreparedServiceRevisionArtifact CreateArtifact(
+        string revisionId,
+        IReadOnlyList<string> endpointIds)
+    {
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = new ServiceIdentity
+            {
+                TenantId = "scope-a",
+                AppId = DefaultOptions.ServiceAppId,
+                Namespace = DefaultOptions.ServiceNamespace,
+                ServiceId = "service-a",
+            },
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Static,
+        };
+        artifact.Endpoints.Add(endpointIds.Select(endpointId => new ServiceEndpointDescriptor
+        {
+            EndpointId = endpointId,
+            DisplayName = endpointId,
+            Kind = ServiceEndpointKind.Chat,
+            RequestTypeUrl = "type.googleapis.com/a.Request",
+            ResponseTypeUrl = "type.googleapis.com/a.Response",
+        }));
+        return artifact;
+    }
 
     private static ServiceCatalogSnapshot CreateServiceSnapshot(
         string serviceId,
@@ -491,5 +588,33 @@ public sealed class ScopeBindingReadinessQueryServiceTests
             ServiceIdentity identity,
             CancellationToken ct = default) =>
             Task.FromResult(TrafficView);
+    }
+
+    private sealed class FakeServiceRevisionArtifactStore : IServiceRevisionArtifactStore
+    {
+        private readonly IReadOnlyDictionary<string, PreparedServiceRevisionArtifact> _artifacts;
+
+        public FakeServiceRevisionArtifactStore()
+            : this(new Dictionary<string, PreparedServiceRevisionArtifact>(StringComparer.Ordinal))
+        {
+        }
+
+        public FakeServiceRevisionArtifactStore(IReadOnlyDictionary<string, PreparedServiceRevisionArtifact> artifacts)
+        {
+            _artifacts = artifacts;
+        }
+
+        public Task SaveAsync(
+            string serviceKey,
+            string revisionId,
+            PreparedServiceRevisionArtifact artifact,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<PreparedServiceRevisionArtifact?> GetAsync(
+            string serviceKey,
+            string revisionId,
+            CancellationToken ct = default) =>
+            Task.FromResult(_artifacts.TryGetValue($"{serviceKey}:{revisionId}", out var artifact) ? artifact.Clone() : null);
     }
 }

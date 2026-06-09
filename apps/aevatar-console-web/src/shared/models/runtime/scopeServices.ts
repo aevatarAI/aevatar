@@ -42,6 +42,26 @@ export interface ScopeServiceRevisionActionResult {
   readonly status: string;
 }
 
+export type ScopeServiceInvocationReadinessStatus =
+  | "ready"
+  | "service_catalog_missing"
+  | "serving_set_missing"
+  | "eligible_serving_target_missing"
+  | "service_catalog_target_missing"
+  | "traffic_view_target_missing"
+  | "prepared_artifact_missing"
+  | "unknown";
+
+export interface ScopeServiceInvocationReadiness {
+  readonly canInvoke: boolean;
+  readonly status: ScopeServiceInvocationReadinessStatus;
+  readonly reasonCode: string;
+  readonly message: string;
+  readonly revisionId: string | null;
+  readonly deploymentId: string | null;
+  readonly observedAtUtc: string | null;
+}
+
 export interface ScopeServiceEndpointContract {
   readonly scopeId: string;
   readonly serviceId: string;
@@ -64,6 +84,7 @@ export interface ScopeServiceEndpointContract {
   readonly sampleRequestJson: string | null;
   readonly deploymentStatus: string;
   readonly revisionId: string;
+  readonly invocationReadiness?: ScopeServiceInvocationReadiness | null;
   readonly curlExample: string | null;
   readonly fetchExample: string | null;
 }
