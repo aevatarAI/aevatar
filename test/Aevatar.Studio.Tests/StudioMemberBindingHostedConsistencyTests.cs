@@ -73,7 +73,24 @@ public sealed class StudioMemberBindingHostedConsistencyTests
         host.BindingRunQueryPort.Requests.Should().ContainSingle()
             .Which.Should().Be((ScopeId, MemberId, accepted.BindingRunId));
 
+        var rosterWhilePending = await host.Client.GetFromJsonAsync<StudioMemberRosterResponse>(
+            $"/api/scopes/{ScopeId}/members");
+        rosterWhilePending.Should().NotBeNull();
+        var pendingMember = rosterWhilePending!.Members.Should().ContainSingle().Which;
+        pendingMember.InvocationReadiness.Should().NotBeNull();
+        pendingMember.InvocationReadiness!.CanInvoke.Should().BeFalse();
+        pendingMember.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.Unknown);
+
         host.Scenario.CompleteBinding();
+
+        var completedRoster = await host.Client.GetFromJsonAsync<StudioMemberRosterResponse>(
+            $"/api/scopes/{ScopeId}/members");
+        completedRoster.Should().NotBeNull();
+        var completedMember = completedRoster!.Members.Should().ContainSingle().Which;
+        completedMember.InvocationReadiness.Should().NotBeNull();
+        completedMember.InvocationReadiness!.CanInvoke.Should().BeTrue();
+        completedMember.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
+        completedMember.InvocationReadiness.ReasonCode.Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
 
         var completedRun = await host.Client.GetFromJsonAsync<StudioMemberBindingRunStatusResponse>(
             $"/api/scopes/{ScopeId}/members/{MemberId}/binding-runs/{accepted.BindingRunId}");
@@ -130,6 +147,7 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             builder.Services.AddSingleton<IStudioMemberBindingRunQueryPort>(bindingRunQueryPort);
             builder.Services.AddSingleton<IStudioTeamQueryPort>(new InertTeamQueryPort());
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(new ThrowingServiceLifecycleQueryPort());
+            builder.Services.AddSingleton<IScopeBindingReadinessQueryPort>(new ReadyScopeBindingReadinessQueryPort());
             builder.Services.AddSingleton<IServiceCommandPort>(new ThrowingServiceCommandPort());
             builder.Services.AddSingleton<IStudioMemberService, StudioMemberService>();
             builder.Services.AddAuthorization();
@@ -346,6 +364,24 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             string teamId,
             CancellationToken ct = default) =>
             Task.FromResult<StudioTeamSummaryResponse?>(null);
+    }
+
+    private sealed class ReadyScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    {
+        public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
+            ScopeBindingReadinessRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ScopeBindingReadinessSnapshot(
+                request.ScopeId,
+                request.ServiceId,
+                ScopeBindingReadinessStatus.Ready,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: true,
+                RevisionId: request.ExpectedRevisionId,
+                DeploymentId: "dep-1",
+                ObservedAtUtc: DateTimeOffset.UtcNow));
     }
 
     private sealed class ThrowingServiceLifecycleQueryPort : IServiceLifecycleQueryPort

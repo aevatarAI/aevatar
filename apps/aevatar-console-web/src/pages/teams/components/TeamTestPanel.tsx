@@ -29,6 +29,12 @@ export type TeamTestRosterRow = {
   readonly canInvokeAsEntry: boolean;
   readonly editStudioHref: string;
   readonly implementationKind: string;
+  readonly invocationReadiness?: {
+    readonly canInvoke: boolean;
+    readonly status: string;
+    readonly reasonCode: string;
+    readonly message: string;
+  } | null;
   readonly lifecycleLabel: string;
   readonly lifecycleStyle: React.CSSProperties;
   readonly memberId: string;
@@ -122,6 +128,26 @@ function formatStatusLabel(status: TeamTestStatus): string {
   }
 }
 
+function formatReadinessMessage(
+  readiness: TeamTestRosterRow['invocationReadiness'],
+): string {
+  switch (readiness?.reasonCode || readiness?.status) {
+    case "prepared_artifact_missing":
+      return "已绑定，但当前版本的 runtime artifact 尚未准备好。";
+    case "service_catalog_missing":
+      return "服务目录尚未同步。";
+    case "serving_set_missing":
+    case "eligible_serving_target_missing":
+      return "Serving target 尚未就绪。";
+    case "traffic_view_target_missing":
+      return "运行时流量视图尚未同步。";
+    case "service_catalog_target_missing":
+      return "Endpoint 尚未同步到服务目录。";
+    default:
+      return readiness?.message || "后端尚未确认可调用。";
+  }
+}
+
 function formatLifecycleLabelForTeamTest(label: string): string {
   switch (label.trim().toLowerCase()) {
     case "created":
@@ -131,7 +157,7 @@ function formatLifecycleLabelForTeamTest(label: string): string {
       return "可绑定";
     case "bind ready":
     case "bind_ready":
-      return "可调用";
+      return "已绑定";
     case "unknown":
       return "状态未知";
     default:
@@ -307,14 +333,19 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                   设为入口并测试
                 </Button>
               ) : (
-                <Button
-                  href={row.buildStudioHref}
-                  disabled={isEntryActionBusy}
-                  onClick={handleNavigate(row.buildStudioHref)}
-                  size="small"
-                >
-                  先 Build / Bind
-                </Button>
+                <Space direction="vertical" size={4}>
+                  <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                    {formatReadinessMessage(row.invocationReadiness)}
+                  </Typography.Text>
+                  <Button
+                    href={row.buildStudioHref}
+                    disabled={isEntryActionBusy}
+                    onClick={handleNavigate(row.buildStudioHref)}
+                    size="small"
+                  >
+                    先 Build / Bind
+                  </Button>
+                </Space>
               )}
             </Space>
           </div>
@@ -408,6 +439,11 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             服务
           </Typography.Text>
           <CompactFactValue value={entryMember?.serviceId || "--"} />
+          {entryMember && !entryMember.canInvokeAsEntry ? (
+            <Typography.Text style={{ fontSize: 12 }} type="secondary">
+              {formatReadinessMessage(entryMember.invocationReadiness)}
+            </Typography.Text>
+          ) : null}
         </div>
         <Space size={8} style={{ flex: "0 1 auto" }} wrap>
           {entryMember?.editStudioHref ? (

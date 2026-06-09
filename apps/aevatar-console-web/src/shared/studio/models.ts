@@ -451,6 +451,26 @@ export function formatStudioMemberLifecycleStage(
   }
 }
 
+export type StudioMemberInvocationReadinessStatus =
+  | 'ready'
+  | 'service_catalog_missing'
+  | 'serving_set_missing'
+  | 'eligible_serving_target_missing'
+  | 'service_catalog_target_missing'
+  | 'traffic_view_target_missing'
+  | 'prepared_artifact_missing'
+  | 'unknown';
+
+export interface StudioMemberInvocationReadiness {
+  readonly canInvoke: boolean;
+  readonly status: StudioMemberInvocationReadinessStatus;
+  readonly reasonCode: string;
+  readonly message: string;
+  readonly revisionId: string | null;
+  readonly deploymentId: string | null;
+  readonly observedAtUtc: string | null;
+}
+
 export interface StudioMemberSummary {
   readonly memberId: string;
   readonly scopeId: string;
@@ -460,6 +480,7 @@ export interface StudioMemberSummary {
   readonly lifecycleStage: StudioMemberLifecycleStage;
   readonly publishedServiceId: string;
   readonly lastBoundRevisionId: string | null;
+  readonly invocationReadiness?: StudioMemberInvocationReadiness | null;
   readonly teamId?: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
