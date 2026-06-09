@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions.Streaming;
 using Orleans.Runtime;
-using Orleans.Storage;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.Topology;
 
@@ -8,8 +7,6 @@ public sealed class StreamTopologyGrain(
     [PersistentState("stream-topology", OrleansRuntimeConstants.GrainStateStorageName)]
     IPersistentState<StreamTopologyGrainState> state) : Grain, IStreamTopologyGrain
 {
-    private const int MaxStorageWriteAttempts = 3;
-
     private IReadOnlyList<StreamForwardingBindingEntry> _readSnapshot = Array.Empty<StreamForwardingBindingEntry>();
     private bool _initialized;
 
@@ -25,15 +22,31 @@ public sealed class StreamTopologyGrain(
         ArgumentException.ThrowIfNullOrWhiteSpace(binding.SourceStreamId);
         ArgumentException.ThrowIfNullOrWhiteSpace(binding.TargetStreamId);
 
+        EnsureInitialized();
         var entry = CloneEntry(binding);
-        await WriteWithConflictRetryAsync(() => UpsertEntry(entry));
+        if (state.State.BindingsByTarget.TryGetValue(binding.TargetStreamId, out var existing) &&
+            EntryEquals(existing, entry))
+        {
+            return;
+        }
+
+        state.State.BindingsByTarget[binding.TargetStreamId] = entry;
+        state.State.Revision++;
+        RebuildReadSnapshot();
+        await state.WriteStateAsync();
     }
 
     public async Task RemoveAsync(string targetStreamId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
 
-        await WriteWithConflictRetryAsync(() => RemoveEntry(targetStreamId));
+        EnsureInitialized();
+        if (!state.State.BindingsByTarget.Remove(targetStreamId))
+            return;
+
+        state.State.Revision++;
+        RebuildReadSnapshot();
+        await state.WriteStateAsync();
     }
 
     public Task<IReadOnlyList<StreamForwardingBindingEntry>> ListAsync()
@@ -50,64 +63,14 @@ public sealed class StreamTopologyGrain(
 
     public async Task ClearAsync()
     {
-        await WriteWithConflictRetryAsync(ClearEntries);
-    }
-
-    private async Task WriteWithConflictRetryAsync(Func<bool> applyMutation)
-    {
-        for (var attempt = 1; ; attempt++)
-        {
-            if (!applyMutation())
-                return;
-
-            RebuildReadSnapshot();
-
-            try
-            {
-                await state.WriteStateAsync();
-                return;
-            }
-            catch (InconsistentStateException) when (attempt < MaxStorageWriteAttempts)
-            {
-                await state.ReadStateAsync();
-                _initialized = false;
-            }
-        }
-    }
-
-    private bool UpsertEntry(StreamForwardingBindingEntry entry)
-    {
-        EnsureInitialized();
-        if (state.State.BindingsByTarget.TryGetValue(entry.TargetStreamId, out var existing) &&
-            EntryEquals(existing, entry))
-        {
-            return false;
-        }
-
-        state.State.BindingsByTarget[entry.TargetStreamId] = CloneEntry(entry);
-        state.State.Revision++;
-        return true;
-    }
-
-    private bool RemoveEntry(string targetStreamId)
-    {
-        EnsureInitialized();
-        if (!state.State.BindingsByTarget.Remove(targetStreamId))
-            return false;
-
-        state.State.Revision++;
-        return true;
-    }
-
-    private bool ClearEntries()
-    {
         EnsureInitialized();
         if (state.State.BindingsByTarget.Count == 0)
-            return false;
+            return;
 
         state.State.BindingsByTarget.Clear();
         state.State.Revision++;
-        return true;
+        RebuildReadSnapshot();
+        await state.WriteStateAsync();
     }
 
     private void EnsureInitialized()

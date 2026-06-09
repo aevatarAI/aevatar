@@ -2,7 +2,7 @@ using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -25,7 +26,8 @@ public static class WorkflowCapabilityEndpoints
     {
         var group = app.MapGroup("/api").WithTags("Chat");
         ChatQueryEndpoints.Map(group);
-        group.MapWorkflowScheduleEndpoints();
+        if (HasWorkflowScheduleDependencies(app.ServiceProvider))
+            WorkflowScheduleEndpoints.Map(group);
 
         return app;
     }
@@ -34,6 +36,9 @@ public static class WorkflowCapabilityEndpoints
     {
         return app;
     }
+
+    private static bool HasWorkflowScheduleDependencies(IServiceProvider services) =>
+        services.GetService<IServiceProviderIsService>()?.IsService(typeof(IScheduledDispatchApplicationService)) == true;
 
     public static async Task HandleChat(
         HttpContext http,
@@ -50,12 +55,12 @@ public static class WorkflowCapabilityEndpoints
 
         try
         {
-            var capabilities = await TryResolveCapabilitiesAsync(serviceProvider, logger, ct);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
+            var connectorAuthorization = ConnectorHttpAuthorizationExtractor.Extract(http);
             var normalizedRequest = ChatRunRequestNormalizer.Normalize(
                 input,
-                capabilities,
-                defaultMetadata);
+                defaultMetadata,
+                trustedConnectorHttpAuthorization: connectorAuthorization);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -149,7 +154,7 @@ public static class WorkflowCapabilityEndpoints
             }
 
             return Results.Accepted(
-                $"/api/actors/{dispatchResult.Receipt.ActorId}",
+                BuildWorkflowRunStatusUrl(dispatchResult.Receipt.ActorId),
                 CapabilityTraceContext.CreateAcceptedPayload(dispatchResult.Receipt));
         }
         catch (OperationCanceledException)
@@ -208,7 +213,7 @@ public static class WorkflowCapabilityEndpoints
 
             // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
             //   Resume dispatch only proves inbox admission for the workflow actor, not applied continuation state.
-            //   The actor read model remains the status resource for observing the run after acceptance.
+            //   The workflow actor current-state read model remains the status resource for observing the run after acceptance.
             var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
             return Results.Accepted(statusUrl, new
             {
@@ -272,7 +277,7 @@ public static class WorkflowCapabilityEndpoints
 
             // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
             //   Signal dispatch only proves inbox admission for the workflow actor, not applied signal handling.
-            //   The actor read model remains the status resource for observing the run after acceptance.
+            //   The workflow actor current-state read model remains the status resource for observing the run after acceptance.
             var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
             return Results.Accepted(statusUrl, new
             {
@@ -333,7 +338,7 @@ public static class WorkflowCapabilityEndpoints
 
             // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
             //   Stop dispatch only proves inbox admission for the workflow actor, not terminal run state.
-            //   The actor read model remains the status resource for observing the run after acceptance.
+            //   The workflow actor current-state read model remains the status resource for observing the run after acceptance.
             var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
             return Results.Accepted(statusUrl, new
             {
@@ -358,7 +363,13 @@ public static class WorkflowCapabilityEndpoints
     }
 
     private static string BuildWorkflowRunStatusUrl(WorkflowRunControlAcceptedReceipt receipt) =>
-        $"/api/actors/{Uri.EscapeDataString(receipt.ActorId)}";
+        BuildWorkflowRunStatusUrl(receipt.ActorId);
+
+    // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
+    //   Old pattern: accepted status links pointed at /api/actors/{actorId}.
+    //   New principle: accepted status links point at the workflow actor current-state readmodel resource.
+    private static string BuildWorkflowRunStatusUrl(string actorId) =>
+        $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state";
 
     private static WorkflowRunEventEnvelope BuildRunContextFrame(WorkflowChatRunAcceptedReceipt receipt) =>
         new()
@@ -540,7 +551,6 @@ public static class WorkflowCapabilityEndpoints
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            var capabilities = await TryResolveCapabilitiesAsync(http.RequestServices, logger, ct);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(http.RequestServices, logger);
             await ChatWebSocketRunCoordinator.ExecuteAsync(
                 socket,
@@ -548,7 +558,6 @@ public static class WorkflowCapabilityEndpoints
                 chatRunService,
                 scope,
                 ct,
-                capabilities,
                 defaultMetadata);
         }
         catch (OperationCanceledException)
@@ -575,29 +584,6 @@ public static class WorkflowCapabilityEndpoints
         finally
         {
             await ChatWebSocketProtocol.CloseAsync(socket, ct);
-        }
-    }
-
-    private static async Task<WorkflowCapabilitiesDocument?> TryResolveCapabilitiesAsync(
-        IServiceProvider? serviceProvider,
-        ILogger? logger,
-        CancellationToken ct)
-    {
-        if (serviceProvider == null)
-            return null;
-
-        try
-        {
-            var queryService = serviceProvider.GetService(typeof(IWorkflowExecutionQueryApplicationService))
-                               as IWorkflowExecutionQueryApplicationService;
-            return queryService == null
-                ? null
-                : await queryService.GetCapabilitiesAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogDebug(ex, "Failed to resolve capabilities for workflow authoring prompt augmentation.");
-            return null;
         }
     }
 

@@ -1,175 +1,126 @@
-using Aevatar.Workflow.Application.Abstractions.Runs;
-
 namespace Aevatar.Workflow.Application.Abstractions.Schedules;
 
-public enum WorkflowScheduleStatus
-{
-    Disabled = 0,
-    Enabled = 1,
-}
-
-public enum WorkflowScheduleFireStatus
-{
-    Accepted = 0,
-    Duplicate = 1,
-    Rejected = 2,
-}
-
-public sealed record WorkflowScheduleNyxIdSubjectRef(
-    string Platform,
-    string Tenant,
-    string ExternalUserId);
-
-public sealed record WorkflowScheduleNyxIdCredentialSource(
-    WorkflowScheduleNyxIdSubjectRef Subject,
-    string Scope);
-
-public sealed record WorkflowScheduleAuth(
-    WorkflowScheduleNyxIdCredentialSource? SenderNyxId = null);
-
-public sealed record WorkflowScheduleTarget(
+public sealed record WorkflowScheduleConfiguration(
+    string ScheduleId,
+    string DisplayName,
+    string WorkflowName,
     string Prompt,
-    WorkflowChatSource Source,
-    string? SessionId = null,
-    IReadOnlyList<WorkflowChatInputPart>? InputParts = null,
-    IReadOnlyDictionary<string, string>? Annotations = null,
+    string CronExpression,
+    string Timezone,
+    bool Enabled,
+    IReadOnlyDictionary<string, string> Headers,
     string? ScopeId = null,
-    IReadOnlyDictionary<string, string>? Headers = null,
-    WorkflowScheduleAuth? Auth = null);
+    string? TenantId = null,
+    string? AppId = null,
+    string? Namespace = null,
+    string? ServiceId = null,
+    string? RevisionId = null);
 
-public sealed record WorkflowScheduleDefinition(
+public sealed record WorkflowScheduleSummary(
     string ScheduleId,
-    string Name,
-    string Cron,
+    string DisplayName,
+    string WorkflowName,
+    string CronExpression,
     string Timezone,
-    WorkflowScheduleStatus Status,
-    WorkflowScheduleTarget Target,
-    DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc,
-    DateTimeOffset? NextFireAtUtc);
+    bool Enabled,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? NextFireAt,
+    DateTimeOffset? LastFireAt,
+    string LastRunActorId,
+    string LastCommandId,
+    string LastCorrelationId,
+    string LastError,
+    int FireCount,
+    int FailureCount,
+    IReadOnlyDictionary<string, string> Headers,
+    string ScopeId,
+    string ScheduleActorId,
+    string TargetActorId);
 
-public sealed record WorkflowScheduleRunRecord(
-    string RunRecordId,
-    string ScheduleId,
-    DateTimeOffset ScheduledFireAtUtc,
-    DateTimeOffset FiredAtUtc,
+public sealed record WorkflowScheduleFireRecord(
+    DateTimeOffset ScheduledFireAt,
+    DateTimeOffset CompletedAt,
     string IdempotencyKey,
-    WorkflowScheduleFireStatus Status,
-    string? AcceptedCommandId = null,
-    string? CorrelationId = null,
-    string? ActorId = null,
-    string? Error = null);
+    string RunActorId,
+    string CommandId,
+    string CorrelationId,
+    string Error,
+    bool Manual);
 
-public sealed record WorkflowSchedulePreview(
-    string Cron,
-    string Timezone,
-    DateTimeOffset FromUtc,
-    IReadOnlyList<DateTimeOffset> FireTimesUtc);
+public sealed record WorkflowScheduleDetail(
+    WorkflowScheduleSummary Schedule,
+    IReadOnlyList<WorkflowScheduleFireRecord> RecentFires);
 
-public sealed record WorkflowScheduleCreateCommand(
-    string? ScheduleId,
-    string Name,
-    string Cron,
-    string Timezone,
-    WorkflowScheduleTarget Target,
-    bool Enabled = true);
+public sealed record WorkflowScheduleMutationReceipt(
+    string ScheduleId,
+    string ScheduleActorId,
+    bool Accepted,
+    string CommandId,
+    string CorrelationId,
+    DateTimeOffset AckedAt,
+    string AckStage);
 
-public sealed record WorkflowScheduleUpdateCommand(
-    string? Name = null,
-    string? Cron = null,
-    string? Timezone = null,
-    WorkflowScheduleTarget? Target = null);
-
-public sealed record WorkflowScheduleListQuery(
-    WorkflowScheduleStatus? Status = null,
-    int Skip = 0,
-    int Take = 100);
+public sealed record WorkflowScheduleRunNowReceipt(
+    string ScheduleId,
+    string ScheduleActorId,
+    DateTimeOffset ScheduledFireAt,
+    string IdempotencyKey,
+    bool Accepted,
+    string CommandId,
+    string CorrelationId,
+    DateTimeOffset AckedAt,
+    string AckStage);
 
 public sealed record WorkflowScheduleListResult(
-    IReadOnlyList<WorkflowScheduleDefinition> Items,
-    int Total);
+    IReadOnlyList<WorkflowScheduleSummary> Items,
+    string? NextCursor,
+    long? TotalCount);
 
-public sealed record WorkflowScheduleFireRequest(
-    string ScheduleId,
-    DateTimeOffset? ScheduledFireAtUtc = null,
-    bool Force = false,
-    bool AdvanceSchedule = false);
-
-public sealed record WorkflowScheduleFireResult(
-    WorkflowScheduleFireStatus Status,
-    WorkflowScheduleRunRecord Run,
-    string? StatusUrl = null);
-
-public enum WorkflowScheduleErrorCode
-{
-    None = 0,
-    InvalidScheduleId = 1,
-    InvalidName = 2,
-    InvalidCron = 3,
-    InvalidTimezone = 4,
-    InvalidTarget = 5,
-    NotFound = 6,
-    AlreadyExists = 7,
-    Disabled = 8,
-    DispatchRejected = 9,
-    CredentialExchangeFailed = 10,
-}
-
-public sealed record WorkflowScheduleError(
-    WorkflowScheduleErrorCode Code,
-    string Message)
-{
-    public static WorkflowScheduleError None { get; } = new(WorkflowScheduleErrorCode.None, string.Empty);
-}
-
-public sealed record WorkflowScheduleResult<T>(
-    T? Value,
-    WorkflowScheduleError Error)
-{
-    public bool Succeeded => Error.Code == WorkflowScheduleErrorCode.None;
-
-    public static WorkflowScheduleResult<T> Success(T value) =>
-        new(value, WorkflowScheduleError.None);
-
-    public static WorkflowScheduleResult<T> Failure(WorkflowScheduleErrorCode code, string message) =>
-        new(default, new WorkflowScheduleError(code, message));
-}
+public sealed record WorkflowSchedulePreview(
+    string CronExpression,
+    string Timezone,
+    IReadOnlyList<DateTimeOffset> NextFireTimes);
 
 public interface IWorkflowScheduleApplicationService
 {
-    Task<WorkflowScheduleResult<WorkflowScheduleDefinition>> CreateAsync(
-        WorkflowScheduleCreateCommand command,
+    Task<WorkflowScheduleMutationReceipt> CreateAsync(
+        WorkflowScheduleConfiguration configuration,
         CancellationToken ct = default);
 
-    Task<WorkflowScheduleResult<WorkflowScheduleDefinition>> UpdateAsync(
+    Task<WorkflowScheduleMutationReceipt> UpdateAsync(
         string scheduleId,
-        WorkflowScheduleUpdateCommand command,
+        WorkflowScheduleConfiguration configuration,
         CancellationToken ct = default);
 
-    Task<WorkflowScheduleResult<WorkflowScheduleDefinition>> EnableAsync(
+    Task<WorkflowScheduleMutationReceipt> EnableAsync(
         string scheduleId,
+        string reason,
         CancellationToken ct = default);
 
-    Task<WorkflowScheduleResult<WorkflowScheduleDefinition>> DisableAsync(
+    Task<WorkflowScheduleMutationReceipt> DisableAsync(
         string scheduleId,
+        string reason,
         CancellationToken ct = default);
 
-    Task<WorkflowScheduleResult<WorkflowScheduleDefinition>> GetAsync(
+    Task<WorkflowScheduleDetail?> GetAsync(
         string scheduleId,
         CancellationToken ct = default);
 
     Task<WorkflowScheduleListResult> ListAsync(
-        WorkflowScheduleListQuery query,
+        int take = 50,
+        string? cursor = null,
+        bool includeTotalCount = false,
         CancellationToken ct = default);
 
-    Task<WorkflowScheduleResult<WorkflowSchedulePreview>> PreviewAsync(
-        string cron,
-        string timezone,
-        DateTimeOffset? fromUtc,
+    Task<WorkflowSchedulePreview> PreviewAsync(
+        string cronExpression,
+        string? timezone,
         int count,
+        DateTimeOffset? fromUtc = null,
         CancellationToken ct = default);
 
-    Task<WorkflowScheduleResult<WorkflowScheduleFireResult>> RunNowAsync(
-        WorkflowScheduleFireRequest request,
+    Task<WorkflowScheduleRunNowReceipt> RunNowAsync(
+        string scheduleId,
         CancellationToken ct = default);
 }
