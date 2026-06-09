@@ -167,6 +167,75 @@ public sealed class ChannelWorkflowDraftRunTests
     }
 
     [Fact]
+    public async Task WorkflowDraftRunGAgent_ShouldIgnoreDuplicateInFlightStartWithoutDispatchingAgain()
+    {
+        var workflow = new RecordingWorkflowChatRunInteractionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateWorkflowDraftRunAgentAsync(dispatch, workflow);
+        agent.State.Status = ChannelWorkflowDraftRunStatus.Started;
+        agent.State.RunId = "workflow-draft-run-1";
+        agent.State.CorrelationId = "msg-1";
+        var request = BuildWorkflowRequest();
+
+        await agent.HandleStartAsync(new ChannelWorkflowDraftRunStartRequested
+        {
+            Request = request.Clone(),
+            RunId = request.RunId,
+        });
+
+        workflow.Requests.Should().BeEmpty();
+        dispatch.Envelopes.Should().BeEmpty();
+        agent.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.Started);
+        agent.State.RunId.Should().Be("workflow-draft-run-1");
+        agent.State.CorrelationId.Should().Be("msg-1");
+    }
+
+    [Fact]
+    public async Task WorkflowDraftRunGAgent_ShouldIgnoreTerminalStartWithoutReopeningRun()
+    {
+        var workflow = new RecordingWorkflowChatRunInteractionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateWorkflowDraftRunAgentAsync(dispatch, workflow);
+        var request = BuildWorkflowRequest();
+
+        await agent.HandleStartAsync(new ChannelWorkflowDraftRunStartRequested
+        {
+            Request = request,
+            RunId = request.RunId,
+        });
+        await agent.HandleStartAsync(new ChannelWorkflowDraftRunStartRequested
+        {
+            Request = request.Clone(),
+            RunId = request.RunId,
+        });
+
+        workflow.Requests.Should().ContainSingle();
+        dispatch.Envelopes.Should().HaveCount(3);
+        agent.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.ReplyHandedOff);
+    }
+
+    [Fact]
+    public async Task WorkflowDraftRunGAgent_ShouldDropMismatchedRequestRunIdBeforeStateOrDispatch()
+    {
+        var workflow = new RecordingWorkflowChatRunInteractionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateWorkflowDraftRunAgentAsync(dispatch, workflow);
+        var request = BuildWorkflowRequest();
+        request.RunId = "workflow-draft-run-other";
+
+        await agent.HandleStartAsync(new ChannelWorkflowDraftRunStartRequested
+        {
+            Request = request,
+            RunId = "workflow-draft-run-1",
+        });
+
+        workflow.Requests.Should().BeEmpty();
+        dispatch.Envelopes.Should().BeEmpty();
+        agent.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.Unspecified);
+        agent.State.RunId.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WorkflowDraftRunGAgent_ShouldDispatchTerminalFailure_WhenWorkflowPortMissing()
     {
         var dispatch = new RecordingActorDispatchPort();
@@ -284,6 +353,42 @@ public sealed class ChannelWorkflowDraftRunTests
         rendered.Text.Should().Contain("boom");
     }
 
+    [Fact]
+    public void ReplyRenderer_ShouldRenderFinishedResultOutput_WhenNoTextWasAccumulated()
+    {
+        var renderer = new WorkflowDraftRunReplyRenderer();
+
+        var rendered = renderer.Render(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "result output" }),
+            },
+        }, string.Empty);
+
+        rendered.Should().NotBeNull();
+        rendered!.IsTerminal.Should().BeTrue();
+        rendered.IsFailure.Should().BeFalse();
+        rendered.Text.Should().Be("result output");
+    }
+
+    [Fact]
+    public void ReplyRenderer_ShouldRenderStoppedRunsAsTerminalFailures()
+    {
+        var renderer = new WorkflowDraftRunReplyRenderer();
+
+        var rendered = renderer.Render(new WorkflowRunEventEnvelope
+        {
+            RunStopped = new WorkflowRunStoppedEventPayload { Reason = "user canceled" },
+        }, "partial");
+
+        rendered.Should().NotBeNull();
+        rendered!.IsTerminal.Should().BeTrue();
+        rendered.IsFailure.Should().BeTrue();
+        rendered.ErrorCode.Should().Be("workflow_run_stopped");
+        rendered.Text.Should().Contain("user canceled");
+    }
+
     private static NeedsWorkflowDraftRunEvent BuildWorkflowRequest() =>
         new()
         {
@@ -377,6 +482,7 @@ public sealed class ChannelWorkflowDraftRunTests
     private sealed class RecordingWorkflowChatRunInteractionPort : IWorkflowChatRunInteractionPort
     {
         public WorkflowChatRunRequest? LastRequest { get; private set; }
+        public List<WorkflowChatRunRequest> Requests { get; } = [];
         public bool EmitFrames { get; init; } = true;
         public bool ThrowOnExecute { get; init; }
         public Func<WorkflowChatRunRequest, CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ResultFactory { get; init; } =
@@ -393,6 +499,7 @@ public sealed class ChannelWorkflowDraftRunTests
             CancellationToken ct = default)
         {
             LastRequest = request;
+            Requests.Add(request);
             if (ThrowOnExecute)
                 throw new InvalidOperationException("workflow execution failed");
 

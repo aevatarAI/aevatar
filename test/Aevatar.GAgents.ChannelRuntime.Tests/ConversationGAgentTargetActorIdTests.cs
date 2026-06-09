@@ -74,6 +74,81 @@ public sealed class ConversationGAgentTargetActorIdTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_ShouldRejectWorkflowDraftRunWithoutRunIdBeforePersistenceOrDispatch()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var eventStore = new InMemoryEventStore();
+        var runner = new DeferredWorkflowDraftRunTurnRunner
+        {
+            ClearRunId = true,
+        };
+        var dispatcher = new RecordingWorkflowDraftRunInteractionPort();
+        var agent = await CreateAgentAsync(actorId, runner, new RecordingLlmReplyRunDispatcher(), dispatcher, eventStore);
+
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-workflow-1"));
+
+        dispatcher.Requests.Should().BeEmpty();
+        agent.State.PendingWorkflowDraftRunRequests.Should().BeEmpty();
+        agent.State.ProcessedCommandIds.Should().Contain("workflow-draft-run:msg-workflow-1");
+        var failures = await ReadConversationFailuresAsync(eventStore, actorId);
+        failures.Should().ContainSingle(x =>
+            x.CommandId == "workflow-draft-run:msg-workflow-1" &&
+            x.ErrorCode == "workflow_draft_run_missing_run_id_rejected" &&
+            x.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_ShouldFailAndCleanWorkflowDraftRun_WhenDispatcherIsUnavailable()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var eventStore = new InMemoryEventStore();
+        var agent = await CreateAgentAsync(
+            actorId,
+            new DeferredWorkflowDraftRunTurnRunner(),
+            new RecordingLlmReplyRunDispatcher(),
+            workflowDispatcher: null,
+            eventStore);
+
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-workflow-1"));
+
+        agent.State.PendingWorkflowDraftRunRequests.Should().BeEmpty();
+        agent.State.ProcessedCommandIds.Should().Contain("workflow-draft-run:msg-workflow-1");
+        var failures = await ReadConversationFailuresAsync(eventStore, actorId);
+        failures.Should().ContainSingle(x =>
+            x.CommandId == "workflow-draft-run:msg-workflow-1" &&
+            x.ErrorCode == "workflow_draft_run_interaction_port_unavailable" &&
+            x.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_ShouldFailAndCleanWorkflowDraftRun_WhenDispatcherThrows()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var eventStore = new InMemoryEventStore();
+        var dispatcher = new RecordingWorkflowDraftRunInteractionPort
+        {
+            ThrowOnDispatch = true,
+        };
+        var agent = await CreateAgentAsync(
+            actorId,
+            new DeferredWorkflowDraftRunTurnRunner(),
+            new RecordingLlmReplyRunDispatcher(),
+            dispatcher,
+            eventStore);
+
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-workflow-1"));
+
+        dispatcher.Requests.Should().BeEmpty();
+        agent.State.PendingWorkflowDraftRunRequests.Should().BeEmpty();
+        agent.State.ProcessedCommandIds.Should().Contain("workflow-draft-run:msg-workflow-1");
+        var failures = await ReadConversationFailuresAsync(eventStore, actorId);
+        failures.Should().ContainSingle(x =>
+            x.CommandId == "workflow-draft-run:msg-workflow-1" &&
+            x.ErrorCode == "workflow_draft_run_dispatch_failed" &&
+            x.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
+    }
+
+    [Fact]
     public async Task ActivateAsync_ShouldFailAndCleanScrubbedWorkflowDraftRunPendingState()
     {
         var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
@@ -126,6 +201,43 @@ public sealed class ConversationGAgentTargetActorIdTests
                 x.CommandId == "workflow-draft-run:msg-workflow-1" &&
                 x.ErrorCode == "missing_runtime_reply_token" &&
                 x.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
+    }
+
+    [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_ShouldFailAndCleanWorkflowDraftRun_WhenUserTokenMissing()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var eventStore = new InMemoryEventStore();
+        var dispatcher = new RecordingWorkflowDraftRunInteractionPort();
+        var agent = await CreateAgentAsync(
+            actorId,
+            new DeferredWorkflowDraftRunTurnRunner(),
+            new RecordingLlmReplyRunDispatcher(),
+            dispatcher,
+            eventStore);
+        var activity = BuildInboundActivity("msg-workflow-1");
+        activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-message-1",
+            CorrelationId = "msg-workflow-1",
+        };
+
+        await agent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = activity,
+            CorrelationId = "msg-workflow-1",
+            ReplyToken = "runtime-reply-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+
+        dispatcher.Requests.Should().BeEmpty();
+        agent.State.PendingWorkflowDraftRunRequests.Should().BeEmpty();
+        agent.State.ProcessedCommandIds.Should().Contain("workflow-draft-run:msg-workflow-1");
+        var failures = await ReadConversationFailuresAsync(eventStore, actorId);
+        failures.Should().ContainSingle(x =>
+            x.CommandId == "workflow-draft-run:msg-workflow-1" &&
+            x.ErrorCode == "missing_runtime_user_access_token" &&
+            x.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
     }
 
     [Fact]
@@ -224,6 +336,17 @@ public sealed class ConversationGAgentTargetActorIdTests
         SetId(agent, id);
         await agent.ActivateAsync();
         return agent;
+    }
+
+    private static async Task<IReadOnlyList<ConversationContinueFailedEvent>> ReadConversationFailuresAsync(
+        InMemoryEventStore eventStore,
+        string actorId)
+    {
+        var events = await eventStore.GetEventsAsync(actorId);
+        return events
+            .Where(x => x.EventData.TypeUrl.EndsWith(ConversationContinueFailedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Select(x => x.EventData.Unpack<ConversationContinueFailedEvent>())
+            .ToList();
     }
 
     private static ChatActivity BuildInboundActivity(string messageId) =>
@@ -331,10 +454,14 @@ public sealed class ConversationGAgentTargetActorIdTests
             var request = Request.Clone();
             request.CorrelationId = activity.Id ?? request.CorrelationId;
             request.Activity = activity.Clone();
+            if (ClearRunId)
+                request.RunId = string.Empty;
             return Task.FromResult(ConversationTurnResult.WorkflowDraftRunRequested(request));
         }
 
         public string? LastReadyRunId { get; private set; }
+
+        public bool ClearRunId { get; init; }
 
         public ConversationTurnResult ReplyResult { get; init; } = ConversationTurnResult.Sent(
             "sent",
@@ -406,9 +533,14 @@ public sealed class ConversationGAgentTargetActorIdTests
     {
         public List<NeedsWorkflowDraftRunEvent> Requests { get; } = [];
 
+        public bool ThrowOnDispatch { get; init; }
+
         public Task DispatchAsync(NeedsWorkflowDraftRunEvent request, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            if (ThrowOnDispatch)
+                throw new InvalidOperationException("workflow draft-run dispatch failed");
+
             Requests.Add(request.Clone());
             return Task.CompletedTask;
         }
