@@ -62,6 +62,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>, WorkflowRunAcceptedCommandTargetResolver>();
         services.AddSingleton<ICommandEnvelopeFactory<WorkflowChatRunRequest>, WorkflowChatRequestEnvelopeFactory>();
         services.TryAddSingleton<IWorkflowForkRunService, WorkflowForkRunService>();
+        services.TryAddSingleton<Func<IWorkflowForkRunService>>(sp =>
+            () => sp.GetRequiredService<IWorkflowForkRunService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
             WorkflowRunForkCoordinator>());

@@ -8,14 +8,14 @@ namespace Aevatar.Workflow.Application.RunForks;
 
 internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHook
 {
-    private readonly IWorkflowForkRunService _forkRunService;
+    private readonly Func<IWorkflowForkRunService> _forkRunServiceFactory;
     private readonly ILogger<WorkflowRunForkCoordinator> _logger;
 
     public WorkflowRunForkCoordinator(
-        IWorkflowForkRunService forkRunService,
+        Func<IWorkflowForkRunService> forkRunServiceFactory,
         ILogger<WorkflowRunForkCoordinator>? logger = null)
     {
-        _forkRunService = forkRunService ?? throw new ArgumentNullException(nameof(forkRunService));
+        _forkRunServiceFactory = forkRunServiceFactory ?? throw new ArgumentNullException(nameof(forkRunServiceFactory));
         _logger = logger ?? NullLogger<WorkflowRunForkCoordinator>.Instance;
     }
 
@@ -40,7 +40,8 @@ internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHoo
 
         try
         {
-            var result = await _forkRunService.ForkAsync(
+            var forkRunService = _forkRunServiceFactory();
+            var result = await forkRunService.ForkAsync(
                 new WorkflowForkRunCommand(
                     SourceRunId: requested.SourceRunId,
                     StartAtStepId: requested.StartAtStepId,

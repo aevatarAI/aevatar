@@ -12,10 +12,27 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowRunForkCoordinatorTests
 {
     [Fact]
+    public async Task BeforePublishAsync_WhenCommittedEventIsNotForkRequest_ShouldNotResolveForkService()
+    {
+        var resolved = false;
+        var coordinator = new WorkflowRunForkCoordinator(() =>
+        {
+            resolved = true;
+            throw new InvalidOperationException("Fork service should not be resolved for unrelated committed events.");
+        });
+
+        await coordinator.BeforePublishAsync(
+            CreateContext(new StringValue { Value = "ignored" }),
+            CancellationToken.None);
+
+        resolved.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task BeforePublishAsync_WhenCommittedForkRequestedEvent_ShouldCallForkService()
     {
         var forkService = new RecordingForkRunService();
-        var coordinator = new WorkflowRunForkCoordinator(forkService);
+        var coordinator = new WorkflowRunForkCoordinator(() => forkService);
         var requested = new WorkflowRunForkRequestedEvent
         {
             SourceRunId = "run-source",
