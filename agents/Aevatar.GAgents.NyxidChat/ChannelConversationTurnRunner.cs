@@ -1292,33 +1292,71 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ArgumentNullException.ThrowIfNull(activity);
 
         var nyxAgentApiKeyId = NormalizeOptional(activity.TransportExtras?.NyxAgentApiKeyId);
-        if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId) &&
-            _registrationQueryByNyxIdentityPort is not null)
+        var canonicalScopeId = NormalizeOptional(activity.TransportExtras?.NyxRegistrationScopeId);
+        if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId))
         {
-            var byNyxIdentity = await _registrationQueryByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync(
+            if (_registrationQueryByNyxIdentityPort is null)
+                return null;
+
+            var registrations = await _registrationQueryByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync(
                 nyxAgentApiKeyId,
                 ct);
+            var byNyxIdentity = ResolveRegistrationByNyxIdentityCandidates(registrations, canonicalScopeId);
+
             if (byNyxIdentity is not null)
                 return byNyxIdentity;
 
-            if (IsNyxRelayActivity(activity, nyxAgentApiKeyId))
-            {
-                var byBoundedScan = await ResolveRegistrationByNyxIdentityScanAsync(nyxAgentApiKeyId, ct);
-                if (byBoundedScan is not null)
-                    return byBoundedScan;
-            }
+            if (registrations.Count > 0)
+                return null;
         }
 
-        return await ResolveRegistrationAsync(activity.Bot?.Value, ct);
+        var byBotId = await ResolveRegistrationAsync(activity.Bot?.Value, ct);
+        return byBotId is not null && IsBotIdFallbackRegistrationAllowed(byBotId, canonicalScopeId, nyxAgentApiKeyId)
+            ? byBotId
+            : null;
     }
 
-    private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationByNyxIdentityScanAsync(
-        string nyxAgentApiKeyId,
-        CancellationToken ct)
+    private static ChannelBotRegistrationEntry? ResolveRegistrationByNyxIdentityCandidates(
+        IReadOnlyList<ChannelBotRegistrationEntry> registrations,
+        string? canonicalScopeId)
     {
-        var registrations = await _registrationQueryPort.QueryAllAsync(ct);
+        if (registrations.Count == 0)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(canonicalScopeId))
+        {
+            return registrations.FirstOrDefault(entry =>
+                string.Equals(NormalizeOptional(entry.ScopeId), canonicalScopeId, StringComparison.Ordinal));
+        }
+
+        var distinctScopeIds = registrations
+            .Select(entry => NormalizeOptional(entry.ScopeId))
+            .Where(static scopeId => scopeId is not null)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (distinctScopeIds.Length != 1)
+            return null;
+
+        var resolvedScopeId = distinctScopeIds[0];
         return registrations.FirstOrDefault(entry =>
-            string.Equals(NormalizeOptional(entry.NyxAgentApiKeyId), nyxAgentApiKeyId, StringComparison.Ordinal));
+            string.Equals(NormalizeOptional(entry.ScopeId), resolvedScopeId, StringComparison.Ordinal));
+    }
+
+    private static bool IsBotIdFallbackRegistrationAllowed(
+        ChannelBotRegistrationEntry registration,
+        string? canonicalScopeId,
+        string? nyxAgentApiKeyId)
+    {
+        if (string.IsNullOrWhiteSpace(canonicalScopeId))
+            return true;
+
+        if (!string.Equals(NormalizeOptional(registration.ScopeId), canonicalScopeId, StringComparison.Ordinal))
+            return false;
+
+        var registrationApiKeyId = NormalizeOptional(registration.NyxAgentApiKeyId);
+        return registrationApiKeyId is null ||
+               string.Equals(registrationApiKeyId, nyxAgentApiKeyId, StringComparison.Ordinal);
     }
 
     private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationForReplyAsync(
@@ -1974,14 +2012,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ? "lark"
             : platform;
     }
-
-    private static bool IsNyxRelayActivity(ChatActivity activity, string nyxAgentApiKeyId) =>
-        activity.OutboundDelivery is
-        {
-            ReplyMessageId.Length: > 0,
-            CorrelationId.Length: > 0,
-        } &&
-        string.Equals(NormalizeOptional(activity.Bot?.Value), nyxAgentApiKeyId, StringComparison.Ordinal);
 
     // Lark reaction emoji_type for "hands typing on keyboard" — added immediately on inbound
     // so the user sees the bot is working before the LLM reply lands. After a reply succeeds,
