@@ -68,6 +68,11 @@ public sealed class ChannelConversationTurnRunnerTests
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
         toolContext.Caller.ScopeId.Should().Be("scope-1");
         toolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
+        // The inbound bot's provider slug is also exposed as the default OUTBOUND delivery provider,
+        // so scheduled_agent_creator resolves one without manual config (was failing with
+        // lark_outbound_provider_slug_unavailable).
+        toolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.LarkOutboundProxySlug)
+            .WhoseValue.Should().Be("api-lark-bot");
     }
 
     [Fact]

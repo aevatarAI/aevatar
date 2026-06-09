@@ -1424,7 +1424,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // (e.g. cross-tenant Lark 99992364) can still notify the user via the bot they just
         // successfully messaged. See issue #423 §C and ChannelMetadataKeys.InboundChannelBotProxySlug.
         if (!string.IsNullOrWhiteSpace(inboundEvent.NyxProviderSlug))
+        {
             metadata[ChannelMetadataKeys.InboundChannelBotProxySlug] = inboundEvent.NyxProviderSlug;
+            // The inbound bot is also the default OUTBOUND delivery provider for a chat-triggered
+            // scheduled task: the scheduled run replies via the same Lark bot that received the
+            // message, so scheduled_agent_creator can resolve a provider without manual Studio/Web
+            // config (was failing with lark_outbound_provider_slug_unavailable). A distinct outbound
+            // provider remains expressible explicitly via agent_delivery_targets.
+            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = inboundEvent.NyxProviderSlug;
+        }
 
         var platformMessageId = NormalizeOptional(activity?.TransportExtras?.NyxPlatformMessageId);
         if (!string.IsNullOrWhiteSpace(platformMessageId))
