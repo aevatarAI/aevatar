@@ -1,3 +1,6 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+
 namespace Aevatar.Workflow.Application.Abstractions.RunForks;
 
 public sealed record WorkflowForkRunCommand(
@@ -9,7 +12,10 @@ public sealed record WorkflowForkRunCommand(
     string? Input = null,
     string? CommandId = null,
     string? CorrelationId = null,
-    int Attempt = 0);
+    int Attempt = 0,
+    string? ScopeId = null,
+    WorkflowCallerCredential? CallerCredential = null,
+    IReadOnlyDictionary<string, string>? Headers = null) : ICommandContextSeed;
 
 public enum WorkflowForkRunStartErrorCode
 {
@@ -96,32 +102,5 @@ public sealed record WorkflowForkRunAcceptedReceipt(
     string SourceRunId,
     string NewRunActorId,
     string WorkflowName,
-    bool Accepted,
     string CommandId,
-    string CorrelationId,
-    DateTimeOffset AckedAt);
-
-public sealed record WorkflowForkRunResult(
-    bool Succeeded,
-    WorkflowForkRunAcceptedReceipt? Receipt,
-    WorkflowForkRunStartError? Error)
-{
-    public static WorkflowForkRunResult Accepted(WorkflowForkRunAcceptedReceipt receipt)
-    {
-        ArgumentNullException.ThrowIfNull(receipt);
-        return new WorkflowForkRunResult(true, receipt, null);
-    }
-
-    public static WorkflowForkRunResult Failure(WorkflowForkRunStartError error)
-    {
-        ArgumentNullException.ThrowIfNull(error);
-        return new WorkflowForkRunResult(false, null, error);
-    }
-}
-
-public interface IWorkflowForkRunService
-{
-    Task<WorkflowForkRunResult> ForkAsync(
-        WorkflowForkRunCommand command,
-        CancellationToken ct = default);
-}
+    string CorrelationId);

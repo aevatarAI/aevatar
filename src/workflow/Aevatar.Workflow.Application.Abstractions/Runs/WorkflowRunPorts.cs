@@ -81,28 +81,16 @@ public sealed record WorkflowRunBindingQuery(
     int Take = 50);
 
 public sealed record WorkflowRunResumeSeedView(
-    string RunId,
-    string Status,
+    string SourceRunId,
+    string WorkflowName,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
     IReadOnlyDictionary<string, string> Variables,
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
-    string FinalError)
-{
-    public WorkflowRunResumeSeedView()
-        : this(
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            new Dictionary<string, string>(StringComparer.Ordinal),
-            new Dictionary<string, string>(StringComparer.Ordinal),
-            [],
-            string.Empty,
-            string.Empty)
-    {
-    }
-}
+    string Status,
+    string FinalError,
+    string ScopeId = "");
 
 /// <summary>
 /// Narrow read contract for resolving workflow actor bindings without exposing raw actor state.

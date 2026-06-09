@@ -68,10 +68,10 @@ export function buildTeamsHref(): string {
 }
 
 export function buildTeamCreateHref(options?: {
-  scopeId?: string;
+  teamName?: string;
 }): string {
   return buildHref('/teams/new', {
-    scopeId: options?.scopeId,
+    teamName: options?.teamName,
   });
 }
 

@@ -15,17 +15,14 @@ reserved only. The `ForwardToModel.tool_set_ref + tool_choice_hint` fields
 express tool availability, tool prefill, and the typed voice attach target.
 Tool prefilled arguments must not be interpreted as actor addressing.
 
-D5/D6 describe later session-owned execution robustness. `ChatRunActor` is not
-implemented in the current v1 slice; `/v1/responses` `wait=complete` therefore
-returns the accepted/streaming invocation receipt and clients observe terminal
-completion through `aevatar_observe_run` or `aevatar_query_readmodel`. Voice
-control/transcript already shares the user-visible `IRealtimeSession` lifecycle;
-future generation/resume/seq-ack/gap/drop/provider lifecycle work belongs to
-that shared realtime-session robustness baseline. Raw PCM/WebRTC remains at the
-`IVoiceVolatileMediaStreamPort` volatile media boundary and does not enter actor
-commands, projection, or readmodels. Ordinary `/ws/voice` still supports only
-typed `tool_choice_hint.voice_attach_target` attachment; pure model forwarding
-remains fail-closed until the shared realtime session authority can execute it.
+D5/D6 describe the later session-owned execution topology. `ChatRunActor` is
+not implemented in the current v1 slice; `/v1/responses` `wait=complete`
+therefore returns the accepted/streaming invocation receipt and clients observe
+terminal completion through `aevatar_observe_run` or `aevatar_query_readmodel`.
+`VoiceSessionActor` is also not implemented by this ADR slice. Until that topology
+exists, ordinary `/ws/voice` supports only typed
+`tool_choice_hint.voice_attach_target` attachment; pure model forwarding
+remains fail-closed.
 
 ## Context
 
@@ -139,16 +136,14 @@ This applies CLAUDE.md §"Actor 执行模型 — self continuation 事件化" an
 §"跨 actor 等待 continuation 化" at the chat-session layer: there is no
 synchronous await across actor boundaries.
 
-### D5 — Session-owned execution keeps one realtime lifecycle
+### D5 — `ChatRunActor` and `VoiceSessionActor` own session state as actors
 
-The later topology may introduce session-scoped authorities:
+The later topology would introduce session-scoped actors:
 
 - **`ChatRunActor`** for `/v1/responses` and `/v1/messages` SSE sessions.
-- A shared realtime-session authority for voice control/transcript sessions,
-  implemented as an actor only if that becomes the narrowest way to own the
-  shared `IRealtimeSession` lifecycle.
+- **`VoiceSessionActor`** for `/ws/voice` Realtime sessions.
 
-These authorities own:
+Both own:
 
 - LLM context for the session
 - Tool-call history
@@ -158,30 +153,26 @@ These authorities own:
   LLM turn
 
 Per CLAUDE.md §"Actor 即业务实体", these are named for the business entity
-(chat run, realtime session), not the technical role. There is no voice-only
-second system: generation, resume, seq-ack, gap/drop handling, and provider
-lifecycle are shared realtime-session robustness concerns. Raw PCM/WebRTC stays
-outside this authority on `IVoiceVolatileMediaStreamPort`; it is not an actor
-command, projection payload, or readmodel input.
+(chat run, voice session), not the technical role.
 
-Issue #1748's first slice only removes the Host-owned voice session shell and
-moves voice control/transcript onto the shared realtime/projection path.
-`ChatRunActor`/`LlmSessionGAgent` and the voice `RoleGAgent` remain separate
-authoritative actors; they must not be merged to share implementation
-convenience.
+Issue #1748's first slice does not introduce `VoiceSessionActor`; it only
+removes the Host-owned voice session shell and moves voice control/transcript
+onto the shared realtime/projection path. `ChatRunActor`/`LlmSessionGAgent` and
+the voice `RoleGAgent` remain separate authoritative actors; they must not be
+merged to share implementation convenience.
 
 ### D6 — Voice converges on the same ingress shape
 
 `/ws/voice` may attach to a voice-enabled actor at WebSocket upgrade time only
 when the resolved `ForwardToModel.tool_choice_hint.voice_attach_target` carries
 the typed attach target. `actor_id` and `voice_module_name` in
-`prefilled_arguments` are ignored for voice attachment. Until the shared
-realtime session authority supports model-forward execution, ordinary
-`/ws/voice` still fails closed for pure model-forward `ForwardToModel` decisions
-before WebSocket accept. The later shared realtime session authority can run
-`ChatRouteResolver` once at session establishment, declare the resolved tool set
-to the OpenAI Realtime provider, and feed function calls through the same
-`ToolCallLoop` without treating tool prefill as actor addressing.
+`prefilled_arguments` are ignored for voice attachment. Until a route-scoped
+`VoiceSessionActor` exists, ordinary `/ws/voice` still fails closed for pure
+model-forward `ForwardToModel` decisions before WebSocket accept. The later
+session actor can run `ChatRouteResolver` once at session establishment,
+declare the resolved tool set to the OpenAI Realtime provider, and feed
+function calls through the same `ToolCallLoop` without treating tool prefill as
+actor addressing.
 
 `/ws/voice/{actorId}` (dev/admin bypass from ADR-0024 D4) stays. It
 short-circuits the resolver, so its semantics are unaffected.
@@ -260,10 +251,10 @@ Static checks (CI guards):
   Phase 4. A guard script asserts `NeedsLlmReplyEvent.TargetActorId` is no
   longer mutated outside the actor that owns the field's authoritative
   state.
-- later `ChatRunActor` and shared realtime-session authority substate that
-  tracks sub-run IDs is a typed proto `repeated` field on actor State, not a
-  `Dictionary<,>` field. Existing middleware-state guard (`tools/ci/`) scope
-  extends to the new actors.
+- later `ChatRunActor` and `VoiceSessionActor` substate that tracks sub-run IDs
+  is a typed proto `repeated` field on actor State, not a
+  `Dictionary<,>` field. Existing middleware-state guard (`tools/ci/`)
+  scope extends to the new actors.
 
 Runtime checks:
 
@@ -303,7 +294,7 @@ Stage 1's tool sources are merged.
 | **2** | Extend `ForwardToModel` proto with `tool_set_ref` + `tool_choice_hint`. Policy authors express GAgent, team, and workflow targets directly as tool-first `ForwardToModel` actions. ChatRun-owned SSE session continuation remains deferred. | No |
 | **3** | Delete legacy wire actions and migration path. Reserve old proto tags/names for `ForwardToGAgent`, `ForwardToTeam`, `ForwardToWorkflow`, and `Bypass`; no new policy writer may emit them. | Yes (clients still using legacy actions) |
 | **4** | Remove code paths: `ResponsesEndpoints.cs:779-927`, `AgentRunGAgent.cs:1108-1141`, resolver branches for legacy actions. `/v1/messages` 501 fallback for these actions deleted. | Yes (clients still using legacy actions) |
-| **5** | Shared realtime-session robustness/provider lifecycle. `/ws/voice` can move from typed attach target only to session-owned `ForwardToModel + tool_set_ref` execution when generation/resume/seq-ack/gap/drop/provider lifecycle is owned by the shared realtime session authority. `/ws/voice/{actorId}` dev bypass unaffected. **Blocked by:** VoicePresence.OpenAI GA migration. | Yes (voice clients) |
+| **5** | `VoiceSessionActor` implementation. `/ws/voice` switches from typed attach target to session-owned `ForwardToModel + tool_set_ref` execution. `/ws/voice/{actorId}` dev bypass unaffected. **Blocked by:** VoicePresence.OpenAI GA migration. | Yes (voice clients) |
 
 ## Supersedes
 

@@ -172,6 +172,7 @@ public sealed record WorkflowForkRunInput
     public string? Input { get; init; }
     public string? CommandId { get; init; }
     public string? CorrelationId { get; init; }
+    public string? ScopeId { get; init; }
 }
 
 internal sealed record ChatWsCommand

@@ -1,5 +1,5 @@
 import { TeamOutlined } from '@ant-design/icons';
-import { Alert, Button, Form, Input, Space, message } from 'antd';
+import { Alert, Button, Input, Space, Typography, message } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import React from 'react';
 import { loadRestorableAuthSession } from '@/shared/auth/session';
@@ -28,21 +28,33 @@ const primaryActionButtonStyle: React.CSSProperties = {
   paddingInline: 18,
 };
 
-type CreateTeamFormValues = {
-  readonly description?: string;
-  readonly teamName?: string;
-};
-
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
 
+function readCreateTeamDraftFromLocation(): {
+  readonly teamName: string;
+} {
+  if (typeof window === 'undefined') {
+    return {
+      teamName: '',
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  return {
+    teamName: params.get('teamName')?.trim() ?? '',
+  };
+}
+
 const TeamCreatePage: React.FC = () => {
   const queryClient = useQueryClient();
-  const [form] = Form.useForm<CreateTeamFormValues>();
+  const initialDraft = React.useMemo(readCreateTeamDraftFromLocation, []);
   const [routeScopeId, setRouteScopeId] = React.useState(
     () => readScopeQueryDraft().scopeId.trim(),
   );
+  const [teamName, setTeamName] = React.useState(initialDraft.teamName);
+  const [teamDescription, setTeamDescription] = React.useState('');
   const [isCreatingTeam, setIsCreatingTeam] = React.useState(false);
   const hasInitializedScopeFromResolvedSession = React.useRef(false);
   const authSessionQuery = useQuery({
@@ -79,8 +91,18 @@ const TeamCreatePage: React.FC = () => {
     );
   }, [resolvedScope?.scopeId]);
   const scopeId = routeScopeId || resolvedScope?.scopeId?.trim() || '';
+  const routeParams = React.useMemo(
+    () => ({
+      teamName: teamName.trim() || undefined,
+    }),
+    [teamName],
+  );
   React.useEffect(() => {
-    const nextPath = buildScopeHref('/teams/new', { scopeId });
+    const nextPath = buildScopeHref(
+      '/teams/new',
+      { scopeId },
+      routeParams,
+    );
     const currentPath =
       typeof window === 'undefined'
         ? ''
@@ -88,7 +110,7 @@ const TeamCreatePage: React.FC = () => {
     if (nextPath !== currentPath) {
       history.replace(nextPath);
     }
-  }, [scopeId]);
+  }, [routeParams, scopeId]);
   const authSessionIssue = React.useMemo(() => {
     if (!authSessionQuery.isError) {
       return '';
@@ -99,9 +121,9 @@ const TeamCreatePage: React.FC = () => {
       t("pages.teams.new.the.login.status.is", "The login status is temporarily unavailable, please refresh and try again."),
     );
   }, [authSessionQuery.error, authSessionQuery.isError]);
-  const handleCreateTeam = async (values: CreateTeamFormValues) => {
-    const displayName = trimOptional(values.teamName);
-    if (!scopeId || !displayName || isCreatingTeam) {
+  const canCreateTeam = Boolean(scopeId && teamName.trim());
+  const handleCreateTeam = async () => {
+    if (!canCreateTeam || isCreatingTeam) {
       return;
     }
 
@@ -109,8 +131,8 @@ const TeamCreatePage: React.FC = () => {
     try {
       const team = await studioApi.createTeam({
         scopeId,
-        displayName,
-        description: trimOptional(values.description) || undefined,
+        displayName: teamName.trim(),
+        description: teamDescription.trim() || undefined,
       });
       queryClient.setQueryData(
         ['teams', 'team-summary', team.scopeId, team.teamId],
@@ -140,6 +162,17 @@ const TeamCreatePage: React.FC = () => {
   return (
     <ConsoleMenuPageShell
       breadcrumb={t("pages.teams.new.aevatar.teams", "Aevatar / Teams")}
+      extra={
+        <Space wrap>
+          <Button
+            disabled={!canCreateTeam}
+            loading={isCreatingTeam}
+            onClick={() => void handleCreateTeam()}
+            style={primaryActionButtonStyle}
+          >
+            {t("pages.teams.new.create.team", "Create Team")}</Button>
+        </Space>
+      }
       title={t("pages.teams.new.create.team.2", "Create Team")}
     >
       {authSessionIssue ? (
@@ -174,10 +207,7 @@ const TeamCreatePage: React.FC = () => {
         padding={20}
         title={t("pages.teams.new.team.information", "team information")}
       >
-        <Form<CreateTeamFormValues>
-          form={form}
-          layout="vertical"
-          onFinish={(values) => void handleCreateTeam(values)}
+        <div
           style={{
             display: 'flex',
             flexDirection: 'column',
@@ -185,45 +215,37 @@ const TeamCreatePage: React.FC = () => {
             maxWidth: 760,
           }}
         >
-          <Form.Item
-            label={t("pages.teams.new.team.name", "Team name")}
-            name="teamName"
-            rules={[
-              {
-                required: true,
-                transform: (value) => trimOptional(value),
-                message: t("pages.teams.new.team.name.required", "Please enter a team name."),
-              },
-            ]}
-          >
+          <div style={{ display: 'grid', gap: 8 }}>
+            <Typography.Text strong>{t("pages.teams.new.team.name", "Team name")}</Typography.Text>
             <Input
               aria-label={t("pages.teams.new.team.name.2", "Team name")}
               placeholder={t("pages.teams.new.for.example.order.assistant", "For example: Order Assistant team")}
+              value={teamName}
+              onChange={(event) => setTeamName(event.target.value)}
             />
-          </Form.Item>
-          <Form.Item
-            label={t("pages.teams.new.description", "Description")}
-            name="description"
-          >
+          </div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <Typography.Text strong>{t("pages.teams.new.description", "Description")}</Typography.Text>
             <Input
               aria-label={t("pages.teams.new.team.description", "Team description")}
               placeholder={t("pages.teams.new.what.is.this.team", "What is this team responsible for?")}
+              value={teamDescription}
+              onChange={(event) => setTeamDescription(event.target.value)}
             />
-          </Form.Item>
+          </div>
           <Space wrap size={[8, 8]}>
             <Button
               icon={<TeamOutlined />}
-              disabled={!scopeId}
-              htmlType="submit"
+              disabled={!canCreateTeam}
               loading={isCreatingTeam}
+              onClick={() => void handleCreateTeam()}
               style={primaryActionButtonStyle}
-              type="primary"
             >
               {t("pages.teams.new.create.team.3", "Create Team")}</Button>
             <Button onClick={() => history.push(buildTeamsHref())}>
               {t("pages.teams.new.back.to.my.teams", "Back to My Teams")}</Button>
           </Space>
-        </Form>
+        </div>
       </AevatarPanel>
     </ConsoleMenuPageShell>
   );

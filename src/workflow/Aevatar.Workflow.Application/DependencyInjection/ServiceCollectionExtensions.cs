@@ -61,10 +61,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>, WorkflowRunCommandTargetResolver>();
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>, WorkflowRunAcceptedCommandTargetResolver>();
         services.AddSingleton<ICommandEnvelopeFactory<WorkflowChatRunRequest>, WorkflowChatRequestEnvelopeFactory>();
-        services.TryAddSingleton<IWorkflowForkRunService, WorkflowForkRunService>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            ICommittedStatePublicationHook,
-            WorkflowRunForkCoordinator>());
         services.AddSingleton<ICommandTargetDispatcher<WorkflowRunCommandTarget>, ActorCommandTargetDispatcher<WorkflowRunCommandTarget>>();
         services.AddSingleton<ICommandTargetDispatcher<WorkflowRunAcceptedCommandTarget>, ActorCommandTargetDispatcher<WorkflowRunAcceptedCommandTarget>>();
         services.AddSingleton<ICommandReceiptFactory<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowRunAcceptedReceiptFactory>();
@@ -123,6 +119,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandEnvelopeFactory<WorkflowStopCommand>, WorkflowStopCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchPipeline<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
+        services.TryAddSingleton<ICommandTargetResolver<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunStartError>, WorkflowForkRunCommandTargetResolver>();
+        services.TryAddSingleton<IWorkflowRunSeedQueryPort, WorkflowRunSeedQueryPort>();
+        services.TryAddSingleton<ICommandTargetDispatcher<WorkflowForkRunCommandTarget>, ActorCommandTargetDispatcher<WorkflowForkRunCommandTarget>>();
+        services.TryAddSingleton<ICommandReceiptFactory<WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt>, WorkflowForkRunAcceptedReceiptFactory>();
+        services.TryAddSingleton<ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>, WorkflowForkRunDispatchPipeline>();
+        services.TryAddSingleton<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>, DefaultCommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>();
         services.TryAddSingleton<RegistryBackedWorkflowCatalogPort>();
         services.TryAddSingleton<IWorkflowCatalogPort>(sp =>
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());

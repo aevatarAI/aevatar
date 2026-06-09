@@ -7,9 +7,11 @@ using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Application.RunForks;
@@ -191,9 +193,6 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(IWorkflowChatRunInteractionPort) &&
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowForkRunService) &&
-            x.ImplementationType == typeof(WorkflowForkRunService));
-        services.Should().Contain(x =>
             x.ServiceType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x =>
@@ -211,6 +210,18 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandTargetResolver<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowForkRunCommandTargetResolver));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowRunSeedQueryPort) &&
+            x.ImplementationType == typeof(WorkflowRunSeedQueryPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowForkRunDispatchPipeline));
     }
 
     [Fact]
@@ -402,6 +413,100 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
+    public void EnvelopeFactory_ShouldCarryResumeSeedOnRequestLevel()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "resume-input",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ResumeSeed: new WorkflowChatRunResumeSeed(
+                "source-run",
+                "step-b",
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["input"] = "seed-input",
+                    ["step-a"] = "alpha",
+                },
+                Attempt: 2));
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+
+        request.ResumeSeed.SourceRunId.Should().Be("source-run");
+        request.ResumeSeed.StartAtStepId.Should().Be("step-b");
+        request.ResumeSeed.Attempt.Should().Be(2);
+        request.ResumeSeed.Variables.Should().Contain("input", "seed-input");
+        request.ResumeSeed.Variables.Should().Contain("step-a", "alpha");
+    }
+
+    [Fact]
+    public async Task WorkflowRunSeedQueryPort_ShouldBuildSeedFromBindingAndRunArtifactReadModels()
+    {
+        var bindingReader = new StaticRunBindingReader([
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-1",
+                "definition-actor-1",
+                "source-run",
+                "direct",
+                "name: direct",
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["child"] = "name: child",
+                },
+                "scope-1"),
+        ]);
+        var reportPort = new StaticArtifactQueryPort(new WorkflowRunReport
+        {
+            WorkflowName = "direct",
+            CompletionStatus = WorkflowRunCompletionStatus.Failed,
+            Input = "seed-input",
+            FinalError = "boom",
+            Steps =
+            [
+                new WorkflowRunStepTrace
+                {
+                    StepId = "step-a",
+                    CompletedAt = DateTimeOffset.UtcNow,
+                    Success = true,
+                    AssignedVariable = "step-a-output",
+                    AssignedValue = "alpha",
+                },
+                new WorkflowRunStepTrace
+                {
+                    StepId = "step-b",
+                    CompletedAt = DateTimeOffset.UtcNow.AddSeconds(1),
+                    Success = false,
+                },
+            ],
+        });
+        var port = new WorkflowRunSeedQueryPort(bindingReader, reportPort);
+
+        var seed = await port.GetResumeSeedAsync(" source-run ", CancellationToken.None);
+
+        seed.Should().NotBeNull();
+        seed!.SourceRunId.Should().Be("source-run");
+        seed.WorkflowName.Should().Be("direct");
+        seed.WorkflowYaml.Should().Be("name: direct");
+        seed.InlineWorkflowYamls.Should().Contain("child", "name: child");
+        seed.Variables.Should().Contain("input", "seed-input");
+        seed.Variables.Should().Contain("step-a-output", "alpha");
+        seed.CompletedStepIds.Should().BeEquivalentTo(["step-a", "step-b"]);
+        seed.LastFailedStepId.Should().Be("step-b");
+        seed.Status.Should().Be("failed");
+        seed.FinalError.Should().Be("boom");
+        seed.ScopeId.Should().Be("scope-1");
+        reportPort.RequestedWorkflowRunIds.Should().ContainSingle().Which.Should().Be("run-actor-1");
+    }
+
+    [Fact]
     public void EnvelopeFactory_ShouldMaterializeTrustedControlAsTypedProtoFields_NotMetadata()
     {
         var services = new ServiceCollection();
@@ -529,5 +634,59 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             "corr-3",
             new Dictionary<string, string>()));
         whiteSpaceSession.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-3");
+    }
+
+    private sealed class StaticRunBindingReader(IReadOnlyList<WorkflowActorBinding> bindings) : IWorkflowRunBindingReader
+    {
+        public Task<IReadOnlyList<WorkflowActorBinding>> ListByRunIdAsync(
+            string runId,
+            int take = 20,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(bindings);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorBinding>> QueryAsync(
+            WorkflowRunBindingQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorBinding>>([]);
+    }
+
+    private sealed class StaticArtifactQueryPort(WorkflowRunReport? report) : IWorkflowExecutionArtifactQueryPort
+    {
+        public List<string> RequestedWorkflowRunIds { get; } = [];
+
+        public bool WorkflowArtifactQueryEnabled => true;
+
+        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(
+            string workflowRunId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            RequestedWorkflowRunIds.Add(workflowRunId);
+            return Task.FromResult(report);
+        }
+
+        public Task<IReadOnlyList<WorkflowRunTimelineExportItem>> ListWorkflowRunTimelineExportAsync(
+            string workflowRunId,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowRunTimelineExportItem>>([]);
+
+        public Task<IReadOnlyList<WorkflowRunGraphExportEdge>> GetWorkflowRunGraphExportEdgesAsync(
+            string workflowRunId,
+            int take = 200,
+            WorkflowRunGraphExportQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowRunGraphExportEdge>>([]);
+
+        public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(
+            string workflowRunId,
+            int depth = 2,
+            int take = 200,
+            WorkflowRunGraphExportQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowRunGraphExportSubgraph());
     }
 }
