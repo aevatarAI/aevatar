@@ -208,7 +208,7 @@ export function parseInspectorParameters(
 
   const parsed = JSON.parse(trimmed) as unknown;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Raw node configuration must be a JSON object.');
+    throw new Error('Step parameters must be a JSON object.');
   }
 
   return Object.fromEntries(Object.entries(parsed));
@@ -566,6 +566,8 @@ export function removeStep(
     };
   }
 
+  const removedStep = steps[currentIndex] as StudioWorkflowStepDocument;
+  const replacementStepId = normalizeString(removedStep.next);
   const nextSteps = steps
     .filter((entry) => normalizeString(entry.id) !== currentStepId)
     .map((entry) => {
@@ -573,18 +575,25 @@ export function removeStep(
       const next = normalizeString(step.next);
       const branches = Object.fromEntries(
         Object.entries(step.branches ?? {})
-          .filter(([, target]) => target !== currentStepId)
+          .map(([label, target]) => [
+            label,
+            target === currentStepId ? replacementStepId : target,
+          ])
           .filter(([, target]) => Boolean(normalizeString(target))),
       );
 
       return {
         ...step,
-        next: next === currentStepId ? null : step.next ?? null,
+        next: next === currentStepId ? replacementStepId || null : step.next ?? null,
         branches,
       } satisfies StudioWorkflowStepDocument;
     });
 
-  const preferredStep = nextSteps[currentIndex] ?? nextSteps[currentIndex - 1] ?? nextSteps[0];
+  const preferredStep =
+    nextSteps.find((entry) => normalizeString(entry.id) === replacementStepId) ??
+    nextSteps[currentIndex] ??
+    nextSteps[currentIndex - 1] ??
+    nextSteps[0];
   const fallbackRoleId = normalizeString(roles[0]?.id);
 
   return {

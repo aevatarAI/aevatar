@@ -7,7 +7,6 @@ import {
   parseInspectorBranches,
   parseInspectorParameters,
   removeStep,
-  removeStepConnection,
   removeSteps,
   suggestBranchLabelForStep,
 } from './document';
@@ -228,9 +227,9 @@ describe('studio document helpers', () => {
     });
   });
 
-  it('rejects non-object raw node configuration', () => {
+  it('rejects non-object step parameters', () => {
     expect(() => parseInspectorParameters('["nope"]')).toThrow(
-      'Raw node configuration must be a JSON object.',
+      'Step parameters must be a JSON object.',
     );
   });
 
@@ -278,7 +277,7 @@ describe('studio document helpers', () => {
     ]);
   });
 
-  it('removes a selected step and clears incident connections without rewiring flow', () => {
+  it('removes a selected step and rewrites inbound edges to the next step', () => {
     const document: StudioWorkflowDocument = {
       name: 'workspace-demo',
       roles: [],
@@ -318,16 +317,18 @@ describe('studio document helpers', () => {
     expect(result.document.steps).toEqual([
       expect.objectContaining({
         id: 'draft_step',
-        next: null,
+        next: 'approve_step',
       }),
       expect.objectContaining({
         id: 'approve_step',
-        branches: {},
+        branches: {
+          retry: 'approve_step',
+        },
       }),
     ]);
   });
 
-  it('removes multiple selected steps without inventing replacement connections', () => {
+  it('removes multiple selected steps in document order and preserves rewired flow', () => {
     const document: StudioWorkflowDocument = {
       name: 'workspace-demo',
       roles: [],
@@ -375,107 +376,15 @@ describe('studio document helpers', () => {
     expect(result.document.steps).toEqual([
       expect.objectContaining({
         id: 'draft_step',
-        next: null,
+        next: 'publish_step',
       }),
       expect.objectContaining({
         id: 'publish_step',
-        branches: {},
-      }),
-    ]);
-  });
-
-  it('removes an explicit next connection while keeping both steps', () => {
-    const document: StudioWorkflowDocument = {
-      name: 'workspace-demo',
-      roles: [],
-      steps: [
-        {
-          id: 'draft_step',
-          type: 'llm_call',
-          targetRole: 'assistant',
-          parameters: {},
-          next: 'approve_step',
-          branches: {},
-        },
-        {
-          id: 'approve_step',
-          type: 'human_approval',
-          targetRole: null,
-          parameters: {},
-          next: null,
-          branches: {},
-        },
-      ],
-    };
-
-    const result = removeStepConnection(
-      document,
-      'draft_step',
-      'approve_step',
-    );
-
-    expect(result.nodeId).toBe('step:draft_step');
-    expect(result.document.steps).toEqual([
-      expect.objectContaining({
-        id: 'draft_step',
-        next: null,
-      }),
-      expect.objectContaining({
-        id: 'approve_step',
-      }),
-    ]);
-  });
-
-  it('removes a branch connection while preserving sibling branches', () => {
-    const document: StudioWorkflowDocument = {
-      name: 'workspace-demo',
-      roles: [],
-      steps: [
-        {
-          id: 'guard_step',
-          type: 'conditional',
-          targetRole: null,
-          parameters: {},
-          next: null,
-          branches: {
-            true: 'approve_step',
-            false: 'retry_step',
-          },
-        },
-        {
-          id: 'approve_step',
-          type: 'human_approval',
-          targetRole: null,
-          parameters: {},
-          next: null,
-          branches: {},
-        },
-        {
-          id: 'retry_step',
-          type: 'llm_call',
-          targetRole: 'assistant',
-          parameters: {},
-          next: null,
-          branches: {},
-        },
-      ],
-    };
-
-    const result = removeStepConnection(
-      document,
-      'guard_step',
-      'retry_step',
-      'false',
-    );
-
-    expect(result.nodeId).toBe('step:guard_step');
-    expect(result.document.steps?.[0]).toEqual(
-      expect.objectContaining({
         branches: {
-          true: 'approve_step',
+          retry: 'publish_step',
         },
       }),
-    );
+    ]);
   });
 
   it('connects a step to a new linear next target', () => {
