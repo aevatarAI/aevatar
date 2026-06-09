@@ -544,6 +544,12 @@ public sealed class ConversationGAgentTargetActorIdTests
             Requests.Add(request.Clone());
             return Task.CompletedTask;
         }
+
+        public Task StartWorkflowInteractionAsync(string runActorId, NeedsWorkflowDraftRunEvent request, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class NoopActorDispatchPort : IActorDispatchPort

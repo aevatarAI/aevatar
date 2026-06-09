@@ -82,7 +82,7 @@ public sealed class ChannelWorkflowDraftRunAdmission
             },
             Prompt = intent.Prompt,
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            RunId = $"workflow-draft-run-{Guid.NewGuid():N}",
+            RunId = ChannelWorkflowDraftRunId.NewValue(),
             NyxUserAccessToken = userAccessToken,
         };
 

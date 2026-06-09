@@ -1,4 +1,3 @@
-using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -7,7 +6,6 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
-using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -22,7 +20,7 @@ public sealed class ChannelWorkflowDraftRunGAgent : GAgentBase<ChannelWorkflowDr
 {
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly WorkflowDraftRunReplyRenderer _renderer;
-    private readonly IWorkflowChatRunInteractionPort? _workflowInteractionPort;
+    private readonly IChannelWorkflowDraftRunInteractionPort? _workflowInteractionPort;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ChannelWorkflowDraftRunGAgent> _logger;
 
@@ -30,7 +28,7 @@ public sealed class ChannelWorkflowDraftRunGAgent : GAgentBase<ChannelWorkflowDr
         IActorDispatchPort actorDispatchPort,
         WorkflowDraftRunReplyRenderer renderer,
         ILogger<ChannelWorkflowDraftRunGAgent> logger,
-        IWorkflowChatRunInteractionPort? workflowInteractionPort = null,
+        IChannelWorkflowDraftRunInteractionPort? workflowInteractionPort = null,
         TimeProvider? timeProvider = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
@@ -46,6 +44,7 @@ public sealed class ChannelWorkflowDraftRunGAgent : GAgentBase<ChannelWorkflowDr
         StateTransitionMatcher
             .Match(current, evt)
             .On<ChannelWorkflowDraftRunStartedEvent>(ApplyStarted)
+            .On<ChannelWorkflowDraftRunFrameRenderedEvent>(ApplyFrameRendered)
             .On<ChannelWorkflowDraftRunReplyHandedOffEvent>(ApplyReplyHandedOff)
             .On<ChannelWorkflowDraftRunFailedEvent>(ApplyFailed)
             .OrCurrent();
@@ -108,95 +107,83 @@ public sealed class ChannelWorkflowDraftRunGAgent : GAgentBase<ChannelWorkflowDr
             StartedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
 
-        await ExecuteWorkflowAsync(request);
-    }
-
-    private async Task ExecuteWorkflowAsync(NeedsWorkflowDraftRunEvent request)
-    {
         if (_workflowInteractionPort is null)
         {
-            await DispatchReadyAsync(
+            await DispatchReadyAndPersistTerminalAsync(
                 request,
                 BuildFailure("workflow_interaction_port_unavailable", "Workflow interaction service is unavailable."),
                 CancellationToken.None);
             return;
         }
 
-        var accumulatedText = string.Empty;
-        try
-        {
-            var result = await _workflowInteractionPort.ExecuteAsync(
-                    BuildCommand(request),
-                    async (frame, token) =>
-                    {
-                        var rendered = _renderer.Render(frame, accumulatedText);
-                        if (rendered is null)
-                            return;
-
-                        accumulatedText = rendered.Text;
-                        if (rendered.IsTerminal)
-                        {
-                            await DispatchReadyAsync(request, rendered, token).ConfigureAwait(false);
-                            return;
-                        }
-
-                        await DispatchChunkAsync(request, accumulatedText, token).ConfigureAwait(false);
-                    },
-                    onAcceptedAsync: null,
-                    CancellationToken.None)
-                .ConfigureAwait(false);
-
-            if (!result.Succeeded)
-            {
-                await DispatchReadyAsync(
-                    request,
-                    BuildFailure(
-                        $"workflow_start_failed:{result.Error}",
-                        $"Workflow start failed: {result.Error}"),
-                    CancellationToken.None);
-                return;
-            }
-
-            if (result.FinalizeResult is null || !result.FinalizeResult.Completed)
-            {
-                await DispatchReadyAsync(
-                    request,
-                    BuildFailure("workflow_completion_unknown", "Workflow ended without a terminal frame."),
-                    CancellationToken.None);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "Workflow draft-run interaction failed: runId={RunId} correlation={CorrelationId}",
-                request.RunId,
-                request.CorrelationId);
-            await DispatchReadyAsync(
-                request,
-                BuildFailure("workflow_draft_run_exception", "Workflow draft-run failed."),
-                CancellationToken.None);
-        }
+        await _workflowInteractionPort.StartWorkflowInteractionAsync(Id, request, CancellationToken.None);
     }
 
-    private static WorkflowChatRunRequest BuildCommand(NeedsWorkflowDraftRunEvent request)
+    [EventHandler]
+    public async Task HandleWorkflowFrameObservedAsync(ChannelWorkflowDraftRunFrameObserved evt)
     {
-        var source = request.WorkflowSource ?? new ChannelWorkflowDraftRunSource();
-        var headers = request.Headers.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-        return new WorkflowChatRunRequest(
-            Prompt: request.Prompt ?? string.Empty,
-            Source: WorkflowChatSource.DefinitionActor(source.DefinitionActorId, source.WorkflowName),
-            SessionId: request.RunId,
-            Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["channel.registration_id"] = request.RegistrationId ?? string.Empty,
-                ["channel.correlation_id"] = request.CorrelationId ?? string.Empty,
-            },
-            ScopeId: source.ScopeId,
-            CallerCredential: new WorkflowCallerCredential(request.NyxUserAccessToken),
-            Headers: headers,
-            CommandIdSeed: request.RunId,
-            CorrelationIdSeed: request.CorrelationId);
+        ArgumentNullException.ThrowIfNull(evt);
+        if (evt.Request is null || evt.Frame is null || !IsActiveContinuation(evt.Request))
+            return;
+
+        var rendered = _renderer.Render(evt.Frame, State.AccumulatedText);
+        if (rendered is null)
+            return;
+
+        await PersistDomainEventAsync(new ChannelWorkflowDraftRunFrameRenderedEvent
+        {
+            RunId = evt.Request.RunId,
+            CorrelationId = evt.Request.CorrelationId,
+            TargetActorId = evt.Request.TargetActorId,
+            AccumulatedText = rendered.Text,
+            RenderedAtUnixMs = evt.ObservedAtUnixMs > 0
+                ? evt.ObservedAtUnixMs
+                : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+
+        if (rendered.IsTerminal)
+        {
+            await DispatchReadyAndPersistTerminalAsync(evt.Request, rendered, CancellationToken.None);
+            return;
+        }
+
+        await DispatchChunkAsync(evt.Request, rendered.Text, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowInteractionCompletedAsync(ChannelWorkflowDraftRunInteractionCompleted evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (evt.Request is null || !IsActiveContinuation(evt.Request))
+            return;
+
+        if (!evt.Succeeded)
+        {
+            await DispatchReadyAndPersistTerminalAsync(
+                evt.Request,
+                BuildFailure(
+                    string.IsNullOrWhiteSpace(evt.ErrorCode) ? "workflow_draft_run_failed" : evt.ErrorCode,
+                    string.IsNullOrWhiteSpace(evt.ErrorSummary) ? "Workflow draft-run failed." : evt.ErrorSummary),
+                CancellationToken.None);
+            return;
+        }
+
+        if (!evt.Completed)
+        {
+            await DispatchReadyAndPersistTerminalAsync(
+                evt.Request,
+                BuildFailure("workflow_completion_unknown", "Workflow ended without a terminal frame."),
+                CancellationToken.None);
+            return;
+        }
+
+        await DispatchReadyAndPersistTerminalAsync(
+            evt.Request,
+            new WorkflowDraftRunRenderedFrame(
+                string.IsNullOrWhiteSpace(State.AccumulatedText) ? "Workflow 已完成。" : State.AccumulatedText,
+                true,
+                false),
+            CancellationToken.None);
     }
 
     private async Task DispatchChunkAsync(
@@ -222,7 +209,7 @@ public sealed class ChannelWorkflowDraftRunGAgent : GAgentBase<ChannelWorkflowDr
             ct);
     }
 
-    private async Task DispatchReadyAsync(
+    private async Task DispatchReadyAndPersistTerminalAsync(
         NeedsWorkflowDraftRunEvent request,
         WorkflowDraftRunRenderedFrame rendered,
         CancellationToken ct)
@@ -322,6 +309,22 @@ public sealed class ChannelWorkflowDraftRunGAgent : GAgentBase<ChannelWorkflowDr
         next.TargetActorId = evt.TargetActorId;
         next.Status = ChannelWorkflowDraftRunStatus.Started;
         next.StartedAtUnixMs = evt.StartedAtUnixMs;
+        next.AccumulatedText = string.Empty;
+        next.CompletedAtUnixMs = 0;
+        next.ErrorCode = string.Empty;
+        next.ErrorSummary = string.Empty;
+        return next;
+    }
+
+    private static ChannelWorkflowDraftRunGAgentState ApplyFrameRendered(
+        ChannelWorkflowDraftRunGAgentState current,
+        ChannelWorkflowDraftRunFrameRenderedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = evt.RunId;
+        next.CorrelationId = evt.CorrelationId;
+        next.TargetActorId = evt.TargetActorId;
+        next.AccumulatedText = evt.AccumulatedText;
         return next;
     }
 
@@ -353,5 +356,31 @@ public sealed class ChannelWorkflowDraftRunGAgent : GAgentBase<ChannelWorkflowDr
         next.ErrorCode = evt.ErrorCode;
         next.ErrorSummary = evt.ErrorSummary;
         return next;
+    }
+
+    private bool IsActiveContinuation(NeedsWorkflowDraftRunEvent request)
+    {
+        if (State.Status != ChannelWorkflowDraftRunStatus.Started)
+        {
+            _logger.LogInformation(
+                "Ignoring workflow draft-run continuation for non-started run: runId={RunId} status={Status}",
+                request.RunId,
+                State.Status);
+            return false;
+        }
+
+        if (!string.Equals(State.RunId, request.RunId, StringComparison.Ordinal) ||
+            !string.Equals(State.CorrelationId, request.CorrelationId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Ignoring stale workflow draft-run continuation: stateRunId={StateRunId} requestRunId={RequestRunId} stateCorrelation={StateCorrelationId} requestCorrelation={RequestCorrelationId}",
+                State.RunId,
+                request.RunId,
+                State.CorrelationId,
+                request.CorrelationId);
+            return false;
+        }
+
+        return true;
     }
 }

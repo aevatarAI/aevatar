@@ -68,6 +68,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.IActorRuntime>(),
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.IActorDispatchPort>(),
                 sp.GetRequiredService<ILogger<ChannelWorkflowDraftRunInteractionPort>>(),
+                sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowChatRunInteractionPort>(),
                 sp.GetService<TimeProvider>()));
         // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
         //   Old pattern: Mainnet Host/API composed the voice demo agent bootstrap workflow directly.
