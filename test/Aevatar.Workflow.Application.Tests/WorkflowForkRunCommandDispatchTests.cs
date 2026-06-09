@@ -379,7 +379,6 @@ public sealed class WorkflowForkRunCommandDispatchTests
         string scopeId = "") =>
         new WorkflowRunResumeSeedView(
             SourceRunId: "source-run",
-            WorkflowName: "source",
             WorkflowYaml: workflowYaml ?? WorkflowYaml("source"),
             InlineWorkflowYamls: inlineWorkflowYamls ?? new Dictionary<string, string>(StringComparer.Ordinal),
             Variables: variables ?? new Dictionary<string, string>(StringComparer.Ordinal)

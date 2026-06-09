@@ -82,7 +82,6 @@ public sealed record WorkflowRunBindingQuery(
 
 public sealed record WorkflowRunResumeSeedView(
     string SourceRunId,
-    string WorkflowName,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
     IReadOnlyDictionary<string, string> Variables,

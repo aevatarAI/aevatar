@@ -18,7 +18,6 @@ public sealed class WorkflowRunResumeSeedReadModelMapper
 
         return new WorkflowRunResumeSeedView(
             source.RunId ?? string.Empty,
-            string.Empty,
             source.WorkflowYaml ?? string.Empty,
             CopyMap(source.InlineWorkflowYamls),
             CopyMap(source.ResumeSeedVariables),
