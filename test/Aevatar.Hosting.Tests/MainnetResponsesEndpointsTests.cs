@@ -528,6 +528,28 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task ResponsesUserSkillsToolProvider_WhenRequestIsCanceled_ShouldPropagateCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var toolProvider = new ResponsesUserSkillsToolProvider(
+            new StubAgentToolSource(
+            [
+                new StubAgentTool("use_skill", "Run a registered skill body"),
+            ]),
+            new CanceledAgentToolSource());
+
+        Func<Task> act = async () => await toolProvider.GetAdditiveToolsAsync(
+            BuildToolProviderContext(
+                new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
+                "resp_1",
+                "token"),
+            cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public async Task PostResponses_WhenSkillBridgeProviderRegistered_ShouldForwardSkillToolsToLlmRequest()
     {
         var provider = new RecordingLLMProvider
@@ -3132,6 +3154,12 @@ public sealed class MainnetResponsesEndpointsTests
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromException<IReadOnlyList<IAgentTool>>(
                 new InvalidOperationException("source discovery failed"));
+    }
+
+    private sealed class CanceledAgentToolSource : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromException<IReadOnlyList<IAgentTool>>(new OperationCanceledException(ct));
     }
 
     private sealed class NotFoundHttpMessageHandler : HttpMessageHandler
