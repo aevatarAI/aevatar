@@ -910,7 +910,7 @@ public sealed class AgentBuilderToolTests
         tools.Select(tool => tool.Name).Should().BeEquivalentTo("agent_builder", "scheduled_agent_creator");
         var managementTool = tools.Single(tool => tool.Name == "agent_builder");
         var creatorTool = tools.Single(tool => tool.Name == "scheduled_agent_creator");
-        creatorTool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        creatorTool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
         creatorTool.IsReadOnly.Should().BeFalse();
         creatorTool.IsDestructive.Should().BeFalse();
 
@@ -976,7 +976,7 @@ public sealed class AgentBuilderToolTests
 
         tools.Select(tool => tool.Name).Should().BeEquivalentTo("agent_builder", "scheduled_agent_creator");
         tools.Single(tool => tool.Name == "scheduled_agent_creator").ApprovalMode
-            .Should().Be(ToolApprovalMode.AlwaysRequire);
+            .Should().Be(ToolApprovalMode.NeverRequire);
     }
 
     private static AgentBuilderTool CreateTool(IServiceCollection services)
