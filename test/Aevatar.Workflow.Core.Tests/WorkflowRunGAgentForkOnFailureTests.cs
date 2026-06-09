@@ -122,7 +122,7 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         {
             Prompt = "hello",
             ScopeId = "scope-1",
-            ResumeSeed = new WorkflowRunResumeSeed
+            ForkSeed = new WorkflowRunForkSeed
             {
                 Attempt = attempt,
             },

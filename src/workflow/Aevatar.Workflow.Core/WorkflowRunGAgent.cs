@@ -282,7 +282,7 @@ public sealed class WorkflowRunGAgent
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = ResolveScopeId(request.ScopeId, State.ScopeId),
             ExecutionContextDelta = executionContextDelta,
-            Attempt = Math.Max(0, request.ResumeSeed?.Attempt ?? 0),
+            Attempt = Math.Max(0, request.ForkSeed?.Attempt ?? 0),
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -290,7 +290,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = executionInput,
             RunId = runId,
-            ResumeSeed = request.ResumeSeed,
+            ForkSeed = request.ForkSeed,
         }, TopologyAudience.Self);
     }
 
@@ -353,8 +353,8 @@ public sealed class WorkflowRunGAgent
 
     private static string ResolveExecutionInput(WorkflowChatRequestEvent request)
     {
-        if (request.ResumeSeed != null &&
-            request.ResumeSeed.Variables.TryGetValue("input", out var seedInput))
+        if (request.ForkSeed != null &&
+            request.ForkSeed.Variables.TryGetValue("input", out var seedInput))
         {
             return seedInput ?? string.Empty;
         }

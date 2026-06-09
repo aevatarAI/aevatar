@@ -95,7 +95,7 @@ public sealed class WorkflowForkRunServiceTests
     }
 
     [Fact]
-    public async Task ForkAsync_ShouldLetVariableOverridesWinInDispatchedResumeSeed()
+    public async Task ForkAsync_ShouldLetVariableOverridesWinInDispatchedForkSeed()
     {
         var seedPort = new RecordingSeedQueryPort
         {
@@ -126,14 +126,14 @@ public sealed class WorkflowForkRunServiceTests
 
         result.Succeeded.Should().BeTrue();
         var request = dispatchPort.DispatchedRequest();
-        request.ResumeSeed.Variables["topic"].Should().Be("override-topic");
-        request.ResumeSeed.Variables["extra"].Should().Be("override-extra");
-        request.ResumeSeed.Variables["step-a"].Should().Be("alpha");
+        request.ForkSeed.Variables["topic"].Should().Be("override-topic");
+        request.ForkSeed.Variables["extra"].Should().Be("override-extra");
+        request.ForkSeed.Variables["step-a"].Should().Be("alpha");
         request.Prompt.Should().Be("seed-input");
     }
 
     [Fact]
-    public async Task ForkAsync_HappyPath_ShouldCreateRunWithChosenYamlAndDispatchResumeSeed()
+    public async Task ForkAsync_HappyPath_ShouldCreateRunWithChosenYamlAndDispatchForkSeed()
     {
         var sourceYaml = WorkflowYaml("source");
         var editedYaml = WorkflowYaml("edited");
@@ -200,11 +200,11 @@ public sealed class WorkflowForkRunServiceTests
 
         var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
         request.Prompt.Should().Be("override-input");
-        request.ResumeSeed.SourceRunId.Should().Be("source-run");
-        request.ResumeSeed.StartAtStepId.Should().Be("step-b");
-        request.ResumeSeed.Variables.Should().Contain("step-a", "alpha");
-        request.ResumeSeed.Variables.Should().Contain("topic", "seed-topic");
-        request.ResumeSeed.Variables.Should().Contain("input", "override-input");
+        request.ForkSeed.SourceRunId.Should().Be("source-run");
+        request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
+        request.ForkSeed.Variables.Should().Contain("topic", "seed-topic");
+        request.ForkSeed.Variables.Should().Contain("input", "override-input");
     }
 
     private static WorkflowForkRunService CreateService(
@@ -219,7 +219,7 @@ public sealed class WorkflowForkRunServiceTests
             new WorkflowChatRequestEnvelopeFactory(),
             dispatchPort);
 
-    private static WorkflowRunResumeSeedView CreateSeedView(
+    private static WorkflowRunForkSeedView CreateSeedView(
         string status,
         string? workflowYaml = null,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
@@ -249,12 +249,12 @@ public sealed class WorkflowForkRunServiceTests
             type: transform
         """;
 
-    private sealed class RecordingSeedQueryPort : IWorkflowRunSeedQueryPort
+    private sealed class RecordingSeedQueryPort : IWorkflowRunForkSeedQueryPort
     {
-        public WorkflowRunResumeSeedView? View { get; set; }
+        public WorkflowRunForkSeedView? View { get; set; }
         public List<string> RequestedRunIds { get; } = [];
 
-        public Task<WorkflowRunResumeSeedView?> GetResumeSeedAsync(
+        public Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
             string runId,
             CancellationToken ct = default)
         {

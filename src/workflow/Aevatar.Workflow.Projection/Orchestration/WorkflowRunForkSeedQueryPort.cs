@@ -6,17 +6,17 @@ using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowRunSeedQueryPort : IWorkflowRunSeedQueryPort
+public sealed class WorkflowRunForkSeedQueryPort : IWorkflowRunForkSeedQueryPort
 {
     private readonly IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> _currentStateReader;
     private readonly IWorkflowRunBindingReader _runBindingReader;
-    private readonly WorkflowRunResumeSeedReadModelMapper _mapper;
+    private readonly WorkflowRunForkSeedReadModelMapper _mapper;
     private readonly bool _queryEnabled;
 
-    public WorkflowRunSeedQueryPort(
+    public WorkflowRunForkSeedQueryPort(
         IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> currentStateReader,
         IWorkflowRunBindingReader runBindingReader,
-        WorkflowRunResumeSeedReadModelMapper mapper,
+        WorkflowRunForkSeedReadModelMapper mapper,
         WorkflowExecutionProjectionOptions? options = null)
     {
         _currentStateReader = currentStateReader ?? throw new ArgumentNullException(nameof(currentStateReader));
@@ -25,7 +25,7 @@ public sealed class WorkflowRunSeedQueryPort : IWorkflowRunSeedQueryPort
         _queryEnabled = options == null || (options.Enabled && options.WorkflowActorCurrentStateQueryEnabled);
     }
 
-    public async Task<WorkflowRunResumeSeedView?> GetResumeSeedAsync(
+    public async Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
         string runId,
         CancellationToken ct = default)
     {

@@ -15,7 +15,7 @@ public sealed class WorkflowForkRunService : IWorkflowForkRunService
         "stopped",
     };
 
-    private readonly IWorkflowRunSeedQueryPort _seedQueryPort;
+    private readonly IWorkflowRunForkSeedQueryPort _seedQueryPort;
     private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
     private readonly IWorkflowDefinitionParser _definitionParser;
     private readonly ICommandContextPolicy _contextPolicy;
@@ -24,7 +24,7 @@ public sealed class WorkflowForkRunService : IWorkflowForkRunService
     private readonly WorkflowParser _workflowParser = new();
 
     public WorkflowForkRunService(
-        IWorkflowRunSeedQueryPort seedQueryPort,
+        IWorkflowRunForkSeedQueryPort seedQueryPort,
         IWorkflowRunProvisioningPort runProvisioningPort,
         IWorkflowDefinitionParser definitionParser,
         ICommandContextPolicy contextPolicy,
@@ -47,7 +47,7 @@ public sealed class WorkflowForkRunService : IWorkflowForkRunService
 
         var sourceRunId = Normalize(command.SourceRunId);
         var startAtStepId = Normalize(command.StartAtStepId);
-        var seedView = await _seedQueryPort.GetResumeSeedAsync(sourceRunId, ct).ConfigureAwait(false);
+        var seedView = await _seedQueryPort.GetForkSeedAsync(sourceRunId, ct).ConfigureAwait(false);
         if (seedView == null)
             return WorkflowForkRunResult.Failure(WorkflowForkRunStartError.SourceRunNotFound(sourceRunId));
 
@@ -90,7 +90,7 @@ public sealed class WorkflowForkRunService : IWorkflowForkRunService
             Source: WorkflowChatSource.DefinitionActor(creationReceipt.ActorId, validation.WorkflowName),
             CommandIdSeed: command.CommandId,
             CorrelationIdSeed: command.CorrelationId,
-            ResumeSeed: new WorkflowChatRunResumeSeed(
+            ForkSeed: new WorkflowChatRunForkSeed(
                 sourceRunId,
                 startAtStepId,
                 variables,

@@ -389,7 +389,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldCarryResumeSeed()
+    public void EnvelopeFactory_ShouldCarryForkSeed()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -398,7 +398,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "resume-input",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
-            ResumeSeed: new WorkflowChatRunResumeSeed(
+            ForkSeed: new WorkflowChatRunForkSeed(
                 "source-run",
                 "step-b",
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -415,10 +415,10 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
 
         request.Prompt.Should().Be("resume-input");
-        request.ResumeSeed.SourceRunId.Should().Be("source-run");
-        request.ResumeSeed.StartAtStepId.Should().Be("step-b");
-        request.ResumeSeed.Variables.Should().Contain("input", "seed-input");
-        request.ResumeSeed.Variables.Should().Contain("step-a", "alpha");
+        request.ForkSeed.SourceRunId.Should().Be("source-run");
+        request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.Variables.Should().Contain("input", "seed-input");
+        request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
     }
 
     [Fact]

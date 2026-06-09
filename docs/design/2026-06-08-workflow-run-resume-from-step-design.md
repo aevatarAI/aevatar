@@ -72,13 +72,13 @@ owner 拆出的三条诉求：
    自动 driver (策略)    │   2. seed 合并 overrides                  │
    WorkflowRunForkReq ──►│   3. 校验 YAML compile + start step 存在  │
    uestedEvent(committed)│   4. WorkflowRunActorPort.CreateRunAsync  │
-        │                │      (binding + WorkflowRunResumeSeed)    │
+        │                │      (binding + WorkflowRunForkSeed)    │
    coordinator 消费 ─────┘                   │                       │
                                              ▼
                             新 WorkflowRunGAgent (新 actorId)
-                              bind 携带 resume_seed
+                              bind 携带 fork_seed
                                  │
-                                 ▼ StartWorkflowEvent(resume_seed)
+                                 ▼ StartWorkflowEvent(fork_seed)
                             WorkflowExecutionKernel.HandleStartWorkflowAsync
                               seed 非空：Variables←seed.variables
                               起跑步：_workflow.GetStep(start_at_step_id)  (非 first)
@@ -94,14 +94,14 @@ owner 拆出的三条诉求：
 
 ```proto
 // 跨 actor 传给新 run 的恢复种子（随 bind/start 流转）
-message WorkflowRunResumeSeed {
+message WorkflowRunForkSeed {
   string source_run_id = 1;          // 取 seed 的来源（lineage/审计）
   string start_at_step_id = 2;       // 新 run 从哪一步起跑
   map<string, string> variables = 3; // 注入 kernel 的初始 variables（含各完成步输出）
 }
 
 // Unit 1 query 返回的只读 seed 契约（read-side，非 state 原样 dump）
-message WorkflowRunResumeSeedView {
+message WorkflowRunForkSeedView {
   string run_id = 1;
   string status = 2;                 // failed/completed/stopped
   string workflow_yaml = 3;          // 旧 run 绑定的 YAML（自动重试复用它）
@@ -121,14 +121,14 @@ message WorkflowRunForkRequestedEvent {
 }
 ```
 
-`StartWorkflowEvent`（或 run bind 事件）增加 optional `WorkflowRunResumeSeed resume_seed`；`WorkflowDefinitionBinding`（应用层 record）增加 optional `WorkflowRunResumeSeed? ResumeSeed`。
+`StartWorkflowEvent`（或 run bind 事件）增加 optional `WorkflowRunForkSeed fork_seed`；`WorkflowDefinitionBinding`（应用层 record）增加 optional `WorkflowRunForkSeed? ForkSeed`。
 
 ## 6. Unit 1 — 中间状态可读（需求1）
 
 中间状态已落盘，只需补**面向读侧的 seed 查询契约**，让 application 层不侧读 event store 就能取 seed。
 
-- 新端口 `IWorkflowRunSeedQueryPort.GetResumeSeedAsync(runId) → WorkflowRunResumeSeedView?`。
-- 由 `WorkflowRunGAgent` 暴露（它是权威拥有者）：内部解 `execution_states` 里的 `WorkflowExecutionKernelState`，映射出 read-side `WorkflowRunResumeSeedView`（强类型契约，非 state 原样 dump）。✅ 符合「状态镜像契约面向查询」。
+- 新端口 `IWorkflowRunForkSeedQueryPort.GetForkSeedAsync(runId) → WorkflowRunForkSeedView?`。
+- 由 `WorkflowRunGAgent` 暴露（它是权威拥有者）：内部解 `execution_states` 里的 `WorkflowExecutionKernelState`，映射出 read-side `WorkflowRunForkSeedView`（强类型契约，非 state 原样 dump）。✅ 符合「状态镜像契约面向查询」。
 - `completed_step_ids` 由 `variables` 的 key 集合（排除 `input` 等保留键）+ `current_step_id` 推出；`last_failed_step_id` = 终态失败时的 `current_step_id`。
 
 ## 7. Unit 2 — Fork 命令 + seed 传输（需求2）
@@ -149,11 +149,11 @@ record WorkflowForkRunCommand(
 
 `WorkflowForkRunService` 流程：
 
-1. 经 `IWorkflowRunSeedQueryPort` 读 `SourceRunId` → `WorkflowRunResumeSeedView`；校验 source 为终态（`failed`/`completed`/`stopped`），否则结构化报错（不 fork 活 run）。
+1. 经 `IWorkflowRunForkSeedQueryPort` 读 `SourceRunId` → `WorkflowRunForkSeedView`；校验 source 为终态（`failed`/`completed`/`stopped`），否则结构化报错（不 fork 活 run）。
 2. 选定 YAML = `InlineYaml ?? view.WorkflowYaml`（sub-yaml 同理）。
 3. seed variables = `view.variables` 合并 `VariableOverrides`（覆盖优先）。
 4. 校验：选定 YAML 能 `WorkflowParser.Parse` + `WorkflowValidator.Validate`；`StartAtStepId` 在该 YAML 的 steps 里存在——否则 loud fail（结构化 start error，含可读原因）。
-5. `WorkflowRunActorPort.CreateRunAsync(binding)`，`binding.ResumeSeed = {source_run_id, start_at_step_id, variables}`；`CreateWorkflowRunBindEnvelope` 把 seed 一并放进 bind envelope（Protobuf）。
+5. `WorkflowRunActorPort.CreateRunAsync(binding)`，`binding.ForkSeed = {source_run_id, start_at_step_id, variables}`；`CreateWorkflowRunBindEnvelope` 把 seed 一并放进 bind envelope（Protobuf）。
 
 ACK 诚实：返回 `accepted + 新 run id`，只承诺新 run inbox admission（对齐现有 resume 端点措辞）。
 
@@ -161,12 +161,12 @@ ACK 诚实：返回 `accepted + 新 run id`，只承诺新 run inbox admission�
 
 插桩点 `HandleStartWorkflowAsync`（已读，:82-148），最小改动：
 
-- bind→start 流转携带 `resume_seed`（经 run bind 状态保存，start 时读出放进 `StartWorkflowEvent.resume_seed`）。
-- start handler 在 :117 `Variables.Clear()` 之后：若 `resume_seed` 非空，`foreach seed.variables → state.Variables[k]=v`（仍保留 :125 `input` / :127 start params 合并语义，覆盖顺序：seed → input → start params，或按实现确定并测试固定）。
-- 起跑步：`resume_seed` 非空时 `entry = _workflow.Steps.FirstOrDefault(s => s.Id == seed.start_at_step_id)`，为空则 loud fail（`WorkflowCompletedEvent.Success=false`，error 指明 step 不存在）；否则保持 `FirstOrDefault()`。
+- bind→start 流转携带 `fork_seed`（经 run bind 状态保存，start 时读出放进 `StartWorkflowEvent.fork_seed`）。
+- start handler 在 :117 `Variables.Clear()` 之后：若 `fork_seed` 非空，`foreach seed.variables → state.Variables[k]=v`（仍保留 :125 `input` / :127 start params 合并语义，覆盖顺序：seed → input → start params，或按实现确定并测试固定）。
+- 起跑步：`fork_seed` 非空时 `entry = _workflow.Steps.FirstOrDefault(s => s.Id == seed.start_at_step_id)`，为空则 loud fail（`WorkflowCompletedEvent.Success=false`，error 指明 step 不存在）；否则保持 `FirstOrDefault()`。
 - start step 的 input：优先 `seed.variables["input"]`（旧 run 失败步的入参语义）→ 退回 `evt.Input`；其余 step 参数仍按 `state.Variables` 做表达式求值，故 seed 注入后下游引用可解析。
 
-**诚实命名**：新增 `resume_seed` 字段/路径，不碰 `WorkflowResumedEvent`。
+**诚实命名**：新增 `fork_seed` 字段/路径，不碰 `WorkflowResumedEvent`。
 
 ## 9. 驱动 A：人工 fork（HTTP）
 
@@ -189,7 +189,7 @@ ACK 诚实：返回 `accepted + 新 run id`，只承诺新 run inbox admission�
 
 人工 fork：
 ```
-operator ─query─► IWorkflowRunSeedQueryPort.GetResumeSeed(oldRun)  // 看失败步/错误
+operator ─query─► IWorkflowRunForkSeedQueryPort.GetForkSeed(oldRun)  // 看失败步/错误
 operator ─edit──► YAML
 operator ─POST──► /runs/fork {source_run_id, start_at_step_id, inline_yaml}
   → WorkflowForkRunService: query seed → merge overrides → validate
@@ -215,20 +215,20 @@ operator ─POST──► /runs/fork {source_run_id, start_at_step_id, inline_ya
 - step 身份按 `id`：改 YAML 时 start step 被改名/删除 → 校验报错；seed 变量按旧 step_id 注入，下游引用被改名 id 取不到值 → 调用方负责保持一致。**不建自动映射引擎**。
 - 只 fork 终态 run，不 fork 活 run。
 - lineage：新 run 记 `source_run_id`，fork 链可追溯。
-- 查询诚实：`WorkflowRunResumeSeedView` 暴露 source `status`/`final_error`，不在弱读上假装强一致。
+- 查询诚实：`WorkflowRunForkSeedView` 暴露 source `status`/`final_error`，不在弱读上假装强一致。
 
 ## 13. 新增 / 修改清单（实现期细化）
 
 新增：
-- proto：`WorkflowRunResumeSeed`、`WorkflowRunResumeSeedView`、`WorkflowRunForkRequestedEvent`；`StartWorkflowEvent` 加 `resume_seed`。
-- `IWorkflowRunSeedQueryPort` + `WorkflowRunGAgent` 实现（Unit 1）。
+- proto：`WorkflowRunForkSeed`、`WorkflowRunForkSeedView`、`WorkflowRunForkRequestedEvent`；`StartWorkflowEvent` 加 `fork_seed`。
+- `IWorkflowRunForkSeedQueryPort` + `WorkflowRunGAgent` 实现（Unit 1）。
 - `WorkflowForkRunCommand` + `WorkflowForkRunService` + envelope factory + target resolver（Unit 2）。
 - `WorkflowRunForkCoordinator`（驱动 B 消费方）。
 - `/api/workflow/runs/fork` 端点（驱动 A）。
 
 修改：
 - `WorkflowExecutionKernel.HandleStartWorkflowAsync`（Unit 3，seed hydrate + start step 选择）。
-- `WorkflowDefinitionBinding` 加 `ResumeSeed?`；`WorkflowRunActorPort.CreateRunAsync` / `CreateWorkflowRunBindEnvelope` 透传 seed。
+- `WorkflowDefinitionBinding` 加 `ForkSeed?`；`WorkflowRunActorPort.CreateRunAsync` / `CreateWorkflowRunBindEnvelope` 透传 seed。
 - `WorkflowRunGAgent` bind 处理存 seed；failed 终态按 `on_failure` 策略发 fork-requested 事件。
 - `WorkflowParser`/`WorkflowDefinition` 解析 run 级 `on_failure`。
 - DI 注册（service / port / coordinator）。
@@ -253,7 +253,7 @@ operator ─POST──► /runs/fork {source_run_id, start_at_step_id, inline_ya
 
 ## 16. 分阶段实施（供 writing-plans 拆解）
 
-1. **proto + Unit 1**：新增 proto 消息 + `IWorkflowRunSeedQueryPort` + `WorkflowRunGAgent` seed view（需求1 闭环、可独立测）。
+1. **proto + Unit 1**：新增 proto 消息 + `IWorkflowRunForkSeedQueryPort` + `WorkflowRunGAgent` seed view（需求1 闭环、可独立测）。
 2. **Unit 3**：内核 start-from-step + seed hydrate（核心执行能力）。
 3. **Unit 2**：fork command/service + binding/bind envelope 透传 seed（打通建 run）。
 4. **驱动 A**：HTTP 端点（人工 fork 端到端）。
