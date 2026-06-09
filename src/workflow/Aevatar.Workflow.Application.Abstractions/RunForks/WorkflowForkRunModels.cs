@@ -16,22 +16,11 @@ public sealed record WorkflowForkRunCommand(
     string? ScopeId = null,
     WorkflowCallerCredential? CallerCredential = null) : ICommandContextSeed
 {
-    private WorkflowChatRunRequest? _preparedRequest;
-
     string? ICommandContextSeed.CommandId => CommandId;
 
     string? ICommandContextSeed.CorrelationId => CorrelationId;
 
     IReadOnlyDictionary<string, string>? ICommandContextSeed.Headers => null;
-
-    public void AttachPreparedRequest(WorkflowChatRunRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        _preparedRequest = request;
-    }
-
-    public WorkflowChatRunRequest ToWorkflowChatRunRequest() =>
-        _preparedRequest ?? throw new InvalidOperationException("Workflow fork command was not prepared for dispatch.");
 }
 
 public enum WorkflowForkRunStartErrorCode

@@ -13,11 +13,13 @@ internal sealed class WorkflowForkRunCommandTarget : ICommandDispatchTarget, ICo
         string startAtStepId,
         string actorId,
         string workflowName,
+        WorkflowChatRunRequest preparedRequest,
         IReadOnlyList<string>? createdActorIds,
         IWorkflowRunProvisioningPort runProvisioningPort)
     {
         SourceRunId = Normalize(sourceRunId);
         StartAtStepId = Normalize(startAtStepId);
+        PreparedRequest = preparedRequest ?? throw new ArgumentNullException(nameof(preparedRequest));
         _innerTarget = new WorkflowRunAcceptedCommandTarget(
             actorId,
             workflowName,
@@ -28,6 +30,8 @@ internal sealed class WorkflowForkRunCommandTarget : ICommandDispatchTarget, ICo
     public string SourceRunId { get; }
 
     public string StartAtStepId { get; }
+
+    public WorkflowChatRunRequest PreparedRequest { get; }
 
     public string ActorId => _innerTarget.ActorId;
 

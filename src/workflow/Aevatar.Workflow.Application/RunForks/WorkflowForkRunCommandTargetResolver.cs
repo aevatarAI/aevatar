@@ -88,18 +88,24 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                 WorkflowForkRunStartError.RunCreationFailed(sourceRunId, startAtStepId, ex.Message));
         }
 
+        var source = WorkflowChatSource.DefinitionActor(creationReceipt.ActorId, validation.WorkflowName);
         var target = new WorkflowForkRunCommandTarget(
             sourceRunId,
             startAtStepId,
             creationReceipt.ActorId,
             validation.WorkflowName,
+            BuildChatRunRequest(
+                command,
+                sourceRunId,
+                startAtStepId,
+                creationReceipt.ActorId,
+                validation.WorkflowName,
+                creationReceipt.CreatedActorIds,
+                source,
+                variables,
+                scopeId),
             creationReceipt.CreatedActorIds,
             _runProvisioningPort);
-        command.AttachPreparedRequest(BuildChatRunRequest(
-            command,
-            target,
-            variables,
-            scopeId));
 
         return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Success(target);
     }
@@ -151,11 +157,15 @@ internal sealed class WorkflowForkRunCommandTargetResolver
 
     private static WorkflowChatRunRequest BuildChatRunRequest(
         WorkflowForkRunCommand command,
-        WorkflowForkRunCommandTarget target,
+        string sourceRunId,
+        string startAtStepId,
+        string actorId,
+        string workflowName,
+        IReadOnlyList<string>? createdActorIds,
+        WorkflowChatSource source,
         IReadOnlyDictionary<string, string> variables,
         string scopeId)
     {
-        var source = WorkflowChatSource.DefinitionActor(target.ActorId, target.WorkflowName);
         return new WorkflowChatRunRequest(
             Prompt: ResolveResumeInput(variables, command.Input),
             Source: source,
@@ -164,14 +174,14 @@ internal sealed class WorkflowForkRunCommandTargetResolver
             CommandIdSeed: command.CommandId,
             CorrelationIdSeed: command.CorrelationId,
             ResumeSeed: new WorkflowChatRunResumeSeed(
-                target.SourceRunId,
-                target.StartAtStepId,
+                sourceRunId,
+                startAtStepId,
                 variables,
                 Math.Max(0, command.Attempt)),
             TargetSeed: new WorkflowRunTargetSeed(
-                target.ActorId,
-                target.WorkflowName,
-                target.CreatedActorIds,
+                actorId,
+                workflowName,
+                createdActorIds,
                 source));
     }
 

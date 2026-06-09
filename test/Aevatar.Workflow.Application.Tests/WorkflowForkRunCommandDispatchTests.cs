@@ -362,10 +362,10 @@ public sealed class WorkflowForkRunCommandDispatchTests
         RecordingRunProvisioningPort runPort,
         RecordingActorDispatchPort dispatchPort)
     {
-        var pipeline = new DefaultCommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>(
+        var pipeline = new WorkflowForkRunDispatchPipeline(
             CreateResolver(seedPort, runPort),
             new DefaultCommandContextPolicy(),
-            new WorkflowForkRunEnvelopeFactory(new WorkflowChatRequestEnvelopeFactory()),
+            new WorkflowChatRequestEnvelopeFactory(),
             new ActorCommandTargetDispatcher<WorkflowForkRunCommandTarget>(dispatchPort),
             new WorkflowForkRunAcceptedReceiptFactory());
         return new WorkflowForkRunCommandDispatchService(pipeline);
