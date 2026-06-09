@@ -159,7 +159,9 @@ describe("TeamsHomePage", () => {
   it("renders the team homepage around real Team roster with member runtime hints", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("button", { name: "测试或配置团队" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "编辑成员" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看成员" })).toBeTruthy();
     expect(screen.getByText("阿凡达/团队")).toBeTruthy();
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
     expect(screen.queryByText("当前工作空间")).toBeNull();
@@ -186,7 +188,9 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("button", { name: "View team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Edit member" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "View team" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "View members" })).toBeTruthy();
     expect(screen.getByText("My AI teams")).toBeTruthy();
     expect(screen.getByText("Total AI teams")).toBeTruthy();
     expect(screen.getByText("Teams needing action")).toBeTruthy();
@@ -196,10 +200,12 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText("组建新团队")).toBeNull();
   });
 
-  it("keeps team card actions focused on the Team detail page", async () => {
+  it("keeps team card actions focused on member work and team detail", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    await screen.findByRole("button", { name: "测试或配置团队" });
+    await screen.findByRole("button", { name: "编辑成员" });
+    expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看成员" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
     expect(screen.queryByText("进入 Studio")).toBeNull();
     expect(screen.queryByText("新增成员")).toBeNull();
@@ -456,23 +462,145 @@ describe("TeamsHomePage", () => {
     const article = screen
       .getByRole("heading", { level: 4, name: "列表团队 1" })
       .closest("article");
-    expect(article?.firstElementChild?.textContent).toContain("测试或配置团队");
+    expect(article?.firstElementChild?.textContent).toContain("编辑成员");
+    expect(article?.firstElementChild?.textContent).toContain("查看团队");
+    expect(article?.firstElementChild?.textContent).toContain("查看成员");
   });
 
-  it("opens the bound member detail handoff from the primary action", async () => {
+  it("opens the bound member Studio handoff from the primary action", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    fireEvent.click(await screen.findByRole("button", { name: "测试或配置团队" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑成员" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-a");
+    expect(params.get("teamId")).toBe("t-support");
+    expect(params.get("member")).toBe("member:member-alpha");
+    expect(params.get("step")).toBe("build");
+    expect(params.get("tab")).toBe("studio");
+    expect(params.get("returnTo")).toBe("/teams?scopeId=scope-a");
+  });
+
+  it("uses the entry member as the Teams homepage primary handoff when configured", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        {
+          ...defaultTeams[0],
+          entryMemberId: "member-entry",
+          memberCount: 2,
+        },
+      ],
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members: [
+        {
+          ...defaultMembers[0],
+          memberId: "member-alpha",
+          displayName: "普通成员",
+        },
+        {
+          ...defaultMembers[0],
+          memberId: "member-entry",
+          displayName: "入口成员",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑入口成员" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("teamId")).toBe("t-support");
+    expect(params.get("member")).toBe("member:member-entry");
+    expect(params.get("returnTo")).toBe("/teams?scopeId=scope-a");
+  });
+
+  it("keeps Team detail available as the secondary action", async () => {
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看团队" }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/teams/scope-a/t-support");
     });
 
     const params = new URLSearchParams(window.location.search);
-    expect(params.get("teamId")).toBeNull();
     expect(params.get("memberId")).toBe("member-alpha");
     expect(params.get("serviceId")).toBe("service-alpha");
     expect(params.get("runId")).toBe("run-latest");
+  });
+
+  it("opens the Team members tab from the Teams homepage secondary action", async () => {
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看成员" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/teams/scope-a/t-support");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("tab")).toBe("members");
+    expect(params.get("memberId")).toBeNull();
+    expect(params.get("serviceId")).toBeNull();
+    expect(params.get("runId")).toBeNull();
+  });
+
+  it("hides the duplicate view-members action when manage members is already the handoff", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        {
+          ...defaultTeams[0],
+          memberCount: 2,
+        },
+      ],
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members: [
+        {
+          ...defaultMembers[0],
+          memberId: "member-alpha",
+          displayName: "普通成员 A",
+        },
+        {
+          ...defaultMembers[0],
+          memberId: "member-beta",
+          displayName: "普通成员 B",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByRole("button", { name: "管理成员" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "查看成员" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "管理成员" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/teams/scope-a/t-support");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("tab")).toBe("members");
   });
 
   it("does not load roster data from a locally restored scope when server auth fails", async () => {
@@ -577,7 +705,9 @@ describe("TeamsHomePage", () => {
     expect(await screen.findByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 3, name: "joker" })).toBeTruthy();
     expect(screen.getByText("ID：t-joker")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "测试或配置团队" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "编辑成员" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "查看团队" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "查看成员" })).toHaveLength(2);
   });
 
   it("hides unassigned members instead of surfacing implementation alerts", async () => {
@@ -659,6 +789,15 @@ describe("TeamsHomePage", () => {
       await screen.findByRole("heading", { level: 3, name: "刚创建的团队" }),
     ).toBeTruthy();
     expect(screen.getByText("ID：t-new")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "创建成员" }));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+    });
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-a");
+    expect(params.get("teamId")).toBe("t-new");
+    expect(params.get("intent")).toBe("create-member");
+    expect(params.get("returnTo")).toBe("/teams?scopeId=scope-a");
     expect(
       screen.queryByText(
         "当前工作空间还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。",
