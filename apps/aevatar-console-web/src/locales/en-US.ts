@@ -388,7 +388,6 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.executeWorkflow': 'Execute workflow',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow identity',
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
-  'teamMemberWorkflowStudio.header.moreActionsAria': 'More workflow actions',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow draft and node actions',
   'teamMemberWorkflowStudio.header.optionalTestPayload': 'Optional test payload',
@@ -401,7 +400,6 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.runActiveMember': 'Run active member',
   'teamMemberWorkflowStudio.header.save': 'Save',
   'teamMemberWorkflowStudio.header.saveDraft': 'Save draft',
-  'teamMemberWorkflowStudio.header.setAsTeamEntry': 'Set as Team entry',
   'teamMemberWorkflowStudio.header.tabs.editor': 'Editor',
   'teamMemberWorkflowStudio.header.tabs.executions': 'Executions',
   'teamMemberWorkflowStudio.header.tabs.runs': 'Runs',

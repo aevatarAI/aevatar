@@ -831,10 +831,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
       within(headerNodeActions).getByRole("button", { name: "Save" }),
     ).toBeTruthy();
     expect(
-      within(headerNodeActions).getByRole("button", {
+      within(headerNodeActions).queryByRole("button", {
         name: "More workflow actions",
       }),
-    ).toBeTruthy();
+    ).toBeNull();
+    expect(screen.queryByText("Set as Team entry")).toBeNull();
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     expect(screen.queryByText("Workflow member")).toBeNull();
     expect(screen.queryByText("Draft workflow member")).toBeNull();
@@ -1453,7 +1454,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
   });
 
-  it("sets Team entry only from the explicit More menu action", async () => {
+  it("does not expose Team entry actions in workflow studio", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1510,16 +1511,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByText("nodes:1")).toBeTruthy();
     });
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "More workflow actions" }));
-    fireEvent.click(await screen.findByText("Set as Team entry"));
-
-    await waitFor(() => {
-      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
-        "scope-1",
-        "t-alpha",
-        "member-alpha",
-      );
-    });
+    expect(
+      screen.queryByRole("button", { name: "More workflow actions" }),
+    ).toBeNull();
+    expect(screen.queryByText("Set as Team entry")).toBeNull();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
   });
 

@@ -1,9 +1,7 @@
 import {
   CloudUploadOutlined,
   DeleteOutlined,
-  DownOutlined,
   EditOutlined,
-  MoreOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   SaveOutlined,
@@ -12,7 +10,6 @@ import {
 import {
   Breadcrumb,
   Button,
-  Dropdown,
   Input,
   Segmented,
   Space,
@@ -32,7 +29,6 @@ type WorkflowStudioHeaderProps = {
   readonly publishTone: "default" | "processing" | "success" | "warning" | "error";
   readonly canRunActiveMember: boolean;
   readonly canSave: boolean;
-  readonly canSetTeamEntry: boolean;
   readonly dirty: boolean;
   readonly activeMemberRunPending: boolean;
   readonly activeMemberRunPlaceholderReason?: string;
@@ -43,15 +39,12 @@ type WorkflowStudioHeaderProps = {
   readonly onRunActiveMember: () => void;
   readonly onNavigateBack: () => void;
   readonly onSave: () => void;
-  readonly onSetTeamEntry: () => void;
   readonly onTitleChange: (title: string) => void;
   readonly savePending: boolean;
   readonly savePlaceholderReason?: string;
   readonly selectedNodeId: string;
   readonly selectedTab: "editor" | "runs";
   readonly onTabChange: (tab: "editor" | "runs") => void;
-  readonly teamEntryNotice: string;
-  readonly teamEntryPending: boolean;
   readonly teamName: string;
   readonly workflowTitle: string;
 };
@@ -380,28 +373,20 @@ const HeaderTabs: React.FC<HeaderTabsProps> = ({
 
 type HeaderNodeActionsProps = {
   readonly canSave: boolean;
-  readonly canSetTeamEntry: boolean;
   readonly onDeleteNode: () => void;
   readonly onSave: () => void;
-  readonly onSetTeamEntry: () => void;
   readonly savePending: boolean;
   readonly savePlaceholderReason?: string;
   readonly selectedNodeId: string;
-  readonly teamEntryNotice: string;
-  readonly teamEntryPending: boolean;
 };
 
 const HeaderNodeActions: React.FC<HeaderNodeActionsProps> = ({
   canSave,
-  canSetTeamEntry,
   onDeleteNode,
   onSave,
-  onSetTeamEntry,
   savePending,
   savePlaceholderReason,
   selectedNodeId,
-  teamEntryNotice,
-  teamEntryPending,
 }) => (
   <section
     aria-label={t(
@@ -441,39 +426,6 @@ const HeaderNodeActions: React.FC<HeaderNodeActionsProps> = ({
     >
       {t("teamMemberWorkflowStudio.header.save", "Save")}
     </Button>
-    <Dropdown
-      menu={{
-        items: [
-          {
-            disabled: !canSetTeamEntry,
-            key: "set-team-entry",
-            label: t(
-              "teamMemberWorkflowStudio.header.setAsTeamEntry",
-              "Set as Team entry",
-            ),
-          },
-        ],
-        onClick: ({ key }) => {
-          if (key === "set-team-entry" && canSetTeamEntry) {
-            onSetTeamEntry();
-          }
-        },
-      }}
-      trigger={["click"]}
-    >
-      <Button
-        aria-label={t(
-          "teamMemberWorkflowStudio.header.moreActionsAria",
-          "More workflow actions",
-        )}
-        icon={<MoreOutlined />}
-        loading={teamEntryPending}
-        size="small"
-        title={teamEntryNotice}
-      >
-        <DownOutlined />
-      </Button>
-    </Dropdown>
   </section>
 );
 
@@ -486,7 +438,6 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   publishTone,
   canRunActiveMember,
   canSave,
-  canSetTeamEntry,
   dirty,
   activeMemberRunPending,
   activeMemberRunPlaceholderReason,
@@ -497,15 +448,12 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   onRunActiveMember,
   onNavigateBack,
   onSave,
-  onSetTeamEntry,
   onTitleChange,
   savePending,
   savePlaceholderReason,
   selectedNodeId,
   selectedTab,
   onTabChange,
-  teamEntryNotice,
-  teamEntryPending,
   teamName,
   workflowTitle,
 }) => {
@@ -586,15 +534,11 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
         <HeaderTabs onTabChange={onTabChange} selectedTab={selectedTab} />
         <HeaderNodeActions
           canSave={canSave}
-          canSetTeamEntry={canSetTeamEntry}
           onDeleteNode={onDeleteNode}
           onSave={onSave}
-          onSetTeamEntry={onSetTeamEntry}
           savePending={savePending}
           savePlaceholderReason={savePlaceholderReason}
           selectedNodeId={selectedNodeId}
-          teamEntryNotice={teamEntryNotice}
-          teamEntryPending={teamEntryPending}
         />
       </div>
     </header>

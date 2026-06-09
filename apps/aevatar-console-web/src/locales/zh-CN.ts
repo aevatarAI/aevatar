@@ -371,7 +371,6 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.executeWorkflow': '执行 Workflow',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
   'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
-  'teamMemberWorkflowStudio.header.moreActionsAria': '更多 Workflow 操作',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow 草稿和节点操作',
   'teamMemberWorkflowStudio.header.optionalTestPayload': '可选测试载荷',
@@ -384,7 +383,6 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.runActiveMember': '运行活跃成员',
   'teamMemberWorkflowStudio.header.save': '保存',
   'teamMemberWorkflowStudio.header.saveDraft': '保存草稿',
-  'teamMemberWorkflowStudio.header.setAsTeamEntry': '设为团队入口',
   'teamMemberWorkflowStudio.header.tabs.editor': '编辑器',
   'teamMemberWorkflowStudio.header.tabs.executions': '执行记录',
   'teamMemberWorkflowStudio.header.tabs.runs': '运行记录',

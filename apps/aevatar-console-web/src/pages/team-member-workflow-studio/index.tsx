@@ -34,7 +34,6 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         publishTone={studio.publishTone}
         canRunActiveMember={studio.canRunActiveMember}
         canSave={studio.canSave}
-        canSetTeamEntry={studio.canSetTeamEntry}
         dirty={studio.dirty}
         activeMemberRunPending={studio.activeMemberRunPending}
         activeMemberRunPlaceholderReason={studio.activeMemberRunPlaceholderReason}
@@ -45,15 +44,12 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         onRunActiveMember={studio.runActiveMember}
         onNavigateBack={studio.navigateBack}
         onSave={studio.save}
-        onSetTeamEntry={studio.setTeamEntry}
         onTitleChange={studio.setWorkflowTitle}
         savePending={studio.savePending}
         savePlaceholderReason={studio.savePlaceholderReason}
         selectedNodeId={studio.selectedNodeId}
         selectedTab={studio.selectedTab}
         onTabChange={studio.setSelectedTab}
-        teamEntryNotice={studio.teamEntryNotice}
-        teamEntryPending={studio.teamEntryPending}
         teamName={studio.teamName}
         workflowTitle={studio.workflowTitle}
       />
