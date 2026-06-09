@@ -58,9 +58,9 @@ public sealed class NyxIdApprovalsTool : IAgentTool
             "show" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.GetApprovalAsync(token, id, ct),
             "approve" when !string.IsNullOrWhiteSpace(id) =>
-                await _client.DecideApprovalAsync(token, id, """{"decision":"approve"}""", ct),
+                await _client.DecideApprovalAsync(token, id, """{"approved":true}""", ct),
             "deny" when !string.IsNullOrWhiteSpace(id) =>
-                await _client.DecideApprovalAsync(token, id, """{"decision":"deny"}""", ct),
+                await _client.DecideApprovalAsync(token, id, """{"approved":false}""", ct),
             "revoke_grant" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.RevokeApprovalGrantAsync(token, id, ct),
             "set_config" when !string.IsNullOrWhiteSpace(id) =>
