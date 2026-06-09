@@ -123,7 +123,11 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             Output = "done",
         }), ctx, CancellationToken.None);
 
-        ctx.Published.Should().NotContain(x => x.Event is StepRequestEvent request && request.StepId == "disconnected");
+        ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepRequestEvent>()
+            .Should()
+            .NotContain(request => request.StepId == "disconnected");
         ctx.Published.Should().ContainSingle(x => x.Event is WorkflowCompletedEvent);
     }
 

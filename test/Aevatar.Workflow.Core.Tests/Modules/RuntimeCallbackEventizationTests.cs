@@ -1037,7 +1037,11 @@ public class RuntimeCallbackEventizationTests
             ctx,
             CancellationToken.None);
 
-        ctx.Published.Should().NotContain(x => x.Event is StepRequestEvent request && request.StepId == "disconnected");
+        ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepRequestEvent>()
+            .Should()
+            .NotContain(request => request.StepId == "disconnected");
         var completion = SingleWorkflowCompletion(ctx);
         completion.Success.Should().BeTrue();
         completion.Output.Should().Be("skipped-output");
