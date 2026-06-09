@@ -576,6 +576,8 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': 'Search nodes',
   'teamMemberWorkflowStudio.nodeLibrary.sectionAria': 'Node library',
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
+  'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
+  'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
   'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
     'Message to active member',
   'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':

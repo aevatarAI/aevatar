@@ -551,6 +551,8 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': '搜索节点',
   'teamMemberWorkflowStudio.nodeLibrary.sectionAria': '节点库',
   'teamMemberWorkflowStudio.nodeLibrary.title': '节点库',
+  'teamMemberWorkflowStudio.resize.executionPanel': '调整运行控制台大小',
+  'teamMemberWorkflowStudio.resize.sidePanel': '调整侧边面板大小',
   'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
     '发送给活跃成员的消息',
   'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
