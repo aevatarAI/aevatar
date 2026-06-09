@@ -4996,7 +4996,7 @@ describe("StudioPage", () => {
       expect(studioApi.serializeYaml).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(screen.getByLabelText("Step ID")).toHaveValue("llm_call");
+      expect(screen.getByLabelText("Step ID")).toHaveValue("llm_step");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
@@ -5005,7 +5005,7 @@ describe("StudioPage", () => {
       expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
         expect.objectContaining({
           scopeId: "scope-1",
-          yaml: expect.stringContaining("llm_call"),
+          yaml: expect.stringMatching(/llm_step[\s\S]*llm_call/),
         }),
       );
     });
@@ -6797,7 +6797,7 @@ describe("StudioPage", () => {
 
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
-      expect(screen.getByRole("button", { name: "llm_call" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "llm_step" })).toBeTruthy();
     });
   });
 
