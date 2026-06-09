@@ -47,6 +47,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
             RunId = string.IsNullOrWhiteSpace(state.RunId) ? context.RootActorId : state.RunId,
             WorkflowName = state.WorkflowName ?? string.Empty,
             Status = state.Status ?? string.Empty,
+            ScopeId = state.ScopeId ?? string.Empty,
             Compiled = state.Compiled,
             CompilationError = state.CompilationError ?? string.Empty,
             Input = state.Input ?? string.Empty,

@@ -88,7 +88,8 @@ public sealed record WorkflowRunForkSeedView(
     IReadOnlyDictionary<string, string> Variables,
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
-    string FinalError)
+    string FinalError,
+    string ScopeId = "")
 {
     public WorkflowRunForkSeedView()
         : this(
@@ -98,6 +99,7 @@ public sealed record WorkflowRunForkSeedView(
             new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal),
             [],
+            string.Empty,
             string.Empty,
             string.Empty)
     {

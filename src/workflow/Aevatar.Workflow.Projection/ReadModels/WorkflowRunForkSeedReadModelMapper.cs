@@ -24,7 +24,8 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             CopyMap(source.ForkSeedVariables),
             source.ForkSeedCompletedStepIds.ToList(),
             source.ForkSeedLastFailedStepId ?? string.Empty,
-            source.FinalError ?? string.Empty);
+            source.FinalError ?? string.Empty,
+            source.ScopeId ?? string.Empty);
     }
 
     public WorkflowRunForkSeedProjectionSnapshot ToProjectionSnapshot(WorkflowRunState state)
@@ -45,7 +46,8 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             CopyMap(state.InlineWorkflowYamls),
             variables,
             completedStepIds,
-            lastFailedStepId);
+            lastFailedStepId,
+            state.ScopeId ?? string.Empty);
     }
 
     private static WorkflowExecutionKernelState? TryReadKernelState(WorkflowRunState state)
@@ -87,4 +89,5 @@ public sealed record WorkflowRunForkSeedProjectionSnapshot(
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
     IReadOnlyDictionary<string, string> Variables,
     IReadOnlyList<string> CompletedStepIds,
-    string LastFailedStepId);
+    string LastFailedStepId,
+    string ScopeId);

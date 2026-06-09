@@ -1,3 +1,6 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+
 namespace Aevatar.Workflow.Application.Abstractions.RunForks;
 
 public sealed record WorkflowForkRunCommand(
@@ -9,7 +12,16 @@ public sealed record WorkflowForkRunCommand(
     string? Input = null,
     string? CommandId = null,
     string? CorrelationId = null,
-    int Attempt = 0);
+    int Attempt = 0,
+    string? ScopeId = null,
+    WorkflowCallerCredential? CallerCredential = null) : ICommandContextSeed
+{
+    string? ICommandContextSeed.CommandId => CommandId;
+
+    string? ICommandContextSeed.CorrelationId => CorrelationId;
+
+    IReadOnlyDictionary<string, string>? ICommandContextSeed.Headers => null;
+}
 
 public enum WorkflowForkRunStartErrorCode
 {
@@ -20,6 +32,7 @@ public enum WorkflowForkRunStartErrorCode
     StartStepNotFound = 4,
     RunCreationFailed = 5,
     DispatchFailed = 6,
+    InvalidCallerCredential = 7,
 }
 
 public sealed record WorkflowForkRunStartError(
@@ -90,6 +103,15 @@ public sealed record WorkflowForkRunStartError(
             string.IsNullOrWhiteSpace(reason)
                 ? "Workflow fork dispatch failed."
                 : reason);
+
+    public static WorkflowForkRunStartError InvalidCallerCredential(
+        string sourceRunId,
+        string startAtStepId) =>
+        new(
+            WorkflowForkRunStartErrorCode.InvalidCallerCredential,
+            sourceRunId ?? string.Empty,
+            startAtStepId ?? string.Empty,
+            "Caller credential is invalid.");
 }
 
 public sealed record WorkflowForkRunAcceptedReceipt(
@@ -100,28 +122,3 @@ public sealed record WorkflowForkRunAcceptedReceipt(
     string CommandId,
     string CorrelationId,
     DateTimeOffset AckedAt);
-
-public sealed record WorkflowForkRunResult(
-    bool Succeeded,
-    WorkflowForkRunAcceptedReceipt? Receipt,
-    WorkflowForkRunStartError? Error)
-{
-    public static WorkflowForkRunResult Accepted(WorkflowForkRunAcceptedReceipt receipt)
-    {
-        ArgumentNullException.ThrowIfNull(receipt);
-        return new WorkflowForkRunResult(true, receipt, null);
-    }
-
-    public static WorkflowForkRunResult Failure(WorkflowForkRunStartError error)
-    {
-        ArgumentNullException.ThrowIfNull(error);
-        return new WorkflowForkRunResult(false, null, error);
-    }
-}
-
-public interface IWorkflowForkRunService
-{
-    Task<WorkflowForkRunResult> ForkAsync(
-        WorkflowForkRunCommand command,
-        CancellationToken ct = default);
-}

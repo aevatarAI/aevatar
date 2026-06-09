@@ -446,7 +446,7 @@ public sealed class IdempotentStepExecutionTests
         completions.Should().HaveCount(2);
         completions.Should().OnlyContain(x => !x.Success);
         completions.Should().OnlyContain(
-            x => x.Error == "fork start step 'missing-step' not found in workflow");
+            x => x.Error == "fork seed start step 'missing-step' was not found");
         host.GetExecutionState("workflow_execution_kernel").Should().BeNull();
     }
 

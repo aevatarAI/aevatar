@@ -105,29 +105,12 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
     {
         var payload = new Aevatar.Workflow.Abstractions.WorkflowRunForkSeed
         {
-            SourceRunId = source.SourceRunId ?? string.Empty,
-            StartAtStepId = source.StartAtStepId ?? string.Empty,
-            Attempt = source.Attempt,
+            SourceRunId = Normalize(source.SourceRunId),
+            StartAtStepId = Normalize(source.StartAtStepId),
+            Attempt = Math.Max(0, source.Attempt),
         };
         AppendVariables(payload.Variables, source.Variables);
         return payload;
-    }
-
-    private static void AppendVariables(
-        Google.Protobuf.Collections.MapField<string, string> destination,
-        IReadOnlyDictionary<string, string>? source)
-    {
-        if (source == null || source.Count == 0)
-            return;
-
-        foreach (var (key, value) in source)
-        {
-            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
-            if (normalizedKey.Length == 0)
-                continue;
-
-            destination[normalizedKey] = value ?? string.Empty;
-        }
     }
 
     private static void AppendMetadata(
@@ -150,6 +133,23 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         }
     }
 
+    private static void AppendVariables(
+        Google.Protobuf.Collections.MapField<string, string> destination,
+        IReadOnlyDictionary<string, string>? source)
+    {
+        if (source == null || source.Count == 0)
+            return;
+
+        foreach (var (key, value) in source)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            if (normalizedKey.Length == 0)
+                continue;
+
+            destination[normalizedKey] = value ?? string.Empty;
+        }
+    }
+
     private static bool IsReservedMetadataKey(string key) =>
         IsScopeMetadataKey(key) ||
         string.Equals(key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal);
@@ -158,4 +158,6 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         string.Equals(key, "scope_id", StringComparison.Ordinal) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.Ordinal);
 
+    private static string Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }
