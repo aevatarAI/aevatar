@@ -7,13 +7,11 @@ import type { StudioExecutionDetail } from "@/shared/studio/models";
 type WorkflowStudioExecutionPanelProps = {
   readonly detail: StudioExecutionDetail | null;
   readonly error?: string;
-  readonly height?: number;
 };
 
 const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> = ({
   detail,
   error,
-  height = 210,
 }) => {
   const trace = React.useMemo(() => buildExecutionTrace(detail), [detail]);
   const rawFrames = detail?.frames ?? [];
@@ -33,7 +31,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
         background: "#ffffff",
         borderTop: "1px solid #e5e7eb",
         display: "grid",
-        flex: `0 0 ${height}px`,
+        flex: "0 0 210px",
         gap: 10,
         gridTemplateRows: "minmax(0, 1fr)",
         minHeight: 0,
@@ -43,9 +41,9 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
       <section
         data-testid="member-run-result-panel"
         style={{
-          display: "flex",
-          flexDirection: "column",
+          display: "grid",
           gap: 8,
+          gridTemplateRows: "auto minmax(0, 1fr)",
           minHeight: 0,
           minWidth: 0,
         }}
@@ -77,9 +75,8 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
             <div
               style={{
                 display: "grid",
-                flex: 1,
                 gap: 6,
-                minHeight: 0,
+                maxHeight: 130,
                 overflow: "auto",
               }}
             >
