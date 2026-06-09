@@ -246,6 +246,32 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     }
 
     [Fact]
+    public async Task GetReadinessAsync_WhenRevisionCatalogMissing_ShouldReturnPreparedArtifactMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a", activeRevisionId: "rev-ready"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort, new FakeServiceRevisionCatalogQueryReader(null));
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-ready"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.PreparedArtifactMissing);
+        snapshot.InvokeReady.Should().BeFalse();
+        snapshot.RevisionId.Should().Be("rev-ready");
+        snapshot.DeploymentId.Should().Be("deployment-rev-ready");
+    }
+
+    [Fact]
     public async Task GetReadinessAsync_WhenPreparedArtifactDoesNotExposeExpectedEndpoint_ShouldReturnPreparedArtifactMissing()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort
