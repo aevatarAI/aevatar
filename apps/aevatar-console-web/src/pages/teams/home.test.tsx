@@ -559,6 +559,50 @@ describe("TeamsHomePage", () => {
     expect(params.get("runId")).toBeNull();
   });
 
+  it("hides the duplicate view-members action when manage members is already the handoff", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        {
+          ...defaultTeams[0],
+          memberCount: 2,
+        },
+      ],
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members: [
+        {
+          ...defaultMembers[0],
+          memberId: "member-alpha",
+          displayName: "普通成员 A",
+        },
+        {
+          ...defaultMembers[0],
+          memberId: "member-beta",
+          displayName: "普通成员 B",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByRole("button", { name: "管理成员" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "查看成员" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "管理成员" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/teams/scope-a/t-support");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("tab")).toBe("members");
+  });
+
   it("does not load roster data from a locally restored scope when server auth fails", async () => {
     window.history.replaceState({}, "", "/teams");
     persistAuthSession({

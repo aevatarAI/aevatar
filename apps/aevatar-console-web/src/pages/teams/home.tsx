@@ -731,6 +731,8 @@ const TeamRosterActionGroup: React.FC<{
 }> = ({ large = false, preview }) => {
   const buttonSize = large ? "large" : "middle";
   const { token } = theme.useToken();
+  const showViewMembersAction =
+    preview.memberQuickAction.href !== preview.membersHref;
   const buttonStyle: React.CSSProperties = {
     borderRadius: 999,
     fontWeight: 600,
@@ -780,15 +782,17 @@ const TeamRosterActionGroup: React.FC<{
       >
         {t("teams.home.actions.viewTeam", "View team")}
       </Button>
-      <Button
-        icon={<BarsOutlined />}
-        onClick={() => history.push(preview.membersHref)}
-        size={buttonSize}
-        style={buttonStyle}
-        type="text"
-      >
-        {t("teams.home.actions.viewMembers", "View members")}
-      </Button>
+      {showViewMembersAction ? (
+        <Button
+          icon={<BarsOutlined />}
+          onClick={() => history.push(preview.membersHref)}
+          size={buttonSize}
+          style={buttonStyle}
+          type="text"
+        >
+          {t("teams.home.actions.viewMembers", "View members")}
+        </Button>
+      ) : null}
     </Space>
   );
 };
