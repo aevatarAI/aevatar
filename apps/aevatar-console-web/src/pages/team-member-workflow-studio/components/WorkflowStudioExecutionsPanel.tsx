@@ -1,5 +1,6 @@
 import { Alert, Button, Empty, List, Spin, Tag, Typography } from "antd";
 import React from "react";
+import { t } from "@/shared/i18n/messages";
 import type { StudioExecutionSummary } from "@/shared/studio/models";
 
 type WorkflowStudioExecutionsPanelProps = {
@@ -60,7 +61,10 @@ const WorkflowStudioExecutionsPanel: React.FC<WorkflowStudioExecutionsPanelProps
   onOpenExecution,
 }) => (
   <section
-    aria-label="Workflow executions"
+    aria-label={t(
+      "teamMemberWorkflowStudio.executionsPanel.sectionAria",
+      "Workflow executions",
+    )}
     style={{
       background: "#ffffff",
       flex: 1,
@@ -70,11 +74,13 @@ const WorkflowStudioExecutionsPanel: React.FC<WorkflowStudioExecutionsPanelProps
     }}
   >
     <Typography.Title level={4} style={{ marginTop: 0 }}>
-      Executions
+      {t("teamMemberWorkflowStudio.executionsPanel.title", "Executions")}
     </Typography.Title>
     <Typography.Paragraph style={{ color: "#6b7280", maxWidth: 760 }}>
-      This tab only shows executions that can be safely scoped to the current
-      workflow member by stable workflow or service identifiers.
+      {t(
+        "teamMemberWorkflowStudio.executionsPanel.description",
+        "This tab only shows executions that can be safely scoped to the current workflow member by stable workflow or service identifiers.",
+      )}
     </Typography.Paragraph>
     {error ? (
       <Alert message={error} showIcon type="error" />
@@ -93,7 +99,7 @@ const WorkflowStudioExecutionsPanel: React.FC<WorkflowStudioExecutionsPanelProps
                 onClick={() => onOpenExecution(execution.executionId)}
                 size="small"
               >
-                Inspect
+                {t("teamMemberWorkflowStudio.executionsPanel.inspect", "Inspect")}
               </Button>,
             ]}
           >
@@ -101,16 +107,30 @@ const WorkflowStudioExecutionsPanel: React.FC<WorkflowStudioExecutionsPanelProps
               description={[
                 formatExecutionTime(execution.startedAtUtc),
                 formatDuration(execution.startedAtUtc, execution.completedAtUtc),
-                execution.serviceId ? `service ${execution.serviceId}` : "",
+                execution.serviceId
+                  ? t(
+                      "teamMemberWorkflowStudio.executionsPanel.serviceMeta",
+                      "service {serviceId}",
+                      { serviceId: execution.serviceId },
+                    )
+                  : "",
               ]
                 .filter(Boolean)
                 .join(" · ")}
               title={
                 <span>
                   <Tag color={readStatusColor(execution.status)}>
-                    {execution.status || "unknown"}
+                    {execution.status ||
+                      t(
+                        "teamMemberWorkflowStudio.executionsPanel.unknownStatus",
+                        "unknown",
+                      )}
                   </Tag>
-                  {execution.workflowName || "Workflow execution"}
+                  {execution.workflowName ||
+                    t(
+                      "teamMemberWorkflowStudio.executionsPanel.fallbackName",
+                      "Workflow execution",
+                    )}
                 </span>
               }
             />
@@ -124,7 +144,10 @@ const WorkflowStudioExecutionsPanel: React.FC<WorkflowStudioExecutionsPanelProps
       <Empty
         description={
           emptyReason ||
-          "No safely scoped executions are available for this workflow member."
+          t(
+            "teamMemberWorkflowStudio.executionsPanel.empty",
+            "No safely scoped executions are available for this workflow member.",
+          )
         }
         image={Empty.PRESENTED_IMAGE_SIMPLE}
       />

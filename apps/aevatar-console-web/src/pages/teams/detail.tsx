@@ -760,15 +760,26 @@ const TeamDetailPage: React.FC = () => {
     trimText(entryMemberSummary?.displayName) || entryMemberId;
   const teamRosterRows = React.useMemo(
     () =>
-      (teamMembersQuery.data?.members ?? []).map((member) => ({
-        buildStudioHref:
-          trimText(member.implementationKind).toLowerCase() === "workflow"
-            ? buildTeamMemberWorkflowStudioHref({
-                memberId: member.memberId,
-                mode: "edit-member",
-                scopeId,
-                teamId: selectedTeamId,
-              })
+      (teamMembersQuery.data?.members ?? []).map((member) => {
+        const isWorkflowMember =
+          trimText(member.implementationKind).toLowerCase() === "workflow";
+        const workflowStudioHref = buildTeamMemberWorkflowStudioHref({
+          memberId: member.memberId,
+          mode: "edit-member",
+          scopeId,
+          teamId: selectedTeamId,
+        });
+        const legacyEditStudioHref = buildTeamStudioHref({
+          memberId: member.memberId,
+          mode: "edit-member",
+          returnTo: buildTeamReturnHref(member.memberId),
+          scopeId,
+          teamId: selectedTeamId,
+        });
+
+        return {
+          buildStudioHref: isWorkflowMember
+            ? workflowStudioHref
             : buildTeamStudioHref({
                 memberId: member.memberId,
                 mode: "build-member",
@@ -776,26 +787,24 @@ const TeamDetailPage: React.FC = () => {
                 scopeId,
                 teamId: selectedTeamId,
               }),
-        description: trimText(member.description),
-        canInvokeAsEntry:
-          normalizeStatus(member.lifecycleStage) === "bind_ready" &&
-          trimText(member.publishedServiceId).length > 0,
-        editStudioHref: buildTeamMemberWorkflowStudioHref({
+          description: trimText(member.description),
+          canInvokeAsEntry:
+            normalizeStatus(member.lifecycleStage) === "bind_ready" &&
+            trimText(member.publishedServiceId).length > 0,
+          editStudioHref: isWorkflowMember
+            ? workflowStudioHref
+            : legacyEditStudioHref,
+          implementationKind: formatCompositionKind(member.implementationKind),
+          key: member.memberId,
+          lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
+          lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
+          isEntryMember: trimText(member.memberId) === entryMemberId,
+          isSelectedMember: trimText(member.memberId) === selectedRosterMemberId,
           memberId: member.memberId,
-          mode: "edit-member",
-          scopeId,
-          teamId: selectedTeamId,
-        }),
-        implementationKind: formatCompositionKind(member.implementationKind),
-        key: member.memberId,
-        lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
-        lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
-        isEntryMember: trimText(member.memberId) === entryMemberId,
-        isSelectedMember: trimText(member.memberId) === selectedRosterMemberId,
-        memberId: member.memberId,
-        name: trimText(member.displayName) || member.memberId,
-        serviceId: trimText(member.publishedServiceId) || "--",
-      })),
+          name: trimText(member.displayName) || member.memberId,
+          serviceId: trimText(member.publishedServiceId) || "--",
+        };
+      }),
     [
       buildTeamReturnHref,
       entryMemberId,
@@ -815,15 +824,6 @@ const TeamDetailPage: React.FC = () => {
         teamId: selectedTeamId,
       }),
     [buildTeamReturnHref, scopeId, selectedTeamId],
-  );
-  const createWorkflowMemberHref = React.useMemo(
-    () =>
-      buildTeamMemberWorkflowStudioHref({
-        mode: "create-member",
-        scopeId,
-        teamId: selectedTeamId,
-      }),
-    [scopeId, selectedTeamId],
   );
   const latestVisibleUpdate =
     teamSummaryQuery.data?.updatedAt ||
@@ -1530,7 +1530,6 @@ const TeamDetailPage: React.FC = () => {
     return (
       <TeamMembersTab
         createMemberHref={createMemberHref}
-        createWorkflowMemberHref={createWorkflowMemberHref}
         entryActionBusyMemberId={entryActionBusyMemberId}
         onClearEntry={
           teamSummaryQuery.data && !isTeamArchived && entryMemberId

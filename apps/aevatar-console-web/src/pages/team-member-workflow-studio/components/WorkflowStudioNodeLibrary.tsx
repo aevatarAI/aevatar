@@ -1,6 +1,7 @@
 import { SearchOutlined } from "@ant-design/icons";
 import { Button, Empty, Input, Space, Tag, Typography } from "antd";
 import React from "react";
+import { t } from "@/shared/i18n/messages";
 import {
   getStudioGraphCategory,
   STUDIO_GRAPH_CATEGORIES,
@@ -64,7 +65,10 @@ const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
       }}
     >
       <button
-        aria-label="Close node library"
+        aria-label={t(
+          "teamMemberWorkflowStudio.nodeLibrary.closeAria",
+          "Close node library",
+        )}
         onClick={onClose}
         style={{
           background: "transparent",
@@ -79,7 +83,10 @@ const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
         type="button"
       />
       <aside
-        aria-label="Node library"
+        aria-label={t(
+          "teamMemberWorkflowStudio.nodeLibrary.sectionAria",
+          "Node library",
+        )}
         style={{
           background: "#ffffff",
           borderRight: "1px solid #e5e7eb",
@@ -100,23 +107,32 @@ const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
             style={{ justifyContent: "space-between", width: "100%" }}
           >
             <Typography.Title level={4} style={{ margin: 0 }}>
-              Node library
+              {t("teamMemberWorkflowStudio.nodeLibrary.title", "Node library")}
             </Typography.Title>
             <Button onClick={onClose} size="small">
-              Close
+              {t("teamMemberWorkflowStudio.common.close", "Close")}
             </Button>
           </Space>
           <Input
             allowClear
-            aria-label="Search nodes"
+            aria-label={t(
+              "teamMemberWorkflowStudio.nodeLibrary.searchAria",
+              "Search nodes",
+            )}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search nodes"
+            placeholder={t(
+              "teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder",
+              "Search nodes",
+            )}
             prefix={<SearchOutlined />}
             value={query}
           />
           {filteredCategories.length === 0 ? (
             <Empty
-              description="No nodes match this search."
+              description={t(
+                "teamMemberWorkflowStudio.nodeLibrary.emptySearch",
+                "No nodes match this search.",
+              )}
               image={Empty.PRESENTED_IMAGE_SIMPLE}
             />
           ) : (
@@ -140,7 +156,11 @@ const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
                     const itemCategory = getStudioGraphCategory(stepType);
                     return (
                       <button
-                        aria-label={`Insert ${formatStepType(stepType)} node`}
+                        aria-label={t(
+                          "teamMemberWorkflowStudio.nodeLibrary.insertNodeAria",
+                          "Insert {nodeName} node",
+                          { nodeName: formatStepType(stepType) },
+                        )}
                         key={stepType}
                         onClick={() => onInsertNode(stepType)}
                         style={{

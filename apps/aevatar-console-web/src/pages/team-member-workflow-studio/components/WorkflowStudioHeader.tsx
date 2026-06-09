@@ -21,6 +21,7 @@ import {
   Typography,
 } from "antd";
 import React from "react";
+import { t } from "@/shared/i18n/messages";
 
 type WorkflowStudioHeaderProps = {
   readonly activationChecked: boolean;
@@ -65,14 +66,16 @@ function formatActivationStatusLabel(input: {
   readonly tone: WorkflowStudioHeaderProps["activationTone"];
 }): string {
   if (input.pending) {
-    return "Publishing";
+    return t("teamMemberWorkflowStudio.header.activation.publishing", "Publishing");
   }
 
   if (input.tone === "error") {
-    return "Error";
+    return t("teamMemberWorkflowStudio.header.activation.error", "Error");
   }
 
-  return input.checked ? "Ready" : "Inactive";
+  return input.checked
+    ? t("teamMemberWorkflowStudio.header.activation.ready", "Ready")
+    : t("teamMemberWorkflowStudio.header.activation.inactive", "Inactive");
 }
 
 function formatExecutionTime(value: string | null | undefined): string {
@@ -141,7 +144,10 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   const hasRunInput = runInput.trim().length > 0;
   const runInputEditor = (
     <div
-      aria-label="Run options"
+      aria-label={t(
+        "teamMemberWorkflowStudio.header.runOptionsAria",
+        "Run options",
+      )}
       style={{
         display: "grid",
         gap: 8,
@@ -151,17 +157,23 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
       <Space align="center" size={8}>
         <EditOutlined style={{ color: "#6b7280" }} />
         <Typography.Text strong style={{ fontSize: 12 }}>
-          Run input
+          {t("teamMemberWorkflowStudio.header.runInput", "Run input")}
         </Typography.Text>
         <Typography.Text style={{ color: "#6b7280", fontSize: 12 }}>
-          Optional test payload
+          {t(
+            "teamMemberWorkflowStudio.header.optionalTestPayload",
+            "Optional test payload",
+          )}
         </Typography.Text>
       </Space>
       <Input.TextArea
-        aria-label="Run input"
+        aria-label={t("teamMemberWorkflowStudio.header.runInput", "Run input")}
         autoSize={{ minRows: 2, maxRows: 4 }}
         onChange={(event) => onRunInputChange(event.target.value)}
-        placeholder="Optional input for this workflow run"
+        placeholder={t(
+          "teamMemberWorkflowStudio.header.runInputPlaceholder",
+          "Optional input for this workflow run",
+        )}
         style={{ maxHeight: 150 }}
         value={runInput}
       />
@@ -198,16 +210,23 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
                   }}
                   type="button"
                 >
-                  Team
+                  {t("teamMemberWorkflowStudio.header.teamBreadcrumb", "Team")}
                 </button>
               ),
             },
-            { title: teamName || "Current team" },
+            {
+              title:
+                teamName ||
+                t("teamMemberWorkflowStudio.header.currentTeam", "Current team"),
+            },
           ]}
         />
         <Space size={10} style={{ minWidth: 0 }} wrap>
           <Input
-            aria-label="Workflow title"
+            aria-label={t(
+              "teamMemberWorkflowStudio.header.workflowTitleAria",
+              "Workflow title",
+            )}
             onChange={(event) => onTitleChange(event.target.value)}
             style={{
               color: "#111827",
@@ -222,7 +241,14 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
             value={workflowTitle}
             variant="borderless"
           />
-          {dirty ? <Tag color="gold">Unsaved changes</Tag> : null}
+          {dirty ? (
+            <Tag color="gold">
+              {t(
+                "teamMemberWorkflowStudio.header.unsavedChanges",
+                "Unsaved changes",
+              )}
+            </Tag>
+          ) : null}
         </Space>
         <div
           style={{
@@ -239,7 +265,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
             wrap
           >
             <Typography.Text strong style={{ color: "#1f2937", fontSize: 13 }}>
-              Workflow run
+              {t("teamMemberWorkflowStudio.header.workflowRun", "Workflow run")}
             </Typography.Text>
             <Tag color={readExecutionStatusColor(executionStatus)}>
               {executionStatus}
@@ -257,7 +283,11 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
                 {formattedExecutionStartedAt}
               </Typography.Text>
             ) : null}
-            {hasRunInput ? <Tag color="blue">input set</Tag> : null}
+            {hasRunInput ? (
+              <Tag color="blue">
+                {t("teamMemberWorkflowStudio.header.inputSet", "input set")}
+              </Tag>
+            ) : null}
             <Popover
               content={runInputEditor}
               onOpenChange={setRunInputExpanded}
@@ -276,7 +306,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
                 size="small"
                 type={hasRunInput ? "default" : "text"}
               >
-                Run input
+                {t("teamMemberWorkflowStudio.header.runInput", "Run input")}
               </Button>
             </Popover>
           </Space>
@@ -295,8 +325,17 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
         <Segmented
           size="small"
           options={[
-            { label: "Editor", value: "editor" },
-            { label: "Executions", value: "executions" },
+            {
+              label: t("teamMemberWorkflowStudio.header.tabs.editor", "Editor"),
+              value: "editor",
+            },
+            {
+              label: t(
+                "teamMemberWorkflowStudio.header.tabs.executions",
+                "Executions",
+              ),
+              value: "executions",
+            },
           ]}
           onChange={(value) => {
             if (value === "editor" || value === "executions") {
@@ -313,10 +352,18 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
             .join(" · ")}
         >
           <Typography.Text style={{ color: "#6b7280", fontSize: 13 }}>
-            {activationChecked ? "Active" : "Inactive"}
+            {activationChecked
+              ? t("teamMemberWorkflowStudio.header.activation.active", "Active")
+              : t(
+                  "teamMemberWorkflowStudio.header.activation.inactive",
+                  "Inactive",
+                )}
           </Typography.Text>
           <Switch
-            aria-label="Activate workflow member"
+            aria-label={t(
+              "teamMemberWorkflowStudio.header.activateAria",
+              "Activate workflow member",
+            )}
             checked={activationChecked}
             disabled={activationDisabled}
             loading={activationPending}
@@ -344,12 +391,19 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           loading={executePending}
           onClick={onExecute}
           size="small"
-          title={canExecute ? "Execute workflow" : executePlaceholderReason}
+          title={
+            canExecute
+              ? t(
+                  "teamMemberWorkflowStudio.header.executeWorkflow",
+                  "Execute workflow",
+                )
+              : executePlaceholderReason
+          }
         >
-          Execute workflow
+          {t("teamMemberWorkflowStudio.header.executeWorkflow", "Execute workflow")}
         </Button>
         <Button icon={<PlusOutlined />} onClick={onAddNode} size="small">
-          Add node
+          {t("teamMemberWorkflowStudio.header.addNode", "Add node")}
         </Button>
         <Button
           disabled={!selectedNodeId}
@@ -357,7 +411,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           onClick={onDeleteNode}
           size="small"
         >
-          Delete node
+          {t("teamMemberWorkflowStudio.header.deleteNode", "Delete node")}
         </Button>
         <Button
           disabled={!canSave}
@@ -365,10 +419,14 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           loading={savePending}
           onClick={onSave}
           size="small"
-          title={canSave ? "Save draft" : savePlaceholderReason}
+          title={
+            canSave
+              ? t("teamMemberWorkflowStudio.header.saveDraft", "Save draft")
+              : savePlaceholderReason
+          }
           type="primary"
         >
-          Save
+          {t("teamMemberWorkflowStudio.header.save", "Save")}
         </Button>
         <Dropdown
           menu={{
@@ -376,7 +434,10 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
               {
                 disabled: !canSetTeamEntry,
                 key: "set-team-entry",
-                label: "Set as Team entry",
+                label: t(
+                  "teamMemberWorkflowStudio.header.setAsTeamEntry",
+                  "Set as Team entry",
+                ),
               },
             ],
             onClick: ({ key }) => {
@@ -388,7 +449,10 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           trigger={["click"]}
         >
           <Button
-            aria-label="More workflow actions"
+            aria-label={t(
+              "teamMemberWorkflowStudio.header.moreActionsAria",
+              "More workflow actions",
+            )}
             icon={<MoreOutlined />}
             loading={teamEntryPending}
             size="small"

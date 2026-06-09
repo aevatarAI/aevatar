@@ -1,5 +1,6 @@
 import { Alert, Typography } from "antd";
 import React from "react";
+import { t } from "@/shared/i18n/messages";
 import { buildExecutionTrace } from "@/shared/studio/execution";
 import type { StudioExecutionDetail } from "@/shared/studio/models";
 
@@ -22,7 +23,10 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
 
   return (
     <aside
-      aria-label="Workflow execution console"
+      aria-label={t(
+        "teamMemberWorkflowStudio.executionPanel.consoleAria",
+        "Workflow execution console",
+      )}
       style={{
         background: "#ffffff",
         borderTop: "1px solid #e5e7eb",
@@ -117,8 +121,15 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
               ) : (
                 <Typography.Text style={{ color: "#6b7280", fontSize: 12 }}>
                   {rawFrames.length
-                    ? `${rawFrames.length} raw execution frame(s) received.`
-                    : "Execution logs will appear here after a workflow run returns frames."}
+                    ? t(
+                        "teamMemberWorkflowStudio.executionPanel.rawFrames",
+                        "{count} raw execution frame(s) received.",
+                        { count: rawFrames.length },
+                      )
+                    : t(
+                        "teamMemberWorkflowStudio.executionPanel.emptyLogs",
+                        "Execution logs will appear here after a workflow run returns frames.",
+                      )}
                 </Typography.Text>
               )}
             </div>

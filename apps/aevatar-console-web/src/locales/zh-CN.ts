@@ -21,6 +21,7 @@ const zhCNMessages = {
   'menu.Services': '服务',
   'menu.Settings': '设置',
   'menu.Team Details': '团队详情',
+  'menu.Team Member Workflow Studio': '团队成员 Workflow Studio',
   'menu.Topology': '拓扑',
   'nav.groups.platform': '平台',
   'nav.groups.settings': '设置',
@@ -333,6 +334,74 @@ const zhCNMessages = {
   'teams.members.title': '团队成员',
   'teams.members.unavailable.description': '当前无法读取这支团队的成员清单。',
   'teams.members.unavailable.title': '成员清单暂不可见',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
+    '当前 Phase 1 页面只会通过稳定 Workflow 引用加载成员。请先补齐后端或 ReadModel 引用，再在这里编辑这个成员。',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
+    '这个成员还没有关联 Workflow 草稿。',
+  'teamMemberWorkflowStudio.common.close': '关闭',
+  'teamMemberWorkflowStudio.executionPanel.consoleAria':
+    'Workflow 执行控制台',
+  'teamMemberWorkflowStudio.executionPanel.emptyLogs':
+    'Workflow 运行返回帧后，这里会展示执行日志。',
+  'teamMemberWorkflowStudio.executionPanel.rawFrames':
+    '已收到 {count} 个原始执行帧。',
+  'teamMemberWorkflowStudio.executionsPanel.description':
+    '这个 tab 只展示能通过稳定 Workflow 或 Service 标识安全归属到当前 Workflow 成员的执行记录。',
+  'teamMemberWorkflowStudio.executionsPanel.empty':
+    '当前 Workflow 成员还没有可安全归属的执行记录。',
+  'teamMemberWorkflowStudio.executionsPanel.fallbackName':
+    'Workflow 执行',
+  'teamMemberWorkflowStudio.executionsPanel.inspect': '查看',
+  'teamMemberWorkflowStudio.executionsPanel.sectionAria':
+    'Workflow 执行记录',
+  'teamMemberWorkflowStudio.executionsPanel.serviceMeta':
+    'service {serviceId}',
+  'teamMemberWorkflowStudio.executionsPanel.title': '执行记录',
+  'teamMemberWorkflowStudio.executionsPanel.unknownStatus': '未知',
+  'teamMemberWorkflowStudio.header.activateAria': '激活 Workflow 成员',
+  'teamMemberWorkflowStudio.header.activation.active': '已激活',
+  'teamMemberWorkflowStudio.header.activation.error': '错误',
+  'teamMemberWorkflowStudio.header.activation.inactive': '未激活',
+  'teamMemberWorkflowStudio.header.activation.publishing': '发布中',
+  'teamMemberWorkflowStudio.header.activation.ready': '就绪',
+  'teamMemberWorkflowStudio.header.addNode': '添加节点',
+  'teamMemberWorkflowStudio.header.currentTeam': '当前团队',
+  'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
+  'teamMemberWorkflowStudio.header.executeWorkflow': '执行 Workflow',
+  'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
+  'teamMemberWorkflowStudio.header.moreActionsAria': '更多 Workflow 操作',
+  'teamMemberWorkflowStudio.header.optionalTestPayload': '可选测试载荷',
+  'teamMemberWorkflowStudio.header.runInput': '运行输入',
+  'teamMemberWorkflowStudio.header.runInputPlaceholder':
+    '本次 Workflow 运行的可选输入',
+  'teamMemberWorkflowStudio.header.runOptionsAria': '运行选项',
+  'teamMemberWorkflowStudio.header.save': '保存',
+  'teamMemberWorkflowStudio.header.saveDraft': '保存草稿',
+  'teamMemberWorkflowStudio.header.setAsTeamEntry': '设为团队入口',
+  'teamMemberWorkflowStudio.header.tabs.editor': '编辑器',
+  'teamMemberWorkflowStudio.header.tabs.executions': '执行记录',
+  'teamMemberWorkflowStudio.header.teamBreadcrumb': '团队',
+  'teamMemberWorkflowStudio.header.unsavedChanges': '有未保存更改',
+  'teamMemberWorkflowStudio.header.workflowRun': 'Workflow 运行',
+  'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow 标题',
+  'teamMemberWorkflowStudio.nodeDetail.apply': '应用',
+  'teamMemberWorkflowStudio.nodeDetail.input': '输入',
+  'teamMemberWorkflowStudio.nodeDetail.inputEmpty':
+    '接入 Workflow 执行后，这里会展示输入预览。',
+  'teamMemberWorkflowStudio.nodeDetail.output': '输出',
+  'teamMemberWorkflowStudio.nodeDetail.outputEmpty':
+    '真实 Workflow 执行结果返回前，这里暂时没有输出。',
+  'teamMemberWorkflowStudio.nodeDetail.parameters': '参数',
+  'teamMemberWorkflowStudio.nodeDetail.parametersAria': '节点参数',
+  'teamMemberWorkflowStudio.nodeDetail.sectionAria': '节点详情',
+  'teamMemberWorkflowStudio.nodeLibrary.closeAria': '关闭节点库',
+  'teamMemberWorkflowStudio.nodeLibrary.emptySearch':
+    '没有匹配当前搜索的节点。',
+  'teamMemberWorkflowStudio.nodeLibrary.insertNodeAria': '插入 {nodeName} 节点',
+  'teamMemberWorkflowStudio.nodeLibrary.searchAria': '搜索节点',
+  'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': '搜索节点',
+  'teamMemberWorkflowStudio.nodeLibrary.sectionAria': '节点库',
+  'teamMemberWorkflowStudio.nodeLibrary.title': '节点库',
 };
 
 export default zhCNMessages;

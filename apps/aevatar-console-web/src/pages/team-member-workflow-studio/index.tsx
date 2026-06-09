@@ -7,6 +7,7 @@ import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
 import WorkflowStudioNodeDetailPanel from "./components/WorkflowStudioNodeDetailPanel";
 import WorkflowStudioNodeLibrary from "./components/WorkflowStudioNodeLibrary";
 import { useTeamMemberWorkflowStudio } from "./hooks/useTeamMemberWorkflowStudio";
+import { t } from "@/shared/i18n/messages";
 
 const TeamMemberWorkflowStudioPage: React.FC = () => {
   const studio = useTeamMemberWorkflowStudio();
@@ -62,8 +63,14 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
       {studio.linkedWorkflowMissing ? (
         <Alert
           banner
-          message="No workflow draft is linked to this member yet."
-          description="This Phase 1 page only loads workflow members through a stable workflow reference. Add that backend/read-model reference before editing this member here."
+          message={t(
+            "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title",
+            "No workflow draft is linked to this member yet.",
+          )}
+          description={t(
+            "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description",
+            "This Phase 1 page only loads workflow members through a stable workflow reference. Add that backend/read-model reference before editing this member here.",
+          )}
           type="warning"
         />
       ) : null}

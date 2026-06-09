@@ -1573,7 +1573,7 @@ describe("TeamDetailPage", () => {
     );
   });
 
-  it("routes Edit in Studio actions into the new workflow studio for every Team member", async () => {
+  it("keeps non-workflow member edit actions on the old Studio flow", async () => {
     (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-1",
       members: [
@@ -1600,26 +1600,15 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
     fireEvent.click(await screen.findByRole("link", { name: "在 Studio 中编辑" }));
 
-    expect(window.location.pathname).toBe(
-      "/teams/scope-1/t-alpha/members/member-agent-alpha/workflow",
-    );
-  });
-
-  it("offers workflow creation on the new workflow studio route from an empty Team roster", async () => {
-    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
-      scopeId: "scope-1",
-      members: [],
-      nextPageToken: null,
-    });
-
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    fireEvent.click(await screen.findByRole("link", { name: "创建工作流成员" }));
-
-    expect(window.location.pathname).toBe(
-      "/teams/scope-1/t-alpha/members/new/workflow",
+    expect(window.location.pathname).toBe("/studio");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("teamId")).toBe("t-alpha");
+    expect(params.get("member")).toBe("member:member-agent-alpha");
+    expect(params.get("step")).toBe("build");
+    expect(params.get("tab")).toBe("studio");
+    expect(params.get("returnTo")).toBe(
+      "/teams/scope-1/t-alpha?memberId=member-agent-alpha&tab=members",
     );
   });
 
@@ -1650,6 +1639,7 @@ describe("TeamDetailPage", () => {
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    expect(screen.queryByRole("link", { name: "创建工作流成员" })).toBeNull();
     fireEvent.click(await screen.findByRole("link", { name: "创建第一个成员" }));
 
     expect(window.location.pathname).toBe("/studio");

@@ -1,5 +1,6 @@
 import { Alert, Button, Input, Space, Typography } from "antd";
 import React from "react";
+import { t } from "@/shared/i18n/messages";
 import type { StudioStepInspectorDraft } from "@/shared/studio/document";
 
 type WorkflowStudioNodeDetailPanelProps = {
@@ -29,7 +30,10 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
 
   return (
     <aside
-      aria-label="Node detail"
+      aria-label={t(
+        "teamMemberWorkflowStudio.nodeDetail.sectionAria",
+        "Node detail",
+      )}
       style={{
         background: "#ffffff",
         borderLeft: "1px solid #e5e7eb",
@@ -58,7 +62,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             </Typography.Paragraph>
           </div>
           <Button onClick={onClose} size="small">
-            Close
+            {t("teamMemberWorkflowStudio.common.close", "Close")}
           </Button>
         </Space>
       </header>
@@ -71,9 +75,14 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
         }}
       >
         <section>
-          <Typography.Text strong>Input</Typography.Text>
+          <Typography.Text strong>
+            {t("teamMemberWorkflowStudio.nodeDetail.input", "Input")}
+          </Typography.Text>
           <Typography.Paragraph style={{ color: "#6b7280", marginTop: 8 }}>
-            Input preview will appear here when workflow execution is wired.
+            {t(
+              "teamMemberWorkflowStudio.nodeDetail.inputEmpty",
+              "Input preview will appear here when workflow execution is wired.",
+            )}
           </Typography.Paragraph>
         </section>
         <section>
@@ -81,17 +90,22 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             align="center"
             style={{ justifyContent: "space-between", width: "100%" }}
           >
-            <Typography.Text strong>Parameters</Typography.Text>
+            <Typography.Text strong>
+              {t("teamMemberWorkflowStudio.nodeDetail.parameters", "Parameters")}
+            </Typography.Text>
             <Button
               onClick={() => onParametersChange(parametersText)}
               size="small"
               type="primary"
             >
-              Apply
+              {t("teamMemberWorkflowStudio.nodeDetail.apply", "Apply")}
             </Button>
           </Space>
           <Input.TextArea
-            aria-label="Node parameters"
+            aria-label={t(
+              "teamMemberWorkflowStudio.nodeDetail.parametersAria",
+              "Node parameters",
+            )}
             autoSize={{ minRows: 9, maxRows: 18 }}
             onChange={(event) => setParametersText(event.target.value)}
             spellCheck={false}
@@ -112,9 +126,14 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           ) : null}
         </section>
         <section>
-          <Typography.Text strong>Output</Typography.Text>
+          <Typography.Text strong>
+            {t("teamMemberWorkflowStudio.nodeDetail.output", "Output")}
+          </Typography.Text>
           <Typography.Paragraph style={{ color: "#6b7280", marginTop: 8 }}>
-            Output remains empty until a real workflow execution result is available.
+            {t(
+              "teamMemberWorkflowStudio.nodeDetail.outputEmpty",
+              "Output remains empty until a real workflow execution result is available.",
+            )}
           </Typography.Paragraph>
         </section>
       </div>

@@ -21,6 +21,7 @@ const enUSMessages = {
   'menu.Services': 'Services',
   'menu.Settings': 'Settings',
   'menu.Team Details': 'Team Details',
+  'menu.Team Member Workflow Studio': 'Team Member Workflow Studio',
   'menu.Topology': 'Topology',
   'nav.groups.platform': 'Platform',
   'nav.groups.settings': 'Settings',
@@ -350,6 +351,74 @@ const enUSMessages = {
   'teams.members.unavailable.description':
     'The member roster for this team cannot be read right now.',
   'teams.members.unavailable.title': 'Member roster unavailable',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
+    'This Phase 1 page only loads workflow members through a stable workflow reference. Add that backend/read-model reference before editing this member here.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
+    'No workflow draft is linked to this member yet.',
+  'teamMemberWorkflowStudio.common.close': 'Close',
+  'teamMemberWorkflowStudio.executionPanel.consoleAria':
+    'Workflow execution console',
+  'teamMemberWorkflowStudio.executionPanel.emptyLogs':
+    'Execution logs will appear here after a workflow run returns frames.',
+  'teamMemberWorkflowStudio.executionPanel.rawFrames':
+    '{count} raw execution frame(s) received.',
+  'teamMemberWorkflowStudio.executionsPanel.description':
+    'This tab only shows executions that can be safely scoped to the current workflow member by stable workflow or service identifiers.',
+  'teamMemberWorkflowStudio.executionsPanel.empty':
+    'No safely scoped executions are available for this workflow member.',
+  'teamMemberWorkflowStudio.executionsPanel.fallbackName':
+    'Workflow execution',
+  'teamMemberWorkflowStudio.executionsPanel.inspect': 'Inspect',
+  'teamMemberWorkflowStudio.executionsPanel.sectionAria':
+    'Workflow executions',
+  'teamMemberWorkflowStudio.executionsPanel.serviceMeta':
+    'service {serviceId}',
+  'teamMemberWorkflowStudio.executionsPanel.title': 'Executions',
+  'teamMemberWorkflowStudio.executionsPanel.unknownStatus': 'unknown',
+  'teamMemberWorkflowStudio.header.activateAria': 'Activate workflow member',
+  'teamMemberWorkflowStudio.header.activation.active': 'Active',
+  'teamMemberWorkflowStudio.header.activation.error': 'Error',
+  'teamMemberWorkflowStudio.header.activation.inactive': 'Inactive',
+  'teamMemberWorkflowStudio.header.activation.publishing': 'Publishing',
+  'teamMemberWorkflowStudio.header.activation.ready': 'Ready',
+  'teamMemberWorkflowStudio.header.addNode': 'Add node',
+  'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
+  'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
+  'teamMemberWorkflowStudio.header.executeWorkflow': 'Execute workflow',
+  'teamMemberWorkflowStudio.header.inputSet': 'input set',
+  'teamMemberWorkflowStudio.header.moreActionsAria': 'More workflow actions',
+  'teamMemberWorkflowStudio.header.optionalTestPayload': 'Optional test payload',
+  'teamMemberWorkflowStudio.header.runInput': 'Run input',
+  'teamMemberWorkflowStudio.header.runInputPlaceholder':
+    'Optional input for this workflow run',
+  'teamMemberWorkflowStudio.header.runOptionsAria': 'Run options',
+  'teamMemberWorkflowStudio.header.save': 'Save',
+  'teamMemberWorkflowStudio.header.saveDraft': 'Save draft',
+  'teamMemberWorkflowStudio.header.setAsTeamEntry': 'Set as Team entry',
+  'teamMemberWorkflowStudio.header.tabs.editor': 'Editor',
+  'teamMemberWorkflowStudio.header.tabs.executions': 'Executions',
+  'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
+  'teamMemberWorkflowStudio.header.unsavedChanges': 'Unsaved changes',
+  'teamMemberWorkflowStudio.header.workflowRun': 'Workflow run',
+  'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
+  'teamMemberWorkflowStudio.nodeDetail.apply': 'Apply',
+  'teamMemberWorkflowStudio.nodeDetail.input': 'Input',
+  'teamMemberWorkflowStudio.nodeDetail.inputEmpty':
+    'Input preview will appear here when workflow execution is wired.',
+  'teamMemberWorkflowStudio.nodeDetail.output': 'Output',
+  'teamMemberWorkflowStudio.nodeDetail.outputEmpty':
+    'Output remains empty until a real workflow execution result is available.',
+  'teamMemberWorkflowStudio.nodeDetail.parameters': 'Parameters',
+  'teamMemberWorkflowStudio.nodeDetail.parametersAria': 'Node parameters',
+  'teamMemberWorkflowStudio.nodeDetail.sectionAria': 'Node detail',
+  'teamMemberWorkflowStudio.nodeLibrary.closeAria': 'Close node library',
+  'teamMemberWorkflowStudio.nodeLibrary.emptySearch':
+    'No nodes match this search.',
+  'teamMemberWorkflowStudio.nodeLibrary.insertNodeAria': 'Insert {nodeName} node',
+  'teamMemberWorkflowStudio.nodeLibrary.searchAria': 'Search nodes',
+  'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': 'Search nodes',
+  'teamMemberWorkflowStudio.nodeLibrary.sectionAria': 'Node library',
+  'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
 };
 
 export default enUSMessages;
