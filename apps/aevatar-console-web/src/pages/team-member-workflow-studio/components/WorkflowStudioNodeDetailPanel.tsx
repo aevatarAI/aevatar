@@ -2,6 +2,7 @@ import { Alert, Button, Input, Space, Typography } from "antd";
 import React from "react";
 import { t } from "@/shared/i18n/messages";
 import type { StudioStepInspectorDraft } from "@/shared/studio/document";
+import { formatStudioStepTypeLabel } from "@/shared/studio/graph";
 
 type WorkflowStudioNodeDetailPanelProps = {
   readonly error?: string;
@@ -58,7 +59,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             <Typography.Paragraph
               style={{ color: "#6b7280", margin: "2px 0 0" }}
             >
-              {stepDraft.type}
+              {formatStudioStepTypeLabel(stepDraft.type)}
             </Typography.Paragraph>
           </div>
           <Button onClick={onClose} size="small">
@@ -74,17 +75,6 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           padding: 18,
         }}
       >
-        <section>
-          <Typography.Text strong>
-            {t("teamMemberWorkflowStudio.nodeDetail.input", "Input")}
-          </Typography.Text>
-          <Typography.Paragraph style={{ color: "#6b7280", marginTop: 8 }}>
-            {t(
-              "teamMemberWorkflowStudio.nodeDetail.inputEmpty",
-              "Input preview will appear here when workflow execution is wired.",
-            )}
-          </Typography.Paragraph>
-        </section>
         <section>
           <Space
             align="center"
@@ -124,17 +114,6 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
               type="error"
             />
           ) : null}
-        </section>
-        <section>
-          <Typography.Text strong>
-            {t("teamMemberWorkflowStudio.nodeDetail.output", "Output")}
-          </Typography.Text>
-          <Typography.Paragraph style={{ color: "#6b7280", marginTop: 8 }}>
-            {t(
-              "teamMemberWorkflowStudio.nodeDetail.outputEmpty",
-              "Output remains empty until a real workflow execution result is available.",
-            )}
-          </Typography.Paragraph>
         </section>
       </div>
     </aside>

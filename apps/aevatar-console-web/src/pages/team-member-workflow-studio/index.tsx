@@ -2,10 +2,11 @@ import { Alert, Spin } from "antd";
 import React from "react";
 import WorkflowStudioCanvas from "./components/WorkflowStudioCanvas";
 import WorkflowStudioExecutionPanel from "./components/WorkflowStudioExecutionPanel";
-import WorkflowStudioExecutionsPanel from "./components/WorkflowStudioExecutionsPanel";
 import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
+import WorkflowStudioMemberRunsPanel from "./components/WorkflowStudioMemberRunsPanel";
 import WorkflowStudioNodeDetailPanel from "./components/WorkflowStudioNodeDetailPanel";
 import WorkflowStudioNodeLibrary from "./components/WorkflowStudioNodeLibrary";
+import WorkflowStudioRunOptionsPanel from "./components/WorkflowStudioRunOptionsPanel";
 import { useTeamMemberWorkflowStudio } from "./hooks/useTeamMemberWorkflowStudio";
 import { t } from "@/shared/i18n/messages";
 
@@ -25,31 +26,27 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
       }}
     >
       <WorkflowStudioHeader
-        activationChecked={studio.activationChecked}
-        activationDisabled={studio.activationDisabled}
-        activationNotice={studio.activationNotice}
-        activationPending={studio.activationPending}
-        activationPlaceholderReason={studio.activationPlaceholderReason}
-        activationTone={studio.activationTone}
-        canExecute={studio.canExecute}
+        memberPublished={studio.memberPublished}
+        publishDisabled={studio.publishDisabled}
+        publishNotice={studio.publishNotice}
+        publishPending={studio.publishPending}
+        publishPlaceholderReason={studio.publishPlaceholderReason}
+        publishTone={studio.publishTone}
+        canRunActiveMember={studio.canRunActiveMember}
         canSave={studio.canSave}
         canSetTeamEntry={studio.canSetTeamEntry}
         dirty={studio.dirty}
-        executionRunId={studio.executionDetail?.executionId ?? ""}
-        executionStartedAt={studio.executionDetail?.startedAtUtc ?? ""}
-        executionStatus={studio.executionStatus}
-        executePending={studio.executePending}
-        executePlaceholderReason={studio.executePlaceholderReason}
-        onActivate={studio.activate}
+        activeMemberRunPending={studio.activeMemberRunPending}
+        activeMemberRunPlaceholderReason={studio.activeMemberRunPlaceholderReason}
+        onPublishMember={studio.publishMember}
         onAddNode={studio.openNodeLibrary}
         onDeleteNode={studio.deleteSelectedNode}
-        onExecute={studio.execute}
+        onOpenRunOptions={studio.openRunOptions}
+        onRunActiveMember={studio.runActiveMember}
         onNavigateBack={studio.navigateBack}
-        onRunInputChange={studio.setExecutionRunInput}
         onSave={studio.save}
         onSetTeamEntry={studio.setTeamEntry}
         onTitleChange={studio.setWorkflowTitle}
-        runInput={studio.executionRunInput}
         savePending={studio.savePending}
         savePlaceholderReason={studio.savePlaceholderReason}
         selectedNodeId={studio.selectedNodeId}
@@ -118,19 +115,27 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             onInsertNode={studio.insertNode}
             open={studio.nodeLibraryOpen}
           />
-          <WorkflowStudioNodeDetailPanel
-            error={studio.selectedStepParameterError}
+          <WorkflowStudioRunOptionsPanel
             onClose={studio.selectCanvas}
-            onParametersChange={studio.updateSelectedStepParameters}
-            stepDraft={studio.selectedStepDraft}
+            onRunInputChange={studio.setExecutionRunInput}
+            open={studio.runOptionsOpen}
+            runInput={studio.executionRunInput}
           />
+          {studio.runOptionsOpen ? null : (
+            <WorkflowStudioNodeDetailPanel
+              error={studio.selectedStepParameterError}
+              onClose={studio.selectCanvas}
+              onParametersChange={studio.updateSelectedStepParameters}
+              stepDraft={studio.selectedStepDraft}
+            />
+          )}
         </section>
       ) : (
-        <WorkflowStudioExecutionsPanel
-          emptyReason={studio.executionsEmptyReason}
-          error={studio.executionsError}
-          executions={studio.executions}
-          loading={studio.executionsLoading}
+        <WorkflowStudioMemberRunsPanel
+          emptyReason={studio.memberRunsEmptyReason}
+          error={studio.memberRunsError}
+          executions={studio.memberRuns}
+          loading={studio.memberRunsLoading}
           onOpenExecution={studio.openExecution}
         />
       )}
