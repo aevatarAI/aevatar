@@ -90,24 +90,6 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         return await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false);
     }
 
-    public async Task<bool> TryHandleAsync(
-        ProjectionRuntimeScopeKey scopeKey,
-        Google.Protobuf.IMessage payload,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(payload);
-
-        var actorId = ProjectionScopeActorId.Build(scopeKey);
-        var actor = await _runtime.GetAsync(actorId).ConfigureAwait(false);
-        if (actor == null)
-            return false;
-
-        var envelope = ProjectionScopeCommandEnvelopeFactory.Create(payload, actorId);
-        envelope.Route = EnvelopeRouteSemantics.CreateDirect("projection.scope.port", actorId);
-        await actor.HandleEventAsync(envelope, ct).ConfigureAwait(false);
-        return true;
-    }
-
     public async Task DispatchAsync(
         ProjectionRuntimeScopeKey scopeKey,
         Google.Protobuf.IMessage payload,

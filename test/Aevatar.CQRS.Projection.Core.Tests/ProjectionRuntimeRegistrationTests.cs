@@ -52,12 +52,10 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         runtime.CreatedActorIds.Should().ContainSingle()
             .Which.Should().Be(ProjectionScopeActorId.Build(scopeKey));
-        runtime.CreatedActors.Should().ContainSingle();
-        runtime.CreatedActors[0].Handled.Should().ContainSingle()
-            .Which.Payload!.Unpack<EnsureProjectionScopeCommand>().ProjectionKind.Should().Be("projection-a");
-        dispatchPort.Dispatched.Should().ContainSingle();
+        dispatchPort.Dispatched.Should().HaveCount(2);
         dispatchPort.Dispatched[0].actorId.Should().Be(ProjectionScopeActorId.Build(scopeKey));
-        dispatchPort.Dispatched[0].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().ProjectionKind.Should().Be("projection-a");
+        dispatchPort.Dispatched[0].command.Payload!.Unpack<EnsureProjectionScopeCommand>().ProjectionKind.Should().Be("projection-a");
+        dispatchPort.Dispatched[1].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().ProjectionKind.Should().Be("projection-a");
     }
 
     [Fact]
@@ -101,12 +99,9 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         runtime.CreatedActorIds.Should().ContainSingle()
             .Which.Should().Be(ProjectionScopeActorId.Build(scopeKey));
-        runtime.CreatedActors.Should().ContainSingle();
-        runtime.CreatedActors[0].Handled.Should().ContainSingle()
-            .Which.Payload!.Unpack<EnsureProjectionScopeCommand>().SessionId.Should().Be("correlation-1");
-        dispatchPort.Dispatched.Should().ContainSingle();
-        dispatchPort.Dispatched[0].actorId.Should().Be(ProjectionScopeActorId.Build(scopeKey));
-        dispatchPort.Dispatched[0].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().SessionId
+        dispatchPort.Dispatched.Should().HaveCount(2);
+        dispatchPort.Dispatched[1].actorId.Should().Be(ProjectionScopeActorId.Build(scopeKey));
+        dispatchPort.Dispatched[1].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().SessionId
             .Should().Be("correlation-1");
     }
 
@@ -143,10 +138,8 @@ public sealed class ProjectionRuntimeRegistrationTests
         });
 
         streamProvider.Streams.Should().BeEmpty();
-        dispatchPort.Dispatched.Should().BeEmpty();
-        runtime.CreatedActors.Should().ContainSingle();
-        var command = runtime.CreatedActors[0].Handled.Should().ContainSingle().Subject
-            .Payload!.Unpack<EnsureProjectionScopeCommand>();
+        dispatchPort.Dispatched.Should().ContainSingle();
+        var command = dispatchPort.Dispatched[0].command.Payload!.Unpack<EnsureProjectionScopeCommand>();
         command.RootActorId.Should().Be("actor-relay");
     }
 
@@ -309,11 +302,9 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         runtime.CreatedActorIds.Should().ContainSingle()
             .Which.Should().Be(ProjectionScopeActorId.Build(scopeKey));
-        runtime.CreatedActors.Should().ContainSingle();
-        runtime.CreatedActors[0].Handled.Should().ContainSingle()
-            .Which.Payload!.Unpack<EnsureProjectionScopeCommand>().SessionId.Should().Be("session-9");
-        dispatchPort.Dispatched.Should().ContainSingle();
-        dispatchPort.Dispatched[0].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().SessionId.Should().Be("session-9");
+        dispatchPort.Dispatched.Should().HaveCount(2);
+        dispatchPort.Dispatched[0].command.Payload!.Unpack<EnsureProjectionScopeCommand>().SessionId.Should().Be("session-9");
+        dispatchPort.Dispatched[1].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().SessionId.Should().Be("session-9");
     }
 
     [Fact]
@@ -421,7 +412,6 @@ public sealed class ProjectionRuntimeRegistrationTests
     {
         public HashSet<string> ExistingActorIds { get; } = [];
         public List<string> CreatedActorIds { get; } = [];
-        public List<RecordingActor> CreatedActors { get; } = [];
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent
@@ -429,9 +419,7 @@ public sealed class ProjectionRuntimeRegistrationTests
             var actorId = id ?? Guid.NewGuid().ToString("N");
             ExistingActorIds.Add(actorId);
             CreatedActorIds.Add(actorId);
-            var actor = new RecordingActor(actorId);
-            CreatedActors.Add(actor);
-            return Task.FromResult<IActor>(actor);
+            return Task.FromResult<IActor>(new RecordingActor(actorId));
         }
 
         public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
@@ -439,8 +427,7 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task<IActor?> GetAsync(string id) =>
-            Task.FromResult<IActor?>(CreatedActors.SingleOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal)));
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(ExistingActorIds.Contains(id));
 
@@ -532,20 +519,13 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         public string Id { get; }
 
-        public List<EventEnvelope> Handled { get; } = [];
-
         public IAgent Agent => throw new NotSupportedException();
 
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Handled.Add(envelope);
-            return Task.CompletedTask;
-        }
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
 

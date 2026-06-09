@@ -52,20 +52,16 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
             request.SessionId);
 
         await _scopeRuntime.EnsureExistsAsync(scopeKey, ct).ConfigureAwait(false);
-        var command = new EnsureProjectionScopeCommand
-        {
-            RootActorId = scopeKey.RootActorId,
-            ProjectionKind = scopeKey.ProjectionKind,
-            SessionId = scopeKey.SessionId,
-            Mode = ProjectionScopeModeMapper.ToProto(scopeKey.Mode),
-        };
-        if (!await _scopeRuntime.TryHandleAsync(scopeKey, command, ct).ConfigureAwait(false))
-        {
-            await _scopeRuntime.DispatchAsync(
-                scopeKey,
-                command,
-                ct).ConfigureAwait(false);
-        }
+        await _scopeRuntime.DispatchAsync(
+            scopeKey,
+            new EnsureProjectionScopeCommand
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                SessionId = scopeKey.SessionId,
+                Mode = ProjectionScopeModeMapper.ToProto(scopeKey.Mode),
+            },
+            ct).ConfigureAwait(false);
 
         return _leaseFactory(scopeKey, context);
     }
