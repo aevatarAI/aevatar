@@ -2998,7 +2998,7 @@ public sealed class ConversationGAgentDedupTests
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
-        public async Task<T> WaitForPayloadAsync<T>()
+        public async Task<T> WaitForPayloadAsync<T>(Func<T, bool>? predicate = null)
             where T : IMessage<T>, new()
         {
             var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
@@ -3014,8 +3014,12 @@ public sealed class ConversationGAgentDedupTests
                     envelope = _pending.Dequeue();
                 }
 
-                if (envelope.Payload.Is(new T().Descriptor))
-                    return envelope.Payload.Unpack<T>();
+                if (!envelope.Payload.Is(new T().Descriptor))
+                    continue;
+
+                var payload = envelope.Payload.Unpack<T>();
+                if (predicate is null || predicate(payload))
+                    return payload;
             }
 
             throw new TimeoutException($"Timed out waiting for dispatched {typeof(T).Name}.");
@@ -3472,7 +3476,8 @@ public sealed class ConversationGAgentDedupTests
     [Fact]
     public async Task HandleLlmReplyReadyAsync_CardModeStreamingCompleted_PersistsLarkCardStreamPrefix()
     {
-        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-finalize");
+        var card = new RecordingCardTurnRunner();
+        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-finalize", cardRunner: card);
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-finalize", "relay-msg-1", "complete answer"));
@@ -3495,9 +3500,18 @@ public sealed class ConversationGAgentDedupTests
             Activity = CreateRelayActivity("act-card-finalize", "relay-msg-1"),
             Outbound = new MessageContent { Text = "complete answer" },
             TerminalState = LlmReplyTerminalState.Completed,
+            ReplyToken = "runtime-ready-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
             ReadyAtUnixMs = 100,
         };
+        ready.Activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "ready-user-access-token",
+        };
         await agent.HandleLlmReplyReadyAsync(ready);
+        card.CardFinalizeCount.ShouldBe(1);
+        card.LastCardFinalizeActivityUserAccessToken.ShouldBe("ready-user-access-token");
+        card.LastCardFinalizeRuntimeUserAccessToken.ShouldBe("ready-user-access-token");
         var finalize = agent.State.ActiveReplyLifecycles.Single();
         await agent.HandleLarkCardOperationCompletedAsync(CreateCardFinalizeCompletion(
             "act-card-finalize",
@@ -3517,6 +3531,129 @@ public sealed class ConversationGAgentDedupTests
         var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
         completed.SentActivityId.ShouldStartWith("lark-card-stream:");
         completed.Outbound.Text.ShouldBe("complete answer");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_CardFinalizeFailed_PersistsDeliveryFailedBeforeTurnCompleted()
+    {
+        var card = new RecordingCardTurnRunner
+        {
+            CardFinalizeResultFactory = (_, _, _, _) =>
+                ConversationCardFinalizeResult.Failed("card_close_streaming_failed", "close rejected"),
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(
+            new RecordingTurnRunner(),
+            "conv-card-finalize-failed",
+            cardRunner: card,
+            dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyCardStreamChunkAsync(
+            CreateCardStreamChunk("act-card-finalize-failed", "relay-msg-1", "partial answer"));
+        var create = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-finalize-failed",
+            create.LarkCardInFlightSequence,
+            create.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-finalize-failed", "relay-msg-1", "partial answer"),
+            success: true,
+            cardId: "card_failed",
+            cardMessageId: "om_card_failed"));
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-card-finalize-failed",
+            RegistrationId = "reg-1",
+            RunId = "run-card-finalize-failed",
+            SourceActorId = "agent-run",
+            Activity = CreateRelayActivity("act-card-finalize-failed", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "final answer" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+            ReplyToken = "runtime-ready-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+        var signal = await dispatch.WaitForPayloadAsync<LarkCardOperationCompletedEvent>(payload =>
+            payload.Operation == LarkCardOperationPhase.Finalize);
+        await agent.HandleLarkCardOperationCompletedAsync(signal);
+
+        agent.State.ActiveReplyLifecycles.ShouldBeEmpty();
+        agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Failed);
+        agent.State.LastReplyDelivery.Failed.ErrorCode.ShouldBe("card_close_streaming_failed");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        var eventTypes = events.Select(e => e.EventType).ToList();
+        eventTypes.ShouldNotContain(type => type.Contains(nameof(LlmReplyDeliveredEvent), StringComparison.Ordinal));
+        var failedIndex = eventTypes.FindIndex(type =>
+            type.Contains(nameof(LlmReplyDeliveryFailedEvent), StringComparison.Ordinal));
+        var completedIndex = eventTypes.FindIndex(type =>
+            type.Contains(nameof(ConversationTurnCompletedEvent), StringComparison.Ordinal));
+        failedIndex.ShouldBeGreaterThanOrEqualTo(0);
+        completedIndex.ShouldBeGreaterThan(failedIndex);
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events[completedIndex].EventData.Value);
+        completed.SentActivityId.ShouldBe("lark-card-stream:om_card_failed");
+        completed.Outbound.Text.ShouldBe("partial answer");
+    }
+
+    [Fact]
+    public async Task HandleLarkCardOperationTimeoutFiredAsync_CardFinalizeTimeout_PersistsDeliveryFailedBeforeTurnCompleted()
+    {
+        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-finalize-timeout");
+
+        await agent.HandleLlmReplyCardStreamChunkAsync(
+            CreateCardStreamChunk("act-card-finalize-timeout", "relay-msg-1", "partial answer"));
+        var create = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-finalize-timeout",
+            create.LarkCardInFlightSequence,
+            create.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-finalize-timeout", "relay-msg-1", "partial answer"),
+            success: true,
+            cardId: "card_timeout",
+            cardMessageId: "om_card_timeout"));
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-card-finalize-timeout",
+            RegistrationId = "reg-1",
+            RunId = "run-card-finalize-timeout",
+            SourceActorId = "agent-run",
+            Activity = CreateRelayActivity("act-card-finalize-timeout", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "final answer" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+            ReplyToken = "runtime-ready-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+        var finalize = agent.State.ActiveReplyLifecycles.Single();
+
+        await agent.HandleLarkCardOperationTimeoutFiredAsync(new LarkCardOperationTimeoutFiredEvent
+        {
+            CorrelationId = "act-card-finalize-timeout",
+            Operation = LarkCardOperationPhase.Finalize,
+            Sequence = finalize.LarkCardInFlightSequence,
+            OperationGeneration = finalize.LarkCardOperationGeneration,
+            CardId = "card_timeout",
+            CardMessageId = "om_card_timeout",
+            CommandId = "llm:act-card-finalize-timeout",
+            Activity = CreateRelayActivity("act-card-finalize-timeout", "relay-msg-1"),
+            LastFlushedText = "partial answer",
+            FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        agent.State.ActiveReplyLifecycles.ShouldBeEmpty();
+        agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Failed);
+        agent.State.LastReplyDelivery.Failed.ErrorCode.ShouldBe("finalize_timeout");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        var eventTypes = events.Select(e => e.EventType).ToList();
+        eventTypes.ShouldNotContain(type => type.Contains(nameof(LlmReplyDeliveredEvent), StringComparison.Ordinal));
+        var failedIndex = eventTypes.FindIndex(type =>
+            type.Contains(nameof(LlmReplyDeliveryFailedEvent), StringComparison.Ordinal));
+        var completedIndex = eventTypes.FindIndex(type =>
+            type.Contains(nameof(ConversationTurnCompletedEvent), StringComparison.Ordinal));
+        failedIndex.ShouldBeGreaterThanOrEqualTo(0);
+        completedIndex.ShouldBeGreaterThan(failedIndex);
     }
 
     [Fact]
@@ -3771,6 +3908,8 @@ public sealed class ConversationGAgentDedupTests
         public int CardFinalizeCount;
         public long LastCardStreamSequence;
         public long LastCardFinalizeSequence;
+        public string? LastCardFinalizeActivityUserAccessToken;
+        public string? LastCardFinalizeRuntimeUserAccessToken;
 
         public Func<LlmReplyCardStreamChunkEvent, ConversationCardCreateResult>? CardCreateResultFactory { get; set; }
         public Func<LlmReplyCardStreamChunkEvent, string, string, long, ConversationCardStreamResult>? CardStreamResultFactory { get; set; }
@@ -3815,6 +3954,8 @@ public sealed class ConversationGAgentDedupTests
         {
             Interlocked.Increment(ref CardFinalizeCount);
             LastCardFinalizeSequence = sequence;
+            LastCardFinalizeActivityUserAccessToken = referenceActivity.TransportExtras?.NyxUserAccessToken;
+            LastCardFinalizeRuntimeUserAccessToken = runtimeContext.NyxUserAccessToken;
             var result = CardFinalizeResultFactory?.Invoke(referenceActivity, cardId, elementId, sequence)
                 ?? ConversationCardFinalizeResult.Succeeded();
             return Task.FromResult(result);

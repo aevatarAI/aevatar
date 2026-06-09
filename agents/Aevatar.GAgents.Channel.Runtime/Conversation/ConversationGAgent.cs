@@ -730,16 +730,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             DescribeReplyTokenSource(evt, runtimeContext));
 
         if (await TryCompleteStreamedReplyAsync(evt, commandId, referenceActivity, runtimeContext))
-        {
-            // Streaming path bypasses RunLlmReplyAsync entirely (the reply was already finalized via
-            // RunStreamChunkAsync edits), so the runner's post-reply housekeeping never fires from
-            // there. Trigger the hook explicitly so platform-specific cleanup (e.g. Lark
-            // "Typing"→"DONE" reaction swap) still runs on the most common production reply path.
-            var streamingActivity = referenceActivity ?? evt.Activity;
-            if (streamingActivity is not null)
-                _ = ResolveRunner().OnReplyDeliveredAsync(streamingActivity, CancellationToken.None);
             return;
-        }
 
         var runner = ResolveRunner();
         var result = await runner.RunLlmReplyAsync(
@@ -996,7 +987,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         // finished as a terminal phase. Plain `await` so the continuation stays on the
         // actor's single-threaded scheduler (no ConfigureAwait(false) — it would let the
         // post-await active lifecycle reads run off the actor turn).
-        if (await TryCompleteCardStreamedReplyAsync(evt, correlationId, commandId, referenceActivity))
+        if (await TryCompleteCardStreamedReplyAsync(evt, correlationId, commandId, referenceActivity, runtimeContext))
             return true;
 
         var state = GetOrInitNyxRelayStreamingState(correlationId);
@@ -1881,6 +1872,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             ChannelMessageId = $"nyx-relay-stream:{platformMessageId}",
         };
         await PersistDomainEventAsync(delivered);
+        if (referenceActivity is not null)
+            _ = ResolveRunner().OnReplyDeliveredAsync(referenceActivity, CancellationToken.None);
         await ClearReplyLifecyclesAsync(evt.CorrelationId, referenceActivity, "streamed_completion");
         await PersistDomainEventAsync(completed);
         Logger.LogInformation(
@@ -2210,7 +2203,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             evt.CorrelationId,
             activity,
             evt.ReplyToken,
-            evt.ReplyTokenExpiresAtUnixMs);
+            evt.ReplyTokenExpiresAtUnixMs,
+            evt.Activity?.TransportExtras?.NyxUserAccessToken);
     }
 
     // Refactor (iter17/cluster-038): Old pattern: transient relay credentials could ride inside persisted ChatActivity clones. New principle: durable admission/retry/LLM state stores only non-secret relay facts; same-activation credentials stay in runtime context.

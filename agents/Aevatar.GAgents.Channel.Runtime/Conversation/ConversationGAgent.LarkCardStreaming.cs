@@ -574,34 +574,28 @@ public sealed partial class ConversationGAgent
         bool finalDiffers,
         IReadOnlyList<ConversationHistoryEntry> appendedHistory,
         long sequence,
-        long generation)
+        long generation,
+        ConversationTurnRuntimeContext runtimeContext)
     {
         var cardId = state.CardId ?? string.Empty;
         var cardMessageId = state.CardMessageId ?? string.Empty;
         var streamingElementId = state.StreamingElementId;
         var lastFlushedText = state.LastFlushedText;
-        var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Finalize, sequence, generation);
-        return PublishReplyOperationStepAsync(
-            workItemId,
-            "lark-card-finalize",
+        return ExecuteLarkCardFinalizeOperationAsync(
+            ResolveCardRunner(),
+            activityForToken.Clone(),
             correlationId,
+            commandId,
+            cardId,
+            cardMessageId,
+            streamingElementId,
+            finalText,
+            lastFlushedText,
+            finalDiffers,
+            appendedHistory.Select(entry => entry.Clone()).ToArray(),
+            sequence,
             generation,
-            ReplyOperationStepEvent.PayloadOneofCase.LarkCard,
-            new LarkCardOperationStepPayload
-            {
-                Operation = LarkCardOperationPhase.Finalize,
-                Sequence = sequence,
-                OperationGeneration = generation,
-                Activity = activityForToken.Clone(),
-                CommandId = commandId,
-                FinalText = finalText,
-                LastFlushedText = lastFlushedText,
-                CardId = cardId,
-                CardMessageId = cardMessageId,
-                StreamingElementId = streamingElementId,
-                FinalDiffers = finalDiffers,
-                AppendedHistory = { appendedHistory.Select(entry => entry.Clone()) },
-            },
+            runtimeContext,
             CancellationToken.None);
     }
 
@@ -649,7 +643,7 @@ public sealed partial class ConversationGAgent
                 CardId = cardId,
                 CardMessageId = cardMessageId,
                 CommandId = commandId,
-                Activity = activityForToken,
+                Activity = CloneForDurableState(activityForToken) ?? new ChatActivity(),
                 FinalText = finalText,
                 LastFlushedText = lastFlushedText,
             };
@@ -670,7 +664,7 @@ public sealed partial class ConversationGAgent
                 CardId = cardId,
                 CardMessageId = cardMessageId,
                 CommandId = commandId,
-                Activity = activityForToken,
+                Activity = CloneForDurableState(activityForToken) ?? new ChatActivity(),
                 FinalText = finalText,
                 LastFlushedText = lastFlushedText,
             };
@@ -735,6 +729,7 @@ public sealed partial class ConversationGAgent
                     CancellationToken.None);
                 return;
             case LarkCardOperationPhase.Finalize:
+                RestoreRuntimeTransportCredentials(step.Activity, runtimeContext);
                 await ExecuteLarkCardFinalizeOperationAsync(
                     ResolveCardRunner(),
                     step.Activity?.Clone() ?? new ChatActivity(),
@@ -933,7 +928,8 @@ public sealed partial class ConversationGAgent
         LlmReplyReadyEvent evt,
         string correlationId,
         string commandId,
-        ChatActivity? referenceActivity)
+        ChatActivity? referenceActivity,
+        ConversationTurnRuntimeContext runtimeContext)
     {
         var state = GetOrInitLarkCardStreamingState(correlationId);
         // Idle: card path was never started for this turn (or already cleaned up); let the
@@ -977,7 +973,8 @@ public sealed partial class ConversationGAgent
             && !string.Equals(finalText, state.LastFlushedText, StringComparison.Ordinal);
 
         var nextSequence = state.Sequence + 1;
-        var activityForToken = referenceActivity ?? evt.Activity ?? new ChatActivity();
+        var activityForToken = (referenceActivity ?? evt.Activity)?.Clone() ?? new ChatActivity();
+        RestoreRuntimeTransportCredentials(activityForToken, runtimeContext);
 
         var generation = NextLarkCardOperationGeneration(state);
         await TransitionLarkCardStreamingPhaseAsync(
@@ -1013,7 +1010,8 @@ public sealed partial class ConversationGAgent
             finalDiffers,
             evt.AppendedHistory.ToArray(),
             nextSequence,
-            generation);
+            generation,
+            runtimeContext);
         return true;
     }
 
@@ -1075,7 +1073,7 @@ public sealed partial class ConversationGAgent
                         OriginalCardId = NormalizeOptional(result.CardId),
                         InFlight = null,
                     });
-                await PersistCardStreamedCompletionAsync(
+                await PersistCardStreamedDeliveredCompletionAsync(
                     correlationId,
                     BuildLlmReplyCommandId(evt.Chunk?.CorrelationId ?? correlationId),
                     evt.Chunk?.Activity,
@@ -1170,7 +1168,7 @@ public sealed partial class ConversationGAgent
                     LarkCardStreamingPhase.Terminated,
                     terminalReason: $"stream_failed:{result.ErrorCode}",
                     fieldUpdate: s => s with { InFlight = null });
-                await PersistCardStreamedCompletionAsync(
+                await PersistCardStreamedDeliveredCompletionAsync(
                     correlationId,
                     BuildLlmReplyCommandId(evt.Chunk?.CorrelationId ?? correlationId),
                     evt.Chunk?.Activity,
@@ -1234,6 +1232,7 @@ public sealed partial class ConversationGAgent
         var finalText = state.PendingFinalizeText ?? evt.FinalText ?? string.Empty;
         var commandId = state.PendingFinalizeCommandId ?? evt.CommandId ?? BuildLlmReplyCommandId(correlationId);
         var visibleText = result.FinalTextWritten ? finalText : state.LastFlushedText;
+        var cardMessageId = state.CardMessageId ?? evt.CardMessageId ?? string.Empty;
         if (result.Success)
         {
             await TransitionLarkCardStreamingPhaseAsync(
@@ -1242,27 +1241,34 @@ public sealed partial class ConversationGAgent
                 LarkCardStreamingPhase.Completed,
                 terminalReason: "completed",
                 fieldUpdate: s => s with { InFlight = null });
-        }
-        else
-        {
-            Logger.LogWarning(
-                "Card finalize failed; persisting partial. correlation={CorrelationId}, code={ErrorCode}",
-                evt.CorrelationId,
-                result.ErrorCode);
-            await TransitionLarkCardStreamingPhaseAsync(
+            await PersistCardStreamedDeliveredCompletionAsync(
                 correlationId,
-                state,
-                LarkCardStreamingPhase.Terminated,
-                terminalReason: $"finalize_failed:{result.ErrorCode}",
-                fieldUpdate: s => s with { InFlight = null });
+                commandId,
+                evt.Activity,
+                cardMessageId,
+                visibleText,
+                evt.AppendedHistory.ToArray());
+            return;
         }
 
-        await PersistCardStreamedCompletionAsync(
+        Logger.LogWarning(
+            "Card finalize failed; persisting partial. correlation={CorrelationId}, code={ErrorCode}",
+            evt.CorrelationId,
+            result.ErrorCode);
+        await TransitionLarkCardStreamingPhaseAsync(
+            correlationId,
+            state,
+            LarkCardStreamingPhase.Terminated,
+            terminalReason: $"finalize_failed:{result.ErrorCode}",
+            fieldUpdate: s => s with { InFlight = null });
+        await PersistCardStreamedFailedCompletionAsync(
             correlationId,
             commandId,
             evt.Activity,
-            state.CardMessageId ?? evt.CardMessageId ?? string.Empty,
+            cardMessageId,
             visibleText,
+            result.ErrorCode,
+            result.ErrorSummary,
             evt.AppendedHistory.ToArray());
     }
 
@@ -1389,12 +1395,14 @@ public sealed partial class ConversationGAgent
                     LarkCardStreamingPhase.Terminated,
                     terminalReason: "finalize_timeout",
                     fieldUpdate: s => s with { InFlight = null });
-                await PersistCardStreamedCompletionAsync(
+                await PersistCardStreamedFailedCompletionAsync(
                     correlationId,
                     NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
                     evt.Activity,
                     state.CardMessageId ?? evt.CardMessageId ?? string.Empty,
                     state.LastFlushedText,
+                    "finalize_timeout",
+                    "Card finalize operation timed out.",
                     appendedHistory: []);
                 return;
         }
@@ -1424,7 +1432,13 @@ public sealed partial class ConversationGAgent
         {
             var finalText = state.PendingFinalizeText;
             var commandId = state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId);
-            var activity = sourceChunk?.Activity ?? new ChatActivity();
+            var activity = sourceChunk?.Activity?.Clone() ?? new ChatActivity();
+            var runtimeContext = BuildNyxRelayRuntimeContext(
+                correlationId,
+                activity,
+                sourceChunk?.ReplyToken,
+                sourceChunk?.ReplyTokenExpiresAtUnixMs ?? 0);
+            RestoreRuntimeTransportCredentials(activity, runtimeContext);
             var nextSequence = state.Sequence + 1;
             var generation = NextLarkCardOperationGeneration(state);
             var finalDiffers = !string.IsNullOrWhiteSpace(finalText)
@@ -1460,7 +1474,8 @@ public sealed partial class ConversationGAgent
                 finalDiffers,
                 state.PendingAppendedHistory,
                 nextSequence,
-                generation);
+                generation,
+                runtimeContext);
             return;
         }
 
@@ -1505,12 +1520,54 @@ public sealed partial class ConversationGAgent
     // Refactor (iter20/cluster-004):
     //   Old pattern: Card completion removed process-local token/card registries after writing only completion.
     //   New principle: Persist delivered + completion facts and clear the actor-owned lifecycle state explicitly.
+    private Task PersistCardStreamedDeliveredCompletionAsync(
+        string correlationId,
+        string commandId,
+        ChatActivity? eventActivity,
+        string cardMessageId,
+        string outboundText,
+        IReadOnlyList<ConversationHistoryEntry> appendedHistory) =>
+        PersistCardStreamedCompletionAsync(
+            correlationId,
+            commandId,
+            eventActivity,
+            cardMessageId,
+            outboundText,
+            deliveryFailure: null,
+            appendedHistory);
+
+    private Task PersistCardStreamedFailedCompletionAsync(
+        string correlationId,
+        string commandId,
+        ChatActivity? eventActivity,
+        string cardMessageId,
+        string outboundText,
+        string errorCode,
+        string errorSummary,
+        IReadOnlyList<ConversationHistoryEntry> appendedHistory) =>
+        PersistCardStreamedCompletionAsync(
+            correlationId,
+            commandId,
+            eventActivity,
+            cardMessageId,
+            outboundText,
+            new LlmReplyDeliveryFailedEvent
+            {
+                CorrelationId = correlationId,
+                RunId = ResolvePendingLlmReplyRunId(correlationId) ?? string.Empty,
+                FailedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                ErrorCode = errorCode ?? string.Empty,
+                ErrorMessage = errorSummary ?? string.Empty,
+            },
+            appendedHistory);
+
     private async Task PersistCardStreamedCompletionAsync(
         string correlationId,
         string commandId,
         ChatActivity? eventActivity,
         string cardMessageId,
         string outboundText,
+        LlmReplyDeliveryFailedEvent? deliveryFailure,
         IReadOnlyList<ConversationHistoryEntry> appendedHistory)
     {
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -1528,15 +1585,26 @@ public sealed partial class ConversationGAgent
             OutboundDelivery = ToOutboundDeliveryReceipt(eventActivity?.OutboundDelivery),
         };
         completed.AppendedHistory.AddRange(appendedHistory.Select(entry => entry.Clone()));
-        var delivered = new LlmReplyDeliveredEvent
+        if (deliveryFailure is null)
         {
-            CorrelationId = correlationId,
-            RunId = NormalizeOptional(State.PendingLlmReplyRequests.FirstOrDefault(request =>
-                string.Equals(request.CorrelationId, correlationId, StringComparison.Ordinal))?.RunId) ?? string.Empty,
-            AckedAtUnixMs = nowMs,
-            ChannelMessageId = $"lark-card-stream:{cardMessageId}",
-        };
-        await PersistDomainEventAsync(delivered);
+            var delivered = new LlmReplyDeliveredEvent
+            {
+                CorrelationId = correlationId,
+                RunId = ResolvePendingLlmReplyRunId(correlationId) ?? string.Empty,
+                AckedAtUnixMs = nowMs,
+                ChannelMessageId = $"lark-card-stream:{cardMessageId}",
+            };
+            await PersistDomainEventAsync(delivered);
+            if (eventActivity is not null)
+                _ = ResolveRunner().OnReplyDeliveredAsync(eventActivity, CancellationToken.None);
+        }
+        else
+        {
+            if (deliveryFailure.FailedAtUnixMs <= 0)
+                deliveryFailure.FailedAtUnixMs = nowMs;
+            await PersistDomainEventAsync(deliveryFailure);
+        }
+
         await ClearReplyLifecycleAsync(correlationId, ConversationReplyLifecycleMode.LarkCard, "card_fallback_or_terminal");
         await PersistDomainEventAsync(completed);
         Logger.LogInformation(
