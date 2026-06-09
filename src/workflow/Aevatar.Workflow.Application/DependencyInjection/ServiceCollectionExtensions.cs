@@ -65,9 +65,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandTargetDispatcher<WorkflowForkRunCommandTarget>>(sp =>
             new ActorCommandTargetDispatcher<WorkflowForkRunCommandTarget>(
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.IActorDispatchPort>()));
+        services.TryAddSingleton<ICommandTargetEnvelopeFactory<WorkflowForkRunCommand, WorkflowForkRunCommandTarget>, WorkflowForkRunCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandReceiptFactory<WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt>, WorkflowForkRunAcceptedReceiptFactory>();
-        services.TryAddSingleton<ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>, WorkflowForkRunDispatchPipeline>();
+        services.TryAddSingleton<ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>, DefaultCommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>();
         services.TryAddSingleton<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>, WorkflowForkRunCommandDispatchService>();
+        services.TryAddSingleton(sp => new Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>(
+            () => sp.GetRequiredService<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
             WorkflowRunForkCoordinator>());

@@ -9,15 +9,24 @@ namespace Aevatar.Workflow.Application.RunForks;
 
 internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHook
 {
-    private readonly ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> _forkDispatchService;
+    private readonly Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>> _forkDispatchService;
     private readonly ILogger<WorkflowRunForkCoordinator> _logger;
 
     public WorkflowRunForkCoordinator(
-        ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> forkDispatchService,
+        Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>> forkDispatchService,
         ILogger<WorkflowRunForkCoordinator>? logger = null)
     {
         _forkDispatchService = forkDispatchService ?? throw new ArgumentNullException(nameof(forkDispatchService));
         _logger = logger ?? NullLogger<WorkflowRunForkCoordinator>.Instance;
+    }
+
+    internal WorkflowRunForkCoordinator(
+        ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> forkDispatchService,
+        ILogger<WorkflowRunForkCoordinator>? logger = null)
+        : this(new Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>(
+            () => forkDispatchService ?? throw new ArgumentNullException(nameof(forkDispatchService))),
+            logger)
+    {
     }
 
     public async Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
@@ -41,7 +50,7 @@ internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHoo
 
         try
         {
-            var result = await _forkDispatchService.DispatchAsync(
+            var result = await _forkDispatchService.Value.DispatchAsync(
                 new WorkflowForkRunCommand(
                     SourceRunId: requested.SourceRunId,
                     StartAtStepId: requested.StartAtStepId,

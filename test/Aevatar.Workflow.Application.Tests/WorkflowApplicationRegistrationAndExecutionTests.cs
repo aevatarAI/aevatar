@@ -199,6 +199,9 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
             x.ImplementationType == typeof(WorkflowForkRunCommandDispatchService));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandTargetEnvelopeFactory<WorkflowForkRunCommand, WorkflowForkRunCommandTarget>) &&
+            x.ImplementationType == typeof(WorkflowForkRunCommandEnvelopeFactory));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x =>
@@ -220,7 +223,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(IWorkflowRunSeedQueryPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
-            x.ImplementationType == typeof(WorkflowForkRunDispatchPipeline));
+            x.ImplementationType == typeof(DefaultCommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>));
     }
 
     [Fact]

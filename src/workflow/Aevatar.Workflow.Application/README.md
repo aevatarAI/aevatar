@@ -74,7 +74,7 @@ Aevatar.Workflow.Application/
 ├── RunForks/
 │   ├── WorkflowForkRunAcceptedReceiptFactory.cs
 │   ├── WorkflowForkRunCommandDispatchService.cs
-│   ├── WorkflowForkRunDispatchPipeline.cs
+│   ├── WorkflowForkRunCommandEnvelopeFactory.cs
 │   ├── WorkflowForkRunCommandTarget.cs
 │   ├── WorkflowForkRunCommandTargetResolver.cs
 │   └── WorkflowRunForkCoordinator.cs
