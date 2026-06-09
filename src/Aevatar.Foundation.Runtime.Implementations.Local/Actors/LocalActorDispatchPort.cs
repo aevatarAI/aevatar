@@ -6,10 +6,9 @@ public sealed class LocalActorDispatchPort : IActorDispatchPort
 {
     private readonly IActorRuntime _runtime;
 
-    public LocalActorDispatchPort(IActorRuntime runtime, IStreamProvider streams)
+    public LocalActorDispatchPort(IActorRuntime runtime)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        ArgumentNullException.ThrowIfNull(streams);
     }
 
     public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
@@ -21,7 +20,7 @@ public sealed class LocalActorDispatchPort : IActorDispatchPort
         if (await _runtime.GetAsync(actorId) is not LocalActor target)
             throw new InvalidOperationException($"Actor {actorId} not found.");
 
-        _ = target.AcceptDispatchedEnvelopeAsync(envelope.Clone());
+        target.AcceptDispatchedEnvelope(envelope.Clone());
         return DispatchAdmissionFactory.Create(actorId, envelope);
     }
 }

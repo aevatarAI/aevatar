@@ -115,7 +115,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 RunId = runId,
                 StepId = stepId,
             };
-            ApplySenderNyxIdAccessToken(ctx, intent);
+            WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
             CopyParametersToIntent(request.Parameters, intent);
             try
             {
@@ -223,14 +223,6 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
 
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
-    }
-
-    private static void ApplySenderNyxIdAccessToken(
-        IWorkflowExecutionContext ctx,
-        WorkflowLlmExecutionIntent intent)
-    {
-        if (ctx is IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
-            intent.SenderNyxIdAccessToken = Normalize(runtimeAccessor.RuntimeContext.SenderNyxIdAccessToken) ?? string.Empty;
     }
 
     private static void CopyParametersToIntent(

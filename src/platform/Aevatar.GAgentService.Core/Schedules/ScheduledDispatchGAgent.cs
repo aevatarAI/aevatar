@@ -345,7 +345,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             envelope);
     }
 
-    private async Task<ScheduledDispatchEnvelope> BuildServiceInvocationDispatchEnvelopeAsync(
+    private Task<ScheduledDispatchEnvelope> BuildServiceInvocationDispatchEnvelopeAsync(
         IReadOnlyDictionary<string, string> headers,
         string idempotencyKey,
         CancellationToken ct)
@@ -382,11 +382,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         foreach (var (key, value) in headers)
             envelope.Propagation.Baggage[key] = value;
 
-        return new ScheduledDispatchEnvelope(
+        return Task.FromResult(new ScheduledDispatchEnvelope(
             ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
             ScheduledDispatchTargetKindState.ServiceInvocation,
             envelope,
-            ReadOnlyCopy(headers));
+            ReadOnlyCopy(headers)));
     }
 
     private static ScheduledServiceInvocationAuth? ToRuntimeAuth(ScheduledServiceInvocationAuthState? auth)

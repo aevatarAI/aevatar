@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
@@ -20,7 +21,7 @@ public sealed class LocalActorDispatchAdmissionTests
             new InMemoryStreamForwardingRegistry());
         var runtime = new LocalActorRuntime(streams, new ServiceCollection().BuildServiceProvider(), streams);
         await runtime.CreateAsync<GateAgent>("admission-actor");
-        var dispatchPort = new LocalActorDispatchPort(runtime, streams);
+        var dispatchPort = new LocalActorDispatchPort(runtime);
         var envelope = new EventEnvelope
         {
             Id = "cmd-admitted",
@@ -46,6 +47,29 @@ public sealed class LocalActorDispatchAdmissionTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldProcessRapidDispatchesInAdmissionOrder()
+    {
+        var streams = new InMemoryStreamProvider(
+            new InMemoryStreamOptions(),
+            NullLoggerFactory.Instance,
+            new InMemoryStreamForwardingRegistry());
+        var runtime = new LocalActorRuntime(streams, new ServiceCollection().BuildServiceProvider(), streams);
+        await runtime.CreateAsync<OrderedAgent>("ordered-actor");
+        var dispatchPort = new LocalActorDispatchPort(runtime);
+
+        var first = CreateEnvelope("cmd-1", "ordered-actor");
+        var second = CreateEnvelope("cmd-2", "ordered-actor");
+
+        await dispatchPort.DispatchAsync("ordered-actor", first, CancellationToken.None);
+        await dispatchPort.DispatchAsync("ordered-actor", second, CancellationToken.None);
+
+        var handledFirst = await OrderedAgent.Handled.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        var handledSecond = await OrderedAgent.Handled.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        handledFirst.Should().Be("cmd-1");
+        handledSecond.Should().Be("cmd-2");
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldRejectMissingActor()
     {
         var streams = new InMemoryStreamProvider(
@@ -53,7 +77,7 @@ public sealed class LocalActorDispatchAdmissionTests
             NullLoggerFactory.Instance,
             new InMemoryStreamForwardingRegistry());
         var runtime = new LocalActorRuntime(streams, new ServiceCollection().BuildServiceProvider(), streams);
-        var dispatchPort = new LocalActorDispatchPort(runtime, streams);
+        var dispatchPort = new LocalActorDispatchPort(runtime);
         var envelope = new EventEnvelope
         {
             Id = "cmd-missing",
@@ -64,6 +88,41 @@ public sealed class LocalActorDispatchAdmissionTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Actor missing-actor not found.");
+    }
+
+    private static EventEnvelope CreateEnvelope(string id, string targetActorId) =>
+        new()
+        {
+            Id = id,
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+            Route = EnvelopeRouteSemantics.CreateDirect("tester", targetActorId),
+            Propagation = new EnvelopePropagation { CorrelationId = $"corr-{id}" },
+        };
+
+    private sealed class OrderedAgent : IAgent
+    {
+        public static Channel<string> Handled { get; private set; } = Channel.CreateUnbounded<string>();
+
+        public string Id => "ordered-agent";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Handled.Writer.TryWrite(envelope.Id);
+            return Task.CompletedTask;
+        }
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("ordered");
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default)
+        {
+            Handled = Channel.CreateUnbounded<string>();
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class GateAgent : IAgent

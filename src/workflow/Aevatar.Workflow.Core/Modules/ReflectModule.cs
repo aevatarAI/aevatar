@@ -213,7 +213,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             RunId = state.RunId,
             StepId = state.StepId,
         };
-        ApplySenderNyxIdAccessToken(ctx, intent);
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
@@ -250,7 +250,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             RunId = state.RunId,
             StepId = state.StepId,
         };
-        ApplySenderNyxIdAccessToken(ctx, intent);
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
@@ -287,14 +287,6 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             },
             TopologyAudience.Self,
             ct);
-
-    private static void ApplySenderNyxIdAccessToken(
-        IWorkflowExecutionContext ctx,
-        WorkflowLlmExecutionIntent intent)
-    {
-        if (ctx is IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
-            intent.SenderNyxIdAccessToken = Normalize(runtimeAccessor.RuntimeContext.SenderNyxIdAccessToken) ?? string.Empty;
-    }
 
     private static void CopyParametersToIntent(
         MapField<string, string> source,

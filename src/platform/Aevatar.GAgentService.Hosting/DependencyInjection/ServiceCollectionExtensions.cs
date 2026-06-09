@@ -87,12 +87,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
-        services.TryAddSingleton<IScheduledServiceInvocationCredentialExchangePort>(sp =>
-            sp.GetService<INyxIdCapabilityBroker>() is { } broker
-                ? new NyxIdScheduledServiceInvocationCredentialExchangePort(
-                    broker,
-                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdScheduledServiceInvocationCredentialExchangePort>>())
-                : new NoopScheduledServiceInvocationCredentialExchangePort());
+        services.AddScheduledCredentialExchangePort();
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
@@ -135,18 +130,21 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
-        services.TryAddSingleton<IScheduledServiceInvocationCredentialExchangePort>(sp =>
-            sp.GetService<INyxIdCapabilityBroker>() is { } broker
-                ? new NyxIdScheduledServiceInvocationCredentialExchangePort(
-                    broker,
-                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdScheduledServiceInvocationCredentialExchangePort>>())
-                : new NoopScheduledServiceInvocationCredentialExchangePort());
+        services.AddScheduledCredentialExchangePort();
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
         services.TryAddTransient<ScheduledDispatchGAgent>();
         return services;
     }
+
+    private static void AddScheduledCredentialExchangePort(this IServiceCollection services) =>
+        services.TryAddSingleton<IScheduledServiceInvocationCredentialExchangePort>(sp =>
+            sp.GetService<INyxIdCapabilityBroker>() is { } broker
+                ? new NyxIdScheduledServiceInvocationCredentialExchangePort(
+                    broker,
+                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdScheduledServiceInvocationCredentialExchangePort>>())
+                : new NoopScheduledServiceInvocationCredentialExchangePort());
 
     public static IServiceCollection AddGAgentServiceProjectionReadModelProviders(
         this IServiceCollection services,

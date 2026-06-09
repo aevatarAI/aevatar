@@ -156,6 +156,38 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldAcceptTenantlessServiceInvocationNyxIdSubject()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
+                {
+                    Platform = "GitHub",
+                    ExternalUserId = "ou-user-1",
+                },
+                Scope = " proxy ",
+            },
+        });
+
+        var result = await ScheduledDispatchEndpoints.Create(request, service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().NotBeNull();
+        var subject = auth.SenderNyxId.Subject;
+        subject.Platform.Should().Be("github");
+        subject.Tenant.Should().BeEmpty();
+        subject.ExternalUserId.Should().Be("ou-user-1");
+    }
+
+    [Fact]
     public async Task Create_ShouldReturnBadRequest_WhenServiceInvocationAuthSubjectIsNull()
     {
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
