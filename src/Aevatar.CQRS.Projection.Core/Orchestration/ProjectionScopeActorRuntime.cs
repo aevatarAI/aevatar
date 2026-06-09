@@ -13,7 +13,6 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
     private readonly IAgentKindVerifier? _agentKindVerifier;
     private readonly string _scopeAgentKind;
     private readonly IStreamPubSubMaintenance? _streamPubSubMaintenance;
-    private readonly IStreamProvider? _streams;
     private readonly ILogger<ProjectionScopeActorRuntime<TScopeAgent>> _logger;
 
     public ProjectionScopeActorRuntime(
@@ -22,8 +21,7 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         IAgentKindVerifier? agentKindVerifier = null,
         IAgentKindRegistry? agentKindRegistry = null,
         IStreamPubSubMaintenance? streamPubSubMaintenance = null,
-        ILogger<ProjectionScopeActorRuntime<TScopeAgent>>? logger = null,
-        IStreamProvider? streams = null)
+        ILogger<ProjectionScopeActorRuntime<TScopeAgent>>? logger = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
@@ -31,7 +29,6 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         _scopeAgentKind = ResolveScopeAgentKind(agentKindRegistry);
         _streamPubSubMaintenance = streamPubSubMaintenance;
         _logger = logger ?? NullLogger<ProjectionScopeActorRuntime<TScopeAgent>>.Instance;
-        _streams = streams;
     }
 
     public async Task EnsureExistsAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
@@ -108,21 +105,6 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         envelope.Route = EnvelopeRouteSemantics.CreateDirect("projection.scope.port", actorId);
         _ = await _dispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
     }
-
-    public Task EnsureObservationRelayAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
-    {
-        if (_streams == null || string.IsNullOrWhiteSpace(scopeKey.RootActorId))
-            return Task.CompletedTask;
-
-        return _streams
-            .GetStream(scopeKey.RootActorId)
-            .UpsertRelayAsync(
-                ProjectionScopeObservationRelayBinding.Create(
-                    scopeKey.RootActorId,
-                    ProjectionScopeActorId.Build(scopeKey)),
-                ct);
-    }
-
     private static string ResolveScopeAgentKind(IAgentKindRegistry? agentKindRegistry)
     {
         if (agentKindRegistry == null)

@@ -302,6 +302,28 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldForwardSenderNyxIdAccessTokenToIntent()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+        ctx.RuntimeContext.ApplySenderNyxIdAccessToken(" sender-token-llm ");
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "llm-token",
+                StepType = "llm_call",
+                RunId = "run-llm-token",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var intent = DispatchedLlmIntent(ctx);
+        intent.SenderNyxIdAccessToken.Should().Be("sender-token-llm");
+    }
+
+    [Fact]
     public async Task EvaluateModule_ShouldPublishDeterministicFailure_WhenStepIdMissing()
     {
         var module = new EvaluateModule();
@@ -460,6 +482,20 @@ public sealed class WorkflowRuntimeModuleBranchTests
         intent.Annotations.Should().ContainKey("tenant").WhoseValue.Should().Be("alpha");
         intent.Annotations.Should().NotContainKey("timeout_ms");
         intent.Annotations.Should().NotContainKey("blank");
+
+        ctx.RuntimeContext.ApplySenderNyxIdAccessToken(" sender-token-evaluate ");
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "evaluate-token",
+                StepType = "evaluate",
+                RunId = "run-evaluate-token",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Last()
+            .SenderNyxIdAccessToken.Should().Be("sender-token-evaluate");
 
         await module.HandleAsync(
             Wrap(new WorkflowLlmInvocationCompletedEvent
@@ -671,6 +707,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
         intent.Annotations.Should().ContainKey("trace").WhoseValue.Should().Be("abc");
         intent.Annotations.Should().NotContainKey("empty");
         intent.Prompt.Should().Contain("correctness");
+        ctx.RuntimeContext.ApplySenderNyxIdAccessToken(" sender-token-reflect ");
 
         await module.HandleAsync(
             Wrap(new WorkflowLlmInvocationCompletedEvent
@@ -684,6 +721,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
 
         var improve = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Last();
         improve.SessionId.Should().Be("agent-1:default:reflect-trim_r1_improve:a1");
+        improve.SenderNyxIdAccessToken.Should().Be("sender-token-reflect");
         ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
     }
 

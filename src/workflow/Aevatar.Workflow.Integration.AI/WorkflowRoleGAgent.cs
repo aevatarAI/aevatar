@@ -37,7 +37,7 @@ public class WorkflowRoleGAgent(
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
     private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -155,6 +155,7 @@ public class WorkflowRoleGAgent(
                 ModelOverride = intent.Model ?? string.Empty,
                 NyxIdRoutePreference = toolContext.Routing.NyxIdRoutePreference ?? string.Empty,
                 UserMemoryPrompt = intent.UserMemoryPrompt ?? string.Empty,
+                SenderNyxIdAccessToken = intent.SenderNyxIdAccessToken ?? string.Empty,
             },
         };
         if (intent.HasMaxToolRounds)

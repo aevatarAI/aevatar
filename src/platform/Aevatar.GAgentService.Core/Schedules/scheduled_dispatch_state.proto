@@ -83,6 +83,25 @@ message ScheduledServiceInvocationTargetState
   google.protobuf.Any payload = 3;
   string revision_id = 4;
   aevatar.gagentservice.ServiceInvocationCaller caller = 5;
+  ScheduledServiceInvocationAuthState auth = 6;
+}
+
+message ScheduledServiceInvocationAuthState
+{
+  ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1;
+}
+
+message ScheduledServiceInvocationNyxIdCredentialSourceState
+{
+  ScheduledServiceInvocationNyxIdSubjectRefState subject = 1;
+  string scope = 2;
+}
+
+message ScheduledServiceInvocationNyxIdSubjectRefState
+{
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
 }
 
 message ScheduledDispatchCreateCommand

@@ -60,7 +60,7 @@ public sealed class CommittedStateProjectionActivationHook : ICommittedStatePubl
 
                 try
                 {
-                    await _dispatcher.DispatchAsync(plan, ct).ConfigureAwait(false);
+                    await _dispatcher.DispatchAsync(plan, context, ct).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {

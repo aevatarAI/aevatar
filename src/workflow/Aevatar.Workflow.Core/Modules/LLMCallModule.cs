@@ -392,6 +392,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         intent.CallerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var callerCredential)
             ? callerCredential
             : new WorkflowCallerCredential();
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyParametersToChatRequest(request, intent, timeoutMs);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);

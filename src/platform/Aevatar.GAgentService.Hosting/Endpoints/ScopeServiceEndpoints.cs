@@ -3082,10 +3082,10 @@ const response = await fetch("{{invokePath}}", {
             return null;
 
         return new WorkflowLlmControl(
-            model,
-            maxToolRounds,
-            userMemoryPrompt,
-            routePreference);
+            ModelOverride: model,
+            MaxToolRoundsOverride: maxToolRounds,
+            UserMemoryPrompt: userMemoryPrompt,
+            RoutePreference: routePreference);
     }
 
     private static async Task<LLMControlContext?> BuildScopedLlmControlAsync(

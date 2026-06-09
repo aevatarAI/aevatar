@@ -26,7 +26,8 @@ public sealed record WorkflowLlmControl(
     string? ModelOverride = null,
     int? MaxToolRoundsOverride = null,
     string? UserMemoryPrompt = null,
-    string? RoutePreference = null);
+    string? RoutePreference = null,
+    string? SenderNyxIdAccessToken = null);
 
 public sealed record WorkflowCallerCredential(string? BearerToken = null);
 

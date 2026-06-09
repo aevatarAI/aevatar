@@ -92,10 +92,10 @@ internal static class ChatRunRequestNormalizer
             return null;
 
         return new WorkflowLlmControl(
-            NormalizeOptional(source.ModelOverride),
-            source.MaxToolRoundsOverride is > 0 ? source.MaxToolRoundsOverride : null,
-            NormalizeOptional(source.UserMemoryPrompt),
-            NormalizeOptional(source.NyxIdRoutePreference));
+            ModelOverride: NormalizeOptional(source.ModelOverride),
+            MaxToolRoundsOverride: source.MaxToolRoundsOverride is > 0 ? source.MaxToolRoundsOverride : null,
+            UserMemoryPrompt: NormalizeOptional(source.UserMemoryPrompt),
+            RoutePreference: NormalizeOptional(source.NyxIdRoutePreference));
     }
 
     private static string? NormalizeOptional(string? value) =>

@@ -27,6 +27,7 @@ message WorkflowLlmControlContext {
   optional int32 max_tool_rounds_override = 2;
   string user_memory_prompt = 3;
   string route_preference = 4;
+  string sender_nyx_id_access_token = 5;
 }
 
 message WorkflowCallerCredential {
@@ -480,6 +481,7 @@ message WorkflowLlmExecutionIntent
   map<string, string> annotations = 10;
   WorkflowCallerCredential caller_credential = 12;
   string route_preference = 13;
+  string sender_nyx_id_access_token = 14;
 }
 
 message WorkflowLlmInvocationStartedEvent

@@ -50,7 +50,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         var actorId = ExtractRunContextActorId(body);
         actorId.Should().NotBeNullOrWhiteSpace();
 
-        var snapshot = await WaitForCompletedWorkflowActorCurrentStateAsync(host.Client, actorId!);
+        var snapshot = await WaitForCompletedCurrentStateAsync(host.Client, actorId!);
 
         snapshot.ActorId.Should().Be(actorId);
         snapshot.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.Completed);
@@ -59,6 +59,43 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         snapshot.LastError.Should().BeEmpty();
         snapshot.RequestedSteps.Should().Be(0);
         snapshot.CompletedSteps.Should().Be(0);
+    }
+
+    private static async Task<WorkflowActorCurrentStateHttpResponse> WaitForCompletedCurrentStateAsync(
+        HttpClient client,
+        string actorId)
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        WorkflowActorCurrentStateHttpResponse? last = null;
+
+        try
+        {
+            while (true)
+            {
+                using var snapshotResponse = await client.GetAsync(
+                    $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state",
+                    timeoutCts.Token);
+                snapshotResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+                last = await snapshotResponse.Content.ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>(
+                    cancellationToken: timeoutCts.Token);
+                if (last is
+                    {
+                        CompletionStatus: WorkflowRunCompletionStatus.Completed,
+                        LastSuccess: true,
+                        LastOutput: "y\nz"
+                    })
+                {
+                    return last;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(100), timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                $"Workflow actor current-state did not reach completed. actor_id={actorId}, last_status={last?.CompletionStatus}, last_output={last?.LastOutput}");
+        }
     }
 
     private static string? ExtractRunContextActorId(string sseBody)
