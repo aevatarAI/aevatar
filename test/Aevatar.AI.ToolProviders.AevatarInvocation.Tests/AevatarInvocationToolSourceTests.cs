@@ -990,6 +990,80 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task ObserveRun_ServiceRun_WhenReadModelIsMissing_ShouldReturnNotFoundWithoutFallback()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-service-run-missing");
+        var output = await tool.ExecuteAsync("""
+            {
+              "service_run": {
+                "service_id": "service-1",
+                "run_id": "missing-run"
+              }
+            }
+            """);
+
+        ErrorCode(output).Should().Be("service_run_not_found");
+        harness.ServiceRunQuery.LastScopeId.Should().Be("scope-1");
+        harness.ServiceRunQuery.LastServiceId.Should().Be("service-1");
+        harness.ServiceRunQuery.LastRunId.Should().Be("missing-run");
+        harness.ServiceRunQuery.LastCommandId.Should().BeNull();
+        harness.ServiceRunQuery.LastQuery.Should().BeNull();
+        harness.TerminalQuery.LastActorId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ObserveRun_GAgentTerminalCorrelation_WhenReadModelIsMissing_ShouldReturnNotFoundWithoutFallback()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-terminal-correlation-missing");
+        var output = await tool.ExecuteAsync("""
+            {
+              "gagent_terminal_correlation": {
+                "actor_id": "actor-1",
+                "correlation_id": "missing-correlation"
+              }
+            }
+            """);
+
+        ErrorCode(output).Should().Be("gagent_terminal_not_found");
+        harness.TerminalQuery.LastActorId.Should().Be("actor-1");
+        harness.TerminalQuery.LastCorrelationId.Should().Be("missing-correlation");
+        harness.TerminalQuery.LastSessionId.Should().BeNull();
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ObserveRun_GAgentTerminalSession_WhenReadModelIsMissing_ShouldReturnNotFoundWithoutFallback()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-terminal-session-missing");
+        var output = await tool.ExecuteAsync("""
+            {
+              "gagent_terminal_session": {
+                "actor_id": "actor-1",
+                "session_id": "missing-session"
+              }
+            }
+            """);
+
+        ErrorCode(output).Should().Be("gagent_terminal_not_found");
+        harness.TerminalQuery.LastActorId.Should().Be("actor-1");
+        harness.TerminalQuery.LastCorrelationId.Should().BeNull();
+        harness.TerminalQuery.LastSessionId.Should().Be("missing-session");
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ObserveRun_ShouldReadServiceRunTargetWithCallerScopeOnly()
     {
         var harness = new Harness();
@@ -1142,6 +1216,54 @@ public sealed class AevatarInvocationToolSourceTests
         var output = await tool.ExecuteAsync("{}");
 
         ErrorCode(output).Should().Be("invalid_arguments");
+    }
+
+    [Theory]
+    [InlineData(
+        """
+        {
+          "service_run": {
+            "run_id": "run-1"
+          }
+        }
+        """)]
+    [InlineData(
+        """
+        {
+          "gagent_terminal_correlation": {
+            "correlation_id": "correlation-1"
+          }
+        }
+        """)]
+    [InlineData(
+        """
+        {
+          "gagent_terminal_session": {
+            "actor_id": "actor-1"
+          }
+        }
+        """)]
+    [InlineData(
+        """
+        {
+          "workflow_current_state": {
+            "command_id": "command-1"
+          }
+        }
+        """)]
+    public async Task ObserveRun_WhenNestedRequiredFieldIsMissing_ShouldReturnStructuredErrorWithoutFallback(
+        string argumentsJson)
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-nested-missing");
+        var output = await tool.ExecuteAsync(argumentsJson);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+        harness.TerminalQuery.LastActorId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
     }
 
     private static bool HasStrictObjectSchema(string schema)
