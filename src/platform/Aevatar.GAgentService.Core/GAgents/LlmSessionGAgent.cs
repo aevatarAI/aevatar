@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -729,8 +730,37 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         foreach (var provider in providers)
         {
             ct.ThrowIfCancellationRequested();
-            substituteTools.AddRange(await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
-            additiveTools.AddRange(await provider.GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
+            try
+            {
+                substituteTools.AddRange(await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(
+                    ex,
+                    "Responses substitute tool discovery failed for provider {ProviderType}; continuing without that provider.",
+                    provider.GetType().Name);
+            }
+
+            try
+            {
+                additiveTools.AddRange(await provider.GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(
+                    ex,
+                    "Responses additive tool discovery failed for provider {ProviderType}; continuing without that provider.",
+                    provider.GetType().Name);
+            }
         }
 
         var substitutedNames = (command.ToolSelection?.SubstitutedToolNames ?? [])
@@ -795,7 +825,8 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                     ? "{}"
                     : toolCall.ArgumentsJson;
                 var result = toolsByName.TryGetValue(toolCall.Name, out var tool)
-                    ? await tool.ExecuteAsync(
+                    ? await ResponsesSafeToolExecutor.ExecuteAsync(
+                        tool,
                         argumentsJson,
                         ct)
                     : System.Text.Json.JsonSerializer.Serialize(new
