@@ -39,6 +39,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         activeMemberRunPlaceholderReason={studio.activeMemberRunPlaceholderReason}
         onPublishMember={studio.publishMember}
         onAddNode={studio.openNodeLibrary}
+        onDeleteConnection={studio.deleteSelectedConnection}
         onDeleteNode={studio.deleteSelectedNode}
         onOpenRunOptions={studio.openRunOptions}
         onRunActiveMember={studio.runActiveMember}
@@ -47,6 +48,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         onTitleChange={studio.setWorkflowTitle}
         savePending={studio.savePending}
         savePlaceholderReason={studio.savePlaceholderReason}
+        selectedEdgeId={studio.selectedEdgeId}
         selectedNodeId={studio.selectedNodeId}
         selectedTab={studio.selectedTab}
         onTabChange={studio.setSelectedTab}
@@ -96,13 +98,20 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
               onAddFirstStep={studio.openNodeLibrary}
               onCanvasSelect={studio.selectCanvas}
               onConnectNodes={studio.connectNodes}
+              onDeleteEdges={(edgeIds) => {
+                if (edgeIds.includes(studio.selectedEdgeId)) {
+                  studio.deleteSelectedConnection();
+                }
+              }}
               onDeleteNodes={(nodeIds) => {
                 if (nodeIds.includes(studio.selectedNodeId)) {
                   studio.deleteSelectedNode();
                 }
               }}
+              onEdgeSelect={studio.selectEdge}
               onNodeLayoutChange={studio.moveNodes}
               onNodeSelect={studio.selectNode}
+              selectedEdgeId={studio.selectedEdgeId}
               selectedNodeId={studio.selectedNodeId}
             />
           )}
@@ -113,15 +122,15 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           />
           <WorkflowStudioRunOptionsPanel
             onClose={studio.selectCanvas}
-            onRunInputChange={studio.setExecutionRunInput}
+            onRunMessageChange={studio.setExecutionRunMessage}
             open={studio.runOptionsOpen}
-            runInput={studio.executionRunInput}
+            runMessage={studio.executionRunMessage}
           />
           {studio.runOptionsOpen ? null : (
             <WorkflowStudioNodeDetailPanel
-              error={studio.selectedStepParameterError}
+              error={studio.selectedStepConfigurationError}
               onClose={studio.selectCanvas}
-              onParametersChange={studio.updateSelectedStepParameters}
+              onConfigurationChange={studio.updateSelectedStepConfiguration}
               stepDraft={studio.selectedStepDraft}
             />
           )}

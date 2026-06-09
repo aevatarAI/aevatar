@@ -988,6 +988,62 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task WorkflowLoop_ShouldNotDispatchAdjacentDisconnectedStepWhenOnErrorSkipHasNoNextStep()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf-skip-disconnected",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                    OnError = new StepErrorPolicy
+                    {
+                        Strategy = "skip",
+                        DefaultOutput = "skipped-output",
+                    },
+                },
+                new StepDefinition
+                {
+                    Id = "disconnected",
+                    Type = "transform",
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf-skip-disconnected",
+                RunId = "run-skip-disconnected",
+                Input = "input",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-skip-disconnected",
+                Success = false,
+                Error = "boom",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().NotContain(x => x.Event is StepRequestEvent request && request.StepId == "disconnected");
+        var completion = SingleWorkflowCompletion(ctx);
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be("skipped-output");
+    }
+
+    [Fact]
     public async Task WorkflowLoop_ShouldDispatchFallbackStepWhenOnErrorFallbackConfigured()
     {
         var ctx = new SchedulingContext();

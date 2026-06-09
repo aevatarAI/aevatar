@@ -34,6 +34,7 @@ type WorkflowStudioHeaderProps = {
   readonly activeMemberRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
   readonly onAddNode: () => void;
+  readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
   readonly onOpenRunOptions: () => void;
   readonly onRunActiveMember: () => void;
@@ -42,6 +43,7 @@ type WorkflowStudioHeaderProps = {
   readonly onTitleChange: (title: string) => void;
   readonly savePending: boolean;
   readonly savePlaceholderReason?: string;
+  readonly selectedEdgeId: string;
   readonly selectedNodeId: string;
   readonly selectedTab: "editor" | "runs";
   readonly onTabChange: (tab: "editor" | "runs") => void;
@@ -373,61 +375,73 @@ const HeaderTabs: React.FC<HeaderTabsProps> = ({
 
 type HeaderNodeActionsProps = {
   readonly canSave: boolean;
+  readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
   readonly onSave: () => void;
   readonly savePending: boolean;
   readonly savePlaceholderReason?: string;
+  readonly selectedEdgeId: string;
   readonly selectedNodeId: string;
 };
 
 const HeaderNodeActions: React.FC<HeaderNodeActionsProps> = ({
   canSave,
+  onDeleteConnection,
   onDeleteNode,
   onSave,
   savePending,
   savePlaceholderReason,
+  selectedEdgeId,
   selectedNodeId,
-}) => (
-  <section
-    aria-label={t(
-      "teamMemberWorkflowStudio.header.nodeActionsAria",
-      "Workflow draft and node actions",
-    )}
-    data-testid="workflow-header-node-actions"
-    style={{
-      alignItems: "center",
-      display: "flex",
-      flexWrap: "wrap",
-      gap: 8,
-      justifyContent: "flex-end",
-      minWidth: 0,
-    }}
-  >
-    <Button
-      disabled={!selectedNodeId}
-      icon={<DeleteOutlined />}
-      onClick={onDeleteNode}
-      size="small"
+}) => {
+  const hasSelectedConnection = Boolean(selectedEdgeId);
+  const hasSelectedNode = Boolean(selectedNodeId);
+  const deleteLabel = hasSelectedConnection
+    ? t("teamMemberWorkflowStudio.header.deleteConnection", "Delete connection")
+    : t("teamMemberWorkflowStudio.header.deleteNode", "Delete node");
+
+  return (
+    <section
+      aria-label={t(
+        "teamMemberWorkflowStudio.header.nodeActionsAria",
+        "Workflow draft and node actions",
+      )}
+      data-testid="workflow-header-node-actions"
+      style={{
+        alignItems: "center",
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 8,
+        justifyContent: "flex-end",
+        minWidth: 0,
+      }}
     >
-      {t("teamMemberWorkflowStudio.header.deleteNode", "Delete node")}
-    </Button>
-    <Button
-      disabled={!canSave}
-      icon={<SaveOutlined />}
-      loading={savePending}
-      onClick={onSave}
-      size="small"
-      title={
-        canSave
-          ? t("teamMemberWorkflowStudio.header.saveDraft", "Save draft")
-          : savePlaceholderReason
-      }
-      type="primary"
-    >
-      {t("teamMemberWorkflowStudio.header.save", "Save")}
-    </Button>
-  </section>
-);
+      <Button
+        disabled={!hasSelectedConnection && !hasSelectedNode}
+        icon={<DeleteOutlined />}
+        onClick={hasSelectedConnection ? onDeleteConnection : onDeleteNode}
+        size="small"
+      >
+        {deleteLabel}
+      </Button>
+      <Button
+        disabled={!canSave}
+        icon={<SaveOutlined />}
+        loading={savePending}
+        onClick={onSave}
+        size="small"
+        title={
+          canSave
+            ? t("teamMemberWorkflowStudio.header.saveDraft", "Save draft")
+            : savePlaceholderReason
+        }
+        type="primary"
+      >
+        {t("teamMemberWorkflowStudio.header.save", "Save")}
+      </Button>
+    </section>
+  );
+};
 
 const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   memberPublished,
@@ -443,6 +457,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   activeMemberRunPlaceholderReason,
   onPublishMember,
   onAddNode,
+  onDeleteConnection,
   onDeleteNode,
   onOpenRunOptions,
   onRunActiveMember,
@@ -451,6 +466,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   onTitleChange,
   savePending,
   savePlaceholderReason,
+  selectedEdgeId,
   selectedNodeId,
   selectedTab,
   onTabChange,
@@ -534,10 +550,12 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
         <HeaderTabs onTabChange={onTabChange} selectedTab={selectedTab} />
         <HeaderNodeActions
           canSave={canSave}
+          onDeleteConnection={onDeleteConnection}
           onDeleteNode={onDeleteNode}
           onSave={onSave}
           savePending={savePending}
           savePlaceholderReason={savePlaceholderReason}
+          selectedEdgeId={selectedEdgeId}
           selectedNodeId={selectedNodeId}
         />
       </div>

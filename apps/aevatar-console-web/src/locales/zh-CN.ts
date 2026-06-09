@@ -302,6 +302,139 @@ const zhCNMessages = {
   'teams.detail.update.fromTeam': '来自团队更新时间',
   'teams.detail.update.fromVisibleRun': '来自最近可见运行',
   'teams.detail.update.fromWorkflow': '来自 Workflow 更新时间',
+  'shared.studio.nodeConfiguration.assign.target.label': '目标变量',
+  'shared.studio.nodeConfiguration.assign.target.placeholder': 'result',
+  'shared.studio.nodeConfiguration.assign.value.label': '值',
+  'shared.studio.nodeConfiguration.assign.value.placeholder': '$input',
+  'shared.studio.nodeConfiguration.cache.childStep.label': '缓存节点',
+  'shared.studio.nodeConfiguration.cache.key.label': '缓存键',
+  'shared.studio.nodeConfiguration.cache.key.placeholder': '$input',
+  'shared.studio.nodeConfiguration.cache.ttl.label': 'TTL 秒数',
+  'shared.studio.nodeConfiguration.cache.ttl.placeholder': '600',
+  'shared.studio.nodeConfiguration.connectorCall.connector.label': 'Connector',
+  'shared.studio.nodeConfiguration.connectorCall.connector.placeholder':
+    '已配置的 Connector 名称',
+  'shared.studio.nodeConfiguration.connectorCall.method.label': '方法',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.delete': 'DELETE',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.get': 'GET',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.patch': 'PATCH',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.post': 'POST',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.put': 'PUT',
+  'shared.studio.nodeConfiguration.connectorCall.onError.label': '出错时',
+  'shared.studio.nodeConfiguration.connectorCall.operation.label': '操作',
+  'shared.studio.nodeConfiguration.connectorCall.operation.placeholder':
+    '操作或 endpoint 名称',
+  'shared.studio.nodeConfiguration.connectorCall.path.label': '路径',
+  'shared.studio.nodeConfiguration.connectorCall.path.placeholder': '/v1/items',
+  'shared.studio.nodeConfiguration.connectorCall.retry.label': '重试次数',
+  'shared.studio.nodeConfiguration.connectorCall.retry.placeholder': '0',
+  'shared.studio.nodeConfiguration.connectorCall.timeout.label': '超时毫秒',
+  'shared.studio.nodeConfiguration.connectorCall.timeout.placeholder': '10000',
+  'shared.studio.nodeConfiguration.delay.duration.label': '持续毫秒',
+  'shared.studio.nodeConfiguration.delay.duration.placeholder': '1000',
+  'shared.studio.nodeConfiguration.emit.eventType.label': '事件类型',
+  'shared.studio.nodeConfiguration.emit.eventType.placeholder':
+    'workflow.completed',
+  'shared.studio.nodeConfiguration.emit.payload.label': 'Payload',
+  'shared.studio.nodeConfiguration.emit.payload.placeholder': '$input',
+  'shared.studio.nodeConfiguration.guard.check.label': '检查',
+  'shared.studio.nodeConfiguration.guard.check.option.contains': '包含关键词',
+  'shared.studio.nodeConfiguration.guard.check.option.jsonValid':
+    '输入是有效 JSON',
+  'shared.studio.nodeConfiguration.guard.check.option.maxLength':
+    '不超过最大长度',
+  'shared.studio.nodeConfiguration.guard.check.option.notEmpty': '输入非空',
+  'shared.studio.nodeConfiguration.guard.check.option.regex': '匹配正则',
+  'shared.studio.nodeConfiguration.guard.onFailure.label': '失败时',
+  'shared.studio.nodeConfiguration.humanApproval.onReject.label': '拒绝时',
+  'shared.studio.nodeConfiguration.humanApproval.onReject.option.fail':
+    '让运行失败',
+  'shared.studio.nodeConfiguration.humanApproval.onReject.option.skip':
+    '跳过这个步骤',
+  'shared.studio.nodeConfiguration.humanApproval.prompt.label': '审批提示',
+  'shared.studio.nodeConfiguration.humanApproval.prompt.placeholder':
+    'Approve this step?',
+  'shared.studio.nodeConfiguration.humanInput.prompt.label': '输入提示',
+  'shared.studio.nodeConfiguration.humanInput.prompt.placeholder':
+    'Please provide the missing input.',
+  'shared.studio.nodeConfiguration.humanInput.variable.label': '响应变量',
+  'shared.studio.nodeConfiguration.humanInput.variable.placeholder':
+    'human_response',
+  'shared.studio.nodeConfiguration.llmCall.instruction.description':
+    '在调用角色前，追加到本次运行消息之前。',
+  'shared.studio.nodeConfiguration.llmCall.instruction.label': '指令',
+  'shared.studio.nodeConfiguration.llmCall.instruction.placeholder':
+    '告诉这个角色该步骤要做什么。',
+  'shared.studio.nodeConfiguration.option.onFailure.branch': '进入分支',
+  'shared.studio.nodeConfiguration.option.onFailure.fail': '让运行失败',
+  'shared.studio.nodeConfiguration.option.onFailure.skip': '跳过这个步骤',
+  'shared.studio.nodeConfiguration.retrieveFacts.query.label': '查询',
+  'shared.studio.nodeConfiguration.retrieveFacts.query.placeholder':
+    '这个步骤要检索哪些事实？',
+  'shared.studio.nodeConfiguration.retrieveFacts.topK.label': 'Top K',
+  'shared.studio.nodeConfiguration.retrieveFacts.topK.placeholder': '3',
+  'shared.studio.nodeConfiguration.stepType.option.assign': '赋值',
+  'shared.studio.nodeConfiguration.stepType.option.cache': '缓存',
+  'shared.studio.nodeConfiguration.stepType.option.checkpoint': '检查点',
+  'shared.studio.nodeConfiguration.stepType.option.conditional': '条件判断',
+  'shared.studio.nodeConfiguration.stepType.option.connectorCall':
+    'Connector 调用',
+  'shared.studio.nodeConfiguration.stepType.option.delay': '延迟',
+  'shared.studio.nodeConfiguration.stepType.option.dynamicWorkflow':
+    '动态 Workflow',
+  'shared.studio.nodeConfiguration.stepType.option.emit': '发出事件',
+  'shared.studio.nodeConfiguration.stepType.option.evaluate': '评估',
+  'shared.studio.nodeConfiguration.stepType.option.foreach': '逐项处理',
+  'shared.studio.nodeConfiguration.stepType.option.guard': '检查守卫',
+  'shared.studio.nodeConfiguration.stepType.option.humanApproval': '人工审批',
+  'shared.studio.nodeConfiguration.stepType.option.humanInput': '人工输入',
+  'shared.studio.nodeConfiguration.stepType.option.llmCall': 'LLM 调用',
+  'shared.studio.nodeConfiguration.stepType.option.mapReduce': 'Map reduce',
+  'shared.studio.nodeConfiguration.stepType.option.parallel': '并行',
+  'shared.studio.nodeConfiguration.stepType.option.race': '抢先完成',
+  'shared.studio.nodeConfiguration.stepType.option.reflect': '反思',
+  'shared.studio.nodeConfiguration.stepType.option.retrieveFacts': '检索事实',
+  'shared.studio.nodeConfiguration.stepType.option.switch': '分支选择',
+  'shared.studio.nodeConfiguration.stepType.option.toolCall': '工具调用',
+  'shared.studio.nodeConfiguration.stepType.option.transform': '转换',
+  'shared.studio.nodeConfiguration.stepType.option.vote': '投票',
+  'shared.studio.nodeConfiguration.stepType.option.waitSignal': '等待信号',
+  'shared.studio.nodeConfiguration.stepType.option.while': '循环',
+  'shared.studio.nodeConfiguration.stepType.option.workflowCall':
+    'Workflow 调用',
+  'shared.studio.nodeConfiguration.stepType.option.workflowYamlValidate':
+    'Workflow YAML 校验',
+  'shared.studio.nodeConfiguration.transform.operation.label': '操作',
+  'shared.studio.nodeConfiguration.transform.operation.option.count': '统计行数',
+  'shared.studio.nodeConfiguration.transform.operation.option.identity': '原样传递',
+  'shared.studio.nodeConfiguration.transform.operation.option.join':
+    '合并分段',
+  'shared.studio.nodeConfiguration.transform.operation.option.jsonExtract':
+    '提取 JSON',
+  'shared.studio.nodeConfiguration.transform.operation.option.lowercase':
+    '转小写',
+  'shared.studio.nodeConfiguration.transform.operation.option.split':
+    '拆分分段',
+  'shared.studio.nodeConfiguration.transform.operation.option.take':
+    '取开头几行',
+  'shared.studio.nodeConfiguration.transform.operation.option.takeLast':
+    '取末尾几行',
+  'shared.studio.nodeConfiguration.transform.operation.option.trim':
+    '去除首尾空白',
+  'shared.studio.nodeConfiguration.transform.operation.option.uppercase':
+    '转大写',
+  'shared.studio.nodeConfiguration.waitSignal.signalName.label': '信号名',
+  'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder': 'continue',
+  'shared.studio.nodeConfiguration.waitSignal.timeout.label': '超时毫秒',
+  'shared.studio.nodeConfiguration.waitSignal.timeout.placeholder': '60000',
+  'shared.studio.nodeConfiguration.workflowCall.lifecycle.label': '生命周期',
+  'shared.studio.nodeConfiguration.workflowCall.lifecycle.option.inline':
+    '内联调用',
+  'shared.studio.nodeConfiguration.workflowCall.lifecycle.option.scope':
+    '使用 scope Workflow',
+  'shared.studio.nodeConfiguration.workflowCall.workflow.label': 'Workflow',
+  'shared.studio.nodeConfiguration.workflowCall.workflow.placeholder':
+    'child_workflow',
   'teams.members.actions.build': '构建',
   'teams.members.actions.clearEntry': '清除入口成员',
   'teams.members.actions.create': '创建成员',
@@ -366,19 +499,15 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.activation.ready': '就绪',
   'teamMemberWorkflowStudio.header.addNode': '添加节点',
   'teamMemberWorkflowStudio.header.currentTeam': '当前团队',
+  'teamMemberWorkflowStudio.header.deleteConnection': '删除连接',
   'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
   'teamMemberWorkflowStudio.header.editWorkflowName': '编辑 Workflow 名称',
-  'teamMemberWorkflowStudio.header.executeWorkflow': '执行 Workflow',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
-  'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow 草稿和节点操作',
-  'teamMemberWorkflowStudio.header.optionalTestPayload': '可选测试载荷',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow 主操作',
-  'teamMemberWorkflowStudio.header.runInput': '运行输入',
-  'teamMemberWorkflowStudio.header.runInputPlaceholder':
-    '本次 Workflow 运行的可选输入',
+  'teamMemberWorkflowStudio.header.runMessage': '运行消息',
   'teamMemberWorkflowStudio.header.runOptionsAria': '运行选项',
   'teamMemberWorkflowStudio.header.runActiveMember': '运行活跃成员',
   'teamMemberWorkflowStudio.header.save': '保存',
@@ -396,18 +525,23 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.teamBreadcrumb': '团队',
   'teamMemberWorkflowStudio.header.unsavedChanges': '有未保存更改',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow 视图',
-  'teamMemberWorkflowStudio.header.workflowRun': 'Workflow 运行',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow 标题',
-  'teamMemberWorkflowStudio.nodeDetail.apply': '应用',
-  'teamMemberWorkflowStudio.nodeDetail.input': '输入',
-  'teamMemberWorkflowStudio.nodeDetail.inputEmpty':
-    '接入 Workflow 执行后，这里会展示输入预览。',
-  'teamMemberWorkflowStudio.nodeDetail.output': '输出',
-  'teamMemberWorkflowStudio.nodeDetail.outputEmpty':
-    '真实 Workflow 执行结果返回前，这里暂时没有输出。',
-  'teamMemberWorkflowStudio.nodeDetail.parameters': '参数',
-  'teamMemberWorkflowStudio.nodeDetail.parametersAria': '节点参数',
+  'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
+    '高级原始配置',
+  'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
+    '只有当节点选项还没有引导字段时才使用这里。',
+  'teamMemberWorkflowStudio.nodeDetail.applyRawConfiguration':
+    '应用原始 JSON',
+  'teamMemberWorkflowStudio.nodeDetail.configuration': '配置',
+  'teamMemberWorkflowStudio.nodeDetail.configurationDescription':
+    '编辑这个节点在草稿运行时会使用的字段。',
+  'teamMemberWorkflowStudio.nodeDetail.noSemanticFields':
+    '这个节点类型暂时没有引导字段。需要时可以使用高级原始配置。',
+  'teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria':
+    '原始节点配置',
   'teamMemberWorkflowStudio.nodeDetail.sectionAria': '节点详情',
+  'teamMemberWorkflowStudio.nodeDetail.stepId': '步骤 ID：{stepId}',
+  'teamMemberWorkflowStudio.nodeDetail.updateNode': '更新节点',
   'teamMemberWorkflowStudio.nodeLibrary.closeAria': '关闭节点库',
   'teamMemberWorkflowStudio.nodeLibrary.emptySearch':
     '没有匹配当前搜索的节点。',
@@ -416,8 +550,10 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': '搜索节点',
   'teamMemberWorkflowStudio.nodeLibrary.sectionAria': '节点库',
   'teamMemberWorkflowStudio.nodeLibrary.title': '节点库',
-  'teamMemberWorkflowStudio.runOptionsPanel.inputPlaceholder':
-    '本次活跃成员运行的可选输入',
+  'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
+    '发送给活跃成员的消息',
+  'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
+    '本次运行可选发送给活跃成员的消息',
   'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': '运行选项面板',
   'teamMemberWorkflowStudio.runOptionsPanel.title': '运行选项',
   'teamMemberWorkflowStudio.runsPanel.description':

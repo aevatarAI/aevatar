@@ -94,14 +94,24 @@ public class WorkflowDefinitionTests
     }
 
     [Fact]
-    public void GetNextStep_WhenNoNextPointer_ShouldUseSequentialOrder()
+    public void GetNextStep_WhenNoNextPointer_ShouldReturnNull()
     {
         var workflow = BuildWorkflow(
             new StepDefinition { Id = "s1", Type = "llm_call" },
             new StepDefinition { Id = "s2", Type = "transform" });
 
-        workflow.GetNextStep("s1")!.Id.Should().Be("s2");
+        workflow.GetNextStep("s1").Should().BeNull();
         workflow.GetNextStep("s2").Should().BeNull();
+    }
+
+    [Fact]
+    public void GetNextStep_WhenNextPointerSet_ShouldUseExplicitTarget()
+    {
+        var workflow = BuildWorkflow(
+            new StepDefinition { Id = "s1", Type = "llm_call", Next = "s2" },
+            new StepDefinition { Id = "s2", Type = "transform" });
+
+        workflow.GetNextStep("s1")!.Id.Should().Be("s2");
     }
 
     [Fact]

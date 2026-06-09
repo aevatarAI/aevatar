@@ -28,6 +28,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
                 {
                     Id = "first",
                     Type = "transform",
+                    Next = "second",
                     Parameters = new Dictionary<string, string>
                     {
                         ["value"] = "${concat('v=', input)}",
@@ -77,6 +78,53 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         secondReq!.StepId.Should().Be("second");
         secondReq.Input.Should().Be("out1");
         secondReq.Parameters["value"].Should().Be("prev=out1, input=out1");
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_WhenAdjacentStepIsNotExplicitlyConnected_ShouldCompleteWithoutDispatchingIt()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "first",
+                    Type = "transform",
+                },
+                new StepDefinition
+                {
+                    Id = "disconnected",
+                    Type = "transform",
+                },
+            ],
+        };
+
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+        const string runId = "run-disconnected";
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = runId,
+            Input = "hello",
+        }), ctx, CancellationToken.None);
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(Wrap(new StepCompletedEvent
+        {
+            StepId = "first",
+            RunId = runId,
+            Success = true,
+            Output = "done",
+        }), ctx, CancellationToken.None);
+
+        ctx.Published.Should().NotContain(x => x.Event is StepRequestEvent request && request.StepId == "disconnected");
+        ctx.Published.Should().ContainSingle(x => x.Event is WorkflowCompletedEvent);
     }
 
     [Fact]

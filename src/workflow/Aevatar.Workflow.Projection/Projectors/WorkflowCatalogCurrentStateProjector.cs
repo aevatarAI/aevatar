@@ -221,14 +221,6 @@ public sealed class WorkflowCatalogCurrentStateProjector
                     });
                 }
             }
-            else if (i + 1 < definition.Steps.Count)
-            {
-                edges.Add(new WorkflowCatalogEdgeReadModel
-                {
-                    From = step.Id,
-                    To = definition.Steps[i + 1].Id,
-                });
-            }
 
             if (step.Children is { Count: > 0 })
             {
