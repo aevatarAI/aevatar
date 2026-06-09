@@ -58,6 +58,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         });
         configured.Configuration.Target.ServiceInvocation.EndpointId.Should().Be("chat");
         configured.Configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
+        configured.Configuration.Target.ServiceInvocation.Auth.Should().BeNull();
         configured.Configuration.Timezone.Should().Be("UTC");
         configured.Configuration.Headers.Should().Contain(
             new KeyValuePair<string, string>("trace", "enabled"));
@@ -69,6 +70,101 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configured.Dispatch.Descriptor.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
         preparation.Configurations.Should().ContainSingle()
             .Which.ScheduleId.Should().Be("daily-report");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldMapWorkflowScheduleAuthToServiceInvocationAuth()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(new WorkflowScheduleConfiguration(
+            ScheduleId: "auth-schedule",
+            DisplayName: "Auth schedule",
+            WorkflowName: "direct",
+            Prompt: "summarize status",
+            CronExpression: "*/15 * * * *",
+            Timezone: "UTC",
+            Enabled: true,
+            Headers: new Dictionary<string, string>(),
+            ScopeId: "scope-1",
+            Auth: new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
+                new WorkflowScheduleNyxIdSubjectRef(" lark ", " tenant-1 ", " ou-user-1 "),
+                " proxy "))));
+
+        var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().NotBeNull();
+        invocation.Auth.SenderNyxId!.Subject.Platform.Should().Be("lark");
+        invocation.Auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
+        invocation.Auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
+        invocation.Auth.SenderNyxId.Scope.Should().Be("proxy");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldMapTenantlessWorkflowScheduleAuthToEmptyTenant()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
+                new WorkflowScheduleNyxIdSubjectRef("lark", " ", "ou-user-1"),
+                "proxy")),
+        });
+
+        var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
+        invocation.Auth!.SenderNyxId!.Subject.Tenant.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleAuth()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleAuthWithoutSubject()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(null!, "proxy")),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*subject is required*");
+    }
+
+    [Theory]
+    [InlineData("", "tenant-1", "ou-user-1", "proxy")]
+    [InlineData("lark", "tenant-1", "", "proxy")]
+    [InlineData("lark", "tenant-1", "ou-user-1", "")]
+    public async Task CreateAsync_ShouldRejectInvalidWorkflowScheduleAuth(
+        string platform,
+        string tenant,
+        string externalUserId,
+        string scope)
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
+                new WorkflowScheduleNyxIdSubjectRef(platform, tenant, externalUserId),
+                scope)),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>();
     }
 
     [Fact]

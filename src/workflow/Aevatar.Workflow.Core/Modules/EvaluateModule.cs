@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -114,6 +115,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 RunId = runId,
                 StepId = stepId,
             };
+            WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
             CopyParametersToIntent(request.Parameters, intent);
             try
             {
@@ -243,6 +245,9 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             intent.Annotations[normalizedKey] = normalizedValue;
         }
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventContext ctx)
     {

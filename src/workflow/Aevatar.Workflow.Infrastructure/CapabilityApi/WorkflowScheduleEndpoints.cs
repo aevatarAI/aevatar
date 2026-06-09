@@ -208,6 +208,7 @@ public sealed record WorkflowScheduleConfigurationHttpRequest
     public bool Enabled { get; init; } = true;
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
     public string? ScopeId { get; init; }
+    public WorkflowScheduleAuthHttpRequest? Auth { get; init; }
 
     public WorkflowScheduleConfiguration ToConfiguration(string? fallbackScheduleId) =>
         new(
@@ -219,7 +220,71 @@ public sealed record WorkflowScheduleConfigurationHttpRequest
             Timezone: Timezone ?? string.Empty,
             Enabled: Enabled,
             Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            ScopeId: ScopeId);
+            ScopeId: ScopeId,
+            Auth: Auth?.ToAuth());
+}
+
+public sealed record WorkflowScheduleAuthHttpRequest
+{
+    public WorkflowScheduleNyxIdCredentialSourceHttpRequest? SenderNyxId { get; init; }
+
+    public WorkflowScheduleAuth ToAuth()
+    {
+        if (SenderNyxId == null)
+            throw new ArgumentException("Sender NyxID credential source is required.", nameof(SenderNyxId));
+
+        return new WorkflowScheduleAuth(SenderNyxId.ToSource());
+    }
+}
+
+public sealed record WorkflowScheduleNyxIdCredentialSourceHttpRequest
+{
+    public required WorkflowScheduleNyxIdSubjectRefHttpRequest Subject { get; init; }
+    public required string Scope { get; init; }
+
+    public WorkflowScheduleNyxIdCredentialSource ToSource() =>
+        new(NormalizeSubject(Subject), NormalizeRequired(Scope, nameof(Scope)));
+
+    private static WorkflowScheduleNyxIdSubjectRef NormalizeSubject(
+        WorkflowScheduleNyxIdSubjectRefHttpRequest? subject)
+    {
+        if (subject == null)
+            throw new ArgumentException("Subject is required.", nameof(Subject));
+
+        return subject.ToSubject();
+    }
+
+    private static string NormalizeRequired(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} is required.", name);
+
+        return value.Trim();
+    }
+}
+
+public sealed record WorkflowScheduleNyxIdSubjectRefHttpRequest
+{
+    public required string Platform { get; init; }
+    public string? Tenant { get; init; }
+    public required string ExternalUserId { get; init; }
+
+    public WorkflowScheduleNyxIdSubjectRef ToSubject() =>
+        new(
+            NormalizeRequired(Platform, nameof(Platform)).ToLowerInvariant(),
+            NormalizeOptional(Tenant),
+            NormalizeRequired(ExternalUserId, nameof(ExternalUserId)));
+
+    private static string NormalizeRequired(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} is required.", name);
+
+        return value.Trim();
+    }
+
+    private static string NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }
 
 public sealed record WorkflowSchedulePreviewHttpRequest
