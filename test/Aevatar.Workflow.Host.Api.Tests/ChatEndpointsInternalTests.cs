@@ -47,6 +47,81 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleForkRun_ShouldDispatchTypedForkCommandAndReturnAccepted()
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
+        {
+            Result = CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Success(
+                new WorkflowForkRunAcceptedReceipt(
+                    "source-run",
+                    "new-run-actor",
+                    "direct",
+                    true,
+                    "cmd-1",
+                    "corr-1",
+                    new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero))),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = " source-run ",
+                StartAtStepId = " step-b ",
+                Input = "resume input",
+                CommandId = " cmd-1 ",
+                CorrelationId = " corr-1 ",
+                ScopeId = " scope-1 ",
+                VariableOverrides = new Dictionary<string, string>
+                {
+                    [" topic "] = "override",
+                },
+            },
+            service,
+            ct: CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        service.Commands.Should().ContainSingle();
+        var command = service.Commands[0];
+        command.SourceRunId.Should().Be("source-run");
+        command.StartAtStepId.Should().Be("step-b");
+        command.ScopeId.Should().Be("scope-1");
+        command.VariableOverrides.Should().Contain("topic", "override");
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        body.Should().Contain("new-run-actor");
+        body.Should().Contain("cmd-1");
+        body.Should().Contain("corr-1");
+    }
+
+    [Fact]
+    public async Task HandleForkRun_ShouldMapInvalidWorkflowYaml()
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
+        {
+            Result = CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.InvalidWorkflowYaml("source-run", "step-b", "Workflow YAML is invalid.")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = "source-run",
+                StartAtStepId = "step-b",
+            },
+            service,
+            ct: CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("Workflow YAML is invalid.");
+    }
+
+    [Fact]
     public async Task HandleCommand_ShouldReturnAcceptedPayload_WithoutWaitingForTerminalWorkflowEvents()
     {
         var service = new FakeCommandDispatchService
@@ -597,7 +672,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "step-1",
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -623,7 +698,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "step-1",
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -659,7 +734,7 @@ public sealed class ChatEndpointsInternalTests
                 },
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -699,7 +774,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "step-1",
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -729,7 +804,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "step-1",
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -757,7 +832,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "step-1",
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -1039,9 +1114,9 @@ public sealed class ChatEndpointsInternalTests
     [Fact]
     public async Task HandleForkRun_ShouldReturnAcceptedLocationAndDispatchMappedCommand()
     {
-        var service = new RecordingForkRunService
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
         {
-            Result = WorkflowForkRunResult.Accepted(
+            Result = CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Success(
                 new WorkflowForkRunAcceptedReceipt(
                     "source-run",
                     "new-run-actor",
@@ -1067,10 +1142,12 @@ public sealed class ChatEndpointsInternalTests
                     [" topic "] = "recovered",
                 },
                 Input = "resume input",
+                ScopeId = " scope-1 ",
                 CommandId = " cmd-1 ",
                 CorrelationId = " corr-1 ",
             },
             service,
+            CreateHttpContext("Bearer trusted-token"),
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -1079,7 +1156,7 @@ public sealed class ChatEndpointsInternalTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/new-run-actor/current-state");
         var body = await ReadBodyAsync(http.Response);
-        body.Should().Contain("\"newRunId\":\"new-run-actor\"");
+        body.Should().Contain("\"newRunActorId\":\"new-run-actor\"");
         body.Should().Contain("\"acceptedCommandId\":\"cmd-1\"");
         body.Should().Contain("\"statusUrl\":\"/api/workflow-actors/new-run-actor/current-state\"");
         service.Commands.Should().ContainSingle();
@@ -1089,8 +1166,34 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().InlineSubYamls.Should().ContainKey("helper").WhoseValue.Should().Be("name: helper");
         service.Commands.Single().VariableOverrides.Should().ContainKey("topic").WhoseValue.Should().Be("recovered");
         service.Commands.Single().Input.Should().Be("resume input");
+        service.Commands.Single().ScopeId.Should().Be("scope-1");
+        service.Commands.Single().CallerCredential!.BearerToken.Should().Be("trusted-token");
         service.Commands.Single().CommandId.Should().Be("cmd-1");
         service.Commands.Single().CorrelationId.Should().Be("corr-1");
+    }
+
+    [Fact]
+    public async Task HandleForkRun_ShouldRejectMalformedBearerBeforeDispatch()
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>();
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = "source-run",
+                StartAtStepId = "step-b",
+            },
+            service,
+            CreateHttpContext("Bearer token 123"),
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_CALLER_CREDENTIAL");
+        service.Commands.Should().BeEmpty();
     }
 
     [Theory]
@@ -1098,7 +1201,7 @@ public sealed class ChatEndpointsInternalTests
     [InlineData("source-run", "   ")]
     public async Task HandleForkRun_ShouldRejectMissingRequiredFields(string sourceRunId, string startAtStepId)
     {
-        var service = new RecordingForkRunService();
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>();
         var result = await WorkflowCapabilityEndpoints.HandleForkRun(
             new WorkflowForkRunInput
             {
@@ -1106,6 +1209,7 @@ public sealed class ChatEndpointsInternalTests
                 StartAtStepId = startAtStepId,
             },
             service,
+            null,
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -1120,9 +1224,9 @@ public sealed class ChatEndpointsInternalTests
     [Fact]
     public async Task HandleForkRun_ShouldMapStartErrorWithReason()
     {
-        var service = new RecordingForkRunService
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
         {
-            Result = WorkflowForkRunResult.Failure(
+            Result = CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Failure(
                 WorkflowForkRunStartError.StartStepNotFound("source-run", "missing-step")),
         };
 
@@ -1133,15 +1237,15 @@ public sealed class ChatEndpointsInternalTests
                 StartAtStepId = "missing-step",
             },
             service,
+            null,
             CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status422UnprocessableEntity);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         body.Should().Contain("Start step 'missing-step' was not found");
-        body.Should().Contain("StartStepNotFound");
         service.Commands.Should().ContainSingle();
     }
 
@@ -1212,7 +1316,7 @@ public sealed class ChatEndpointsInternalTests
         return await reader.ReadToEndAsync();
     }
 
-    private static DefaultHttpContext CreateHttpContext()
+    private static DefaultHttpContext CreateHttpContext(string? authorization = null)
     {
         var http = new DefaultHttpContext
         {
@@ -1221,6 +1325,8 @@ public sealed class ChatEndpointsInternalTests
                 .AddOptions()
                 .BuildServiceProvider(),
         };
+        if (!string.IsNullOrWhiteSpace(authorization))
+            http.Request.Headers.Authorization = authorization;
         http.Response.Body = new MemoryStream();
         return http;
     }
@@ -1346,24 +1452,6 @@ public sealed class ChatEndpointsInternalTests
             Commands.Add(command);
             if (DispatchException != null)
                 throw DispatchException;
-            return Task.FromResult(Result);
-        }
-    }
-
-    private sealed class RecordingForkRunService : IWorkflowForkRunService
-    {
-        public List<WorkflowForkRunCommand> Commands { get; } = [];
-
-        public WorkflowForkRunResult Result { get; set; } =
-            WorkflowForkRunResult.Failure(
-                WorkflowForkRunStartError.SourceRunNotFound("source-run"));
-
-        public Task<WorkflowForkRunResult> ForkAsync(
-            WorkflowForkRunCommand command,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Commands.Add(command);
             return Task.FromResult(Result);
         }
     }

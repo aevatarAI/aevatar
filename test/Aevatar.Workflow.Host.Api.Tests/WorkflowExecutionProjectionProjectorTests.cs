@@ -891,6 +891,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     LastCommandId = "cmd-current",
                     DefinitionActorId = "definition-1",
                     WorkflowName = "wf-current",
+                    ScopeId = "scope-current",
                     Status = status,
                     Compiled = true,
                     CompilationError = "none",
@@ -906,6 +907,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.CommandId.Should().Be("cmd-current");
         document.DefinitionActorId.Should().Be("definition-1");
         document.WorkflowName.Should().Be("wf-current");
+        document.ScopeId.Should().Be("scope-current");
         document.Status.Should().Be(status);
         document.Compiled.Should().BeTrue();
         document.ExecutionStateCount.Should().Be(0);

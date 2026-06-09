@@ -376,12 +376,13 @@ public static class WorkflowCapabilityEndpoints
 
     public static async Task<IResult> HandleForkRun(
         WorkflowForkRunInput input,
-        [FromServices] IWorkflowForkRunService forkRunService,
+        [FromServices] ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> forkDispatchService,
+        HttpContext? http = null,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(forkRunService);
+        ArgumentNullException.ThrowIfNull(forkDispatchService);
 
         try
         {
@@ -394,7 +395,16 @@ public static class WorkflowCapabilityEndpoints
                 return Results.BadRequest(new { error = "sourceRunId and startAtStepId are required." });
             }
 
-            var result = await forkRunService.ForkAsync(
+            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            if (!callerCredential.Succeeded)
+            {
+                scope.MarkResult(StatusCodes.Status400BadRequest);
+                return Results.Json(
+                    new { error = "Caller credential is invalid.", code = "INVALID_CALLER_CREDENTIAL" },
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            var dispatch = await forkDispatchService.DispatchAsync(
                 new WorkflowForkRunCommand(
                     sourceRunId,
                     startAtStepId,
@@ -403,21 +413,23 @@ public static class WorkflowCapabilityEndpoints
                     NormalizeStringMap(input.VariableOverrides),
                     input.Input,
                     NormalizeOptional(input.CommandId),
-                    NormalizeOptional(input.CorrelationId)),
+                    NormalizeOptional(input.CorrelationId),
+                    ScopeId: NormalizeOptional(input.ScopeId),
+                    CallerCredential: callerCredential.Credential),
                 ct);
 
-            if (!result.Succeeded || result.Receipt == null)
-                return MapForkRunFailure(result.Error, scope);
+            if (!dispatch.Succeeded || dispatch.Receipt == null)
+                return MapForkRunFailure(dispatch.Error, scope);
 
-            var statusUrl = BuildWorkflowRunStatusUrl(result.Receipt.NewRunActorId);
+            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt.NewRunActorId);
             return Results.Accepted(statusUrl, new
             {
                 accepted = true,
-                sourceRunId = result.Receipt.SourceRunId,
-                newRunId = result.Receipt.NewRunActorId,
-                workflowName = result.Receipt.WorkflowName,
-                acceptedCommandId = result.Receipt.CommandId,
-                correlationId = result.Receipt.CorrelationId,
+                sourceRunId = dispatch.Receipt.SourceRunId,
+                newRunActorId = dispatch.Receipt.NewRunActorId,
+                workflowName = dispatch.Receipt.WorkflowName,
+                acceptedCommandId = dispatch.Receipt.CommandId,
+                correlationId = dispatch.Receipt.CorrelationId,
                 statusUrl,
             });
         }
@@ -496,37 +508,38 @@ public static class WorkflowCapabilityEndpoints
     }
 
     private static IResult MapForkRunFailure(
-        WorkflowForkRunStartError? error,
+        WorkflowForkRunStartError error,
         ApiRequestScope scope)
     {
-        if (error == null)
+        var (statusCode, message) = error.Code switch
         {
-            scope.MarkResult(StatusCodes.Status500InternalServerError);
-            return Results.Json(
-                new { error = "Workflow fork failed." },
-                statusCode: StatusCodes.Status500InternalServerError);
-        }
-
-        var statusCode = error.Code switch
-        {
-            WorkflowForkRunStartErrorCode.SourceRunNotFound => StatusCodes.Status404NotFound,
-            WorkflowForkRunStartErrorCode.SourceRunNotTerminal => StatusCodes.Status409Conflict,
-            WorkflowForkRunStartErrorCode.InvalidWorkflowYaml => StatusCodes.Status422UnprocessableEntity,
-            WorkflowForkRunStartErrorCode.StartStepNotFound => StatusCodes.Status422UnprocessableEntity,
-            WorkflowForkRunStartErrorCode.RunCreationFailed => StatusCodes.Status502BadGateway,
-            WorkflowForkRunStartErrorCode.DispatchFailed => StatusCodes.Status502BadGateway,
-            _ => StatusCodes.Status500InternalServerError,
+            WorkflowForkRunStartErrorCode.SourceRunNotFound => (
+                StatusCodes.Status404NotFound,
+                error.Reason),
+            WorkflowForkRunStartErrorCode.SourceRunNotTerminal => (
+                StatusCodes.Status409Conflict,
+                error.Reason),
+            WorkflowForkRunStartErrorCode.InvalidWorkflowYaml => (
+                StatusCodes.Status400BadRequest,
+                error.Reason),
+            WorkflowForkRunStartErrorCode.StartStepNotFound => (
+                StatusCodes.Status400BadRequest,
+                error.Reason),
+            WorkflowForkRunStartErrorCode.RunCreationFailed => (
+                StatusCodes.Status502BadGateway,
+                error.Reason),
+            WorkflowForkRunStartErrorCode.DispatchFailed => (
+                StatusCodes.Status502BadGateway,
+                error.Reason),
+            WorkflowForkRunStartErrorCode.InvalidCallerCredential => (
+                StatusCodes.Status400BadRequest,
+                error.Reason),
+            _ => (
+                StatusCodes.Status500InternalServerError,
+                "Workflow fork dispatch failed."),
         };
         scope.MarkResult(statusCode);
-        return Results.Json(
-            new
-            {
-                error = error.Reason,
-                code = error.Code.ToString(),
-                sourceRunId = error.SourceRunId,
-                startAtStepId = error.StartAtStepId,
-            },
-            statusCode: statusCode);
+        return Results.Json(new { error = message }, statusCode: statusCode);
     }
 
     private static string? NormalizeOptional(string? value)
@@ -558,13 +571,13 @@ public static class WorkflowCapabilityEndpoints
             : normalized;
     }
 
-    private static IReadOnlyDictionary<string, string>? NormalizeStringMap(IDictionary<string, string>? values)
+    private static IReadOnlyDictionary<string, string>? NormalizeStringMap(IDictionary<string, string>? map)
     {
-        if (values == null || values.Count == 0)
+        if (map == null || map.Count == 0)
             return null;
 
         var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in values)
+        foreach (var (key, value) in map)
         {
             var normalizedKey = NormalizeOptional(key);
             if (normalizedKey == null)

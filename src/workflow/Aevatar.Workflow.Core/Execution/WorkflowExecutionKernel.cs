@@ -125,24 +125,20 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var resumeSeed = evt.ResumeSeed;
         var hasResumeSeedStart = resumeSeed != null && !string.IsNullOrWhiteSpace(resumeSeed.StartAtStepId);
         if (hasResumeSeedStart)
-        {
-            foreach (var (key, value) in resumeSeed!.Variables)
-                state.Variables[key] = value ?? string.Empty;
-        }
-
+            MergeStartParametersIntoVariables(state.Variables, resumeSeed!.Variables);
         state.Variables["input"] = evt.Input ?? string.Empty;
         MirrorRunUsageVariables(state);
         MergeStartParametersIntoVariables(state.Variables, evt.Parameters);
         await SaveStateAsync(state, ctx, ct);
 
         var entry = hasResumeSeedStart
-            ? _workflow.Steps.FirstOrDefault(s => string.Equals(s.Id, resumeSeed!.StartAtStepId, StringComparison.Ordinal))
+            ? _workflow.GetStep(resumeSeed!.StartAtStepId)
             : _workflow.Steps.FirstOrDefault();
         if (entry == null)
         {
             await CleanupRunAsync(state, ctx, ct);
             var error = hasResumeSeedStart
-                ? $"resume start step '{resumeSeed!.StartAtStepId}' not found in workflow"
+                ? $"resume seed start step '{resumeSeed!.StartAtStepId}' was not found"
                 : "无步骤";
             await PublishWorkflowCompletedAsync(
                 ctx,
@@ -158,9 +154,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
 
         var startInput = hasResumeSeedStart && resumeSeed!.Variables.TryGetValue("input", out var seedInput)
-            ? seedInput
+            ? seedInput ?? string.Empty
             : evt.Input ?? string.Empty;
-        await DispatchStepAsync(entry, startInput ?? string.Empty, state, ctx, ct);
+        await DispatchStepAsync(entry, startInput, state, ctx, ct);
     }
 
     private async Task HandleTimeoutFiredAsync(

@@ -757,6 +757,62 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_WhenLongRunningLarkAutomation_ShouldRunInteractionPublishThenScheduleTools()
+    {
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("conversation:c");
+        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var toolOrder = new List<string>();
+        var providerFactory = new OrderedAutomationToolProviderFactory();
+        var replyGenerator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                new StaticAgentRunToolSource(
+                [
+                    new RecordingAgentTool("reply_with_interaction", toolOrder, """{"status":"queued"}"""),
+                    new RecordingAgentTool("ornn_publish_skill", toolOrder, """{"skill_ref":"daily-lark-digest"}"""),
+                    new RecordingAgentTool("scheduled_agent_creator", toolOrder, """{"accepted":true,"agent_id":"agent-1"}"""),
+                ]),
+            ],
+            localSkillCatalog: new LocalSkillCatalog());
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var activity = BuildRelayActivity();
+        activity.Content.Text = "每天早上把 GitHub 进展总结发到这个 Lark 群";
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-long-lark-automation",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-long-lark-automation",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
+            }).ToPayload(),
+            LlmControl = ControlForAgentRun(rounds: 6).ToPayload(),
+            Metadata =
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-long-lark-automation",
+            },
+        });
+
+        toolOrder.Should().Equal("reply_with_interaction", "ornn_publish_skill", "scheduled_agent_creator");
+        providerFactory.RoundToolNames.Should().Equal("reply_with_interaction", "ornn_publish_skill", "scheduled_agent_creator", "<final>");
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.ProducedReplyText.Should().Contain("scheduled");
+    }
+
+    [Fact]
     public async Task HandleStartAsync_WhenTargetRefIsNullOrNone_LeavesRequestUnchanged()
     {
         // Defense-in-depth: turns without a chat-route policy match must
@@ -3236,6 +3292,57 @@ public sealed class AgentRunGAgentTests
         }
     }
 
+    private sealed class OrderedAutomationToolProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        private static readonly string[] ToolNames =
+        [
+            "reply_with_interaction",
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+        ];
+
+        private int _round;
+
+        public string Name => "ordered-automation-tool-provider";
+
+        public List<string> RoundToolNames { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var round = _round++;
+            if (round < ToolNames.Length)
+            {
+                var toolName = ToolNames[round];
+                RoundToolNames.Add(toolName);
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = $"call-{round + 1}",
+                        Name = toolName,
+                        ArgumentsJson = "{}",
+                    },
+                };
+                await Task.CompletedTask;
+                yield return new LLMStreamChunk { IsLast = true };
+                yield break;
+            }
+
+            RoundToolNames.Add("<final>");
+            yield return new LLMStreamChunk { DeltaContent = "scheduled" };
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+        }
+    }
+
     private sealed class CountingAgentRunToolSource(IAgentTool tool) : IAgentToolSource
     {
         public int DiscoverCount { get; private set; }
@@ -3244,6 +3351,36 @@ public sealed class AgentRunGAgentTests
         {
             DiscoverCount++;
             return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+        }
+    }
+
+    private sealed class StaticAgentRunToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(tools);
+        }
+    }
+
+    private sealed class RecordingAgentTool(
+        string name,
+        List<string> order,
+        string resultJson) : IAgentTool
+    {
+        public string Name => name;
+
+        public string Description => $"Test tool {name}.";
+
+        public string ParametersSchema => """{"type":"object","additionalProperties":true}""";
+
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            order.Add(name);
+            return Task.FromResult(resultJson);
         }
     }
 

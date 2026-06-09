@@ -136,6 +136,7 @@ public static class WorkflowValidator
         }
 
         ValidateRawActorLifecycleParameters(step, errors);
+        ValidatePresentationRules(step, stepType, errors);
 
         if (stepType == "conditional")
         {
@@ -235,6 +236,18 @@ public static class WorkflowValidator
         if (stepType == "parallel")
         {
             ValidateParallelVoteAgreement(step, errors);
+        }
+    }
+
+    private static void ValidatePresentationRules(
+        StepDefinition step,
+        string stepType,
+        List<string> errors)
+    {
+        if (StepPresentation.HasInteractionTemplateSpec(step.Presentation?.InteractionTemplateSpec) &&
+            !string.Equals(stepType, "notify", StringComparison.Ordinal))
+        {
+            errors.Add($"步骤 '{step.Id}' 的 interaction_template_spec 只允许用于 notify 步骤");
         }
     }
 

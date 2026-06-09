@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions;
@@ -12,27 +13,23 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowRunForkCoordinatorTests
 {
     [Fact]
-    public async Task BeforePublishAsync_WhenCommittedEventIsNotForkRequest_ShouldNotResolveForkService()
+    public async Task BeforePublishAsync_WhenCommittedEventIsNotForkRequest_ShouldNotDispatchForkCommand()
     {
-        var resolved = false;
-        var coordinator = new WorkflowRunForkCoordinator(() =>
-        {
-            resolved = true;
-            throw new InvalidOperationException("Fork service should not be resolved for unrelated committed events.");
-        });
+        var forkDispatchService = new RecordingForkDispatchService();
+        var coordinator = new WorkflowRunForkCoordinator(forkDispatchService);
 
         await coordinator.BeforePublishAsync(
             CreateContext(new StringValue { Value = "ignored" }),
             CancellationToken.None);
 
-        resolved.Should().BeFalse();
+        forkDispatchService.Commands.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task BeforePublishAsync_WhenCommittedForkRequestedEvent_ShouldCallForkService()
+    public async Task BeforePublishAsync_WhenCommittedForkRequestedEvent_ShouldDispatchForkCommand()
     {
-        var forkService = new RecordingForkRunService();
-        var coordinator = new WorkflowRunForkCoordinator(() => forkService);
+        var forkDispatchService = new RecordingForkDispatchService();
+        var coordinator = new WorkflowRunForkCoordinator(forkDispatchService);
         var requested = new WorkflowRunForkRequestedEvent
         {
             SourceRunId = "run-source",
@@ -43,12 +40,13 @@ public sealed class WorkflowRunForkCoordinatorTests
 
         await coordinator.BeforePublishAsync(CreateContext(requested), CancellationToken.None);
 
-        forkService.Commands.Should().ContainSingle();
-        var command = forkService.Commands.Single();
+        forkDispatchService.Commands.Should().ContainSingle();
+        var command = forkDispatchService.Commands.Single();
         command.SourceRunId.Should().Be("run-source");
         command.StartAtStepId.Should().Be("failed-step");
         command.InlineYaml.Should().BeNull();
         command.Attempt.Should().Be(2);
+        command.ScopeId.Should().Be("scope-1");
     }
 
     private static CommittedStatePublicationContext CreateContext(IMessage evt) =>
@@ -70,24 +68,26 @@ public sealed class WorkflowRunForkCoordinatorTests
             },
         };
 
-    private sealed class RecordingForkRunService : IWorkflowForkRunService
+    private sealed class RecordingForkDispatchService
+        : ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
     {
         public List<WorkflowForkRunCommand> Commands { get; } = [];
 
-        public Task<WorkflowForkRunResult> ForkAsync(
+        public Task<CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>> DispatchAsync(
             WorkflowForkRunCommand command,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Commands.Add(command);
-            return Task.FromResult(WorkflowForkRunResult.Accepted(new WorkflowForkRunAcceptedReceipt(
-                command.SourceRunId,
-                "new-run",
-                "wf",
-                true,
-                "cmd",
-                "corr",
-                DateTimeOffset.UtcNow)));
+            return Task.FromResult(CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Success(
+                new WorkflowForkRunAcceptedReceipt(
+                    command.SourceRunId,
+                    "new-run",
+                    "wf",
+                    true,
+                    "cmd",
+                    "corr",
+                    DateTimeOffset.UtcNow)));
         }
     }
 }
