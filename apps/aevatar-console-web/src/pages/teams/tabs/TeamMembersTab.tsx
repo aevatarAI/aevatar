@@ -1,4 +1,9 @@
-import { CheckCircleOutlined, EditOutlined, ToolOutlined } from "@ant-design/icons";
+import {
+  CheckCircleOutlined,
+  EditOutlined,
+  PlusOutlined,
+  ToolOutlined,
+} from "@ant-design/icons";
 import { Button, Space, Tooltip, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
@@ -106,14 +111,34 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
       <AevatarPanel
         title={intl.formatMessage({ id: "teams.members.title" })}
         extra={
-          <Typography.Text style={{ fontSize: 12 }} type="secondary">
-            {rosterRows.length > 0
-              ? intl.formatMessage(
-                  { id: "teams.members.count" },
-                  { count: rosterRows.length },
-                )
-              : intl.formatMessage({ id: "teams.members.roster" })}
-          </Typography.Text>
+          <Space size={10} wrap>
+            <Typography.Text style={{ fontSize: 12 }} type="secondary">
+              {rosterRows.length > 0
+                ? intl.formatMessage(
+                    { id: "teams.members.count" },
+                    { count: rosterRows.length },
+                  )
+                : intl.formatMessage({ id: "teams.members.roster" })}
+            </Typography.Text>
+            {createMemberHref ? (
+              <Button
+                href={createMemberHref}
+                icon={<PlusOutlined />}
+                onClick={handleNavigate(createMemberHref)}
+                size="small"
+                style={{
+                  borderRadius: 999,
+                  boxShadow: token.boxShadowTertiary,
+                  fontWeight: 600,
+                  height: 30,
+                  paddingInline: 14,
+                }}
+                type="primary"
+              >
+                {intl.formatMessage({ id: "teams.members.actions.create" })}
+              </Button>
+            ) : null}
+          </Space>
         }
       >
         <Typography.Text type="secondary">
@@ -173,7 +198,9 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     {intl.formatMessage({ id: "teams.members.columns.implementation" })}
                   </span>
                   <span>{intl.formatMessage({ id: "teams.members.columns.service" })}</span>
-                  <span>{intl.formatMessage({ id: "teams.members.columns.actions" })}</span>
+                  <span style={{ justifySelf: "flex-end" }}>
+                    {intl.formatMessage({ id: "teams.members.columns.actions" })}
+                  </span>
                 </div>
                 {rosterRows.map((row, index) => (
                   <div
@@ -254,8 +281,20 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         }
                       />
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                      <DetailPill compact style={row.lifecycleStyle} text={row.lifecycleLabel} />
+                    <div
+                      style={{
+                        alignItems: "flex-start",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                        minWidth: 0,
+                      }}
+                    >
+                      <DetailPill
+                        compact
+                        style={{ ...row.lifecycleStyle, maxWidth: "100%", width: "fit-content" }}
+                        text={row.lifecycleLabel}
+                      />
                       <Typography.Text style={{ fontFamily: factValueFontFamily, fontSize: 12 }}>
                         {row.implementationKind}
                       </Typography.Text>
@@ -265,7 +304,11 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       strong={false}
                       value={row.serviceId}
                     />
-                    <Space wrap size={8}>
+                    <Space
+                      wrap
+                      size={8}
+                      style={{ justifyContent: "flex-end", width: "100%" }}
+                    >
                       {row.isEntryMember ? (
                         <Button
                           icon={<CheckCircleOutlined />}
@@ -275,6 +318,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           loading={entryActionBusyMemberId === row.memberId}
                           onClick={onClearEntry}
                           size="small"
+                          type="text"
                         >
                           {intl.formatMessage({ id: "teams.members.actions.clearEntry" })}
                         </Button>
@@ -286,6 +330,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           loading={entryActionBusyMemberId === row.memberId}
                           onClick={() => onSetEntry(row.memberId)}
                           size="small"
+                          type="text"
                         >
                           {intl.formatMessage({ id: "teams.members.actions.setEntry" })}
                         </Button>
@@ -295,6 +340,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         icon={<EditOutlined />}
                         onClick={handleNavigate(row.editStudioHref)}
                         size="small"
+                        type="text"
                       >
                         {intl.formatMessage({ id: "teams.members.actions.editInStudio" })}
                       </Button>
@@ -303,7 +349,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         icon={<ToolOutlined />}
                         onClick={handleNavigate(row.buildStudioHref)}
                         size="small"
-                        type="primary"
+                        style={{ color: token.colorPrimary }}
+                        type="text"
                       >
                         {intl.formatMessage({ id: "teams.members.actions.build" })}
                       </Button>
