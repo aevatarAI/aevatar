@@ -141,6 +141,102 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldReturnBadRequest_WhenServiceInvocationAuthIsEmpty()
+    {
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest());
+
+        var result = await ScheduledDispatchEndpoints.Create(
+            request,
+            new RecordingScheduledDispatchApplicationService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
+    public async Task Create_ShouldAcceptTenantlessServiceInvocationNyxIdSubject()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
+                {
+                    Platform = "GitHub",
+                    ExternalUserId = "ou-user-1",
+                },
+                Scope = " proxy ",
+            },
+        });
+
+        var result = await ScheduledDispatchEndpoints.Create(request, service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().NotBeNull();
+        var subject = auth.SenderNyxId.Subject;
+        subject.Platform.Should().Be("github");
+        subject.Tenant.Should().BeEmpty();
+        subject.ExternalUserId.Should().Be("ou-user-1");
+    }
+
+    [Fact]
+    public async Task Create_ShouldReturnBadRequest_WhenServiceInvocationAuthSubjectIsNull()
+    {
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+            {
+                Subject = null!,
+                Scope = "proxy",
+            },
+        });
+
+        var result = await ScheduledDispatchEndpoints.Create(
+            request,
+            new RecordingScheduledDispatchApplicationService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
+    public async Task Create_ShouldReturnBadRequest_WhenServiceInvocationAuthFieldsAreBlank()
+    {
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
+                {
+                    Platform = " ",
+                    Tenant = "tenant-1",
+                    ExternalUserId = "ou-user-1",
+                },
+                Scope = "",
+            },
+        });
+
+        var result = await ScheduledDispatchEndpoints.Create(
+            request,
+            new RecordingScheduledDispatchApplicationService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
     public async Task Enable_ShouldMapNotFound()
     {
         var service = new RecordingScheduledDispatchApplicationService
@@ -370,6 +466,30 @@ public sealed class ScheduledDispatchEndpointsTests
                     Id = "template",
                     Payload = Any.Pack(new StringValue { Value = "run" }),
                 },
+            },
+        };
+
+    private static ScheduledDispatchConfigurationHttpRequest CreateServiceInvocationRequestWithAuth(
+        ScheduledServiceInvocationAuthHttpRequest auth) =>
+        new()
+        {
+            ScheduleId = "schedule-1",
+            DisplayName = "Run service",
+            CronExpression = "0 10 * * *",
+            Timezone = "UTC",
+            Enabled = false,
+            ServiceInvocation = new ScheduledDispatchServiceInvocationTargetHttpRequest
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "tenant",
+                    AppId = "app",
+                    Namespace = "default",
+                    ServiceId = "svc",
+                },
+                EndpointId = "run",
+                Payload = Any.Pack(new StringValue { Value = "run" }),
+                Auth = auth,
             },
         };
 

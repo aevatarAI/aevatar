@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 
@@ -101,9 +102,53 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var correlationId = ResolveCorrelationId(request, commandId);
         var runId = ResolveRunId(request, commandId);
         await RegisterRunAsync(target, request, runId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
-        var envelope = CreateEnvelope(run.ActorId, Any.Pack(chatRequest), commandId, correlationId);
+        var envelope = CreateEnvelope(run.ActorId, Any.Pack(ToWorkflowChatRequest(chatRequest)), commandId, correlationId);
         await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
         return CreateReceipt(target, run.ActorId, commandId, correlationId, runId);
+    }
+
+    private static WorkflowChatRequestEvent ToWorkflowChatRequest(ChatRequestEvent source)
+    {
+        var request = new WorkflowChatRequestEvent
+        {
+            Prompt = source.Prompt ?? string.Empty,
+            SessionId = source.SessionId ?? string.Empty,
+            TimeoutMs = source.TimeoutMs,
+            ScopeId = source.ScopeId ?? string.Empty,
+            ConnectorHttpAuthorization = source.ConnectorHttpAuthorization ?? string.Empty,
+        };
+        foreach (var part in source.InputParts)
+        {
+            request.InputParts.Add(new WorkflowChatInputPartPayload
+            {
+                Kind = part.Kind switch
+                {
+                    ChatContentPartKind.Text => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Text,
+                    ChatContentPartKind.Image => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image,
+                    ChatContentPartKind.Audio => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio,
+                    ChatContentPartKind.Video => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video,
+                    _ => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified,
+                },
+                Text = part.Text ?? string.Empty,
+                DataBase64 = part.DataBase64 ?? string.Empty,
+                MediaType = part.MediaType ?? string.Empty,
+                Uri = part.Uri ?? string.Empty,
+                Name = part.Name ?? string.Empty,
+            });
+        }
+        foreach (var (key, value) in source.Headers)
+            request.Headers[key] = value;
+        foreach (var (key, value) in source.Metadata)
+            request.Metadata[key] = value;
+        request.LlmControl = new WorkflowLlmControlContext
+        {
+            ModelOverride = source.LlmControl?.ModelOverride ?? string.Empty,
+            UserMemoryPrompt = source.LlmControl?.UserMemoryPrompt ?? string.Empty,
+            SenderNyxIdAccessToken = source.LlmControl?.SenderNyxIdAccessToken ?? string.Empty,
+        };
+        if (source.LlmControl?.HasMaxToolRoundsOverride == true)
+            request.LlmControl.MaxToolRoundsOverride = source.LlmControl.MaxToolRoundsOverride;
+        return request;
     }
 
     private async Task RegisterRunAsync(
