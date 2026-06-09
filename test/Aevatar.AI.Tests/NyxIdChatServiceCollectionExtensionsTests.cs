@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
@@ -31,5 +32,17 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IAgentToolReceiptRenderer) &&
             descriptor.ImplementationType == typeof(AgentToolReceiptRenderer));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandObservationScopeLeasePreparation<
+                NyxIdChatCommand,
+                NyxIdChatCommandTarget,
+                NyxIdChatAcceptedReceipt,
+                NyxIdChatStartError>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandObservationScopeLeasePreparation<
+                NyxIdApprovalCommand,
+                NyxIdChatCommandTarget,
+                NyxIdChatAcceptedReceipt,
+                NyxIdChatStartError>));
     }
 }
