@@ -21,16 +21,14 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         Func<ProjectionRuntimeScopeKey, TContext, TLease> leaseFactory,
         IAgentTypeVerifier? agentTypeVerifier = null,
         IStreamPubSubMaintenance? streamPubSubMaintenance = null,
-        ILoggerFactory? loggerFactory = null,
-        IStreamProvider? streams = null)
+        ILoggerFactory? loggerFactory = null)
     {
         _scopeRuntime = new ProjectionScopeActorRuntime<TScopeAgent>(
             runtime,
             dispatchPort,
             agentTypeVerifier,
             streamPubSubMaintenance,
-            loggerFactory?.CreateLogger<ProjectionScopeActorRuntime<TScopeAgent>>(),
-            streams);
+            loggerFactory?.CreateLogger<ProjectionScopeActorRuntime<TScopeAgent>>());
         _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
         _leaseFactory = leaseFactory ?? throw new ArgumentNullException(nameof(leaseFactory));
     }

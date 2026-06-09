@@ -1,7 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
-using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -27,7 +25,7 @@ public sealed class CommittedStateProjectionActivationHookTests
     }
 
     [Fact]
-    public async Task BeforePublishAsync_ShouldDispatchTriggeringCommittedObservationAfterEnsureCommand()
+    public async Task BeforePublishAsync_ShouldOnlyEnsureProjectionScopeBeforeNormalPublication()
     {
         var activation = new RecordingActivationService<TestLease>();
         var dispatchPort = new RecordingActorDispatchPort();
@@ -42,16 +40,7 @@ public sealed class CommittedStateProjectionActivationHookTests
         await hook.BeforePublishAsync(BuildContext(), CancellationToken.None);
 
         activation.Requests.Should().ContainSingle();
-        dispatchPort.Dispatched.Should().ContainSingle();
-        var dispatched = dispatchPort.Dispatched[0];
-        dispatched.actorId.Should().Be("projection.durable.scope:projection-a:actor-1");
-        dispatched.envelope.Route.IsObserverPublication().Should().BeTrue();
-        dispatched.envelope.Payload!.Unpack<CommittedStateEventPublished>()
-            .StateEvent.EventId.Should().Be("evt-1");
-        StreamForwardingRules.IsForwardedEnvelopeForTarget(
-            dispatched.envelope,
-            "projection.durable.scope:projection-a:actor-1").Should().BeTrue();
-        StreamForwardingRules.IsTransitOnlyForwarding(dispatched.envelope).Should().BeFalse();
+        dispatchPort.Dispatched.Should().BeEmpty();
     }
 
     [Fact]

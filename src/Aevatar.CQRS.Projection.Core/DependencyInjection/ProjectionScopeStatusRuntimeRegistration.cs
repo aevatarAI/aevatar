@@ -54,8 +54,7 @@ public static class ProjectionScopeStatusRuntimeRegistration
                 (_, context) => new ProjectionScopeStatusRuntimeLease(context),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
-                sp.GetService<ILoggerFactory>(),
-                streams: sp.GetService<IStreamProvider>()));
+                sp.GetService<ILoggerFactory>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<ProjectionScopeStatusRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<
                 ProjectionScopeStatusRuntimeLease,

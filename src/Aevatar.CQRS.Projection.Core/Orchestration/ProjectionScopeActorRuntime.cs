@@ -12,7 +12,6 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IAgentTypeVerifier? _agentTypeVerifier;
     private readonly IStreamPubSubMaintenance? _streamPubSubMaintenance;
-    private readonly IStreamProvider? _streams;
     private readonly ILogger<ProjectionScopeActorRuntime<TScopeAgent>> _logger;
 
     public ProjectionScopeActorRuntime(
@@ -20,15 +19,13 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         IActorDispatchPort dispatchPort,
         IAgentTypeVerifier? agentTypeVerifier = null,
         IStreamPubSubMaintenance? streamPubSubMaintenance = null,
-        ILogger<ProjectionScopeActorRuntime<TScopeAgent>>? logger = null,
-        IStreamProvider? streams = null)
+        ILogger<ProjectionScopeActorRuntime<TScopeAgent>>? logger = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _agentTypeVerifier = agentTypeVerifier;
         _streamPubSubMaintenance = streamPubSubMaintenance;
         _logger = logger ?? NullLogger<ProjectionScopeActorRuntime<TScopeAgent>>.Instance;
-        _streams = streams;
     }
 
     public async Task EnsureExistsAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
@@ -104,19 +101,5 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         var envelope = ProjectionScopeCommandEnvelopeFactory.Create(payload, actorId);
         envelope.Route = EnvelopeRouteSemantics.CreateDirect("projection.scope.port", actorId);
         _ = await _dispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
-    }
-
-    public Task EnsureObservationRelayAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
-    {
-        if (_streams == null || string.IsNullOrWhiteSpace(scopeKey.RootActorId))
-            return Task.CompletedTask;
-
-        return _streams
-            .GetStream(scopeKey.RootActorId)
-            .UpsertRelayAsync(
-                ProjectionScopeObservationRelayBinding.Create(
-                    scopeKey.RootActorId,
-                    ProjectionScopeActorId.Build(scopeKey)),
-                ct);
     }
 }
