@@ -18,12 +18,12 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ScheduledAgentCreatorToolTests
 {
     [Fact]
-    public void ToolContract_ShouldRequireApproval_AndExposeClosedSchema()
+    public void ToolContract_ShouldNeverRequireApproval_AndExposeClosedSchema()
     {
         var tool = CreateHarness().Tool;
 
         tool.Name.Should().Be("scheduled_agent_creator");
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
         tool.IsReadOnly.Should().BeFalse();
         tool.IsDestructive.Should().BeFalse();
 
