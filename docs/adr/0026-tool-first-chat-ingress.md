@@ -18,7 +18,7 @@ Tool prefilled arguments must not be interpreted as actor addressing.
 D5/D6 describe the later session-owned execution topology. `ChatRunActor` is
 not implemented in the current v1 slice; `/v1/responses` `wait=complete`
 therefore returns the accepted/streaming invocation receipt and clients observe
-terminal completion through `aevatar_observe_run` or `aevatar_query_readmodel`.
+terminal completion through typed `aevatar_observe_run` targets.
 `VoiceSessionActor` is also not implemented by this ADR slice. Until that topology
 exists, ordinary `/ws/voice` supports only typed
 `tool_choice_hint.voice_attach_target` attachment; pure model forwarding
@@ -111,8 +111,7 @@ repository (no external repo changes — CLAUDE.md §"外部仓库无改动权")
 | `aevatar_invoke_gagent` | `actor_id`/`actor_name`, typed `payload` | `{run_id, status, stream_topic?, result?}` | `stream` |
 | `aevatar_invoke_team` | `team_id`, `endpoint_id`, typed `payload` | same | `stream` |
 | `aevatar_start_workflow` | `workflow_id`, typed `inputs` | same | `stream` |
-| `aevatar_observe_run` | `run_id` | `{status, recent_events, partial_output}` | — |
-| `aevatar_query_readmodel` | `readmodel_name`, typed `query` | typed result | — |
+| `aevatar_observe_run` | typed oneof target: `service_run`, `gagent_terminal_correlation`, `gagent_terminal_session`, or `workflow_current_state` | `{status, recent_events, partial_output}` | — |
 
 Payloads are typed proto, not free-form JSON. The dispatcher validates the
 proto schema before executing; a malformed call returns a structured error
@@ -234,7 +233,9 @@ deferred:
 - `/ws/voice/{actorId}` dev bypass is preserved.
 - This ADR does not redesign the read-path for sub-run state observation;
   `aevatar_observe_run` reads through the existing readmodel projection
-  surfaces. No new readmodel is introduced.
+  surfaces, one typed target per call. Ordinary workflow queries stay on
+  the workflow-owned `workflow_actor_current_state`, `workflow_status`, and
+  `event_query` tools. No new readmodel is introduced.
 
 ## Verification
 
@@ -290,7 +291,7 @@ Stage 1's tool sources are merged.
 
 | Stage | Scope | Breaking? |
 |---|---|---|
-| **1** | Implement `aevatar_invoke_gagent` / `_team` / `_workflow` / `_observe_run` / `_query_readmodel` as `IAgentToolSource`. Wire into existing ToolCallLoop. Verify Lark outbound user-scoped path (D7 prerequisite). | No |
+| **1** | Implement `aevatar_invoke_gagent` / `_team` / `_workflow` / `_observe_run` as `IAgentToolSource`. Wire into existing ToolCallLoop. Verify Lark outbound user-scoped path (D7 prerequisite). | No |
 | **2** | Extend `ForwardToModel` proto with `tool_set_ref` + `tool_choice_hint`. Policy authors express GAgent, team, and workflow targets directly as tool-first `ForwardToModel` actions. ChatRun-owned SSE session continuation remains deferred. | No |
 | **3** | Delete legacy wire actions and migration path. Reserve old proto tags/names for `ForwardToGAgent`, `ForwardToTeam`, `ForwardToWorkflow`, and `Bypass`; no new policy writer may emit them. | Yes (clients still using legacy actions) |
 | **4** | Remove code paths: `ResponsesEndpoints.cs:779-927`, `AgentRunGAgent.cs:1108-1141`, resolver branches for legacy actions. `/v1/messages` 501 fallback for these actions deleted. | Yes (clients still using legacy actions) |
