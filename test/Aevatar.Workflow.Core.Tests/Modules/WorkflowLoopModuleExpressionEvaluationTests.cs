@@ -128,7 +128,9 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             .OfType<StepRequestEvent>()
             .Should()
             .NotContain(request => request.StepId == "disconnected");
-        ctx.Published.Should().ContainSingle(x => x.Event is WorkflowCompletedEvent);
+        ctx.Published.Should().ContainSingle(x =>
+            x.Direction == TopologyAudience.Parent &&
+            x.Event is WorkflowCompletedEvent);
     }
 
     [Fact]

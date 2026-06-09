@@ -319,6 +319,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         steps:
           - id: call_level1
             type: workflow_call
+            next: format_final_output
             parameters:
               workflow: "subworkflow_level1"
 
@@ -335,6 +336,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         steps:
           - id: call_level2
             type: workflow_call
+            next: reverse_lines_level1
             parameters:
               workflow: "subworkflow_level2"
 
@@ -350,6 +352,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         steps:
           - id: call_level3
             type: workflow_call
+            next: distinct_level2
             parameters:
               workflow: "subworkflow_level3"
 
