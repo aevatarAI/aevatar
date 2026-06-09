@@ -81,6 +81,52 @@ public sealed class ResponsesToolClassificationTests
     }
 
     [Fact]
+    public async Task ClassifyAsync_WhenProviderDiscoveryFails_ShouldContinueWithOtherProviders()
+    {
+        var logger = new RecordingLogger();
+
+        var result = await ResponsesToolClassifier.ClassifyAsync(
+            [
+                new ResponsesApplicationToolDeclaration("client_tool", "client tool", """{"type":"object"}""", "client-hash"),
+            ],
+            [
+                new FaultingResponsesToolProvider(),
+                new RecordingResponsesToolProvider(
+                    [new RecordingTool("client_tool", """{"type":"object"}""", "{}")],
+                    [new RecordingTool("use_skill", """{"type":"object"}""", "{}")]),
+            ],
+            ToolProviderContext,
+            logger);
+
+        result.ForwardedTools.Should().BeEmpty();
+        result.SubstitutedToolNames.Should().ContainSingle("client_tool");
+        result.AdditiveToolNames.Should().ContainSingle("use_skill");
+        result.EffectiveTools.Select(static tool => tool.Name)
+            .Should().Equal("client_tool", "use_skill");
+        logger.Messages.Should().Contain(message =>
+            message.Contains("substitute tool discovery failed", StringComparison.Ordinal));
+        logger.Messages.Should().Contain(message =>
+            message.Contains("additive tool discovery failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_WhenCallerCancels_ShouldPropagateCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var act = () => ResponsesToolClassifier.ClassifyAsync(
+                [],
+                [new RecordingResponsesToolProvider([], [])],
+                ToolProviderContext,
+                new RecordingLogger(),
+                cts.Token)
+            .AsTask();
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public void ResponsesForwardedTool_ShouldExposeDeclarationAndRejectNull()
     {
         ((Action)(() => new ResponsesForwardedTool(null!)))
@@ -153,6 +199,21 @@ public sealed class ResponsesToolClassificationTests
             ResponsesToolProviderContext context,
             CancellationToken ct = default) =>
             ValueTask.FromResult(additiveTools);
+    }
+
+    private sealed class FaultingResponsesToolProvider : IResponsesToolProvider
+    {
+        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromException<IReadOnlyList<IAgentTool>>(
+                new InvalidOperationException("substitute discovery failed"));
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromException<IReadOnlyList<IAgentTool>>(
+                new InvalidOperationException("additive discovery failed"));
     }
 
     private sealed class EmptyResponsesToolProvider : IResponsesToolProvider;

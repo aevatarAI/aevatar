@@ -73,8 +73,22 @@ public static class ResponsesToolClassifier
         foreach (var provider in providerList)
         {
             ct.ThrowIfCancellationRequested();
-            discoveredSubstituteTools.AddRange(
-                await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
+            try
+            {
+                discoveredSubstituteTools.AddRange(
+                    await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Responses substitute tool discovery failed for provider {ProviderType}; continuing without that provider.",
+                    provider.GetType().Name);
+            }
         }
 
         var substituteTools = discoveredSubstituteTools
@@ -86,8 +100,22 @@ public static class ResponsesToolClassifier
         foreach (var provider in providerList)
         {
             ct.ThrowIfCancellationRequested();
-            discoveredAdditiveTools.AddRange(
-                await provider.GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
+            try
+            {
+                discoveredAdditiveTools.AddRange(
+                    await provider.GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Responses additive tool discovery failed for provider {ProviderType}; continuing without that provider.",
+                    provider.GetType().Name);
+            }
         }
 
         var additiveTools = discoveredAdditiveTools
