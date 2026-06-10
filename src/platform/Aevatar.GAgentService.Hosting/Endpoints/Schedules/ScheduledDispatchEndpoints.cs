@@ -125,7 +125,7 @@ public static class ScheduledDispatchEndpoints
 
     internal static async Task<IResult> Delete(
         string scheduleId,
-        ScheduledDispatchStateChangeHttpRequest? input,
+        [FromBody] ScheduledDispatchStateChangeHttpRequest? input,
         [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
@@ -240,7 +240,8 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
             CronExpression: CronExpression,
             Timezone: Timezone ?? string.Empty,
             Enabled: Enabled,
-            Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal));
+            Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            ScheduleKind: ScheduledDispatchScheduleKind.Workflow);
 
     private ScheduledDispatchTargetDescriptor ResolveTarget()
     {

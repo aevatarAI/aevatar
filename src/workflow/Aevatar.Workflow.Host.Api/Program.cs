@@ -10,7 +10,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Bootstrap.Hosting;
-using Aevatar.GAgentService.Hosting.DependencyInjection;
+using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Host.Api;
 
@@ -23,7 +23,7 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddAevatarPlatform();
-builder.Services.AddScheduledDispatchCapability(builder.Configuration);
+builder.AddGAgentServiceCapabilityBundle();
 builder.AddAevatarWorkflowObservability();
 
 var app = builder.Build();

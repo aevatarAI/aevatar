@@ -32,6 +32,7 @@ public sealed class ScheduledDispatchEndpointsTests
         configuration.Target.ServiceInvocation!.EndpointId.Should().Be("chat");
         configuration.Target.ServiceInvocation.Identity.ServiceId.Should().Be("daily-workflow");
         configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("run daily");
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         configuration.CronExpression.Should().Be("0 9 * * *");
         configuration.Timezone.Should().Be("UTC");
         configuration.Enabled.Should().BeTrue();
