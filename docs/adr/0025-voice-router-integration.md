@@ -43,6 +43,13 @@ and provider state machines.
 - Explicit actorId bypass stays at `GET /ws/voice/{actorId}`, but Mainnet Host
   gates it with the `voice-dev` authorization policy (`voice:bypass` scope or
   admin/owner role).
+- Device-originated push events reuse the existing NyxID HTTP Event Gateway to
+  Aevatar `/api/device-events/{registrationId}` path. The device callback
+  facade dispatches a typed `DeviceInbound` protobuf directly to the target
+  actor. `VoicePresenceModule` may admit that direct envelope only when the
+  host explicitly configures the exact protobuf `Any.TypeUrl`, the publisher is
+  `device-events.callback`, the direct target is the current actor, and the
+  actor already has an active voice session or lease.
 
 ## Boundaries
 
@@ -63,6 +70,12 @@ and provider state machines.
 - Rejections that can be known before upgrade use HTTP status codes
   (`403`, `404`, `501`, `503`). WebSocket close `1008` is reserved for failures
   discovered after upgrade.
+- Voice direct external-event admission is not a second webhook, active-session
+  router, readmodel session lookup, or module signal bridge. It reuses the
+  target actor's existing event turn, voice external-event policy, actor-owned
+  dedupe fence, pending injection buffer, and provider injection path. No active
+  voice session means drop and log in v1; it must not create a provider session,
+  create a voice lease, or fall back to text notification.
 - This ADR does not solve #560 stream-session robustness concerns such as
   cross-host reconnect, seq/ack, or replay.
 
@@ -77,3 +90,7 @@ and provider state machines.
 - `/ws/voice/{actorId}` rejects callers without `voice:bypass` or admin/owner.
 - Static checks show no ChatRouting dependency inside
   `Aevatar.Foundation.VoicePresence`.
+- A direct `DeviceInbound` envelope from `device-events.callback` is injected
+  only when its exact TypeUrl is configured and the target actor has an active
+  voice session; untrusted publishers, target mismatch, unknown TypeUrls, and
+  no-session cases are rejected before provider injection.

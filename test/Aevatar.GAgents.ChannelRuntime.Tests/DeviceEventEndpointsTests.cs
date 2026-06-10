@@ -75,6 +75,9 @@ public class DeviceEventEndpointsTests
     [InlineData("scene_summary", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Camera)]
     [InlineData("motion_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion)]
     [InlineData("speech_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Speech)]
+    [InlineData("doorbell_pressed", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("smoke_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("water_leak_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
     public void ParseCallbackPayload_known_v1_event_types_map_to_typed_payload_cases(
         string eventType,
         Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase expectedPayloadCase)
@@ -366,6 +369,38 @@ public class DeviceEventEndpointsTests
 
         inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion);
         inbound.Motion.Detected.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("doorbell_pressed", "info", Aevatar.GAgents.Household.DeviceEventSeverity.Info)]
+    [InlineData("smoke_detected", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
+    [InlineData("water_leak_detected", "warning", Aevatar.GAgents.Household.DeviceEventSeverity.Warning)]
+    public void ParseCallbackPayload_home_alert_events_map_to_typed_alert_payload(
+        string eventType,
+        string severity,
+        Aevatar.GAgents.Household.DeviceEventSeverity expectedSeverity)
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = $"evt-{eventType}",
+            source = "home-assistant",
+            event_type = eventType,
+            severity,
+            area = "kitchen",
+            entity_id = "binary_sensor.kitchen",
+            correlation_key = "ha-alert-1",
+            summary = "Kitchen alert",
+        });
+
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "ha-bridge");
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert);
+        inbound.HomeAlert.Severity.Should().Be(expectedSeverity);
+        inbound.HomeAlert.Area.Should().Be("kitchen");
+        inbound.HomeAlert.EntityId.Should().Be("binary_sensor.kitchen");
+        inbound.HomeAlert.CorrelationKey.Should().Be("ha-alert-1");
+        inbound.HomeAlert.Summary.Should().Be("Kitchen alert");
     }
 
     [Fact]

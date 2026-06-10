@@ -473,6 +473,8 @@ public static class ServiceCollectionExtensions
             ToolExecutionTimeout = options.ToolExecutionTimeout,
             PendingInjectionCapacity = options.PendingInjectionCapacity,
             TimeProvider = options.TimeProvider,
+            DirectExternalEventTypeUrls = options.DirectExternalEventTypeUrls,
+            DirectExternalEventNoActiveSessionPolicy = options.DirectExternalEventNoActiveSessionPolicy,
         };
 
     private static bool IsOpenAIVoiceConfigured(VoiceProviderConfig config) =>
