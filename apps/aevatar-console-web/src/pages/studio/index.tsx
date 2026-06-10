@@ -760,6 +760,69 @@ function resolveWorkflowIdFromRouteValue(
   return options?.allowDirectIdFallback ? normalizedRouteValue : '';
 }
 
+function resolveWorkflowIdFromMemberWorkflowReference(
+  input: {
+    readonly workflowId?: string | null;
+    readonly memberId?: string | null;
+    readonly displayName?: string | null;
+  },
+  workflows: ReadonlyArray<{
+    readonly workflowId: string;
+    readonly name: string;
+    readonly fileName: string;
+    readonly description?: string;
+  }>,
+  workflowFile?: Pick<StudioWorkflowFile, 'workflowId' | 'name' | 'fileName'> | null,
+): string {
+  const typedWorkflowId = trimOptional(input.workflowId);
+  const memberId = trimOptional(input.memberId);
+  if (typedWorkflowId) {
+    const resolvedWorkflowId = resolveWorkflowIdFromRouteValue(typedWorkflowId, workflows, {
+      allowDirectIdFallback: false,
+      workflowFile,
+    });
+    if (resolvedWorkflowId) {
+      return resolvedWorkflowId;
+    }
+
+    return !memberId ||
+      normalizeComparableText(typedWorkflowId) === normalizeComparableText(memberId)
+      ? resolveWorkflowIdFromRouteValue(typedWorkflowId, workflows, {
+          allowDirectIdFallback: true,
+          workflowFile,
+        })
+      : '';
+  }
+
+  if (memberId) {
+    const resolvedByMemberId = resolveWorkflowIdFromRouteValue(memberId, workflows, {
+      allowDirectIdFallback: false,
+      workflowFile,
+    });
+    if (resolvedByMemberId) {
+      return resolvedByMemberId;
+    }
+  }
+
+  const displayName = trimOptional(input.displayName);
+  if (displayName) {
+    const resolvedByDisplayName = resolveWorkflowIdFromRouteValue(displayName, workflows, {
+      allowDirectIdFallback: false,
+      workflowFile,
+    });
+    if (resolvedByDisplayName) {
+      return resolvedByDisplayName;
+    }
+  }
+
+  return memberId
+    ? resolveWorkflowIdFromRouteValue(memberId, workflows, {
+        allowDirectIdFallback: true,
+        workflowFile,
+      })
+    : '';
+}
+
 function describeSavedWorkflowLocation(
   workflow: Pick<StudioWorkflowFile, 'directoryLabel' | 'fileName' | 'filePath'>,
 ): string {
@@ -1549,40 +1612,6 @@ function resolveLifecycleScriptId(
   return '';
 }
 
-function resolveLifecycleWorkflowId(
-  memberKey: string,
-  publishedMembers: readonly PublishedStudioMemberRecord[],
-  studioScopeMembers: readonly StudioMemberSummary[],
-): string {
-  const workflowRouteValue = readWorkflowMemberRouteValueFromMemberKey(memberKey);
-  if (workflowRouteValue) {
-    return workflowRouteValue;
-  }
-
-  const publishedWorkflowId = trimOptional(
-    findPublishedStudioMemberByMemberKey(memberKey, publishedMembers)?.matchedWorkflow
-      ?.workflowId,
-  );
-  if (publishedWorkflowId) {
-    return publishedWorkflowId;
-  }
-
-  const memberSummary = resolveStudioMemberSummaryFromMemberKey(
-    memberKey,
-    publishedMembers,
-    studioScopeMembers,
-  );
-  if (
-    normalizeStudioMemberBindingImplementationKind(
-      memberSummary?.implementationKind,
-    ) === 'workflow'
-  ) {
-    return trimOptional(memberSummary?.displayName);
-  }
-
-  return '';
-}
-
 function resolveWorkflowIdForMemberSummary(
   memberSummary: StudioMemberSummary | null | undefined,
   workflows: ReadonlyArray<{
@@ -1601,15 +1630,30 @@ function resolveWorkflowIdForMemberSummary(
     return '';
   }
 
-  const implementationRef = trimOptional(memberSummary?.displayName);
-  if (!implementationRef) {
-    return '';
-  }
+  return resolveWorkflowIdFromMemberWorkflowReference({
+    memberId: memberSummary?.memberId,
+    displayName: memberSummary?.displayName,
+  }, workflows, workflowFile);
+}
 
-  return resolveWorkflowIdFromRouteValue(implementationRef, workflows, {
-    allowDirectIdFallback: true,
-    workflowFile,
-  });
+function resolveWorkflowIdForMemberDetail(
+  input: {
+    readonly implementationRefWorkflowId?: string | null;
+    readonly memberSummary?: StudioMemberSummary | null;
+  },
+  workflows: ReadonlyArray<{
+    readonly workflowId: string;
+    readonly name: string;
+    readonly fileName: string;
+    readonly description?: string;
+  }>,
+  workflowFile?: Pick<StudioWorkflowFile, 'workflowId' | 'name' | 'fileName'> | null,
+): string {
+  return resolveWorkflowIdFromMemberWorkflowReference({
+    workflowId: input.implementationRefWorkflowId,
+    memberId: input.memberSummary?.memberId,
+    displayName: input.memberSummary?.displayName,
+  }, workflows, workflowFile);
 }
 
 function resolveLifecycleBuildSurface(input: {
@@ -7670,17 +7714,13 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    const workflowLookupValue =
-      trimOptional(memberImplementationRef?.workflowId) ||
-      trimOptional(memberSummary?.displayName) ||
-      trimOptional(memberSummary?.memberId);
-    const workflowId = resolveWorkflowIdFromRouteValue(
-      workflowLookupValue,
-      visibleWorkflowSummaries,
+    const workflowId = resolveWorkflowIdForMemberDetail(
       {
-        allowDirectIdFallback: true,
-        workflowFile: activeWorkflowFile,
+        implementationRefWorkflowId: memberImplementationRef?.workflowId,
+        memberSummary,
       },
+      visibleWorkflowSummaries,
+      activeWorkflowFile,
     );
     if (!workflowId) {
       return;
@@ -8092,19 +8132,28 @@ const StudioPage: React.FC = () => {
           setSelectedScriptId('');
           setTemplateWorkflow('');
         } else {
-          const lifecycleWorkflowId = resolveLifecycleWorkflowId(
+          const lifecycleMemberSummary = resolveStudioMemberSummaryFromMemberKey(
             lifecycleMemberKey,
             publishedScopeMembers,
             studioScopeMembers,
           );
-          const resolvedLifecycleWorkflowId = resolveWorkflowIdFromRouteValue(
-            lifecycleWorkflowId,
-            visibleWorkflowSummaries,
-            {
-              allowDirectIdFallback: true,
-              workflowFile: activeWorkflowFile,
-            },
+          const lifecycleWorkflowRouteValue = readWorkflowMemberRouteValueFromMemberKey(
+            lifecycleMemberKey,
           );
+          const resolvedLifecycleWorkflowId = lifecycleWorkflowRouteValue
+            ? resolveWorkflowIdFromRouteValue(
+                lifecycleWorkflowRouteValue,
+                visibleWorkflowSummaries,
+                {
+                  allowDirectIdFallback: true,
+                  workflowFile: activeWorkflowFile,
+                },
+              )
+            : resolveWorkflowIdForMemberSummary(
+                lifecycleMemberSummary,
+                visibleWorkflowSummaries,
+                activeWorkflowFile,
+              );
           if (resolvedLifecycleWorkflowId) {
             setSelectedWorkflowId(resolvedLifecycleWorkflowId);
             setSelectedScriptId('');
@@ -9197,13 +9246,10 @@ const StudioPage: React.FC = () => {
             trimOptional(selectedMemberSummary?.memberId);
 
           if (memberImplementationKind === 'workflow') {
-            const workflowId = resolveWorkflowIdFromRouteValue(
-              memberImplementationName,
+            const workflowId = resolveWorkflowIdForMemberSummary(
+              selectedMemberSummary,
               visibleWorkflowSummaries,
-              {
-                allowDirectIdFallback: true,
-                workflowFile: activeWorkflowFile,
-              },
+              activeWorkflowFile,
             );
             if (workflowId) {
               const selectedWorkflowSummary = visibleWorkflowSummaries.find(
