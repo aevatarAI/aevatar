@@ -91,7 +91,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
-        services.TryAddTransient<ScheduledDispatchGAgent>();
+        services.TryAddTransient<ScheduleGAgent>();
         services.TryAddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>, StaticGAgentStreamInvocationApplicationService>();
         services.AddScopeGAgentDraftRunInteraction();
         services.AddScriptServiceRunInteraction();
@@ -134,7 +134,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
-        services.TryAddTransient<ScheduledDispatchGAgent>();
+        services.TryAddTransient<ScheduleGAgent>();
         return services;
     }
 

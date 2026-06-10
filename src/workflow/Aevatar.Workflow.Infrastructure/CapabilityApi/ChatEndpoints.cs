@@ -2,7 +2,6 @@ using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
@@ -26,8 +25,6 @@ public static class WorkflowCapabilityEndpoints
     {
         var group = app.MapGroup("/api").WithTags("Chat");
         ChatQueryEndpoints.Map(group);
-        if (HasWorkflowScheduleDependencies(app.ServiceProvider))
-            WorkflowScheduleEndpoints.Map(group);
 
         return app;
     }
@@ -36,9 +33,6 @@ public static class WorkflowCapabilityEndpoints
     {
         return app;
     }
-
-    private static bool HasWorkflowScheduleDependencies(IServiceProvider services) =>
-        services.GetService<IServiceProviderIsService>()?.IsService(typeof(IScheduledDispatchApplicationService)) == true;
 
     public static async Task HandleChat(
         HttpContext http,

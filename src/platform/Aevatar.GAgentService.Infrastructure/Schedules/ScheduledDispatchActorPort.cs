@@ -28,7 +28,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         if (existing != null)
             return existing.Id;
 
-        var actor = await _runtime.CreateAsync<ScheduledDispatchGAgent>(actorId, ct);
+        var actor = await _runtime.CreateAsync<ScheduleGAgent>(actorId, ct);
         return actor.Id;
     }
 

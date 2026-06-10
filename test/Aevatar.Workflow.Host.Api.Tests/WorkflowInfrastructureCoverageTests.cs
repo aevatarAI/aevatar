@@ -13,7 +13,6 @@ using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
@@ -131,7 +130,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void MapWorkflowCapabilityEndpoints_WhenScheduleDependenciesAreRegistered_ShouldMapScheduleRoutes()
+    public void MapWorkflowCapabilityEndpoints_WhenScheduleDependenciesAreRegistered_ShouldNotMapWorkflowScheduleRoutes()
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddLogging();
@@ -145,11 +144,11 @@ public sealed class WorkflowInfrastructureCoverageTests
             .OfType<RouteEndpoint>()
             .Select(x => x.RoutePattern.RawText)
             .Should()
-            .Contain(route => route != null && route.Contains("workflow-schedules", StringComparison.Ordinal));
+            .NotContain(route => route != null && route.Contains("workflow-schedules", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void AddScheduledDispatchCapability_ShouldSupplyWorkflowScheduleDependenciesWithoutFullCapability()
+    public void AddScheduledDispatchCapability_ShouldSupplyScheduleDependenciesWithoutWorkflowScheduleFacade()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -162,9 +161,12 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddWorkflowCapability(new ConfigurationBuilder().Build());
 
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
-        provider.GetRequiredService<IWorkflowScheduleApplicationService>().Should().NotBeNull();
         provider.GetRequiredService<IScheduledServiceInvocationDispatchPort>().Should().NotBeNull();
         provider.GetRequiredService<IServiceInvocationPort>().Should().NotBeNull();
+        services
+            .Select(x => x.ServiceType.FullName ?? string.Empty)
+            .Should()
+            .NotContain(typeName => typeName.Contains("WorkflowSchedule", StringComparison.Ordinal));
         services.Should().NotContain(x => x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType != null &&
             x.ImplementationType.Name.Contains("GAgentServiceDemo", StringComparison.Ordinal));

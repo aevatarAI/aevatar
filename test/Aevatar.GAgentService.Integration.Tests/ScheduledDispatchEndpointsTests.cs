@@ -1,4 +1,4 @@
-using Aevatar.Foundation.Abstractions;
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
@@ -12,10 +12,10 @@ namespace Aevatar.GAgentService.Integration.Tests;
 public sealed class ScheduledDispatchEndpointsTests
 {
     [Fact]
-    public async Task Create_ShouldAcceptEnvelopeTargetAndForwardConfiguration()
+    public async Task Create_ShouldAcceptWorkflowChatTargetAndForwardConfiguration()
     {
         var service = new RecordingScheduledDispatchApplicationService();
-        var request = CreateEnvelopeRequest(scheduleId: "schedule-1");
+        var request = CreateWorkflowChatRequest(scheduleId: "schedule-1");
 
         var result = await ScheduledDispatchEndpoints.Create(request, service);
 
@@ -23,18 +23,19 @@ public sealed class ScheduledDispatchEndpointsTests
         await result.ExecuteAsync(http);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        service.Created.Should().ContainSingle().Which.Should().BeEquivalentTo(
-            new ScheduledDispatchConfiguration(
-                "schedule-1",
-                "Daily",
-                new ScheduledDispatchTargetDescriptor(
-                    ScheduledDispatchTargetKind.Envelope,
-                    ActorId: "actor-1",
-                    Envelope: request.Envelope!.Envelope),
-                "0 9 * * *",
-                "UTC",
-                true,
-                new Dictionary<string, string> { ["trace"] = "1" }));
+        http.Response.Headers.Location.ToString().Should().Be("/api/schedules/schedule-1");
+        var configuration = service.Created.Should().ContainSingle().Which;
+        configuration.ScheduleId.Should().Be("schedule-1");
+        configuration.DisplayName.Should().Be("Daily");
+        configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
+        configuration.Target.ServiceInvocation.Should().NotBeNull();
+        configuration.Target.ServiceInvocation!.EndpointId.Should().Be("chat");
+        configuration.Target.ServiceInvocation.Identity.ServiceId.Should().Be("daily-workflow");
+        configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("run daily");
+        configuration.CronExpression.Should().Be("0 9 * * *");
+        configuration.Timezone.Should().Be("UTC");
+        configuration.Enabled.Should().BeTrue();
+        configuration.Headers.Should().Contain("trace", "1");
     }
 
     [Fact]
@@ -62,7 +63,7 @@ public sealed class ScheduledDispatchEndpointsTests
             CreateException = new ScheduledDispatchConflictException("schedule-1", "Schedule target cannot be prepared."),
         };
 
-        var result = await ScheduledDispatchEndpoints.Create(CreateEnvelopeRequest(scheduleId: "schedule-1"), service);
+        var result = await ScheduledDispatchEndpoints.Create(CreateWorkflowChatRequest(scheduleId: "schedule-1"), service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -80,7 +81,7 @@ public sealed class ScheduledDispatchEndpointsTests
 
         var result = await ScheduledDispatchEndpoints.Update(
             "route-schedule",
-            CreateEnvelopeRequest(scheduleId: null),
+            CreateWorkflowChatRequest(scheduleId: null),
             service);
 
         var http = CreateHttpContext();
@@ -92,17 +93,16 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Update_ShouldAcceptServiceInvocationTarget()
+    public async Task Update_ShouldAcceptWorkflowChatTarget()
     {
         var service = new RecordingScheduledDispatchApplicationService();
-        var payload = Any.Pack(new StringValue { Value = "run" });
         var request = new ScheduledDispatchConfigurationHttpRequest
         {
             DisplayName = "Run service",
             CronExpression = "0 10 * * *",
             Timezone = "UTC",
             Enabled = false,
-            ServiceInvocation = new ScheduledDispatchServiceInvocationTargetHttpRequest
+            WorkflowChatTarget = new ScheduledWorkflowChatTargetHttpRequest
             {
                 Identity = new ServiceIdentity
                 {
@@ -111,8 +111,8 @@ public sealed class ScheduledDispatchEndpointsTests
                     Namespace = "default",
                     ServiceId = "svc",
                 },
-                EndpointId = "run",
-                Payload = payload,
+                Prompt = "run workflow",
+                SessionId = "session-1",
                 RevisionId = "rev-1",
                 Caller = new ServiceInvocationCaller
                 {
@@ -134,8 +134,10 @@ public sealed class ScheduledDispatchEndpointsTests
         configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
         configuration.Target.ServiceInvocation.Should().NotBeNull();
         configuration.Target.ServiceInvocation!.Identity.ServiceId.Should().Be("svc");
-        configuration.Target.ServiceInvocation.EndpointId.Should().Be("run");
-        configuration.Target.ServiceInvocation.Payload.Should().Be(payload);
+        configuration.Target.ServiceInvocation.EndpointId.Should().Be("chat");
+        var chatRequest = configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.Prompt.Should().Be("run workflow");
+        chatRequest.SessionId.Should().Be("session-1");
         configuration.Target.ServiceInvocation.RevisionId.Should().Be("rev-1");
         configuration.Enabled.Should().BeFalse();
     }
@@ -449,7 +451,7 @@ public sealed class ScheduledDispatchEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
     }
 
-    private static ScheduledDispatchConfigurationHttpRequest CreateEnvelopeRequest(string? scheduleId) =>
+    private static ScheduledDispatchConfigurationHttpRequest CreateWorkflowChatRequest(string? scheduleId) =>
         new()
         {
             ScheduleId = scheduleId,
@@ -458,14 +460,16 @@ public sealed class ScheduledDispatchEndpointsTests
             Timezone = "UTC",
             Enabled = true,
             Headers = new Dictionary<string, string> { ["trace"] = "1" },
-            Envelope = new ScheduledDispatchEnvelopeTargetHttpRequest
+            WorkflowChatTarget = new ScheduledWorkflowChatTargetHttpRequest
             {
-                ActorId = "actor-1",
-                Envelope = new EventEnvelope
+                Identity = new ServiceIdentity
                 {
-                    Id = "template",
-                    Payload = Any.Pack(new StringValue { Value = "run" }),
+                    TenantId = "tenant",
+                    AppId = "app",
+                    Namespace = "default",
+                    ServiceId = "daily-workflow",
                 },
+                Prompt = "run daily",
             },
         };
 
@@ -478,7 +482,7 @@ public sealed class ScheduledDispatchEndpointsTests
             CronExpression = "0 10 * * *",
             Timezone = "UTC",
             Enabled = false,
-            ServiceInvocation = new ScheduledDispatchServiceInvocationTargetHttpRequest
+            WorkflowChatTarget = new ScheduledWorkflowChatTargetHttpRequest
             {
                 Identity = new ServiceIdentity
                 {
@@ -487,8 +491,7 @@ public sealed class ScheduledDispatchEndpointsTests
                     Namespace = "default",
                     ServiceId = "svc",
                 },
-                EndpointId = "run",
-                Payload = Any.Pack(new StringValue { Value = "run" }),
+                Prompt = "run workflow",
                 Auth = auth,
             },
         };
@@ -498,12 +501,12 @@ public sealed class ScheduledDispatchEndpointsTests
             new ScheduledDispatchSummary(
                 scheduleId,
                 "Daily",
-                ScheduledDispatchTargetKind.Envelope,
-                "actor-1",
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                string.Empty,
                 Any.Pack(new StringValue { Value = "run" }).TypeUrl,
                 string.Empty,
-                string.Empty,
-                string.Empty,
+                "daily-workflow",
+                "chat",
                 "0 9 * * *",
                 "UTC",
                 true,

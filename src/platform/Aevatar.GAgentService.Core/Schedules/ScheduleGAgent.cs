@@ -11,14 +11,14 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Core.Schedules;
 
-public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
+public sealed class ScheduleGAgent : GAgentBase<ScheduledDispatchState>
 {
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const int MaxFireRecordCount = 128;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScheduledServiceInvocationDispatchPort _serviceInvocationDispatchPort;
 
-    public ScheduledDispatchGAgent(
+    public ScheduleGAgent(
         IActorDispatchPort dispatchPort,
         IScheduledServiceInvocationDispatchPort serviceInvocationDispatchPort)
     {
@@ -49,7 +49,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         var scheduleId = string.IsNullOrWhiteSpace(State.ScheduleId) ? Id : State.ScheduleId;
         var status = State.Enabled ? "enabled" : "disabled";
-        return Task.FromResult($"ScheduledDispatchGAgent[{scheduleId}] {status}");
+        return Task.FromResult($"ScheduleGAgent[{scheduleId}] {status}");
     }
 
     protected override ScheduledDispatchState TransitionState(ScheduledDispatchState current, IMessage evt) =>

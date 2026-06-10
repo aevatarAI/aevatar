@@ -38,7 +38,7 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
             _ when payload.Is(RoleChatSessionCompletedEvent.Descriptor) => GAgentRunTerminalPlans(context),
             var type when type == typeof(LlmSessionGAgent) => LlmSessionPlans(context.ActorId),
             var type when type == typeof(ResponsesAgentToolStateGAgent) => ResponsesAgentToolPlans(context.ActorId),
-            var type when type == typeof(ScheduledDispatchGAgent) => ScheduledDispatchPlans(context.ActorId),
+            var type when type == typeof(ScheduleGAgent) => ScheduledDispatchPlans(context.ActorId),
             _ => [],
         };
     }

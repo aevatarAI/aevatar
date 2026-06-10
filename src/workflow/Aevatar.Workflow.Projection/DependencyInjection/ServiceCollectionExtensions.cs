@@ -7,7 +7,6 @@ using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Workflows;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;

@@ -17,7 +17,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Core.Tests;
 
-public sealed class ScheduledDispatchGAgentTests
+public sealed class ScheduleGAgentTests
 {
     private const string ScheduleActorId = "scheduled-dispatch:schedule-1";
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
@@ -964,7 +964,7 @@ public sealed class ScheduledDispatchGAgentTests
             },
         };
 
-        var handleFire = typeof(ScheduledDispatchGAgent)
+        var handleFire = typeof(ScheduleGAgent)
             .GetMethod("HandleFireAsync", BindingFlags.Instance | BindingFlags.NonPublic);
         handleFire.Should().NotBeNull();
         var task = handleFire!.Invoke(agent,
@@ -1051,7 +1051,7 @@ public sealed class ScheduledDispatchGAgentTests
         var agent = CreateAgent(eventStore, dispatch);
         var scheduledAt = new DateTimeOffset(2026, 5, 29, 8, 59, 0, TimeSpan.Zero);
         var nextFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
-        var transition = typeof(ScheduledDispatchGAgent)
+        var transition = typeof(ScheduleGAgent)
             .GetMethod("TransitionState", BindingFlags.Instance | BindingFlags.NonPublic);
         transition.Should().NotBeNull();
 
@@ -1078,13 +1078,13 @@ public sealed class ScheduledDispatchGAgentTests
         replayed.NextFireLease!.Generation.Should().Be(7);
     }
 
-    private static ScheduledDispatchGAgent CreateAgent(
+    private static ScheduleGAgent CreateAgent(
         IEventStore eventStore,
         RecordingActorDispatchPort dispatch,
         RecordingRuntimeCallbackScheduler? callbackScheduler = null,
         RecordingScheduledServiceInvocationDispatchPort? serviceInvocationDispatch = null)
     {
-        var agent = new ScheduledDispatchGAgent(
+        var agent = new ScheduleGAgent(
             dispatch,
             serviceInvocationDispatch ?? new RecordingScheduledServiceInvocationDispatchPort())
         {

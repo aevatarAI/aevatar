@@ -98,14 +98,14 @@ BindWorkflowDefinition(yaml)
 
 ### Scheduled Dispatch API
 
-第一版定时触发只提供 API 配置面，不提供 UI。主 API 路径为 `/api/scheduled-dispatches`，支持 create/update/enable/disable/list/get/preview/run-now。`/api/workflow-schedules` 仅作为 workflow 兼容入口，内部映射到统一 scheduled dispatch 应用契约。
+第一版定时触发只提供 API 配置面，不提供 UI。主 API 路径为 `/api/schedules`，支持 create/update/enable/disable/list/get/preview/run-now；`/api/workflow-schedules` 不再作为生产兼容入口保留。
 
 运行边界：
 
-- `ScheduledDispatchGAgent` 是每个 schedule 的唯一写侧事实源，持有 cron、timezone、enabled、typed target descriptor、dispatch headers、next fire lease 与 recent fire records。
+- `ScheduleGAgent` 是每个 schedule 的唯一写侧事实源，持有 cron、timezone、enabled、typed target descriptor、dispatch headers、next fire lease 与 recent fire records。
 - 定时唤醒走 `ScheduleSelfDurableTimeoutAsync`，在 Orleans runtime 下由 durable callback/reminder 机制承载；回调只向 schedule actor 发 fire command，不在中间层保存 schedule 状态。
 - schedule actor 只负责计算下一次 fire、生成幂等 key 并投递 prepared target envelope；workflow、GAgent service invocation 与 scripting 目标准备由 application/infrastructure adapter 承载，不进入 schedule actor core。
-- workflow schedule 的 `WorkflowName`、`Prompt`、`ScopeId` 仅存在 typed workflow target descriptor 中；service invocation 与 envelope target 使用各自 typed target descriptor；dispatch `Headers` 只保留传输扩展。
+- 第一 slice 只支持 typed `workflow_chat_target`；`WorkflowName`、`Prompt`、`ScopeId` 等工作流目标语义由该 typed target descriptor 承载，dispatch `Headers` 只保留传输扩展。
 - public API identity fields 必须显式区分 `ScheduleActorId` 与 `TargetActorId`：`ScheduleActorId` 表示持有定时配置与 fire 事实的 schedule actor receipt，`TargetActorId` 表示最近一次或摘要中的投递目标；不得用一个 `ActorId` 混用 schedule actor receipt 和目标摘要。
 - 幂等 key 格式固定为 `schedule:{scheduleId}:fire:{scheduledFireAtUtc:o}`，并随 scheduled fire dispatch headers 透传。
 - schedule 查询只读取 `ScheduledDispatchDocument` read model；API 不读取 actor state，不在 query path replay event store。

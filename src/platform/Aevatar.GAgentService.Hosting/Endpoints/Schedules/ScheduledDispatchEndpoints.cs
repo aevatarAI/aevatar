@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -13,38 +14,38 @@ public static class ScheduledDispatchEndpoints
 {
     public static void Map(RouteGroupBuilder group)
     {
-        group.MapPost("/scheduled-dispatches", Create)
-            .WithTags("Scheduled dispatches")
+        group.MapPost("/schedules", Create)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
-        group.MapPut("/scheduled-dispatches/{scheduleId}", Update)
-            .WithTags("Scheduled dispatches")
+        group.MapPut("/schedules/{scheduleId}", Update)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
-        group.MapPost("/scheduled-dispatches/{scheduleId}/enable", Enable)
-            .WithTags("Scheduled dispatches")
+        group.MapPost("/schedules/{scheduleId}:enable", Enable)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/scheduled-dispatches/{scheduleId}/disable", Disable)
-            .WithTags("Scheduled dispatches")
+        group.MapPost("/schedules/{scheduleId}:disable", Disable)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
-        group.MapGet("/scheduled-dispatches", List)
-            .WithTags("Scheduled dispatches")
+        group.MapGet("/schedules", List)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchListResult>(StatusCodes.Status200OK);
-        group.MapGet("/scheduled-dispatches/{scheduleId}", Get)
-            .WithTags("Scheduled dispatches")
+        group.MapGet("/schedules/{scheduleId}", Get)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchDetail>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/scheduled-dispatches/preview", Preview)
-            .WithTags("Scheduled dispatches")
+        group.MapPost("/schedules/preview", Preview)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchPreview>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
-        group.MapPost("/scheduled-dispatches/{scheduleId}/run-now", RunNow)
-            .WithTags("Scheduled dispatches")
+        group.MapPost("/schedules/{scheduleId}:run-now", RunNow)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchRunNowReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
@@ -58,7 +59,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.CreateAsync(input.ToConfiguration(input.ScheduleId), ct);
-            return Results.Accepted($"/api/scheduled-dispatches/{receipt.ScheduleId}", receipt);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -75,7 +76,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.UpdateAsync(scheduleId, input.ToConfiguration(scheduleId), ct);
-            return Results.Accepted($"/api/scheduled-dispatches/{receipt.ScheduleId}", receipt);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -92,7 +93,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.EnableAsync(scheduleId, input?.Reason ?? string.Empty, ct);
-            return Results.Accepted($"/api/scheduled-dispatches/{receipt.ScheduleId}", receipt);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -109,7 +110,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.DisableAsync(scheduleId, input?.Reason ?? string.Empty, ct);
-            return Results.Accepted($"/api/scheduled-dispatches/{receipt.ScheduleId}", receipt);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -171,7 +172,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.RunNowAsync(scheduleId, ct);
-            return Results.Accepted($"/api/scheduled-dispatches/{receipt.ScheduleId}", receipt);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -207,8 +208,7 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
     public string? Timezone { get; init; }
     public bool Enabled { get; init; } = true;
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
-    public ScheduledDispatchEnvelopeTargetHttpRequest? Envelope { get; init; }
-    public ScheduledDispatchServiceInvocationTargetHttpRequest? ServiceInvocation { get; init; }
+    public ScheduledWorkflowChatTargetHttpRequest? WorkflowChatTarget { get; init; }
 
     public ScheduledDispatchConfiguration ToConfiguration(string? fallbackScheduleId) =>
         new(
@@ -222,36 +222,21 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
 
     private ScheduledDispatchTargetDescriptor ResolveTarget()
     {
-        var targetCount = (Envelope == null ? 0 : 1) +
-                          (ServiceInvocation == null ? 0 : 1);
-        if (targetCount != 1)
-            throw new ArgumentException("Exactly one scheduled dispatch target is required.");
+        if (WorkflowChatTarget == null)
+            throw new ArgumentException("Workflow chat target is required.");
 
-        if (Envelope != null)
-            return Envelope.ToTarget();
-        return ServiceInvocation!.ToTarget();
+        return WorkflowChatTarget.ToTarget();
     }
 }
 
-public sealed record ScheduledDispatchEnvelopeTargetHttpRequest
-{
-    public string? ActorId { get; init; }
-    public required EventEnvelope Envelope { get; init; }
-
-    public ScheduledDispatchTargetDescriptor ToTarget() =>
-        new(
-            ScheduledDispatchTargetKind.Envelope,
-            ActorId: ActorId,
-            Envelope: Envelope);
-}
-
-public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
+public sealed record ScheduledWorkflowChatTargetHttpRequest
 {
     public required ServiceIdentity Identity { get; init; }
-    public required string EndpointId { get; init; }
-    public required Any Payload { get; init; }
+    public required string Prompt { get; init; }
+    public string? SessionId { get; init; }
     public string? RevisionId { get; init; }
     public ServiceInvocationCaller? Caller { get; init; }
+    public LLMControlContextPayload? LlmControl { get; init; }
     public ScheduledServiceInvocationAuthHttpRequest? Auth { get; init; }
 
     public ScheduledDispatchTargetDescriptor ToTarget() =>
@@ -259,11 +244,27 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
             ScheduledDispatchTargetKind.ServiceInvocation,
             ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
                 Identity,
-                EndpointId,
-                Payload,
+                "chat",
+                Any.Pack(new ChatRequestEvent
+                {
+                    Prompt = NormalizeRequired(Prompt, nameof(Prompt)),
+                    SessionId = NormalizeOptional(SessionId),
+                    LlmControl = LlmControl?.Clone(),
+                }),
                 RevisionId,
                 Caller,
                 Auth?.ToAuth()));
+
+    private static string NormalizeRequired(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} is required.", name);
+
+        return value.Trim();
+    }
+
+    private static string NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }
 
 public sealed record ScheduledServiceInvocationAuthHttpRequest
