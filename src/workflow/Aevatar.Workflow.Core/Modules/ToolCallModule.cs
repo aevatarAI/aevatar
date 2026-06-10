@@ -56,7 +56,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        var argumentsJson = string.IsNullOrWhiteSpace(request.Input) ? "{}" : request.Input;
+        var argumentsJson = ResolveArgumentsJson(request);
         ctx.Logger.LogInformation("ToolCall: {StepId} → 工具 {Tool}", request.StepId, toolName);
 
         // 发布 Tool 调用开始事件（供观测/UI）
@@ -140,6 +140,18 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 CallerCredential: callerCredential,
                 RuntimeContext: runtimeContext),
             ct);
+    }
+
+    private static string ResolveArgumentsJson(StepRequestEvent request)
+    {
+        var configuredArguments = request.Parameters.GetValueOrDefault("arguments", string.Empty);
+        if (string.IsNullOrWhiteSpace(configuredArguments))
+            configuredArguments = request.Parameters.GetValueOrDefault("args", string.Empty);
+
+        if (!string.IsNullOrWhiteSpace(configuredArguments))
+            return configuredArguments.Trim();
+
+        return string.IsNullOrWhiteSpace(request.Input) ? "{}" : request.Input;
     }
 
     private static string ComposeWorkflowToolCallId(StepRequestEvent request)

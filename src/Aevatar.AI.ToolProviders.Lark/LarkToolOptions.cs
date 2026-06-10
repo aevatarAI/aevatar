@@ -13,6 +13,7 @@ public sealed class LarkToolOptions
     public bool EnableChatLookup { get; set; } = true;
     public bool EnableSheetsAppendRows { get; set; } = true;
     public bool EnableApprovalsList { get; set; } = true;
+    public bool EnableApprovalsGet { get; set; } = true;
     public bool EnableApprovalsAct { get; set; } = true;
     public bool EnableDocxCreate { get; set; } = true;
 }

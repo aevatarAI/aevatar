@@ -489,6 +489,8 @@ public record MessageContent(
 
 **核心原则**：`MessageContent` 描述 "要表达什么"，不描述 "长什么样"。`IMessageComposer` 把它翻译成 channel-native 的具体 payload。
 
+**NyxID relay inbound attachment rule**：`Channel.NyxIdRelay` 在进入 channel runtime 前把 NyxID callback `content.attachments` 以及 Lark / Feishu raw `event.message.content` 中的 `image_key` / `file_key` 归一到现有 `MessageContent.Attachments` / `AttachmentRef`。非 card 入站只要有 text 或至少一个有效 attachment ref 就是有效内容；空 text 且无 attachment ref 才按 `empty_text` 忽略。attachment ref 只携带 platform locator / key / filename / MIME / size / URL 等引用事实，不下载 bytes、不塞 base64、不新增第二套 attachment abstraction，也不要求 NyxID 仓库改 schema。
+
 **Card action typed payload rule**：workflow resume 与 LLM selection 是仓库内可控的控制语义，必须通过 `WorkflowResumeActionPayload` / `LlmSelectionActionPayload` 挂在 `ActionElement` 与 `CardActionSubmission` 上。`ActionElement.arguments` / `CardActionSubmission.Arguments` 只作为第三方或平台扩展 map，以及旧 callback JSON 的入站兼容边界；进入 `ChannelConversationTurnRunner`、`ChannelCardActionRouting` 或 LLM selection handoff 后，不得把这些字段当成权威事实源。
 
 **为什么不做 universal card schema（Adaptive Cards 路线）**：universal schema 是 Level-3 抽象——为了一致性牺牲 native 表达力。Slack Block Kit 的嵌套 / Discord Embed 的字段限制 / Lark 卡片的交互模型各自有自己最自然的表达方式，强行统一会得到"处处一致但处处不好用"的结果。我们选 Level-2：intent 层统一，表达层 native，能力缺失就显式降级。

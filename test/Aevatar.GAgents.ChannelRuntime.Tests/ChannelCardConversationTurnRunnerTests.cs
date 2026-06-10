@@ -371,6 +371,9 @@ public sealed class ChannelCardConversationTurnRunnerTests
         public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
+        public Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 

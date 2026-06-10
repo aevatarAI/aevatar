@@ -230,6 +230,33 @@ message VoteAgreementDecision {
   map<string, int32> label_counts = 6;
 }
 
+enum TransformOperationKind {
+  TRANSFORM_OPERATION_KIND_UNSPECIFIED = 0;
+  TRANSFORM_OPERATION_KIND_SUM = 1;
+  TRANSFORM_OPERATION_KIND_SUBTRACT = 2;
+  TRANSFORM_OPERATION_KIND_MULTIPLY = 3;
+  TRANSFORM_OPERATION_KIND_DIVIDE = 4;
+  TRANSFORM_OPERATION_KIND_ROUND = 5;
+  TRANSFORM_OPERATION_KIND_MIN = 6;
+  TRANSFORM_OPERATION_KIND_MAX = 7;
+  TRANSFORM_OPERATION_KIND_GROUP_BY = 8;
+}
+
+enum TransformAggregateKind {
+  TRANSFORM_AGGREGATE_KIND_UNSPECIFIED = 0;
+  TRANSFORM_AGGREGATE_KIND_SUM = 1;
+  TRANSFORM_AGGREGATE_KIND_COUNT = 2;
+  TRANSFORM_AGGREGATE_KIND_AVG = 3;
+}
+
+message TransformOperationSpec {
+  TransformOperationKind kind = 1;
+  optional int32 precision = 2;
+  string key = 3;
+  string value = 4;
+  TransformAggregateKind aggregate = 5;
+}
+
 message WorkflowStepParameters
 {
   map<string, string> parameters = 1;
@@ -238,6 +265,7 @@ message WorkflowStepParameters
   aevatar.foundation.interactions.InteractionSpec interaction_spec = 4;
   aevatar.foundation.interactions.InteractionTemplateSpec interaction_template_spec = 5;
   string delivery_target_id = 6;
+  TransformOperationSpec transform_operation = 7;
 }
 message StepRequestEvent
 {

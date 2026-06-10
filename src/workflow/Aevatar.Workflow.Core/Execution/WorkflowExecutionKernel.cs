@@ -6,6 +6,7 @@ using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Aevatar.Workflow.Core.Execution;
@@ -1044,9 +1045,48 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.Variables[$"{prefix}.annotations.{key.Trim()}"] = value ?? string.Empty;
         }
 
+        if (evt.Success && !string.IsNullOrWhiteSpace(evt.Output))
+            MirrorJsonObjectVariables(state, prefix, evt.Output);
+
         if (HasUsage(evt.Usage))
             MirrorStepUsageVariables(state, evt.StepId, evt.Usage);
     }
+
+    private static void MirrorJsonObjectVariables(
+        WorkflowExecutionKernelState state,
+        string prefix,
+        string output)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(output);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return;
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (string.IsNullOrWhiteSpace(property.Name))
+                    continue;
+
+                state.Variables[$"{prefix}.json.{property.Name.Trim()}"] = ToVariableValue(property.Value);
+            }
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+    }
+
+    private static string ToVariableValue(JsonElement value) =>
+        value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+            _ => value.GetRawText(),
+        };
 
     private static void MirrorStepUsageVariables(
         WorkflowExecutionKernelState state,
@@ -1169,9 +1209,27 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 request.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
         }
 
+        ApplyTransformOperation(request, step.TransformOperation, state);
         ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
+    }
+
+    private void ApplyTransformOperation(
+        StepRequestEvent request,
+        TransformOperationSpec? transformOperation,
+        WorkflowExecutionKernelState state)
+    {
+        if (transformOperation is null ||
+            transformOperation.Kind == TransformOperationKind.Unspecified)
+        {
+            return;
+        }
+
+        var spec = transformOperation.Clone();
+        spec.Key = _expressionEvaluator.Evaluate(spec.Key, state.Variables);
+        spec.Value = _expressionEvaluator.Evaluate(spec.Value, state.Variables);
+        (request.StepParameters ??= new WorkflowStepParameters()).TransformOperation = spec;
     }
 
     private void ApplyInteractionPresentation(

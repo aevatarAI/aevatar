@@ -67,6 +67,12 @@ public sealed class LarkCoverageTests
         approvalsListTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
         approvalsListTool.IsReadOnly.Should().BeTrue();
 
+        var approvalsGetTool = new LarkApprovalsGetTool(client);
+        approvalsGetTool.Name.Should().Be("lark_approvals_get");
+        approvalsGetTool.Description.Should().Contain("Read one Lark approval instance");
+        approvalsGetTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        approvalsGetTool.IsReadOnly.Should().BeTrue();
+
         var approvalsActTool = new LarkApprovalsActTool(client);
         approvalsActTool.Name.Should().Be("lark_approvals_act");
         approvalsActTool.Description.Should().Contain("Act on a Lark approval task");
@@ -382,6 +388,14 @@ public sealed class LarkCoverageTests
             _ = request;
             _ = ct;
             return Task.FromResult("""{"code":0,"data":{"tasks":[],"count":0}}""");
+        }
+
+        public Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"instance_code":"inst_1","status":"1"}}""");
         }
 
         public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct)

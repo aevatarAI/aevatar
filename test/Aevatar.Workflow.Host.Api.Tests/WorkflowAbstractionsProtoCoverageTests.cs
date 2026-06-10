@@ -146,6 +146,8 @@ public class WorkflowAbstractionsProtoCoverageTests
             .Should().Contain(field => field.FieldNumber == 8 && field.Name == "step_parameters");
         WorkflowStepParameters.Descriptor.Fields.InDeclarationOrder()
             .Should().Contain(field => field.FieldNumber == 6 && field.Name == "delivery_target_id");
+        WorkflowStepParameters.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 7 && field.Name == "transform_operation");
         StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
             .Should().NotContain(field => field.FieldNumber == 5);
 
@@ -157,6 +159,11 @@ public class WorkflowAbstractionsProtoCoverageTests
         };
         request.StepParameters.Parameters["op"] = "trim";
         request.StepParameters.DeliveryTargetId = "agent-typed";
+        request.StepParameters.TransformOperation = new TransformOperationSpec
+        {
+            Kind = TransformOperationKind.Round,
+            Precision = 2,
+        };
         request.Parameters["target"] = "result";
         request.StepParameters.InteractionSpec = new InteractionSpec { Body = "Continue?" };
 
@@ -164,6 +171,8 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsed.StepParameters.Parameters.Should().Contain(new KeyValuePair<string, string>("op", "trim"));
         parsed.Parameters.Should().Contain(new KeyValuePair<string, string>("target", "result"));
         parsed.StepParameters.DeliveryTargetId.Should().Be("agent-typed");
+        parsed.StepParameters.TransformOperation.Kind.Should().Be(TransformOperationKind.Round);
+        parsed.StepParameters.TransformOperation.Precision.Should().Be(2);
         parsed.StepParameters.InteractionSpec.Body.Should().Be("Continue?");
         parsed.ToString().Should().Contain("stepParameters");
         ((IMessage)parsed.StepParameters).Descriptor.Name.Should().Be(nameof(WorkflowStepParameters));
