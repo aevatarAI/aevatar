@@ -743,7 +743,7 @@ public static class ScopeServiceEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, ct);
+            var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, endpointId, ct);
             await HandleInvokeStreamAsync(
                 http,
                 teamResolution.ScopeId,
@@ -798,7 +798,7 @@ public static class ScopeServiceEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, ct);
+            var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, endpointId, ct);
             return await HandleInvokeAsyncCore(
                 http,
                 teamResolution.ScopeId,

@@ -241,6 +241,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         public Task<TeamEntryMemberResolution> ResolveAsync(
             string scopeId,
             string teamId,
+            string endpointId,
             CancellationToken ct = default) =>
             throw new TeamEntryMemberResolutionException(
                 TeamEntryMemberErrorCodes.TeamNotFound,
