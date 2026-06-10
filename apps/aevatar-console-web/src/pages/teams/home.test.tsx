@@ -309,6 +309,73 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText(/帮助你快速判断是否需要处理/)).toBeNull();
   });
 
+  it("keeps the team runtime signal scoped to the entry member when other bound members are not sampled", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        {
+          ...defaultTeams[0],
+          entryMemberId: "member-entry",
+          memberCount: 2,
+        },
+      ],
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members: [
+        {
+          ...defaultMembers[0],
+          memberId: "member-entry",
+          displayName: "入口成员",
+          publishedServiceId: "service-entry",
+        },
+        {
+          ...defaultMembers[0],
+          memberId: "member-secondary",
+          displayName: "普通成员",
+          publishedServiceId: "service-secondary",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listMemberRuns as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      serviceId: "service-entry",
+      serviceKey: "scope-a:entry",
+      displayName: "入口运行时",
+      runs: [
+        {
+          ...buildMemberRunCatalog("member-alpha").runs[0],
+          serviceId: "service-entry",
+          runId: "run-entry-latest",
+          completionStatus: "completed",
+          lastSuccess: true,
+        },
+      ],
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByText("已完成")).toBeTruthy();
+    expect(screen.getByText("运行中")).toBeTruthy();
+    expect(
+      screen.getByText("最近一次成员运行正常，可继续进入详情查看。"),
+    ).toBeTruthy();
+    expect(screen.queryByText("待运行")).toBeNull();
+    expect(
+      screen.queryByText("成员已绑定服务。下一步：进入团队详情后测试团队，生成第一条可见运行。"),
+    ).toBeNull();
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledTimes(1);
+    });
+    expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+      "scope-a",
+      "member-entry",
+      { take: 1 },
+    );
+  });
+
   it("keeps long member and service summaries compact while preserving full text in titles", async () => {
     (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-a",

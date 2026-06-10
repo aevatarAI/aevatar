@@ -564,11 +564,12 @@ function buildTeamRosterPreview(input: {
     }),
   );
   const sortedMembers = [...input.members].sort(compareMembers);
-  const latestRun =
-    memberPreviews
-      .map((preview) => preview.latestRun)
-      .filter((run): run is ScopeServiceRunSummary => Boolean(run))
-      .sort(compareRuns)[0] ?? null;
+  const memberCount =
+    input.team.memberCount > 0 ? input.team.memberCount : input.members.length;
+  const entryMemberId = trimOptional(input.team.entryMemberId);
+  const entryMemberPreview = entryMemberId
+    ? memberPreviews.find((preview) => preview.memberId === entryMemberId)
+    : undefined;
   const statusRank: Record<TeamOperationalAttention, number> = {
     failed: 0,
     waiting: 1,
@@ -585,12 +586,11 @@ function buildTeamRosterPreview(input: {
         parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt) ||
         right.memberId.localeCompare(left.memberId),
     )[0];
-  const memberCount =
-    input.team.memberCount > 0 ? input.team.memberCount : input.members.length;
-  const entryMemberId = trimOptional(input.team.entryMemberId);
   const entryMember = entryMemberId
     ? input.members.find((member) => trimOptional(member.memberId) === entryMemberId)
     : undefined;
+  const runtimeSignalPreview = entryMemberPreview ?? mostImportantMemberPreview;
+  const latestRun = runtimeSignalPreview?.latestRun ?? null;
   // Deferred P2: keep the current workflow-member fallback when the entry is non-workflow.
   // A later pass should surface an explicit entry-unsupported/manage-members state.
   const preferredWorkflowMember =
@@ -660,7 +660,10 @@ function buildTeamRosterPreview(input: {
   const serviceTooltip =
     uniqueServiceLabels.length > 0 ? uniqueServiceLabels.join(" / ") : undefined;
   const primaryMemberPreview =
-    memberPreviews.find((preview) => preview.serviceId) ?? memberPreviews[0] ?? null;
+    entryMemberPreview ??
+    memberPreviews.find((preview) => preview.serviceId) ??
+    memberPreviews[0] ??
+    null;
   const detailHref = buildTeamDetailHref({
     memberId: primaryMemberPreview?.memberId || undefined,
     runId: latestRun?.runId || undefined,
@@ -675,13 +678,13 @@ function buildTeamRosterPreview(input: {
   });
 
   let attention: TeamOperationalAttention =
-    mostImportantMemberPreview?.attention ?? "draft";
+    runtimeSignalPreview?.attention ?? "draft";
   let attentionDetail = t("pages.teams.home.team", "This team has no members yet. Next: add an entry member, then test the team.");
   if (input.team.lifecycleStage === "archived") {
     attention = "draft";
     attentionDetail = t("pages.teams.home.team.roster", "This team has been archived; the list keeps only its backend roster fact.");
-  } else if (mostImportantMemberPreview) {
-    attentionDetail = mostImportantMemberPreview.attentionDetail;
+  } else if (runtimeSignalPreview) {
+    attentionDetail = runtimeSignalPreview.attentionDetail;
   }
 
   return {
@@ -703,7 +706,7 @@ function buildTeamRosterPreview(input: {
     title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || t("pages.teams.home.team.2", "Unnamed team"),
     updatedAt:
       latestRun?.lastUpdatedAt ||
-      mostImportantMemberPreview?.updatedAt ||
+      runtimeSignalPreview?.updatedAt ||
       input.team.updatedAt ||
       null,
   };
