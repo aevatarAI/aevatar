@@ -712,6 +712,60 @@ describe('StudioMemberInvokePanel', () => {
     });
   });
 
+  it('routes workflow chat invokes through the member stream endpoint when member target is explicit', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({});
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'workspace-demo',
+        runtimeTarget: 'member',
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'workspace-demo',
+            endpoints: [
+              {
+                description: 'Chat with the member.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'invoke',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-workflow',
+            serviceId: 'member-workspace-demo',
+          },
+        ],
+        teamId: 'team-1',
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText('Invocation request input'), {
+      target: {
+        value: 'Run the bound member workflow.',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-1',
+        {
+          prompt: 'Run the bound member workflow.',
+        },
+        expect.any(AbortSignal),
+        {
+          memberId: 'workspace-demo',
+        },
+      );
+    });
+  });
+
   it('records runs into read-only Run history and keeps technical fields in Metadata', async () => {
     const onObserveSessionChange = jest.fn();
 
@@ -876,6 +930,57 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByLabelText('Invocation request input')).toHaveValue(
       'Overwrite prompt',
     );
+  });
+
+  it('routes structured endpoint invokes through the member endpoint when member target is explicit', async () => {
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'default',
+        runtimeTarget: 'member',
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'workspace-demo',
+            endpoints: [
+              {
+                description: 'Send a structured request into the member.',
+                displayName: 'Submit',
+                endpointId: 'submit',
+                kind: 'invoke',
+                requestTypeUrl: 'type.googleapis.com/example.Submit',
+                responseTypeUrl: 'type.googleapis.com/example.SubmitResult',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-default',
+            serviceId: 'default',
+          },
+        ],
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText('Invocation request input'), {
+      target: {
+        value: 'Route this escalation to billing review.',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
+        'scope-1',
+        expect.objectContaining({
+          endpointId: 'submit',
+          prompt: 'Route this escalation to billing review.',
+        }),
+        {
+          memberId: 'default',
+        },
+      );
+    });
   });
 
   it('requires base64 for non text typed payloads and sends it for structured invoke endpoints', async () => {

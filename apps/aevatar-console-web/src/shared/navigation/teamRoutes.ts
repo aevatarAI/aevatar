@@ -166,6 +166,7 @@ export function buildTeamMemberWorkflowStudioHref(options: {
   mode: 'create-member' | 'edit-member';
   scopeId: string;
   teamId: string;
+  workflowId?: string;
 }): string {
   const scopeId = trimOptional(options.scopeId);
   const teamId = trimOptional(options.teamId);
@@ -186,7 +187,35 @@ export function buildTeamMemberWorkflowStudioHref(options: {
     });
   }
 
-  return `/teams/${encodeURIComponent(scopeId)}/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/workflow`;
+  return buildHref(
+    `/teams/${encodeURIComponent(scopeId)}/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/workflow`,
+    {
+      workflowId: options.workflowId,
+    },
+  );
+}
+
+export function buildTeamMemberInvokeHref(options: {
+  memberId?: string;
+  scopeId: string;
+  teamId: string;
+}): string {
+  const scopeId = trimOptional(options.scopeId);
+  const teamId = trimOptional(options.teamId);
+  if (!scopeId || !teamId) {
+    return buildTeamsHref();
+  }
+
+  const memberId = trimOptional(options.memberId);
+  if (!memberId) {
+    return buildTeamDetailHref({
+      scopeId,
+      tab: 'members',
+      teamId,
+    });
+  }
+
+  return `/teams/${encodeURIComponent(scopeId)}/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/invoke`;
 }
 
 export function readTeamDetailRouteState(

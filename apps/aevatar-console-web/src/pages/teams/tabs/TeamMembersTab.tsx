@@ -1,6 +1,6 @@
 import {
   CheckCircleOutlined,
-  EditOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
@@ -21,8 +21,10 @@ import { t } from "@/shared/i18n/messages";
 
 type TeamRosterMemberRow = {
   readonly canInvokeAsEntry: boolean;
+  readonly canInvokeMember: boolean;
   readonly description: string;
   readonly implementationKind: string;
+  readonly isServiceBound: boolean;
   readonly isEntryMember?: boolean;
   readonly isSelectedMember?: boolean;
   readonly key: string;
@@ -30,9 +32,11 @@ type TeamRosterMemberRow = {
   readonly lifecycleStyle: React.CSSProperties;
   readonly buildStudioHref: string;
   readonly editStudioHref: string;
+  readonly invokeHref: string;
   readonly memberId: string;
   readonly name: string;
   readonly serviceId: string;
+  readonly studioHref: string;
   readonly workflowSupported: boolean;
 };
 
@@ -57,6 +61,9 @@ const ellipsisTextStyle: React.CSSProperties = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
 };
+
+const tableGridTemplateColumns =
+  "minmax(260px, 1.7fr) minmax(150px, 0.75fr) minmax(180px, 0.8fr) minmax(330px, max-content)";
 
 const EllipsisText: React.FC<{
   readonly children: string;
@@ -106,7 +113,6 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
     },
     [onNavigate],
   );
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <AevatarPanel
@@ -144,7 +150,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
           </Space>
         }
       >
-        <Typography.Text type="secondary">
+        <Typography.Text style={{ maxWidth: 720 }} type="secondary">
           {intl.formatMessage({ id: "teams.members.description" })}
         </Typography.Text>
         {rosterSyncing ? (
@@ -180,7 +186,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             }}
           >
             <div style={{ overflowX: "auto" }}>
-              <div style={{ minWidth: 980 }}>
+              <div style={{ minWidth: 1060 }}>
                 <div
                   style={{
                     background: "var(--ant-colorBgContainerDisabled)",
@@ -190,13 +196,11 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     fontSize: 12,
                     fontWeight: 600,
                     gap: 16,
-                    gridTemplateColumns:
-                      "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(260px, max-content)",
+                    gridTemplateColumns: tableGridTemplateColumns,
                     padding: "12px 16px",
                   }}
                 >
                   <span>{intl.formatMessage({ id: "teams.members.columns.member" })}</span>
-                  <span>{intl.formatMessage({ id: "teams.members.columns.role" })}</span>
                   <span>
                     {intl.formatMessage({ id: "teams.members.columns.implementation" })}
                   </span>
@@ -205,193 +209,219 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     {intl.formatMessage({ id: "teams.members.columns.actions" })}
                   </span>
                 </div>
-                {rosterRows.map((row, index) => (
-                  <div
-                    key={row.key}
-                    style={{
-                      alignItems: "center",
-                      background: row.isEntryMember
-                        ? "linear-gradient(90deg, var(--ant-colorPrimaryBg) 0%, var(--ant-colorBgContainer) 34%)"
-                        : row.isSelectedMember
-                          ? "var(--ant-colorFillQuaternary)"
-                        : undefined,
-                      borderTop:
-                        index === 0 ? "none" : "1px solid var(--ant-colorBorderSecondary)",
-                      boxShadow: row.isEntryMember
-                        ? "inset 4px 0 0 var(--ant-colorPrimary)"
-                        : row.isSelectedMember
-                          ? "inset 4px 0 0 var(--ant-colorInfo)"
-                        : undefined,
-                      display: "grid",
-                      gap: 16,
-                      gridTemplateColumns:
-                        "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(260px, max-content)",
-                      padding: "14px 16px",
-                    }}
-                  >
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                {rosterRows.map((row, index) => {
+                  const invokeDisabledReason = row.workflowSupported
+                    ? intl.formatMessage({
+                        id: "teams.members.actions.invokeRequiresBinding",
+                      })
+                    : intl.formatMessage({
+                        id: "teams.members.actions.workflowOnlyTitle",
+                      });
+                  const rowBusy = entryActionBusyMemberId === row.memberId;
+
+                  return (
+                    <div
+                      key={row.key}
+                      style={{
+                        alignItems: "center",
+                        background: row.isEntryMember
+                          ? "linear-gradient(90deg, var(--ant-colorPrimaryBg) 0%, var(--ant-colorBgContainer) 30%)"
+                          : row.isSelectedMember
+                            ? "var(--ant-colorFillQuaternary)"
+                            : token.colorBgContainer,
+                        borderTop:
+                          index === 0 ? "none" : "1px solid var(--ant-colorBorderSecondary)",
+                        boxShadow: row.isEntryMember
+                          ? "inset 4px 0 0 var(--ant-colorSuccess)"
+                          : row.isSelectedMember
+                            ? "inset 4px 0 0 var(--ant-colorInfo)"
+                            : undefined,
+                        display: "grid",
+                        gap: 16,
+                        gridTemplateColumns: tableGridTemplateColumns,
+                        minHeight: 86,
+                        padding: "14px 16px",
+                      }}
+                    >
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                        <div
+                          style={{
+                            alignItems: "center",
+                            display: "flex",
+                            gap: 8,
+                            minWidth: 0,
+                          }}
+                        >
+                          <EllipsisText strong>{row.name}</EllipsisText>
+                          {row.isEntryMember ? (
+                            <DetailPill
+                              compact
+                              style={{
+                                background: token.colorSuccessBg,
+                                border: `1px solid ${token.colorSuccessBorder}`,
+                                color: token.colorSuccess,
+                              }}
+                              text={intl.formatMessage({ id: "teams.members.entry" })}
+                            />
+                          ) : null}
+                          {row.isSelectedMember ? (
+                            <DetailPill
+                              compact
+                              style={{
+                                background: token.colorInfoBg,
+                                border: `1px solid ${token.colorInfoBorder}`,
+                                color: token.colorInfo,
+                              }}
+                              text={intl.formatMessage({ id: "teams.members.selected" })}
+                            />
+                          ) : null}
+                        </div>
+                        <Space size={8} style={{ minWidth: 0 }} wrap>
+                          <EllipsisText
+                            monospace
+                            style={{
+                              color: token.colorTextSecondary,
+                              fontSize: 12,
+                              maxWidth: 180,
+                            }}
+                            type="secondary"
+                          >
+                            {row.memberId}
+                          </EllipsisText>
+                          <Typography.Text style={{ color: token.colorTextQuaternary }}>
+                            ·
+                          </Typography.Text>
+                          <div style={{ maxWidth: 300, minWidth: 0 }}>
+                            <FactLine
+                              monospace={false}
+                              rows={1}
+                              secondary
+                              text={
+                                row.description ||
+                                intl.formatMessage(
+                                  { id: "teams.members.fallback.team" },
+                                  { teamId: rosterTeamId || "--" },
+                                )
+                              }
+                            />
+                          </div>
+                        </Space>
+                      </div>
                       <div
                         style={{
-                          alignItems: "center",
+                          alignItems: "flex-start",
                           display: "flex",
-                          gap: 8,
+                          flexDirection: "column",
+                          gap: 6,
                           minWidth: 0,
                         }}
                       >
-                        <EllipsisText strong>{row.name}</EllipsisText>
-                        {row.isEntryMember ? (
-                          <DetailPill
-                            compact
-                            style={{
-                              background: token.colorSuccessBg,
-                              border: `1px solid ${token.colorSuccessBorder}`,
-                              color: token.colorSuccess,
-                            }}
-                            text={intl.formatMessage({ id: "teams.members.entry" })}
-                          />
-                        ) : null}
-                        {row.isSelectedMember ? (
-                          <DetailPill
-                            compact
-                            style={{
-                              background: token.colorInfoBg,
-                              border: `1px solid ${token.colorInfoBorder}`,
-                              color: token.colorInfo,
-                            }}
-                            text={intl.formatMessage({ id: "teams.members.selected" })}
-                          />
-                        ) : null}
+                        <Typography.Text strong>{row.implementationKind}</Typography.Text>
+                        <DetailPill
+                          compact
+                          style={{
+                            ...row.lifecycleStyle,
+                            maxWidth: "100%",
+                            padding: "6px 9px",
+                            width: "fit-content",
+                          }}
+                          text={row.lifecycleLabel}
+                        />
                       </div>
-                      <EllipsisText
-                        monospace
-                        style={{
-                          fontSize: 12,
-                        }}
-                        type="secondary"
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                        <CompactFactValue
+                          color={row.isServiceBound ? token.colorText : token.colorTextTertiary}
+                          head={4}
+                          maxWidth={160}
+                          strong={row.isServiceBound}
+                          tail={4}
+                          value={row.serviceId}
+                        />
+                        <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                          {row.isServiceBound
+                            ? intl.formatMessage({ id: "teams.members.service.bound" })
+                            : intl.formatMessage({ id: "teams.members.service.notBound" })}
+                        </Typography.Text>
+                      </div>
+                      <Space
+                        wrap
+                        size={8}
+                        style={{ justifyContent: "flex-end", width: "100%" }}
                       >
-                        {row.memberId}
-                      </EllipsisText>
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <FactLine
-                        rows={1}
-                        text={
-                          row.description ||
-                          intl.formatMessage(
-                            { id: "teams.members.fallback.team" },
-                            { teamId: rosterTeamId || "--" },
-                          )
-                        }
-                      />
-                    </div>
-                    <div
-                      style={{
-                        alignItems: "flex-start",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 6,
-                        minWidth: 0,
-                      }}
-                    >
-                      <DetailPill
-                        compact
-                        style={{ ...row.lifecycleStyle, maxWidth: "100%", width: "fit-content" }}
-                        text={row.lifecycleLabel}
-                      />
-                      <Typography.Text style={{ fontFamily: factValueFontFamily, fontSize: 12 }}>
-                        {row.implementationKind}
-                      </Typography.Text>
-                    </div>
-                    <CompactFactValue
-                      color="var(--ant-color-text-secondary)"
-                      strong={false}
-                      value={row.serviceId}
-                    />
-                    <Space
-                      wrap
-                      size={8}
-                      style={{ justifyContent: "flex-end", width: "100%" }}
-                    >
-                      {row.isEntryMember ? (
                         <Button
-                          icon={<CheckCircleOutlined />}
-                          disabled={
-                            isEntryActionBusy && entryActionBusyMemberId !== row.memberId
+                          href={row.canInvokeMember ? row.invokeHref : undefined}
+                          disabled={!row.canInvokeMember}
+                          icon={<PlayCircleOutlined />}
+                          onClick={
+                            row.canInvokeMember
+                              ? handleNavigate(row.invokeHref)
+                              : undefined
                           }
-                          loading={entryActionBusyMemberId === row.memberId}
-                          onClick={onClearEntry}
                           size="small"
+                          style={
+                            row.canInvokeMember
+                              ? { color: token.colorSuccess, fontWeight: 600 }
+                              : undefined
+                          }
+                          title={row.canInvokeMember ? undefined : invokeDisabledReason}
                           type="text"
                         >
-                          {intl.formatMessage({ id: "teams.members.actions.clearEntry" })}
+                          {intl.formatMessage({ id: "teams.members.actions.invokeWorkflow" })}
                         </Button>
-                      ) : row.canInvokeAsEntry && onSetEntry ? (
                         <Button
-                          disabled={
-                            isEntryActionBusy && entryActionBusyMemberId !== row.memberId
+                          href={row.workflowSupported ? row.studioHref : undefined}
+                          disabled={!row.workflowSupported}
+                          icon={<ToolOutlined />}
+                          onClick={
+                            row.workflowSupported
+                              ? handleNavigate(row.studioHref)
+                              : undefined
                           }
-                          loading={entryActionBusyMemberId === row.memberId}
-                          onClick={() => onSetEntry(row.memberId)}
                           size="small"
-                          type="text"
+                          title={
+                            row.workflowSupported
+                              ? undefined
+                              : intl.formatMessage({
+                                  id: "teams.members.actions.workflowOnlyTitle",
+                                })
+                          }
+                          type="default"
                         >
-                          {intl.formatMessage({ id: "teams.members.actions.setEntry" })}
+                          {intl.formatMessage({ id: "teams.members.actions.workflowStudio" })}
                         </Button>
-                      ) : null}
-                      <Button
-                        href={row.workflowSupported ? row.editStudioHref : undefined}
-                        disabled={!row.workflowSupported}
-                        icon={<EditOutlined />}
-                        onClick={
-                          row.workflowSupported
-                            ? handleNavigate(row.editStudioHref)
-                            : undefined
-                        }
-                        size="small"
-                        title={
-                          row.workflowSupported
-                            ? undefined
-                            : intl.formatMessage({
-                                id: "teams.members.actions.workflowOnlyTitle",
-                              })
-                        }
-                        type="text"
-                      >
-                        {intl.formatMessage({
-                          id: row.workflowSupported
-                            ? "teams.members.actions.editWorkflow"
-                            : "teams.members.actions.workflowOnly",
-                        })}
-                      </Button>
-                      <Button
-                        href={row.workflowSupported ? row.buildStudioHref : undefined}
-                        disabled={!row.workflowSupported}
-                        icon={<ToolOutlined />}
-                        onClick={
-                          row.workflowSupported
-                            ? handleNavigate(row.buildStudioHref)
-                            : undefined
-                        }
-                        size="small"
-                        style={{ color: token.colorPrimary }}
-                        title={
-                          row.workflowSupported
-                            ? undefined
-                            : intl.formatMessage({
-                                id: "teams.members.actions.workflowOnlyTitle",
-                              })
-                        }
-                        type="text"
-                      >
-                        {intl.formatMessage({
-                          id: row.workflowSupported
-                            ? "teams.members.actions.debugWorkflow"
-                            : "teams.members.actions.workflowOnly",
-                        })}
-                      </Button>
-                    </Space>
-                  </div>
-                ))}
+                        {row.isEntryMember ? (
+                          <Button
+                            icon={<CheckCircleOutlined />}
+                            disabled={
+                              rowBusy ||
+                              (isEntryActionBusy && entryActionBusyMemberId !== row.memberId)
+                            }
+                            loading={entryActionBusyMemberId === row.memberId}
+                            onClick={onClearEntry}
+                            size="small"
+                            type="text"
+                          >
+                            {intl.formatMessage({ id: "teams.members.actions.clearEntry" })}
+                          </Button>
+                        ) : row.canInvokeAsEntry && onSetEntry ? (
+                          <Button
+                            disabled={
+                              rowBusy ||
+                              (isEntryActionBusy &&
+                                entryActionBusyMemberId !== row.memberId)
+                            }
+                            loading={entryActionBusyMemberId === row.memberId}
+                            onClick={() => onSetEntry(row.memberId)}
+                            size="small"
+                            type="text"
+                          >
+                            {intl.formatMessage({ id: "teams.members.actions.setEntry" })}
+                          </Button>
+                        ) : null}
+                      </Space>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>

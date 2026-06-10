@@ -1598,7 +1598,6 @@ export const studioApi = {
     displayName: string;
     implementationKind: StudioMemberImplementationKind;
     description?: string | null;
-    memberId?: string | null;
     teamId?: string | null;
   }): Promise<StudioMemberSummary> {
     return requestDecodedJson(
@@ -1612,7 +1611,33 @@ export const studioApi = {
             displayName: input.displayName.trim(),
             implementationKind: input.implementationKind,
             description: trimOptional(input.description),
-            memberId: trimOptional(input.memberId),
+            teamId: trimOptional(input.teamId),
+          })
+        ),
+      }
+    );
+  },
+
+  createMemberWithId(input: {
+    scopeId: string;
+    memberId: string;
+    displayName: string;
+    implementationKind: StudioMemberImplementationKind;
+    description?: string | null;
+    teamId?: string | null;
+  }): Promise<StudioMemberSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members`,
+      decodeStudioMemberSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName: input.displayName.trim(),
+            implementationKind: input.implementationKind,
+            description: trimOptional(input.description),
+            memberId: input.memberId.trim(),
             teamId: trimOptional(input.teamId),
           })
         ),

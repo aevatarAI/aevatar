@@ -303,15 +303,15 @@ const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
         title={
           canRunActiveMember
             ? t(
-                "teamMemberWorkflowStudio.header.runActiveMember",
-                "Run active member",
+                "teamMemberWorkflowStudio.header.runDraft",
+                "Run draft",
               )
             : activeMemberRunPlaceholderReason
         }
       >
         {t(
-          "teamMemberWorkflowStudio.header.runActiveMember",
-          "Run active member",
+          "teamMemberWorkflowStudio.header.runDraft",
+          "Run draft",
         )}
       </Button>
       <Tooltip title={t("teamMemberWorkflowStudio.header.runOptionsAria", "Run options")}>

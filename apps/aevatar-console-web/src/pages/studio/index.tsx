@@ -5749,7 +5749,7 @@ const StudioPage: React.FC = () => {
           setInventoryBusyKey('create');
           setInventoryBusyAction('create');
           try {
-            createdScriptMember = await studioApi.createMember({
+            createdScriptMember = await studioApi.createMemberWithId({
               scopeId: resolvedStudioScopeId,
               memberId: scriptId,
               displayName: scriptDisplayName,

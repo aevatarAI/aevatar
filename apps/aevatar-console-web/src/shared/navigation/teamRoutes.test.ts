@@ -1,6 +1,7 @@
 import {
   buildTeamCreateHref,
   buildTeamDetailHref,
+  buildTeamMemberInvokeHref,
   buildTeamMemberWorkflowStudioHref,
   buildTeamStudioHref,
   buildTeamsHref,
@@ -84,8 +85,36 @@ describe("teamRoutes", () => {
         mode: "edit-member",
         scopeId: "scope-alpha",
         teamId: "t-alpha",
+        workflowId: " workflow-alpha ",
       }),
-    ).toBe("/teams/scope-alpha/t-alpha/members/member-alpha/workflow");
+    ).toBe(
+      "/teams/scope-alpha/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+  });
+
+  it("builds explicit Team member invoke routes", () => {
+    expect(
+      buildTeamMemberInvokeHref({
+        memberId: " member-alpha ",
+        scopeId: " scope-alpha ",
+        teamId: " t-alpha ",
+      }),
+    ).toBe("/teams/scope-alpha/t-alpha/members/member-alpha/invoke");
+
+    expect(
+      buildTeamMemberInvokeHref({
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }),
+    ).toBe("/teams/scope-alpha/t-alpha?tab=members");
+
+    expect(
+      buildTeamMemberInvokeHref({
+        memberId: "member-alpha",
+        scopeId: "",
+        teamId: "t-alpha",
+      }),
+    ).toBe("/teams");
   });
 
   it("keeps old Studio helpers on /studio", () => {

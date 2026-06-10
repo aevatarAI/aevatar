@@ -63,11 +63,10 @@ type SavedWorkflowDraft = {
 };
 
 type RunActiveMemberVariables = {
+  readonly document: StudioWorkflowDocument;
   readonly memberId: string;
   readonly runMessage: string;
-  readonly publishedServiceId: string;
   readonly title: string;
-  readonly workflowId?: string;
 };
 
 type PublishWorkflowVariables = {
@@ -85,6 +84,7 @@ type PublishedWorkflow = {
 type CreatedWorkflowMember = {
   readonly memberId: string;
   readonly savedDraft: SavedWorkflowDraft;
+  readonly workflowId: string;
 };
 
 function getTeamMemberWorkflowStudioTeamQueryKey(
@@ -187,11 +187,16 @@ function readPathSegments(): {
   mode: TeamMemberWorkflowStudioMode;
   scopeId: string;
   teamId: string;
+  workflowId: string;
 } {
   const segments =
     typeof window === "undefined"
       ? []
       : window.location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const params =
+    typeof window === "undefined"
+      ? new URLSearchParams()
+      : new URLSearchParams(window.location.search);
   const scopeId = trimOptional(segments[1]);
   const teamId = trimOptional(segments[2]);
   const routeMemberId = trimOptional(segments[4]);
@@ -202,6 +207,7 @@ function readPathSegments(): {
     mode,
     scopeId,
     teamId,
+    workflowId: trimOptional(params.get("workflowId")),
   };
 }
 
@@ -260,14 +266,14 @@ function resolveExplicitWorkflowId(
 
 function resolveWorkflowDraftReloadIds(
   memberDetail: StudioMemberDetail | null | undefined,
+  routeWorkflowId?: string | null,
 ): readonly string[] {
   const explicitWorkflowId = resolveExplicitWorkflowId(memberDetail);
-  const memberWorkflowId =
-    trimOptional(memberDetail?.summary.implementationKind).toLowerCase() ===
-    "workflow"
-      ? trimOptional(memberDetail?.summary.memberId)
-      : "";
-  const ids = [explicitWorkflowId, memberWorkflowId].filter(Boolean);
+  const routeDraftWorkflowId = trimOptional(routeWorkflowId);
+  const ids = [
+    routeDraftWorkflowId,
+    explicitWorkflowId,
+  ].filter(Boolean);
 
   return Array.from(new Set(ids));
 }
@@ -549,6 +555,7 @@ function serializeRuntimeEventFrame(event: RuntimeEvent): string {
 
 function createWorkflowInvokeExecutionDetail(input: {
   readonly accumulator: RuntimeEventAccumulator;
+  readonly auditSource?: StudioExecutionDetail["auditSource"];
   readonly completedAtUtc?: string | null;
   readonly error?: string | null;
   readonly executionId: string;
@@ -566,7 +573,7 @@ function createWorkflowInvokeExecutionDetail(input: {
     "";
 
   return {
-    auditSource: "invoke-session",
+    auditSource: input.auditSource ?? "invoke-session",
     actorId: input.accumulator.actorId || null,
     completedAtUtc: input.completedAtUtc ?? null,
     error: input.error ?? null,
@@ -734,7 +741,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     route.mode === "existing" ? resolveExplicitWorkflowId(memberQuery.data) : "";
   const workflowDraftReloadIds =
     route.mode === "existing"
-      ? resolveWorkflowDraftReloadIds(memberQuery.data)
+      ? resolveWorkflowDraftReloadIds(memberQuery.data, route.workflowId)
       : [];
   const memberPublishedServiceId = trimOptional(
     memberQuery.data?.summary.publishedServiceId,
@@ -760,7 +767,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         ? lastError
         : new Error("Workflow draft was not found.");
     },
-    retry: explicitWorkflowId ? undefined : false,
+    retry: false,
   });
   const editableWorkflowId = trimOptional(workflowQuery.data?.workflowId);
   const executionsQuery = useQuery({
@@ -807,8 +814,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         route.memberId ||
         "Workflow member";
   const activeMemberTitle =
-    trimOptional(memberQuery.data?.summary.displayName) ||
     trimOptional(workflowTitle) ||
+    trimOptional(memberQuery.data?.summary.displayName) ||
     routeFallbackTitle;
   const teamName =
     trimOptional(teamQuery.data?.displayName) || route.teamId || "Current team";
@@ -977,18 +984,21 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         title: normalizedTitle,
         workflow: newWorkflowShell,
       });
-      const memberId = trimOptional(savedDraft.workflow.workflowId);
-      if (!memberId) {
-        throw new Error("Workflow draft save did not return a stable member id.");
+      const savedWorkflowId = trimOptional(savedDraft.workflow.workflowId);
+      if (!savedWorkflowId) {
+        throw new Error("Workflow draft save did not return a stable workflow id.");
       }
 
-      const assignedMember = await studioApi.updateMemberTeamAssignment({
+      const createdMember = await studioApi.createMember({
         scopeId: route.scopeId,
-        memberId,
+        displayName: normalizedTitle,
+        implementationKind: "workflow",
         teamId: route.teamId,
       });
-      const createdMemberId =
-        trimOptional(assignedMember.summary.memberId) || memberId;
+      const createdMemberId = trimOptional(createdMember.memberId);
+      if (!createdMemberId) {
+        throw new Error("Workflow member creation did not return a stable member id.");
+      }
       const serialized = await studioApi.serializeYaml({
         document: {
           ...savedDraft.document,
@@ -1006,6 +1016,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       return {
         memberId: createdMemberId,
         savedDraft,
+        workflowId: savedWorkflowId,
       };
     },
     onError: (error) => {
@@ -1015,7 +1026,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           : "Failed to create workflow member.",
       );
     },
-    onSuccess: ({ memberId, savedDraft }) => {
+    onSuccess: ({ memberId, savedDraft, workflowId }) => {
       applySavedDraft(savedDraft);
       void refreshTeamMemberSurfaces(route.scopeId, route.teamId);
       void message.success("Workflow member created.");
@@ -1025,26 +1036,33 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           mode: "edit-member",
           scopeId: route.scopeId,
           teamId: route.teamId,
+          workflowId,
         }),
       );
     },
   });
   const activeMemberRunMutation = useMutation({
     mutationFn: async ({
+      document,
       memberId,
-      publishedServiceId,
       runMessage,
       title,
-      workflowId,
     }: RunActiveMemberVariables): Promise<StudioExecutionDetail> => {
       if (!route.scopeId || !memberId) {
-        throw new Error("Resolve an active workflow member before running it.");
+        throw new Error("Resolve a workflow member before running its draft.");
       }
 
-      const normalizedTitle = trimOptional(title) || "Member run";
+      const normalizedTitle = trimOptional(title) || "Workflow draft";
       const resolvedRunMessage = trimOptional(runMessage) || `Run ${normalizedTitle}`;
+      const serialized = await studioApi.serializeYaml({
+        document: {
+          ...document,
+          name: normalizedTitle,
+        },
+        availableStepTypes: AVAILABLE_STEP_TYPES,
+      });
       const startedAtUtc = new Date().toISOString();
-      const executionId = `invoke:${memberId}:${Date.now().toString(36)}`;
+      const executionId = `draft-run:${memberId}:${Date.now().toString(36)}`;
       const frames: StudioExecutionFrame[] = [];
       const accumulator = createRuntimeEventAccumulator();
       const controller = new AbortController();
@@ -1055,12 +1073,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       ) =>
         createWorkflowInvokeExecutionDetail({
           accumulator,
+          auditSource: "draft-run-session",
           completedAtUtc,
           error,
           executionId,
           frames,
           runMessage: resolvedRunMessage,
-          serviceId: publishedServiceId,
+          serviceId: "",
           startedAtUtc,
           status,
           workflowName: normalizedTitle,
@@ -1069,20 +1088,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setExecutionDetail(buildDetail("running"));
 
       try {
-        const response = await runtimeRunsApi.streamChat(
+        const response = await runtimeRunsApi.streamDraftRun(
           route.scopeId,
           {
-            metadata: workflowId
-              ? {
-                  workflowId,
-                }
-              : undefined,
             prompt: resolvedRunMessage,
+            workflowYamls: [serialized.yaml],
           },
           controller.signal,
-          {
-            memberId,
-          },
         );
 
         for await (const event of parseBackendSSEStream(response, {
@@ -1106,7 +1118,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         );
       } catch (error) {
         const errorMessage =
-          error instanceof Error ? error.message : "Workflow invoke failed.";
+          error instanceof Error ? error.message : "Workflow draft run failed.";
         const completedAtUtc = new Date().toISOString();
         return buildDetail("failed", completedAtUtc, errorMessage);
       }
@@ -1115,7 +1127,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setExecutionError(
         error instanceof Error
           ? error.message
-          : "Failed to run active workflow member.",
+          : "Failed to run workflow draft.",
       );
     },
     onMutate: () => {
@@ -1125,9 +1137,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setExecutionDetail(detail);
       setExecutionError("");
       if (detail.error) {
-        void message.error("Active member run failed.");
+        void message.error("Workflow draft run failed.");
       } else {
-        void message.success("Active member run completed.");
+        void message.success("Workflow draft run completed.");
       }
     },
   });
@@ -1228,6 +1240,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     (memberQuery.isLoading ||
       (workflowDraftReloadIds.length > 0 &&
         (workflowQuery.isLoading || parseQuery.isLoading)));
+  const workflowHasSteps = Boolean(editableDocument?.steps?.length);
   const canSave =
     route.mode === "new"
       ? Boolean(
@@ -1235,6 +1248,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             route.teamId &&
             editableDocument &&
             dirty &&
+            workflowHasSteps &&
             !selectedStepConfigurationError &&
             !createWorkflowMemberMutation.isPending,
         )
@@ -1246,7 +1260,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             !linkedWorkflowMissing &&
             !saveMutation.isPending,
         );
-  const workflowHasSteps = Boolean(editableDocument?.steps?.length);
   const memberPublishedByQuery =
     memberQuery.data?.summary.lifecycleStage === "bind_ready" ||
     Boolean(trimOptional(memberQuery.data?.summary.publishedServiceId));
@@ -1350,29 +1363,32 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     route.mode === "existing" &&
       route.scopeId &&
       route.memberId &&
-      memberPublishedServiceId &&
+      editableDocument &&
+      workflowHasSteps &&
       !activeMemberRunMutation.isPending,
   );
   const activeMemberRunPlaceholderReason =
     route.mode === "new"
-      ? "Create and publish a workflow member before running it."
+      ? "Create and link a workflow member before running its draft."
       : !route.memberId
-        ? "Resolve the workflow member before running it."
-        : !memberPublishedServiceId
-          ? "Publish this workflow member before running it."
+        ? "Resolve the workflow member before running its draft."
+        : !editableDocument
+          ? "Load the workflow draft before running it."
           : !route.scopeId
-            ? "Resolve the current workspace before running the active member."
+            ? "Resolve the current workspace before running the draft."
             : activeMemberRunMutation.isPending
-              ? "Active member run is already starting."
+              ? "Workflow draft run is already starting."
               : linkedWorkflowMissing
-                ? "Run the active published member. Editing remains limited until a stable workflow draft is linked."
+                ? "Run the local draft sketch. Saving remains limited until a stable workflow draft is linked."
                 : !workflowHasSteps
-                  ? "Run the active published member. Add steps before saving editor changes."
-                  : "Run the active workflow member.";
+                  ? "Add at least one step before running this workflow draft."
+                  : "Run the current workflow draft.";
   const savePlaceholderReason =
     route.mode === "new"
       ? !editableDocument
         ? "Load the workflow draft before creating this member."
+        : !workflowHasSteps
+          ? "Add at least one step before creating this member."
         : !dirty
           ? "No changes to save."
           : "Save creates the workflow draft, Team member, and member binding."
@@ -1401,6 +1417,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     if (
       !executionId ||
       executionDetail?.auditSource === "invoke-session" ||
+      executionDetail?.auditSource === "draft-run-session" ||
       resolveWorkflowExecutionStatus(executionDetail) !== "running"
     ) {
       return;
@@ -1625,13 +1642,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           ? "No workflow draft is linked to this member yet. You can sketch locally, but saving requires a stable workflow reference."
           : "Start this workflow by adding the first step.",
     runActiveMember: () => {
-      if (route.memberId && memberPublishedServiceId) {
+      if (route.memberId && editableDocument) {
         activeMemberRunMutation.mutate({
+          document: editableDocument,
           memberId: route.memberId,
-          publishedServiceId: memberPublishedServiceId,
           runMessage: trimOptional(executionRunMessage),
           title: activeMemberTitle,
-          workflowId: editableWorkflowId || undefined,
         });
       }
     },

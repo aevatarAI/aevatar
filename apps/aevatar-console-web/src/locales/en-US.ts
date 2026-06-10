@@ -21,6 +21,7 @@ const enUSMessages = {
   'menu.Services': 'Services',
   'menu.Settings': 'Settings',
   'menu.Team Details': 'Team Details',
+  'menu.Team Member Invoke': 'Team Member Invoke',
   'menu.Team Member Workflow Studio': 'Team Member Workflow Studio',
   'menu.Topology': 'Topology',
   'nav.groups.platform': 'Platform',
@@ -468,13 +469,15 @@ const enUSMessages = {
   'teams.members.actions.createFirst': 'Create first member',
   'teams.members.actions.createFirstWorkflow': 'Create first workflow member',
   'teams.members.actions.createWorkflowMember': 'Create workflow member',
-  'teams.members.actions.debugWorkflow': 'Debug workflow',
-  'teams.members.actions.editWorkflow': 'Edit workflow',
   'teams.members.actions.editInStudio': 'Edit in Studio',
+  'teams.members.actions.invokeRequiresBinding':
+    'Bind this workflow member before invoking it.',
+  'teams.members.actions.invokeWorkflow': 'Invoke',
   'teams.members.actions.setEntry': 'Set as entry member',
   'teams.members.actions.workflowOnly': 'Workflow only',
   'teams.members.actions.workflowOnlyTitle':
     'This console currently supports workflow members only.',
+  'teams.members.actions.workflowStudio': 'Workflow Studio',
   'teams.members.columns.actions': 'Actions',
   'teams.members.columns.implementation': 'Implementation',
   'teams.members.columns.member': 'Member',
@@ -482,12 +485,14 @@ const enUSMessages = {
   'teams.members.columns.service': 'Service',
   'teams.members.count': '{count, plural, one {# member} other {# members}}',
   'teams.members.description':
-    'Confirm entry members here: Set entry determines where team tests start. Workflow debug opens the supported member implementation and binding path, then return to team detail to test the team.',
+    'Review team members, choose the Team entry member, and open workflow members in Studio. Invoke is available only after a workflow member is bound to a published service.',
   'teams.members.empty.description':
     'The team exists as a backend fact, but its current member roster is empty. New members will appear here.',
   'teams.members.empty.title': 'This team has no members yet',
   'teams.members.entry': 'Entry member',
   'teams.members.selected': 'Selected',
+  'teams.members.service.bound': 'Bound service',
+  'teams.members.service.notBound': 'Not bound yet',
   'teams.members.fallback.team': 'Team {teamId}',
   'teams.members.loading.description': 'Reading members for this team.',
   'teams.members.loading.title': 'Reading member roster',
@@ -502,17 +507,66 @@ const enUSMessages = {
   'teams.members.unavailable.description':
     'The member roster for this team cannot be read right now.',
   'teams.members.unavailable.title': 'Member roster unavailable',
+  'pages.teammemberinvoke.back': 'Team members',
+  'pages.teammemberinvoke.description':
+    'Run the bound published workflow member and keep the runtime observation pinned to this member.',
+  'pages.teammemberinvoke.endpoint.missing':
+    'No callable endpoint is available.',
+  'pages.teammemberinvoke.endpoint.missing.description':
+    'The published service has no callable endpoints available to this page.',
+  'pages.teammemberinvoke.fact.member': 'Member',
+  'pages.teammemberinvoke.fact.revision': 'Revision',
+  'pages.teammemberinvoke.fact.service': 'Published service',
+  'pages.teammemberinvoke.fact.workflow': 'Implementation',
+  'pages.teammemberinvoke.implementation.workflow': 'Workflow',
+  'pages.teammemberinvoke.load.failed':
+    'Member invoke context could not be loaded.',
+  'pages.teammemberinvoke.loading': 'Loading invoke context...',
+  'pages.teammemberinvoke.member': 'Member',
+  'pages.teammemberinvoke.next.step': 'Next step',
+  'pages.teammemberinvoke.open.studio': 'Workflow Studio',
+  'pages.teammemberinvoke.resolve.in.studio': 'Open Workflow Studio',
+  'pages.teammemberinvoke.route.missing': 'Missing member route',
+  'pages.teammemberinvoke.route.missing.description':
+    'Open this page from a concrete team member so the invoke target stays stable.',
+  'pages.teammemberinvoke.service.pending':
+    'Published service is not visible yet.',
+  'pages.teammemberinvoke.service.pending.description':
+    'The member binding exists, but the service catalog has not exposed its callable endpoints yet.',
+  'pages.teammemberinvoke.title': 'Invoke workflow member',
+  'pages.teammemberinvoke.unbound': 'This workflow member is not bound yet.',
+  'pages.teammemberinvoke.unbound.description':
+    'Bind this workflow member first so it has a published callable service and endpoint contract.',
+  'pages.teammemberinvoke.workflow.only':
+    'Invoke is available for workflow members only.',
+  'pages.teammemberinvoke.workflow.only.description':
+    "This page only runs workflow members. Use the member's own surface for other implementation kinds.",
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     'This Phase 1 page only loads workflow members through a stable workflow reference. Add that backend/read-model reference before editing this member here.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     'No workflow draft is linked to this member yet.',
   'teamMemberWorkflowStudio.common.close': 'Close',
   'teamMemberWorkflowStudio.executionPanel.consoleAria':
-    'Member run console',
+    'Draft run console',
+  'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
+  'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
+    'Usage, snapshots, and raw observed events will appear here when the backend emits them.',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Run logs will appear here after the active member returns events.',
+    'Run logs will appear here after the workflow draft returns events.',
+  'teamMemberWorkflowStudio.executionPanel.emptyOutput':
+    'Output will appear after the draft run emits a result.',
+  'teamMemberWorkflowStudio.executionPanel.evidence': 'Evidence frames',
+  'teamMemberWorkflowStudio.executionPanel.events': 'Events',
+  'teamMemberWorkflowStudio.executionPanel.items': 'items',
+  'teamMemberWorkflowStudio.executionPanel.logs': 'Logs',
+  'teamMemberWorkflowStudio.executionPanel.output': 'Output',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
     '{count} run event(s) received, but no step logs are available yet.',
+  'teamMemberWorkflowStudio.executionPanel.resultFirst': 'Result',
+  'teamMemberWorkflowStudio.executionPanel.runLog': 'Run log',
+  'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
+  'teamMemberWorkflowStudio.executionPanel.summary': 'Summary',
+  'teamMemberWorkflowStudio.executionPanel.timeline': 'Timeline',
   'teamMemberWorkflowStudio.executionsPanel.description':
     'This tab only shows executions that can be safely scoped to the current workflow member by stable workflow or service identifiers.',
   'teamMemberWorkflowStudio.executionsPanel.empty':
@@ -545,7 +599,8 @@ const enUSMessages = {
     'Workflow primary actions',
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
   'teamMemberWorkflowStudio.header.runOptionsAria': 'Run options',
-  'teamMemberWorkflowStudio.header.runActiveMember': 'Run active member',
+  'teamMemberWorkflowStudio.header.runActiveMember': 'Run draft',
+  'teamMemberWorkflowStudio.header.runDraft': 'Run draft',
   'teamMemberWorkflowStudio.header.save': 'Save',
   'teamMemberWorkflowStudio.header.saveDraft': 'Save draft',
   'teamMemberWorkflowStudio.header.tabs.editor': 'Editor',
@@ -605,9 +660,9 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
   'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
-    'Message to active member',
+    'Draft run input',
   'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
-    'Optional message sent with this active member run',
+    'Optional input sent to this workflow draft run',
   'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': 'Run options panel',
   'teamMemberWorkflowStudio.runOptionsPanel.title': 'Run options',
   'teamMemberWorkflowStudio.runsPanel.description':

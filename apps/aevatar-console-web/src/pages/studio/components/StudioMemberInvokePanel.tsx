@@ -55,6 +55,7 @@ type StudioMemberInvokePanelProps = {
   readonly memberId?: string;
   readonly memberRevision?: StudioMemberBindingRevision | null;
   readonly teamId?: string;
+  readonly runtimeTarget?: 'default' | 'member' | 'service' | 'team';
   readonly services: readonly ScopeConsoleServiceOption[];
   readonly selectedMemberLabel?: string;
   readonly emptyState?: {
@@ -81,6 +82,30 @@ function createClientId(prefix: string): string {
   }
 
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function resolveInvokeRouteTarget(input: {
+  memberId: string;
+  runtimeTarget: NonNullable<StudioMemberInvokePanelProps['runtimeTarget']>;
+  selectedServiceId?: string;
+  teamId: string;
+}) {
+  switch (input.runtimeTarget) {
+    case 'member':
+      return input.memberId ? { memberId: input.memberId } : {};
+    case 'service':
+      return input.selectedServiceId ? { serviceId: input.selectedServiceId } : {};
+    case 'team':
+      return input.teamId ? { teamId: input.teamId } : {};
+    default:
+      if (input.teamId) {
+        return { teamId: input.teamId };
+      }
+
+      return input.selectedServiceId
+        ? { serviceId: input.selectedServiceId }
+        : {};
+  }
 }
 
 function cloneChatMessages(
@@ -386,6 +411,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   memberId,
   memberRevision,
   teamId,
+  runtimeTarget = 'default',
   services,
   selectedMemberLabel,
   emptyState,
@@ -462,10 +488,18 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   );
   const invokeRouteTarget = useMemo(
     () =>
-      normalizedTeamId
-        ? { teamId: normalizedTeamId }
-        : { serviceId: selectedService?.serviceId },
-    [normalizedTeamId, selectedService?.serviceId],
+      resolveInvokeRouteTarget({
+        memberId: normalizedMemberId,
+        runtimeTarget,
+        selectedServiceId: selectedService?.serviceId,
+        teamId: normalizedTeamId,
+      }),
+    [
+      normalizedMemberId,
+      normalizedTeamId,
+      runtimeTarget,
+      selectedService?.serviceId,
+    ],
   );
   const visibleRequestHistory = useMemo(() => {
     const currentServiceId =

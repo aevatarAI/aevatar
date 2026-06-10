@@ -55,6 +55,13 @@ export default [
     parentKeys: ["/teams"],
   },
   {
+    path: "/teams/:scopeId/:teamId/members/:memberId/invoke",
+    name: "Team Member Invoke",
+    component: "./team-member-invoke",
+    hideInMenu: true,
+    parentKeys: ["/teams"],
+  },
+  {
     path: "/teams/:scopeId/:teamId",
     name: "Team Details",
     component: "./teams/detail",

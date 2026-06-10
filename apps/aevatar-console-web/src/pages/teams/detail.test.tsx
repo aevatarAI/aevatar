@@ -758,6 +758,18 @@ jest.mock("@/shared/studio/api", () => ({
       ...mockCreateTeamSummary(),
       entryMemberId: null,
     })),
+    updateMemberTeamAssignment: jest.fn(async (_input: {
+      scopeId: string;
+      memberId: string;
+      teamId: string | null;
+    }) => ({
+      summary: {
+        ...mockCreateTeamMembersCatalog().members[0],
+        teamId: null,
+      },
+      implementationRef: null,
+      lastBinding: null,
+    })),
     archiveTeam: jest.fn(async () => ({
       ...mockCreateTeamSummary(),
       lifecycleStage: "archived",
@@ -846,6 +858,17 @@ describe("TeamDetailPage", () => {
       ...mockCreateTeamSummary(),
       entryMemberId: null,
     }));
+    (studioApi.updateMemberTeamAssignment as jest.Mock).mockReset();
+    (studioApi.updateMemberTeamAssignment as jest.Mock).mockImplementation(
+      async (_input: { scopeId: string; memberId: string; teamId: string | null }) => ({
+        summary: {
+          ...mockCreateTeamMembersCatalog().members[0],
+          teamId: null,
+        },
+        implementationRef: null,
+        lastBinding: null,
+      }),
+    );
     (studioApi.archiveTeam as jest.Mock).mockReset();
     (studioApi.archiveTeam as jest.Mock).mockImplementation(async () => ({
       ...mockCreateTeamSummary(),
@@ -1176,14 +1199,18 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(
       screen.getByText(
-        /设置入口决定团队测试从哪里开始，Workflow 调试入口用于补齐成员实现和绑定/,
+        /只有已经绑定到发布服务的 Workflow 成员才可以调用/,
       ),
     ).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
     expect(screen.getByText("member-team-alpha")).toBeTruthy();
     expect(screen.getByText("入口成员")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "编辑工作流" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "调试工作流" })).toBeTruthy();
+    expect(screen.getByText("已绑定服务")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "调用" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Workflow Studio" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "编辑工作流" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "调试工作流" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "移出团队" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Test member" })).toBeNull();
     expect(screen.queryByRole("link", { name: "View runs" })).toBeNull();
     expect(screen.queryByText("参与者结构")).toBeNull();
@@ -1703,14 +1730,59 @@ describe("TeamDetailPage", () => {
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    fireEvent.click(await screen.findByRole("link", { name: "调试工作流" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
 
     expect(window.location.pathname).toBe(
       "/teams/scope-1/t-alpha/members/member-team-alpha/workflow",
     );
   });
 
-  it("disables non-workflow member edit actions while only workflow members are supported", async () => {
+  it("routes workflow member invoke actions into the member invoke page", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "调用" }));
+
+    expect(window.location.pathname).toBe(
+      "/teams/scope-1/t-alpha/members/member-team-alpha/invoke",
+    );
+  });
+
+  it("keeps invoke disabled for workflow members that are not bound yet", async () => {
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-draft-workflow",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Draft Workflow",
+          description: "Created but not bound yet",
+          implementationKind: "workflow",
+          lifecycleStage: "created",
+          publishedServiceId: "",
+          lastBoundRevisionId: "",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+
+    expect(await screen.findByText("Draft Workflow")).toBeTruthy();
+    expect(screen.getByText("尚未绑定")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Workflow Studio" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "调用" })).toBeDisabled();
+    expect(screen.queryByRole("link", { name: "调用" })).toBeNull();
+  });
+
+  it("allows non-workflow bind-ready members to become Team entry members", async () => {
     (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-1",
       members: [
@@ -1736,12 +1808,23 @@ describe("TeamDetailPage", () => {
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
-    expect(await screen.findAllByRole("button", { name: "仅支持 Workflow" }))
-      .toHaveLength(2);
-    expect(screen.queryByRole("link", { name: "在 Studio 中编辑" })).toBeNull();
+    expect(await screen.findByText("Agent Alpha")).toBeTruthy();
+    expect(screen.getByText("已绑定服务")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "调用" })).toBeDisabled();
+    expect(screen.queryByRole("link", { name: "调用" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Workflow Studio" })).toBeDisabled();
+    fireEvent.click(await screen.findByRole("button", { name: "设为入口成员" }));
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "member-agent-alpha",
+      );
+    });
   });
 
-  it("shows workflow-only affordance for a non-workflow Team Test entry member", async () => {
+  it("starts Team Test through a non-workflow bind-ready entry member", async () => {
     (studioApi.getTeam as jest.Mock).mockResolvedValue({
       ...mockCreateTeamSummary(),
       entryMemberId: "member-agent-alpha",
@@ -1769,14 +1852,23 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
-
-    const workflowOnlyButtons = await within(dialog).findAllByRole("button", {
-      name: "仅支持 Workflow",
+    fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
+      target: { value: "Can an agent entry handle this?" },
     });
-    expect(workflowOnlyButtons).toHaveLength(1);
-    expect(workflowOnlyButtons[0]).toBeDisabled();
-    expect(within(dialog).queryByRole("link", { name: "在 Studio 中编辑" }))
-      .toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamTeamChat).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        expect.objectContaining({
+          prompt: "Can an agent entry handle this?",
+        }),
+        expect.any(AbortSignal),
+      );
+    });
+    expect(within(dialog).queryByRole("button", { name: "仅支持 Workflow" })).toBeNull();
+    expect(await screen.findByText("Team response")).toBeTruthy();
   });
 
   it("routes create-member actions into the workflow member studio", async () => {

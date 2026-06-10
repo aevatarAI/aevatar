@@ -21,6 +21,7 @@ const zhCNMessages = {
   'menu.Services': '服务',
   'menu.Settings': '设置',
   'menu.Team Details': '团队详情',
+  'menu.Team Member Invoke': '团队成员调用',
   'menu.Team Member Workflow Studio': '团队成员 Workflow Studio',
   'menu.Topology': '拓扑',
   'nav.groups.platform': '平台',
@@ -444,12 +445,13 @@ const zhCNMessages = {
   'teams.members.actions.createFirst': '创建第一个成员',
   'teams.members.actions.createFirstWorkflow': '创建第一个工作流成员',
   'teams.members.actions.createWorkflowMember': '创建工作流成员',
-  'teams.members.actions.debugWorkflow': '调试工作流',
-  'teams.members.actions.editWorkflow': '编辑工作流',
   'teams.members.actions.editInStudio': '在 Studio 中编辑',
+  'teams.members.actions.invokeRequiresBinding': '请先绑定这个 Workflow 成员再调用。',
+  'teams.members.actions.invokeWorkflow': '调用',
   'teams.members.actions.setEntry': '设为入口成员',
   'teams.members.actions.workflowOnly': '仅支持 Workflow',
   'teams.members.actions.workflowOnlyTitle': '当前控制台暂只支持 Workflow 类型成员。',
+  'teams.members.actions.workflowStudio': 'Workflow Studio',
   'teams.members.columns.actions': '操作',
   'teams.members.columns.implementation': '实现',
   'teams.members.columns.member': '成员',
@@ -457,12 +459,14 @@ const zhCNMessages = {
   'teams.members.columns.service': '服务',
   'teams.members.count': '{count} 个成员',
   'teams.members.description':
-    '在这里确认入口成员：设置入口决定团队测试从哪里开始，Workflow 调试入口用于补齐成员实现和绑定，完成后回到团队详情测试团队。',
+    '在这里查看团队成员、选择团队入口，并进入 Workflow Studio 编辑成员。只有已经绑定到发布服务的 Workflow 成员才可以调用。',
   'teams.members.empty.description':
     '团队已经是后端事实，但当前成员清单为空。新增成员后会出现在这里。',
   'teams.members.empty.title': '这支团队还没有成员',
   'teams.members.entry': '入口成员',
   'teams.members.selected': '当前选中',
+  'teams.members.service.bound': '已绑定服务',
+  'teams.members.service.notBound': '尚未绑定',
   'teams.members.fallback.team': '归属团队 {teamId}',
   'teams.members.loading.description': '正在读取这支团队的成员。',
   'teams.members.loading.title': '正在读取成员清单',
@@ -475,17 +479,62 @@ const zhCNMessages = {
   'teams.members.title': '团队成员',
   'teams.members.unavailable.description': '当前无法读取这支团队的成员清单。',
   'teams.members.unavailable.title': '成员清单暂不可见',
+  'pages.teammemberinvoke.back': '团队成员',
+  'pages.teammemberinvoke.description':
+    '调用已绑定发布服务的 Workflow 成员，并将运行观察固定到这个成员。',
+  'pages.teammemberinvoke.endpoint.missing': '当前没有可调用的端点。',
+  'pages.teammemberinvoke.endpoint.missing.description':
+    '这个发布服务暂时没有向当前页面开放可调用端点。',
+  'pages.teammemberinvoke.fact.member': '成员',
+  'pages.teammemberinvoke.fact.revision': '版本',
+  'pages.teammemberinvoke.fact.service': '发布服务',
+  'pages.teammemberinvoke.fact.workflow': '实现',
+  'pages.teammemberinvoke.implementation.workflow': 'Workflow',
+  'pages.teammemberinvoke.load.failed': '成员调用上下文加载失败。',
+  'pages.teammemberinvoke.loading': '正在加载调用上下文...',
+  'pages.teammemberinvoke.member': '成员',
+  'pages.teammemberinvoke.next.step': '下一步',
+  'pages.teammemberinvoke.open.studio': 'Workflow Studio',
+  'pages.teammemberinvoke.resolve.in.studio': '打开 Workflow Studio',
+  'pages.teammemberinvoke.route.missing': '缺少成员路由',
+  'pages.teammemberinvoke.route.missing.description':
+    '请从具体团队成员打开这个页面，确保调用目标保持稳定。',
+  'pages.teammemberinvoke.service.pending': '发布服务暂不可见。',
+  'pages.teammemberinvoke.service.pending.description':
+    '成员绑定已经存在，但服务目录还没有暴露它的可调用端点。',
+  'pages.teammemberinvoke.title': '调用 Workflow 成员',
+  'pages.teammemberinvoke.unbound': '这个 Workflow 成员尚未绑定。',
+  'pages.teammemberinvoke.unbound.description':
+    '请先绑定这个 Workflow 成员，让它拥有已发布的可调用服务和端点契约。',
+  'pages.teammemberinvoke.workflow.only': '只有 Workflow 成员可以在这里调用。',
+  'pages.teammemberinvoke.workflow.only.description':
+    '这个页面只运行 Workflow 成员。其他实现类型请使用对应成员自己的入口。',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     '当前 Phase 1 页面只会通过稳定 Workflow 引用加载成员。请先补齐后端或 ReadModel 引用，再在这里编辑这个成员。',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     '这个成员还没有关联 Workflow 草稿。',
   'teamMemberWorkflowStudio.common.close': '关闭',
   'teamMemberWorkflowStudio.executionPanel.consoleAria':
-    '成员运行控制台',
+    '草稿运行控制台',
+  'teamMemberWorkflowStudio.executionPanel.duration': '耗时',
+  'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
+    '后端返回 Usage、Snapshot 或原始观察事件后，这里会展示对应证据。',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    '活跃成员返回事件后，这里会展示运行日志。',
+    'Workflow 草稿返回事件后，这里会展示运行日志。',
+  'teamMemberWorkflowStudio.executionPanel.emptyOutput':
+    '草稿运行返回结果后，这里会展示输出。',
+  'teamMemberWorkflowStudio.executionPanel.evidence': '证据帧',
+  'teamMemberWorkflowStudio.executionPanel.events': '事件',
+  'teamMemberWorkflowStudio.executionPanel.items': '条',
+  'teamMemberWorkflowStudio.executionPanel.logs': '日志',
+  'teamMemberWorkflowStudio.executionPanel.output': '输出',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
     '已收到 {count} 个运行事件，但暂时还没有步骤日志。',
+  'teamMemberWorkflowStudio.executionPanel.resultFirst': '结果',
+  'teamMemberWorkflowStudio.executionPanel.runLog': '运行日志',
+  'teamMemberWorkflowStudio.executionPanel.steps': '步骤',
+  'teamMemberWorkflowStudio.executionPanel.summary': '摘要',
+  'teamMemberWorkflowStudio.executionPanel.timeline': '时间线',
   'teamMemberWorkflowStudio.executionsPanel.description':
     '这个 tab 只展示能通过稳定 Workflow 或 Service 标识安全归属到当前 Workflow 成员的执行记录。',
   'teamMemberWorkflowStudio.executionsPanel.empty':
@@ -518,7 +567,8 @@ const zhCNMessages = {
     'Workflow 主操作',
   'teamMemberWorkflowStudio.header.runMessage': '运行消息',
   'teamMemberWorkflowStudio.header.runOptionsAria': '运行选项',
-  'teamMemberWorkflowStudio.header.runActiveMember': '运行活跃成员',
+  'teamMemberWorkflowStudio.header.runActiveMember': '运行草稿',
+  'teamMemberWorkflowStudio.header.runDraft': '运行草稿',
   'teamMemberWorkflowStudio.header.save': '保存',
   'teamMemberWorkflowStudio.header.saveDraft': '保存草稿',
   'teamMemberWorkflowStudio.header.tabs.editor': '编辑器',
@@ -577,9 +627,9 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.resize.executionPanel': '调整运行控制台大小',
   'teamMemberWorkflowStudio.resize.sidePanel': '调整侧边面板大小',
   'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
-    '发送给活跃成员的消息',
+    '草稿运行输入',
   'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
-    '本次运行可选发送给活跃成员的消息',
+    '本次 Workflow 草稿运行的可选输入',
   'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': '运行选项面板',
   'teamMemberWorkflowStudio.runOptionsPanel.title': '运行选项',
   'teamMemberWorkflowStudio.runsPanel.description':

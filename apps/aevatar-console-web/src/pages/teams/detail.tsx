@@ -17,6 +17,7 @@ import {
 import { buildScopeHref } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
+  buildTeamMemberInvokeHref,
   buildTeamMemberWorkflowStudioHref,
   readTeamDetailRouteState,
   type TeamDetailTab,
@@ -25,7 +26,7 @@ import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
 import {
   formatStudioMemberLifecycleStage,
 } from "@/shared/studio/models";
-import type { StudioTeamSummary } from "@/shared/studio/models";
+import type { StudioMemberRoster, StudioTeamSummary } from "@/shared/studio/models";
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import { describeError } from "@/shared/ui/errorText";
 import {
@@ -784,9 +785,18 @@ const TeamDetailPage: React.FC = () => {
       (teamMembersQuery.data?.members ?? []).map((member) => {
         const isWorkflowMember =
           trimText(member.implementationKind).toLowerCase() === "workflow";
+        const publishedServiceId = trimText(member.publishedServiceId);
+        const isBoundMember =
+          normalizeStatus(member.lifecycleStage) === "bind_ready" &&
+          publishedServiceId.length > 0;
         const workflowStudioHref = buildTeamMemberWorkflowStudioHref({
           memberId: member.memberId,
           mode: "edit-member",
+          scopeId,
+          teamId: selectedTeamId,
+        });
+        const memberInvokeHref = buildTeamMemberInvokeHref({
+          memberId: member.memberId,
           scopeId,
           teamId: selectedTeamId,
         });
@@ -794,12 +804,12 @@ const TeamDetailPage: React.FC = () => {
         return {
           buildStudioHref: isWorkflowMember ? workflowStudioHref : "",
           description: trimText(member.description),
-          canInvokeAsEntry:
-            isWorkflowMember &&
-            normalizeStatus(member.lifecycleStage) === "bind_ready" &&
-            trimText(member.publishedServiceId).length > 0,
+          canInvokeAsEntry: isBoundMember,
+          canInvokeMember: isWorkflowMember && isBoundMember,
           editStudioHref: isWorkflowMember ? workflowStudioHref : "",
           implementationKind: formatCompositionKind(member.implementationKind),
+          invokeHref: isWorkflowMember ? memberInvokeHref : "",
+          isServiceBound: isBoundMember,
           key: member.memberId,
           lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
           lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
@@ -807,7 +817,8 @@ const TeamDetailPage: React.FC = () => {
           isSelectedMember: trimText(member.memberId) === selectedRosterMemberId,
           memberId: member.memberId,
           name: trimText(member.displayName) || member.memberId,
-          serviceId: trimText(member.publishedServiceId) || "--",
+          serviceId: publishedServiceId || "--",
+          studioHref: isWorkflowMember ? workflowStudioHref : "",
           workflowSupported: isWorkflowMember,
         };
       }),
@@ -1454,14 +1465,13 @@ const TeamDetailPage: React.FC = () => {
     }
   }, [
     queryClient,
-    entryMemberId,
     intl,
-    isTeamArchived,
     refreshTeamAuthority,
     scopeId,
     selectedTeamId,
     teamSummaryQueryKey,
   ]);
+
   const teamTestPanel = (
     <TeamTestPanel
       createMemberHref={createMemberHref}

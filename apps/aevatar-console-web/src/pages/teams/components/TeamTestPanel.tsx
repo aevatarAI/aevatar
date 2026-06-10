@@ -355,15 +355,11 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                     row.workflowSupported
                       ? undefined
                       : intl.formatMessage({
-                          id: "teams.members.actions.workflowOnlyTitle",
+                          id: "teams.detail.test.entry.noReady.description",
                         })
                   }
                 >
-                  {intl.formatMessage({
-                    id: row.workflowSupported
-                      ? "teams.detail.test.entry.buildFirst"
-                      : "teams.members.actions.workflowOnly",
-                  })}
+                  {intl.formatMessage({ id: "teams.detail.test.entry.buildFirst" })}
                 </Button>
               )}
             </Space>
@@ -465,31 +461,13 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           <CompactFactValue value={entryMember?.serviceId || "--"} />
         </div>
         <Space size={8} style={{ flex: "0 1 auto" }} wrap>
-          {entryMember ? (
+          {entryMember?.workflowSupported ? (
             <Button
-              href={
-                entryMember.workflowSupported ? entryMember.editStudioHref : undefined
-              }
-              disabled={!entryMember.workflowSupported}
-              onClick={
-                entryMember.workflowSupported
-                  ? handleNavigate(entryMember.editStudioHref)
-                  : undefined
-              }
+              href={entryMember.editStudioHref}
+              onClick={handleNavigate(entryMember.editStudioHref)}
               size="small"
-              title={
-                entryMember.workflowSupported
-                  ? undefined
-                  : intl.formatMessage({
-                      id: "teams.members.actions.workflowOnlyTitle",
-                    })
-              }
             >
-              {intl.formatMessage({
-                id: entryMember.workflowSupported
-                  ? "teams.members.actions.editWorkflow"
-                  : "teams.members.actions.workflowOnly",
-              })}
+              {intl.formatMessage({ id: "teams.members.actions.workflowStudio" })}
             </Button>
           ) : null}
           {onClearEntry ? (
