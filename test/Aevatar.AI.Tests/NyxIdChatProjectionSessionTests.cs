@@ -141,7 +141,7 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
-    public async Task Projector_ShouldFillMessageDefaultsAndEmitTerminalFrame()
+    public async Task Projector_ShouldIgnoreBareTransientTextEvents()
     {
         var hub = new RecordingSessionEventHub();
         var projector = new NyxIdChatSessionEventProjector(hub);
@@ -191,11 +191,46 @@ public sealed class NyxIdChatProjectionSessionTests
             },
             CancellationToken.None);
 
+        hub.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Projector_ShouldEmitTerminalFramesFromCommittedCompletion()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "session-1",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "session-1",
+                    Content = "done",
+                    ContentEmitted = false,
+                    Usage = new TokenUsagePayload
+                    {
+                        PromptTokens = 2,
+                        CompletionTokens = 4,
+                        TotalTokens = 6,
+                    },
+                    Model = "nyxid-model",
+                }),
+            CancellationToken.None);
+
         hub.Published.Should().HaveCount(5);
         hub.Published.Should().OnlyContain(p => p.RootActorId == "chat-actor-1" && p.SessionId == "session-1");
         hub.Published[0].Event.TextMessageStart.MessageId.Should().Be("session-1");
+        hub.Published[0].Event.TextMessageStart.Role.Should().Be("assistant");
         hub.Published[1].Event.TextMessageContent.MessageId.Should().Be("session-1");
-        hub.Published[1].Event.TextMessageContent.Delta.Should().Be("delta");
+        hub.Published[1].Event.TextMessageContent.Delta.Should().Be("done");
         hub.Published[2].Event.Usage.Should().NotBeNull();
         hub.Published[2].Event.Usage.Available.Should().BeTrue();
         hub.Published[2].Event.Usage.TotalTokens.Should().Be(6);
@@ -203,6 +238,67 @@ public sealed class NyxIdChatProjectionSessionTests
         hub.Published[3].Event.TextMessageEnd.MessageId.Should().Be("session-1");
         hub.Published[4].Event.RunFinished.ThreadId.Should().Be("chat-actor-1");
         hub.Published[4].Event.RunFinished.RunId.Should().Be("session-1");
+        hub.Published[4].Event.RunFinished.Result.Unpack<StringValue>().Value.Should().Be("done");
+    }
+
+    [Fact]
+    public async Task Projector_ShouldSynthesizeContent_WhenActorAlreadyEmittedTransientFrames()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "session-1",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "session-1",
+                    Content = "done",
+                    ContentEmitted = true,
+                }),
+            CancellationToken.None);
+
+        hub.Published.Select(p => p.Event.EventCase).Should().Equal(
+            AGUIEvent.EventOneofCase.TextMessageStart,
+            AGUIEvent.EventOneofCase.TextMessageContent,
+            AGUIEvent.EventOneofCase.TextMessageEnd,
+            AGUIEvent.EventOneofCase.RunFinished);
+        hub.Published[1].Event.TextMessageContent.Delta.Should().Be("done");
+    }
+
+    [Fact]
+    public async Task Projector_ShouldEmitRunErrorFromCommittedFailure()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "session-1",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "session-1",
+                    Content = "LLM request failed [tools=none]: upstream unavailable",
+                }),
+            CancellationToken.None);
+
+        hub.Published.Should().ContainSingle();
+        hub.Published[0].Event.RunError.Message.Should().Be("upstream unavailable");
+        hub.Published[0].Event.RunError.RunId.Should().Be("session-1");
     }
 
     [Fact]
@@ -238,6 +334,23 @@ public sealed class NyxIdChatProjectionSessionTests
 
         hub.Published.Should().BeEmpty();
     }
+
+    private static EventEnvelope CommittedEnvelope(string actorId, IMessage evt) => new()
+    {
+        Payload = Any.Pack(new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = Guid.NewGuid().ToString("N"),
+                Version = 1,
+                EventData = Any.Pack(evt),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            StateRoot = Any.Pack(new RoleGAgentState()),
+        }),
+        Route = EnvelopeRouteSemantics.CreateObserverPublication(actorId),
+        Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+    };
 
     private sealed class RecordingReleaseService : IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease>
     {
