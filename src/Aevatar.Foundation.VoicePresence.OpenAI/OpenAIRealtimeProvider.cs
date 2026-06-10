@@ -335,6 +335,22 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             return _physicalSession.SendInputAudioAsync(BinaryData.FromBytes(pcm16.ToArray()), ct);
         }
 
+        public override async Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(inputImage);
+            if (inputImage.Data.IsEmpty)
+                return;
+
+            var mediaType = string.IsNullOrWhiteSpace(inputImage.MediaType)
+                ? "image/png"
+                : inputImage.MediaType.Trim();
+            if (!mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Image media_type must start with 'image/'.", nameof(inputImage));
+
+            await _physicalSession.SendInputImageAsync(BuildInputImageEvent(inputImage, mediaType), ct);
+            await _physicalSession.StartResponseAsync(ct);
+        }
+
         public override async Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(callId))
@@ -374,6 +390,29 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 
             await _physicalSession.AddItemAsync(item, ct);
             await _physicalSession.StartResponseAsync(ct);
+        }
+
+        private static BinaryData BuildInputImageEvent(VoiceInputImage inputImage, string mediaType)
+        {
+            var eventObject = new JsonObject
+            {
+                ["type"] = "conversation.item.create",
+                ["item"] = new JsonObject
+                {
+                    ["type"] = "message",
+                    ["role"] = "user",
+                    ["content"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["type"] = "input_image",
+                            ["image_url"] = $"data:{mediaType};base64,{Convert.ToBase64String(inputImage.Data.ToByteArray())}",
+                        },
+                    },
+                },
+            };
+
+            return BinaryData.FromString(eventObject.ToJsonString());
         }
 
         public override async ValueTask DisposeAsync()

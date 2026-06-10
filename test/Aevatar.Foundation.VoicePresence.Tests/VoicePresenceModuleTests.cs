@@ -92,6 +92,72 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Accepted_input_image_signal_should_forward_to_provider_without_state_or_realtime_publication()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var hub = new RecordingProjectionSessionEventHub();
+        var services = new ServiceCollection()
+            .AddSingleton<IProjectionSessionEventHub<VoiceRealtimeFrame>>(hub)
+            .BuildServiceProvider();
+        var ctx = new StubEventHandlerContext(services, CreateRoleAgentWithActiveSession());
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            InputImageReceived = new VoiceInputImageReceived
+            {
+                SessionId = "session-1",
+                InputImage = new VoiceInputImage
+                {
+                    MediaType = "image/png",
+                    Data = ByteString.CopyFrom([1, 2, 3]),
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.InputImages.ShouldHaveSingleItem().Data.ToByteArray().ShouldBe([1, 2, 3]);
+        ctx.Agent.ShouldBeOfType<RecordingRoleAgent>().PersistedStates.ShouldBeEmpty();
+        hub.Events.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Stale_input_image_signal_should_be_ignored()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var roleAgent = CreateRoleAgentWithActiveSession();
+        roleAgent.State.VoicePresence[DefaultModuleName].TransportAttached = true;
+        roleAgent.State.VoicePresence[DefaultModuleName].ActiveTransportLeaseId = "transport-1";
+        roleAgent.State.VoicePresence[DefaultModuleName].ActiveLeaseOwnerId = "host-1";
+        roleAgent.State.VoicePresence[DefaultModuleName].LeaseExpiresAt =
+            Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        roleAgent.State.VoicePresence[DefaultModuleName].LeaseEpoch = 3;
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            InputImageReceived = new VoiceInputImageReceived
+            {
+                SessionId = "session-1",
+                OwnerId = "host-1",
+                TransportLeaseId = "stale-transport",
+                LeaseExpiresAt = roleAgent.State.VoicePresence[DefaultModuleName].LeaseExpiresAt.Clone(),
+                LeaseEpoch = 3,
+                InputImage = new VoiceInputImage
+                {
+                    MediaType = "image/png",
+                    Data = ByteString.CopyFrom([1]),
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.InputImages.ShouldBeEmpty();
+        roleAgent.PersistedStates.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void CanHandle_should_accept_voice_frames_and_external_publications()
     {
         var module = CreateModule(new RecordingVoiceProvider());
@@ -1940,6 +2006,7 @@ public class VoicePresenceModuleTests
         public int InjectEventCalls { get; private set; }
 
         public List<byte[]> AudioFrames { get; } = [];
+        public List<VoiceInputImage> InputImages { get; } = [];
         public List<(string CallId, string ResultJson)> ToolResults { get; } = [];
         public List<VoiceConversationEventInjection> InjectedEvents { get; } = [];
 
@@ -1973,6 +2040,12 @@ public class VoicePresenceModuleTests
             public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
             {
                 provider.AudioFrames.Add(pcm16.ToArray());
+                return Task.CompletedTask;
+            }
+
+            public override Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct)
+            {
+                provider.InputImages.Add(inputImage.Clone());
                 return Task.CompletedTask;
             }
 

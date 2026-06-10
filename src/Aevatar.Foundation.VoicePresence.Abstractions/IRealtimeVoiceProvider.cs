@@ -21,6 +21,8 @@ public abstract class RealtimeVoiceProviderSession : IAsyncDisposable
 {
     public abstract Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct);
 
+    public abstract Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct);
+
     public abstract Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct);
 
     public abstract Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct);

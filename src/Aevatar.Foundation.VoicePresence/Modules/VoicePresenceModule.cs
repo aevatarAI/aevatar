@@ -158,6 +158,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             case VoiceModuleSignal.SignalOneofCase.ProviderEventReceived:
                 await HandleProviderEventReceivedAsync(signal.ProviderEventReceived, ctx, ct);
                 break;
+            case VoiceModuleSignal.SignalOneofCase.InputImageReceived:
+                await HandleInputImageReceivedAsync(signal.InputImageReceived, ctx, ct);
+                break;
             case VoiceModuleSignal.SignalOneofCase.None:
             default:
                 break;
@@ -442,6 +445,22 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await HandleProviderEventAsync(request.ProviderEvent, ctx, ct);
     }
 
+    private async Task HandleInputImageReceivedAsync(
+        VoiceInputImageReceived request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (!IsAcceptedInputImageSignal(state, request) ||
+            request.InputImage == null)
+        {
+            return;
+        }
+
+        await using var providerSession = await ConnectProviderSessionAsync(state, ct);
+        await providerSession.SendInputImageAsync(request.InputImage, ct);
+    }
+
     private async Task HandleTransportAttachRequestedAsync(
         VoiceTransportAttachRequested request,
         IEventHandlerContext ctx,
@@ -607,6 +626,36 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         return string.Equals(state.RemoteSessionId, sessionId, StringComparison.Ordinal) &&
                string.Equals(state.ActiveSessionId, sessionId, StringComparison.Ordinal) &&
                MatchesLeaseEpoch(state, leaseEpoch);
+    }
+
+    private bool IsAcceptedInputImageSignal(
+        VoicePresenceRuntimeState state,
+        VoiceInputImageReceived request)
+    {
+        if (request == null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            IsLeaseExpired(state.LeaseExpiresAt))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.TransportLeaseId))
+        {
+            return IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt,
+                request.LeaseEpoch);
+        }
+
+        if (string.IsNullOrWhiteSpace(state.RemoteSessionId))
+            return false;
+
+        return string.Equals(state.RemoteSessionId, request.SessionId, StringComparison.Ordinal) &&
+               string.Equals(state.ActiveSessionId, request.SessionId, StringComparison.Ordinal) &&
+               MatchesLeaseEpoch(state, request.LeaseEpoch);
     }
 
     private static bool MatchesLeaseEpoch(VoicePresenceRuntimeState state, long leaseEpoch) =>

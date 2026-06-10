@@ -421,6 +421,26 @@ public class MiniCPMRealtimeProviderTests
     }
 
     [Fact]
+    public async Task SendInputImage_should_throw_not_supported()
+    {
+        await using var provider = CreateProvider(new StubHttpMessageHandler((request, ct) =>
+        {
+            _ = request;
+            _ = ct;
+            return Task.FromResult(CreateSseResponse(blockAfterPayload: true));
+        }));
+
+        var providerSession = await ConnectAsync(provider);
+
+        await Should.ThrowAsync<NotSupportedException>(() =>
+            providerSession.SendInputImageAsync(new VoiceInputImage
+            {
+                MediaType = "image/png",
+                Data = Google.Protobuf.ByteString.CopyFrom([1]),
+            }, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task InjectEvent_should_throw_not_supported()
     {
         await using var provider = CreateProvider(new StubHttpMessageHandler((request, ct) =>

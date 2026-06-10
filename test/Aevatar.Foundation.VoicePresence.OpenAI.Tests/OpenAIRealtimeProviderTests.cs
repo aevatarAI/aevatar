@@ -296,6 +296,64 @@ public class OpenAIRealtimeProviderTests
     }
 
     [Fact]
+    public async Task SendInputImage_should_emit_openai_conversation_item_and_start_response()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+
+        var providerSession = await ConnectAsync(provider);
+        await providerSession.SendInputImageAsync(new VoiceInputImage
+        {
+            MediaType = "image/png",
+            Data = Google.Protobuf.ByteString.CopyFrom([1, 2, 3]),
+        }, CancellationToken.None);
+
+        session.InputImageEvents.Count.ShouldBe(1);
+        using var document = JsonDocument.Parse(session.InputImageEvents.Single());
+        var root = document.RootElement;
+        root.GetProperty("type").GetString().ShouldBe("conversation.item.create");
+        var item = root.GetProperty("item");
+        item.GetProperty("type").GetString().ShouldBe("message");
+        item.GetProperty("role").GetString().ShouldBe("user");
+        var content = item.GetProperty("content")[0];
+        content.GetProperty("type").GetString().ShouldBe("input_image");
+        content.GetProperty("image_url").GetString()
+            .ShouldBe($"data:image/png;base64,{Convert.ToBase64String([1, 2, 3])}");
+        session.StartResponseCalls.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task SendInputImage_empty_should_be_noop()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+
+        var providerSession = await ConnectAsync(provider);
+        await providerSession.SendInputImageAsync(new VoiceInputImage
+        {
+            MediaType = "image/png",
+        }, CancellationToken.None);
+
+        session.InputImageEvents.ShouldBeEmpty();
+        session.StartResponseCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task SendInputImage_should_reject_non_image_media_type()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+        var providerSession = await ConnectAsync(provider);
+
+        await Should.ThrowAsync<ArgumentException>(() =>
+            providerSession.SendInputImageAsync(new VoiceInputImage
+            {
+                MediaType = "application/octet-stream",
+                Data = Google.Protobuf.ByteString.CopyFrom([1]),
+            }, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Unsupported_sample_rate_should_be_rejected()
     {
         var session = new FakeSession();
@@ -559,6 +617,8 @@ public class OpenAIRealtimeProviderTests
 
         public List<BinaryData> SentAudio { get; } = [];
 
+        public List<string> InputImageEvents { get; } = [];
+
         public List<RealtimeItem> AddedItems { get; } = [];
 
         public int StartResponseCalls { get; private set; }
@@ -579,6 +639,13 @@ public class OpenAIRealtimeProviderTests
         {
             _ = ct;
             SentAudio.Add(audio);
+            return Task.CompletedTask;
+        }
+
+        public Task SendInputImageAsync(BinaryData inputImageEvent, CancellationToken ct)
+        {
+            _ = ct;
+            InputImageEvents.Add(inputImageEvent.ToString());
             return Task.CompletedTask;
         }
 
@@ -626,6 +693,7 @@ public class OpenAIRealtimeProviderTests
     {
         public Task SendSessionUpdateAsync(BinaryData sessionUpdateEvent, CancellationToken ct) => Task.CompletedTask;
         public Task SendInputAudioAsync(BinaryData audio, CancellationToken ct) => Task.CompletedTask;
+        public Task SendInputImageAsync(BinaryData inputImageEvent, CancellationToken ct) => Task.CompletedTask;
         public Task AddItemAsync(RealtimeItem item, CancellationToken ct) => Task.CompletedTask;
         public Task StartResponseAsync(CancellationToken ct) => Task.CompletedTask;
         public Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
