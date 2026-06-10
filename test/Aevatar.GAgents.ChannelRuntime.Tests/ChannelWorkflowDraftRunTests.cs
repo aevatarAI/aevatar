@@ -1,3 +1,4 @@
+using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -6,6 +7,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
@@ -241,6 +243,51 @@ public sealed class ChannelWorkflowDraftRunTests
                 x.MessageId == "om_123" &&
                 x.ResourceKey == "file_v3_1" &&
                 x.Kind == LarkMessageResourceKind.File),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task InteractionPort_ShouldUseRelayNormalizedLarkBlobRefAsMessageResourceKey()
+    {
+        var lark = Substitute.For<ILarkNyxClient>();
+        lark.DownloadMessageResourceAsync(
+                "user-token-1",
+                Arg.Any<LarkMessageResourceDownloadRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new LarkMessageResourceDownloadResult(
+                true,
+                [1, 2, 3],
+                "image/png",
+                "photo.png")));
+        var ingress = new RecordingWorkflowFileIngressPort();
+        var workflow = new RecordingWorkflowChatRunInteractionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreateInteractionPort(dispatch, workflow, lark, ingress);
+        var request = BuildWorkflowRequestFromLarkRelayPayload();
+
+        await port.StartWorkflowInteractionAsync(
+            "channel-workflow-draft-run:workflow-draft-run-1",
+            request,
+            CancellationToken.None);
+
+        var workflowRequest = await workflow.WaitForRequestAsync();
+        workflowRequest.InputParts.Should().ContainSingle();
+        workflowRequest.InputParts![0].Kind.Should().Be(WorkflowChatInputPartKind.Image);
+        workflowRequest.InputParts[0].FileRef!.SourceMessageId.Should().Be("om_image_1");
+        workflowRequest.InputParts[0].FileRef!.SourceResourceKey.Should().Be("img_v3_abc");
+        ingress.Requests.Should().ContainSingle();
+        ingress.Requests[0].SourceMessageId.Should().Be("om_image_1");
+        ingress.Requests[0].SourceResourceKey.Should().Be("img_v3_abc");
+        await lark.Received(1).DownloadMessageResourceAsync(
+            "user-token-1",
+            Arg.Is<LarkMessageResourceDownloadRequest>(x =>
+                x.MessageId == "om_image_1" &&
+                x.ResourceKey == "img_v3_abc" &&
+                x.Kind == LarkMessageResourceKind.Image),
+            Arg.Any<CancellationToken>());
+        await lark.DidNotReceive().DownloadMessageResourceAsync(
+            "user-token-1",
+            Arg.Is<LarkMessageResourceDownloadRequest>(x => x.ResourceKey.StartsWith("lark:", StringComparison.Ordinal)),
             Arg.Any<CancellationToken>());
     }
 
@@ -828,6 +875,47 @@ public sealed class ChannelWorkflowDraftRunTests
             Name = "file-from-relay",
             ContentType = "file",
         });
+        return request;
+    }
+
+    private static NeedsWorkflowDraftRunEvent BuildWorkflowRequestFromLarkRelayPayload()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-image-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "type": "private" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "image" },
+              "raw_platform_data": {
+                "event": {
+                  "sender": {
+                    "sender_id": {
+                      "union_id": "on_user_1"
+                    }
+                  },
+                  "message": {
+                    "message_id": "om_image_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "image",
+                    "content": "{\"image_key\":\"img_v3_abc\",\"file_name\":\"photo.png\",\"file_size\":42}"
+                  }
+                }
+              }
+            }
+            """;
+        var parsed = new NyxIdRelayTransport().Parse(Encoding.UTF8.GetBytes(body));
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Attachments.Should().ContainSingle();
+        parsed.Activity.Content.Attachments[0].BlobRef.Should().Be("lark:image_key:img_v3_abc");
+        parsed.Activity.Content.Attachments[0].AttachmentId.Should().NotBe("img_v3_abc");
+
+        var request = BuildWorkflowRequest();
+        request.Activity = parsed.Activity;
+        request.Activity.Content.Text = "/workflow run daily-greeting";
+        request.Prompt = "/workflow run daily-greeting";
         return request;
     }
 
