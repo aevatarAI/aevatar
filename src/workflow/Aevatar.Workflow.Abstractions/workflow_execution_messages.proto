@@ -13,6 +13,29 @@ enum WorkflowChatInputPartKind {
   WORKFLOW_CHAT_INPUT_PART_KIND_VIDEO = 4;
 }
 
+enum WorkflowFileSourceKind {
+  WORKFLOW_FILE_SOURCE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_FILE_SOURCE_KIND_CHAT_INPUT = 1;
+  WORKFLOW_FILE_SOURCE_KIND_FORM_UPLOAD = 2;
+  WORKFLOW_FILE_SOURCE_KIND_CONNECTED_SERVICE_RESOURCE = 3;
+  WORKFLOW_FILE_SOURCE_KIND_EXTERNAL_RESOURCE = 4;
+  WORKFLOW_FILE_SOURCE_KIND_GENERATED = 5;
+}
+
+message WorkflowFileRef {
+  string file_id = 1;
+  string artifact_id = 2;
+  WorkflowFileSourceKind source_kind = 3;
+  string source_message_id = 4;
+  string source_resource_key = 5;
+  string file_name = 6;
+  string media_type = 7;
+  int64 size_bytes = 8;
+  string sha256 = 9;
+  int64 created_at_unix_ms = 10;
+  int64 expires_at_unix_ms = 11;
+}
+
 message WorkflowChatInputPartPayload {
   WorkflowChatInputPartKind kind = 1;
   string text = 2;
@@ -20,6 +43,7 @@ message WorkflowChatInputPartPayload {
   string media_type = 4;
   string uri = 5;
   string name = 6;
+  WorkflowFileRef file_ref = 7;
 }
 
 message WorkflowLlmControlContext {

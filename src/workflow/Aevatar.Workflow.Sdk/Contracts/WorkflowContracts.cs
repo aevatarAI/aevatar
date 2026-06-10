@@ -35,9 +35,18 @@ public sealed record ChatRunInlineFilePart
 
 public sealed record ChatRunFileRefPart
 {
+    public string? FileId { get; init; }
+    public string? ArtifactId { get; init; }
+    public string? SourceKind { get; init; }
+    public string? SourceMessageId { get; init; }
+    public string? SourceResourceKey { get; init; }
+    public string? FileName { get; init; }
     public string? Uri { get; init; }
     public string? MediaType { get; init; }
     public string? Name { get; init; }
+    public long? CreatedAtUnixMs { get; init; }
+    public long? ExpiresAtUnixMs { get; init; }
+    public string? Sha256 { get; init; }
 }
 
 public sealed record WorkflowResumeRequest

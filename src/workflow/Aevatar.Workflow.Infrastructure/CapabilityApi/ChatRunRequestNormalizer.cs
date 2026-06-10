@@ -300,6 +300,7 @@ internal static class ChatRunRequestNormalizer
                 MediaType = fileInputResult.MediaType ?? NormalizeContentPartValue(part.MediaType),
                 Uri = fileInputResult.Uri ?? NormalizeContentPartValue(part.Uri),
                 Name = fileInputResult.Name ?? NormalizeContentPartValue(part.Name),
+                FileRef = fileInputResult.FileRef,
             });
         }
 
@@ -313,6 +314,7 @@ internal static class ChatRunRequestNormalizer
         string? MediaType,
         string? Uri,
         string? Name,
+        WorkflowFileRef? FileRef,
         WorkflowChatRunStartError Error);
 
     private static FileInputNormalizationResult NormalizeFileInput(ChatInputContentPart part)
@@ -324,14 +326,9 @@ internal static class ChatRunRequestNormalizer
             return NormalizeInlineFile(part.InlineFile);
 
         if (part.FileRef != null)
-            return new FileInputNormalizationResult(
-                null,
-                NormalizeContentPartValue(part.FileRef.MediaType),
-                NormalizeContentPartValue(part.FileRef.Uri),
-                NormalizeContentPartValue(part.FileRef.Name),
-                WorkflowChatRunStartError.None);
+            return NormalizeFileRef(part.FileRef);
 
-        return new FileInputNormalizationResult(null, null, null, null, WorkflowChatRunStartError.None);
+        return new FileInputNormalizationResult(null, null, null, null, null, WorkflowChatRunStartError.None);
     }
 
     private static FileInputNormalizationResult NormalizeInlineFile(ChatInputInlineFile inlineFile)
@@ -357,11 +354,92 @@ internal static class ChatRunRequestNormalizer
             NormalizeContentPartValue(inlineFile.MediaType),
             null,
             NormalizeContentPartValue(inlineFile.Name),
+            null,
             WorkflowChatRunStartError.None);
     }
 
+    private static FileInputNormalizationResult NormalizeFileRef(ChatInputFileRef fileRef)
+    {
+        var artifactId = NormalizeContentPartValue(fileRef.ArtifactId) ??
+                         NormalizeContentPartValue(fileRef.Uri);
+        var fileId = NormalizeContentPartValue(fileRef.FileId);
+        if (fileId == null && artifactId == null)
+            return InvalidFileInput();
+
+        if (!TryNormalizeFileSourceKind(fileRef.SourceKind, out var sourceKind))
+            return InvalidFileInput();
+
+        if (!TryNormalizeUnixMs(fileRef.CreatedAtUnixMs, out var createdAtUnixMs) ||
+            !TryNormalizeUnixMs(fileRef.ExpiresAtUnixMs, out var expiresAtUnixMs))
+            return InvalidFileInput();
+
+        if (createdAtUnixMs > 0 && expiresAtUnixMs > 0 && expiresAtUnixMs < createdAtUnixMs)
+            return InvalidFileInput();
+
+        var mediaType = NormalizeContentPartValue(fileRef.MediaType);
+        var fileName = NormalizeContentPartValue(fileRef.FileName) ??
+                       NormalizeContentPartValue(fileRef.Name);
+
+        var normalized = new WorkflowFileRef
+        {
+            FileId = fileId,
+            ArtifactId = artifactId,
+            SourceKind = sourceKind,
+            SourceMessageId = NormalizeContentPartValue(fileRef.SourceMessageId),
+            SourceResourceKey = NormalizeContentPartValue(fileRef.SourceResourceKey),
+            FileName = fileName,
+            MediaType = mediaType,
+            Sha256 = NormalizeContentPartValue(fileRef.Sha256),
+            CreatedAtUnixMs = createdAtUnixMs,
+            ExpiresAtUnixMs = expiresAtUnixMs,
+        };
+
+        return new FileInputNormalizationResult(
+            null,
+            mediaType,
+            artifactId,
+            fileName,
+            normalized,
+            WorkflowChatRunStartError.None);
+    }
+
+    private static bool TryNormalizeFileSourceKind(string? sourceKind, out WorkflowFileSourceKind normalized)
+    {
+        normalized = WorkflowFileSourceKind.Unspecified;
+
+        var value = NormalizeContentPartValue(sourceKind);
+        if (value == null)
+            return true;
+
+        var sourceKindKey = value.ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty);
+        normalized = sourceKindKey switch
+        {
+            "unspecified" =>
+                WorkflowFileSourceKind.Unspecified,
+            "chatinput" or "chat" =>
+                WorkflowFileSourceKind.ChatInput,
+            "formupload" or "form" =>
+                WorkflowFileSourceKind.FormUpload,
+            "connectedserviceresource" or "connectedservice" =>
+                WorkflowFileSourceKind.ConnectedServiceResource,
+            "externalresource" or "external" =>
+                WorkflowFileSourceKind.ExternalResource,
+            "generated" =>
+                WorkflowFileSourceKind.Generated,
+            _ => WorkflowFileSourceKind.Unspecified,
+        };
+
+        return normalized != WorkflowFileSourceKind.Unspecified || sourceKindKey == "unspecified";
+    }
+
+    private static bool TryNormalizeUnixMs(long? value, out long normalized)
+    {
+        normalized = value ?? 0;
+        return normalized >= 0;
+    }
+
     private static FileInputNormalizationResult InvalidFileInput() =>
-        new(null, null, null, null, WorkflowChatRunStartError.InvalidFileInput);
+        new(null, null, null, null, null, WorkflowChatRunStartError.InvalidFileInput);
 
     private static bool TryGetDecodedByteLength(string dataBase64, out long decodedByteLength)
     {

@@ -56,7 +56,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        return new WorkflowChatInputPartPayload
+        var payload = new WorkflowChatInputPartPayload
         {
             Kind = source.Kind switch
             {
@@ -71,6 +71,39 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             MediaType = source.MediaType ?? string.Empty,
             Uri = source.Uri ?? string.Empty,
             Name = source.Name ?? string.Empty,
+        };
+        if (source.FileRef != null)
+            payload.FileRef = ToProto(source.FileRef);
+
+        return payload;
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileRef ToProto(
+        Application.Abstractions.Runs.WorkflowFileRef source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new Aevatar.Workflow.Abstractions.WorkflowFileRef
+        {
+            FileId = source.FileId ?? string.Empty,
+            ArtifactId = source.ArtifactId ?? string.Empty,
+            SourceKind = source.SourceKind switch
+            {
+                Application.Abstractions.Runs.WorkflowFileSourceKind.ChatInput => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput,
+                Application.Abstractions.Runs.WorkflowFileSourceKind.FormUpload => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.FormUpload,
+                Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
+                Application.Abstractions.Runs.WorkflowFileSourceKind.ExternalResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ExternalResource,
+                Application.Abstractions.Runs.WorkflowFileSourceKind.Generated => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Generated,
+                _ => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified,
+            },
+            SourceMessageId = source.SourceMessageId ?? string.Empty,
+            SourceResourceKey = source.SourceResourceKey ?? string.Empty,
+            FileName = source.FileName ?? string.Empty,
+            MediaType = source.MediaType ?? string.Empty,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
         };
     }
 

@@ -6,6 +6,8 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
+using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -748,7 +750,112 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                 Uri = "artifact://file-1",
                 MediaType = "image/png",
                 Name = "hello.png",
+                FileRef = new ApplicationWorkflowFileRef
+                {
+                    ArtifactId = "artifact://file-1",
+                    MediaType = "image/png",
+                    FileName = "hello.png",
+                },
             });
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldNormalizeTypedFileRefDescriptor()
+    {
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "fileRef": {
+                    "fileId": "file-1",
+                    "artifactId": "artifact-1",
+                    "sourceKind": "connected_service_resource",
+                    "sourceMessageId": "om_1",
+                    "sourceResourceKey": "image_key_1",
+                    "fileName": "invoice.png",
+                    "mediaType": "image/png",
+                    "createdAtUnixMs": 1710000000000,
+                    "expiresAtUnixMs": 1710003600000,
+                    "sha256": "abc"
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        var part = result.Request!.InputParts.Should().ContainSingle().Which;
+        part.Uri.Should().Be("artifact-1");
+        part.MediaType.Should().Be("image/png");
+        part.Name.Should().Be("invoice.png");
+        part.FileRef.Should().BeEquivalentTo(new ApplicationWorkflowFileRef
+        {
+            FileId = "file-1",
+            ArtifactId = "artifact-1",
+            SourceKind = ApplicationWorkflowFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = "image_key_1",
+            FileName = "invoice.png",
+            MediaType = "image/png",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+            Sha256 = "abc",
+        });
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectFileRefWithoutStableIdentity()
+    {
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "fileRef": {
+                    "mediaType": "image/png",
+                    "name": "hello.png"
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidFileInput);
+    }
+
+    [Theory]
+    [InlineData("""{ "fileId": "file-1", "sourceKind": "not-a-source" }""")]
+    [InlineData("""{ "fileId": "file-1", "createdAtUnixMs": -1 }""")]
+    [InlineData("""{ "fileId": "file-1", "createdAtUnixMs": 1710003600000, "expiresAtUnixMs": 1710000000000 }""")]
+    public void ChatRunRequestNormalizer_ShouldRejectInvalidFileRefDescriptor(string fileRefJson)
+    {
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            $$"""
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "fileRef": {{fileRefJson}}
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidFileInput);
     }
 
     [Fact]

@@ -65,6 +65,48 @@ public class WorkflowAbstractionsProtoCoverageTests
     }
 
     [Fact]
+    public void WorkflowChatInputPartPayload_ShouldRoundtripTypedFileRef()
+    {
+        WorkflowChatInputPartPayload.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 7 && field.Name == "file_ref");
+
+        var part = new WorkflowChatInputPartPayload
+        {
+            Kind = WorkflowChatInputPartKind.Image,
+            MediaType = "image/png",
+            Name = "invoice.png",
+            FileRef = new WorkflowFileRef
+            {
+                FileId = "file-1",
+                ArtifactId = "artifact-1",
+                SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+                SourceMessageId = "om_1",
+                SourceResourceKey = "image_key_1",
+                FileName = "invoice.png",
+                MediaType = "image/png",
+                Sha256 = "abc",
+                CreatedAtUnixMs = 1710000000000,
+                ExpiresAtUnixMs = 1710003600000,
+            },
+        };
+
+        var parsed = WorkflowChatInputPartPayload.Parser.ParseFrom(part.ToByteArray());
+
+        parsed.FileRef.FileId.Should().Be("file-1");
+        parsed.FileRef.ArtifactId.Should().Be("artifact-1");
+        parsed.FileRef.SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
+        parsed.FileRef.SourceMessageId.Should().Be("om_1");
+        parsed.FileRef.SourceResourceKey.Should().Be("image_key_1");
+        parsed.FileRef.FileName.Should().Be("invoice.png");
+        parsed.FileRef.MediaType.Should().Be("image/png");
+        parsed.FileRef.Sha256.Should().Be("abc");
+        parsed.FileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        parsed.FileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .Should().Contain(nameof(WorkflowFileRef));
+    }
+
+    [Fact]
     public void WorkflowCompletedEvent_ShouldMergeAndCompare()
     {
         var source = new WorkflowCompletedEvent
