@@ -21,7 +21,8 @@ public sealed class StudioTeamGAgentStreamInvocationServiceTests
     public async Task InvokeAsync_ShouldResolveEntryMemberAndDelegateToPublishedServiceIdentity()
     {
         var staticPort = new RecordingStaticGAgentStreamInvocationPort();
-        var service = CreateService(staticPort);
+        var readinessPort = new ReadyScopeBindingReadinessQueryPort();
+        var service = CreateService(staticPort, readinessPort: readinessPort);
         var emitted = new List<AGUIEvent>();
         StudioTeamStreamInvocationAcceptedReceipt? accepted = null;
 
@@ -78,6 +79,10 @@ public sealed class StudioTeamGAgentStreamInvocationServiceTests
         delegated.Identity.Namespace.Should().Be(ScopeServiceIdentityDefaults.ServiceNamespace);
         delegated.Identity.ServiceId.Should().Be(PublishedServiceId);
         delegated.EndpointId.Should().Be("chat");
+        readinessPort.LastRequest.Should().NotBeNull();
+        readinessPort.LastRequest!.ExpectedEndpointIds.Should().BeEquivalentTo(
+            ["chat"],
+            options => options.WithStrictOrdering());
         delegated.Input.Prompt.Should().Be("hello team");
         delegated.Input.PreferredActorId.Should().Be("actor-preferred");
         delegated.Input.SessionId.Should().Be("session-1");
@@ -157,14 +162,39 @@ public sealed class StudioTeamGAgentStreamInvocationServiceTests
     private static StudioTeamGAgentStreamInvocationService CreateService(
         RecordingStaticGAgentStreamInvocationPort staticPort,
         StudioTeamSummaryResponse? team = null,
-        StudioMemberDetailResponse? member = null)
+        StudioMemberDetailResponse? member = null,
+        ReadyScopeBindingReadinessQueryPort? readinessPort = null)
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(team ?? NewTeam()),
-            new MemberQueryPort(member ?? NewMember()));
+            new MemberQueryPort(member ?? NewMember()),
+            readinessPort ?? new ReadyScopeBindingReadinessQueryPort());
         return new StudioTeamGAgentStreamInvocationService(
             resolver,
             staticPort);
+    }
+
+    private sealed class ReadyScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    {
+        public ScopeBindingReadinessRequest? LastRequest { get; private set; }
+
+        public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
+            ScopeBindingReadinessRequest request,
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new ScopeBindingReadinessSnapshot(
+                request.ScopeId,
+                request.ServiceId,
+                ScopeBindingReadinessStatus.Ready,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: true,
+                RevisionId: request.ExpectedRevisionId ?? "rev-1",
+                DeploymentId: "dep-1",
+                ObservedAtUtc: DateTimeOffset.UtcNow));
+        }
     }
 
     private static StudioTeamStreamInvocationRequest NewRequest() =>
