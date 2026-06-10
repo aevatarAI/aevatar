@@ -1289,6 +1289,71 @@ describe("TeamDetailPage", () => {
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
   });
 
+  it("does not sample runtime runs while browsing members with member-owned service ids", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?tab=members",
+    );
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      displayName: "test09",
+      entryMemberId: "member-untitled-member1",
+      memberCount: 5,
+    });
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-untitled-member1",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Untitled member1",
+          description: "Member page should only render roster facts",
+          implementationKind: "workflow",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "member-untitled-member1",
+          lastBoundRevisionId: "rev-member-1",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
+      {
+        serviceKey: "scope-1:member-untitled-member1",
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "member-untitled-member1",
+        displayName: "Untitled member1 runtime",
+        defaultServingRevisionId: "rev-member-1",
+        activeServingRevisionId: "rev-member-1",
+        deploymentId: "dep-member-1",
+        primaryActorId: "actor-member-1",
+        deploymentStatus: "Active",
+        endpoints: [],
+        policyIds: [],
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Untitled member1")).toBeTruthy();
+    expect(screen.getByText("member-untitled-member1")).toBeTruthy();
+    expect(screen.getByText("memb...ber1")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
+    expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
+  });
+
   it("shows the configured Team entry member without treating it as the service target", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
