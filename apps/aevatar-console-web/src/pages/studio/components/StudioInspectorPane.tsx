@@ -1,4 +1,4 @@
-import { Button, Empty, Input, Select, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Empty, Input, Select, Space, Tag, Typography } from 'antd';
 import React from 'react';
 import type { StudioNodeInspectorDraft } from '@/shared/studio/document';
 import {
@@ -11,6 +11,12 @@ import type {
   StudioRoleDefinition,
   StudioValidationFinding,
 } from '@/shared/studio/models';
+import {
+  buildNodeConfigFields,
+  updateNodeConfigFieldParametersText,
+  validateNodeConfigParametersText,
+  type NodeConfigField,
+} from '@/shared/studio/nodeConfigFields';
 import {
   cardListActionStyle,
   cardListHeaderStyle,
@@ -121,6 +127,11 @@ type NoticePanelProps = {
   type?: 'default' | 'info' | 'success' | 'warning' | 'error';
 };
 
+type NodeConfigFieldsEditorProps = {
+  readonly fields: readonly NodeConfigField[];
+  readonly onChangeFieldValue: (field: NodeConfigField, value: string) => void;
+};
+
 const summaryMetricToneMap: Record<
   NonNullable<SummaryMetricProps['tone']>,
   { color: string }
@@ -161,6 +172,12 @@ const yamlEditorStyle: React.CSSProperties = {
     "'SFMono-Regular', 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace",
   fontSize: 13,
   lineHeight: 1.5,
+};
+
+const fieldDescriptionStyle: React.CSSProperties = {
+  color: 'var(--ant-color-text-secondary)',
+  fontSize: 12,
+  lineHeight: '18px',
 };
 
 function hasValidationError(findings: StudioValidationFinding[]): boolean {
@@ -329,6 +346,75 @@ const NoticePanel: React.FC<NoticePanelProps> = ({
         {action}
       </div>
       {children}
+    </div>
+  );
+};
+
+const NodeConfigFieldsEditor: React.FC<NodeConfigFieldsEditorProps> = ({
+  fields,
+  onChangeFieldValue,
+}) => {
+  if (fields.length === 0) {
+    return (
+      <Typography.Text type="secondary">
+        {t("pages.studio.studioinspectorpane.no.structured.parameters", "No structured parameters inferred. Edit the raw JSON below.")}
+      </Typography.Text>
+    );
+  }
+
+  return (
+    <div style={formGridStyle}>
+      {fields.map((field) => {
+        const inputId = `studio-node-config-field-${field.name}`;
+        const ariaLabel = `Parameter ${field.label}`;
+
+        return (
+          <div key={field.name} style={cardStackStyle}>
+            <Typography.Text strong>
+              {field.label}
+              {field.required ? ' *' : ''}
+            </Typography.Text>
+            {field.kind === 'select' ? (
+              <Select
+                allowClear={!field.required}
+                aria-label={ariaLabel}
+                id={inputId}
+                options={field.options.map((option) => ({
+                  label: option.label,
+                  value: option.value,
+                }))}
+                placeholder={field.placeholder}
+                value={field.value || undefined}
+                onChange={(value) => onChangeFieldValue(field, String(value || ''))}
+              />
+            ) : field.kind === 'json' ? (
+              <Input.TextArea
+                aria-label={ariaLabel}
+                autoSize={{ minRows: 3, maxRows: 8 }}
+                id={inputId}
+                placeholder={field.placeholder}
+                value={field.value}
+                onChange={(event) =>
+                  onChangeFieldValue(field, event.target.value)
+                }
+              />
+            ) : (
+              <Input
+                aria-label={ariaLabel}
+                id={inputId}
+                placeholder={field.placeholder}
+                value={field.value}
+                onChange={(event) =>
+                  onChangeFieldValue(field, event.target.value)
+                }
+              />
+            )}
+            <Typography.Text style={fieldDescriptionStyle}>
+              {field.description}
+            </Typography.Text>
+          </div>
+        );
+      })}
     </div>
   );
 };
@@ -541,19 +627,56 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
     return items;
   }, [selectedGraphStep]);
 
+  const nodeConfigFieldSet = React.useMemo(
+    () =>
+      nodeInspectorDraft?.kind === 'step'
+        ? buildNodeConfigFields({
+            connectors,
+            nodeType: nodeInspectorDraft.type,
+            parametersText: nodeInspectorDraft.parametersText,
+          })
+        : null,
+    [connectors, nodeInspectorDraft],
+  );
+  const parameterDraftError = React.useMemo(
+    () =>
+      nodeInspectorDraft?.kind === 'step'
+        ? validateNodeConfigParametersText(nodeInspectorDraft.parametersText)
+        : '',
+    [nodeInspectorDraft],
+  );
   const selectedConnectorName = React.useMemo(() => {
-    if (nodeInspectorDraft?.kind !== 'step' || nodeInspectorDraft.type !== 'connector_call') {
+    if (!nodeConfigFieldSet?.parameters) {
       return '';
     }
 
-    try {
-      return String(
-        JSON.parse(nodeInspectorDraft.parametersText || '{}').connector || '',
-      );
-    } catch {
-      return '';
+    return String(nodeConfigFieldSet.parameters.connector || '');
+  }, [nodeConfigFieldSet]);
+  const handleApplyNodeChanges = React.useCallback(() => {
+    if (parameterDraftError) {
+      return;
     }
-  }, [nodeInspectorDraft]);
+
+    onApplyNodeChanges();
+  }, [onApplyNodeChanges, parameterDraftError]);
+  const handleChangeNodeConfigFieldValue = React.useCallback(
+    (field: NodeConfigField, value: string) => {
+      if (nodeInspectorDraft?.kind !== 'step') {
+        return;
+      }
+
+      onChangeNodeInspectorDraft({
+        ...nodeInspectorDraft,
+        parametersText: updateNodeConfigFieldParametersText({
+          field,
+          nodeType: nodeInspectorDraft.type,
+          parametersText: nodeInspectorDraft.parametersText,
+          rawValue: value,
+        }),
+      });
+    },
+    [nodeInspectorDraft, onChangeNodeInspectorDraft],
+  );
 
   const filteredSavedRoles = React.useMemo(() => {
     const keyword = roleSearch.trim().toLowerCase();
@@ -601,11 +724,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
             />
             <SummaryMetric
               label={t("pages.studio.studioinspectorpane.connector.mode", "Connector mode")}
-              tone={nodeInspectorDraft.type === 'connector_call' ? 'warning' : 'default'}
+              tone={selectedConnectorName ? 'warning' : 'default'}
               value={
-                nodeInspectorDraft.type === 'connector_call'
-                  ? selectedConnectorName || 'Pending'
-                  : 'Direct'
+                selectedConnectorName || 'Direct'
               }
             />
           </div>
@@ -726,45 +847,16 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
             title="Parameters"
             help="Keep runtime inputs readable and wire connector calls explicitly."
           />
-          {nodeInspectorDraft.type === 'connector_call' ? (
-            <div style={cardStackStyle}>
-              <Typography.Text strong>{t("pages.studio.studioinspectorpane.connector.3", "Connector")}</Typography.Text>
-              <Select
-                aria-label={t("pages.studio.studioinspectorpane.studio.connector.call.connector", "Studio connector call connector")}
-                allowClear
-                placeholder={t("pages.studio.studioinspectorpane.select.connector", "Select connector")}
-                value={selectedConnectorName || undefined}
-                options={connectors.map((connector) => ({
-                  label: t("pages.studio.studioinspectorpane.copy.2", "{value1} · {value2}", { value1: connector.name, value2: connector.type }),
-                  value: connector.name,
-                }))}
-                onChange={(value) => {
-                  try {
-                    const parsed = JSON.parse(nodeInspectorDraft.parametersText || '{}');
-                    onChangeNodeInspectorDraft({
-                      ...nodeInspectorDraft,
-                      parametersText: JSON.stringify(
-                        {
-                          ...(parsed && typeof parsed === 'object' ? parsed : {}),
-                          connector: value || '',
-                        },
-                        null,
-                        2,
-                      ),
-                    });
-                  } catch {
-                    onChangeNodeInspectorDraft({
-                      ...nodeInspectorDraft,
-                      parametersText: JSON.stringify(
-                        { connector: value || '' },
-                        null,
-                        2,
-                      ),
-                    });
-                  }
-                }}
-              />
-            </div>
+          <NodeConfigFieldsEditor
+            fields={nodeConfigFieldSet?.fields ?? []}
+            onChangeFieldValue={handleChangeNodeConfigFieldValue}
+          />
+          {nodeConfigFieldSet?.parseError ? (
+            <Alert
+              message={nodeConfigFieldSet.parseError}
+              showIcon
+              type="error"
+            />
           ) : null}
           <div style={cardStackStyle}>
             <Typography.Text strong>{t("pages.studio.studioinspectorpane.parameters", "Parameters")}</Typography.Text>
@@ -835,8 +927,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
           <div style={cardListActionStyle}>
             <Button
               type="primary"
+              disabled={Boolean(parameterDraftError)}
               loading={inspectorPending}
-              onClick={onApplyNodeChanges}
+              onClick={handleApplyNodeChanges}
             >
               {t("pages.studio.studioinspectorpane.apply.node.changes", "Apply node changes")}</Button>
             <Button loading={inspectorPending} onClick={onInsertStep}>
