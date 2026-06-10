@@ -122,6 +122,47 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Accepted_keyed_input_image_signal_should_forward_to_provider_without_state_or_realtime_publication()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var hub = new RecordingProjectionSessionEventHub();
+        var services = new ServiceCollection()
+            .AddSingleton<IProjectionSessionEventHub<VoiceRealtimeFrame>>(hub)
+            .BuildServiceProvider();
+        var roleAgent = CreateRoleAgentWithActiveSession();
+        roleAgent.State.VoicePresence[DefaultModuleName].TransportAttached = true;
+        roleAgent.State.VoicePresence[DefaultModuleName].ActiveTransportLeaseId = "transport-1";
+        roleAgent.State.VoicePresence[DefaultModuleName].ActiveLeaseOwnerId = "host-1";
+        roleAgent.State.VoicePresence[DefaultModuleName].LeaseExpiresAt =
+            Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        roleAgent.State.VoicePresence[DefaultModuleName].LeaseEpoch = 3;
+        var ctx = new StubEventHandlerContext(services, roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            InputImageReceived = new VoiceInputImageReceived
+            {
+                SessionId = "session-1",
+                OwnerId = "host-1",
+                TransportLeaseId = "transport-1",
+                LeaseExpiresAt = roleAgent.State.VoicePresence[DefaultModuleName].LeaseExpiresAt.Clone(),
+                LeaseEpoch = 3,
+                InputImage = new VoiceInputImage
+                {
+                    MediaType = "image/png",
+                    Data = ByteString.CopyFrom([4, 5, 6]),
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.InputImages.ShouldHaveSingleItem().Data.ToByteArray().ShouldBe([4, 5, 6]);
+        roleAgent.PersistedStates.ShouldBeEmpty();
+        hub.Events.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Stale_input_image_signal_should_be_ignored()
     {
         var provider = new RecordingVoiceProvider();
