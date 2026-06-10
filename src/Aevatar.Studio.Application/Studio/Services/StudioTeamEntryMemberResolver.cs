@@ -33,8 +33,10 @@ public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
     public async Task<TeamEntryMemberResolution> ResolveAsync(
         string scopeId,
         string teamId,
+        string endpointId,
         CancellationToken ct = default)
     {
+        var normalizedEndpointId = NormalizeRequired(endpointId, nameof(endpointId));
         var team = await _teamQueryPort.GetAsync(scopeId, teamId, ct);
         if (team == null)
         {
@@ -96,7 +98,8 @@ public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
         var readiness = await _readinessQueryPort.GetReadinessAsync(
             new ScopeBindingReadinessRequest(
                 ScopeId: team.ScopeId,
-                ServiceId: member.Summary.PublishedServiceId),
+                ServiceId: member.Summary.PublishedServiceId,
+                ExpectedEndpointIds: [normalizedEndpointId]),
             ct);
         if (readiness.Status != ScopeBindingReadinessStatus.Ready || !readiness.InvokeReady)
         {
@@ -112,6 +115,15 @@ public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
             TeamId: team.TeamId,
             EntryMemberId: entryMemberId,
             PublishedServiceId: member.Summary.PublishedServiceId);
+    }
+
+    private static string NormalizeRequired(string? value, string fieldName)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
+            throw new InvalidOperationException($"{fieldName} is required.");
+
+        return normalized;
     }
 
     private static string MapReadinessReason(ScopeBindingReadinessStatus status) =>

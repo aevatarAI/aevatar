@@ -22,7 +22,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             new MemberQueryPort(NewMember()),
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
-        var result = await resolver.ResolveAsync(ScopeId, TeamId);
+        var result = await resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         result.ScopeId.Should().Be(ScopeId);
         result.TeamId.Should().Be(TeamId);
@@ -40,7 +40,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             memberPort,
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
-        var result = await resolver.ResolveAsync(ScopeId, TeamId);
+        var result = await resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         result.Should().Be(new TeamEntryMemberResolution(
             ScopeId,
@@ -91,7 +91,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             new MemberQueryPort(NewMember()),
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
-        var act = () => resolver.ResolveAsync(ScopeId, TeamId);
+        var act = () => resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
             .Where(ex => ex.Code == TeamEntryMemberErrorCodes.TeamNotFound);
@@ -105,7 +105,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             new MemberQueryPort(NewMember()),
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
-        var act = () => resolver.ResolveAsync(ScopeId, TeamId);
+        var act = () => resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
             .Where(ex => ex.Code == TeamEntryMemberErrorCodes.TeamArchived);
@@ -119,7 +119,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             new MemberQueryPort(NewMember()),
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
-        var act = () => resolver.ResolveAsync(ScopeId, TeamId);
+        var act = () => resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
             .Where(ex => ex.Code == TeamEntryMemberErrorCodes.EntryMemberNotConfigured);
@@ -133,7 +133,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             new MemberQueryPort(null),
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
-        var act = () => resolver.ResolveAsync(ScopeId, TeamId);
+        var act = () => resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
             .Where(ex => ex.Code == TeamEntryMemberErrorCodes.EntryMemberNotFound);
@@ -147,7 +147,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             new MemberQueryPort(NewMember(teamId: "other-team")),
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
-        var act = () => resolver.ResolveAsync(ScopeId, TeamId);
+        var act = () => resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
             .Where(ex => ex.Code == TeamEntryMemberErrorCodes.EntryMemberMismatch);
@@ -161,7 +161,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             new MemberQueryPort(NewMember(lifecycleStage: MemberLifecycleStageNames.BuildReady)),
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
-        var act = () => resolver.ResolveAsync(ScopeId, TeamId);
+        var act = () => resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
             .Where(ex => ex.Code == TeamEntryMemberErrorCodes.EntryMemberNotReady);
@@ -175,7 +175,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             new MemberQueryPort(NewMember(publishedServiceId: "")),
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
-        var act = () => resolver.ResolveAsync(ScopeId, TeamId);
+        var act = () => resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
             .Where(ex => ex.Code == TeamEntryMemberErrorCodes.EntryMemberNotReady);
@@ -190,10 +190,27 @@ public sealed class StudioTeamEntryMemberResolverTests
             new MemberQueryPort(NewMember()),
             readinessPort);
 
-        await resolver.ResolveAsync(ScopeId, TeamId);
+        await resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         readinessPort.LastRequest.Should().NotBeNull();
         readinessPort.LastRequest!.ExpectedRevisionId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldCheckReadinessForRequestedEndpointOnly()
+    {
+        var readinessPort = new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true);
+        var resolver = new StudioTeamEntryMemberResolver(
+            new TeamQueryPort(NewTeam()),
+            new MemberQueryPort(NewMember()),
+            readinessPort);
+
+        await resolver.ResolveAsync(ScopeId, TeamId, " chat ");
+
+        readinessPort.LastRequest.Should().NotBeNull();
+        readinessPort.LastRequest!.ExpectedEndpointIds.Should().BeEquivalentTo(
+            ["chat"],
+            options => options.WithStrictOrdering());
     }
 
     [Fact]
@@ -204,7 +221,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             new MemberQueryPort(NewMember()),
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.PreparedArtifactMissing, invokeReady: false));
 
-        var act = () => resolver.ResolveAsync(ScopeId, TeamId);
+        var act = () => resolver.ResolveAsync(ScopeId, TeamId, "chat");
 
         await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
             .Where(ex => ex.Code == TeamEntryMemberErrorCodes.EntryMemberNotReady
