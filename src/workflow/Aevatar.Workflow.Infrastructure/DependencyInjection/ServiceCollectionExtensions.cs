@@ -2,6 +2,7 @@ using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Infrastructure.Capabilities;
 using Aevatar.Workflow.Infrastructure.Reporting;
@@ -32,6 +33,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
         services.TryAddSingleton<IWorkflowFileArtifactReadPort>(sp =>
             sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowDocumentExtractToolSource>());
         services.TryAddSingleton<WorkflowRunActorPort>();
         services.TryAddSingleton<IWorkflowDefinitionProvisioningPort>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());
