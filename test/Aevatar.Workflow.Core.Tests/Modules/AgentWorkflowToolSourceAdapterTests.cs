@@ -1,4 +1,6 @@
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Integration.AI;
@@ -34,6 +36,121 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedScopeId.Should().Be("scope-1");
         agentTool.ObservedCallId.Should().Be("call-1");
         agentTool.ObservedExternalMetadata.Should().NotContainKey("ExecutionId");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowTool_ShouldExecuteAgentToolThroughToolMiddlewareChain()
+    {
+        var agentTool = new CapturingAgentTool();
+        var middleware = new RewritingToolCallMiddleware();
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            [middleware]);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: """{"original":true}""",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        agentTool.ObservedArgumentsJson.Should().Be("""{"rewritten":true}""");
+        result.ResultJson.Should().Be("""{"middleware":true}""");
+        middleware.NextExecuted.Should().BeTrue();
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowTool_WhenApprovalDenied_ShouldFailClosedWithoutExecutingAgentTool()
+    {
+        var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
+        var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Denied("blocked"));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            approvalHandler: approvalHandler);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        await FluentActions.Awaiting(() => tool.ExecuteAsync(
+                new WorkflowToolExecutionRequest(
+                    ArgumentsJson: "{}",
+                    RunId: "run-1",
+                    StepId: "step-1",
+                    ExecutionId: "exec-1",
+                    CallId: "call-1",
+                    ScopeId: "scope-1",
+                    CallerCredential: new WorkflowCallerCredential()),
+                CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*ApprovalDenied*blocked*");
+
+        agentTool.ExecuteCount.Should().Be(0);
+        approvalHandler.Requests.Should().ContainSingle();
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowTool_WhenApprovalPending_ShouldFailClosedWithoutReturningPendingPayload()
+    {
+        var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
+        var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Yielded("approval-1"));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            approvalHandler: approvalHandler);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        await FluentActions.Awaiting(() => tool.ExecuteAsync(
+                new WorkflowToolExecutionRequest(
+                    ArgumentsJson: "{}",
+                    RunId: "run-1",
+                    StepId: "step-1",
+                    ExecutionId: "exec-1",
+                    CallId: "call-1",
+                    ScopeId: "scope-1",
+                    CallerCredential: new WorkflowCallerCredential()),
+                CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*ApprovalPending*approval-1*");
+
+        agentTool.ExecuteCount.Should().Be(0);
+        approvalHandler.Requests.Should().ContainSingle();
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowTool_ShouldUseSingleCanonicalApprovalMiddlewareWhenHostRegistersDuplicate()
+    {
+        var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
+        var canonicalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
+        var duplicateHandler = new ScriptedApprovalHandler(ToolApprovalResult.Denied("duplicate"));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            [new ToolApprovalMiddleware(duplicateHandler)],
+            canonicalHandler);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.ResultJson.Should().Be("""{"observed":true}""");
+        agentTool.ExecuteCount.Should().Be(1);
+        canonicalHandler.Requests.Should().ContainSingle();
+        duplicateHandler.Requests.Should().BeEmpty();
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -166,13 +283,17 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
-    private sealed class CapturingAgentTool : IAgentTool
+    private sealed class CapturingAgentTool(ToolApprovalMode approvalMode = ToolApprovalMode.NeverRequire) : IAgentTool
     {
         public string Name => "capture_context";
 
         public string Description => "Capture tool context";
 
         public string ParametersSchema => "{}";
+
+        public ToolApprovalMode ApprovalMode { get; } = approvalMode;
+
+        public int ExecuteCount { get; private set; }
 
         public string? ObservedArgumentsJson { get; private set; }
 
@@ -193,6 +314,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            ExecuteCount++;
             ObservedArgumentsJson = argumentsJson;
             CaptureContext();
             return ExecuteAsyncCore(ct);
@@ -216,6 +338,35 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
             ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime
                 ?? AgentWorkflowRuntimeContext.Empty;
+        }
+    }
+
+    private sealed class RewritingToolCallMiddleware : IToolCallMiddleware
+    {
+        public bool NextExecuted { get; private set; }
+
+        public async Task InvokeAsync(ToolCallContext context, Func<Task> next)
+        {
+            context.ArgumentsJson = """{"rewritten":true}""";
+            await next();
+            NextExecuted = true;
+            context.Result = """{"middleware":true}""";
+        }
+    }
+
+    private sealed class ScriptedApprovalHandler(params ToolApprovalResult[] results) : IToolApprovalHandler
+    {
+        private readonly Queue<ToolApprovalResult> _results = new(results);
+
+        public List<ToolApprovalRequest> Requests { get; } = [];
+
+        public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(_results.TryDequeue(out var result)
+                ? result
+                : ToolApprovalResult.Denied("missing scripted result"));
         }
     }
 
