@@ -78,6 +78,10 @@ public class DeviceEventEndpointsTests
     [InlineData("doorbell_pressed", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
     [InlineData("smoke_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
     [InlineData("water_leak_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("carbon_monoxide_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("glass_break_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("lock_tampered", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("alarm_triggered", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
     public void ParseCallbackPayload_known_v1_event_types_map_to_typed_payload_cases(
         string eventType,
         Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase expectedPayloadCase)
@@ -372,9 +376,13 @@ public class DeviceEventEndpointsTests
     }
 
     [Theory]
-    [InlineData("doorbell_pressed", "info", Aevatar.GAgents.Household.DeviceEventSeverity.Info)]
+    [InlineData("doorbell_pressed", "", Aevatar.GAgents.Household.DeviceEventSeverity.Info)]
     [InlineData("smoke_detected", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
     [InlineData("water_leak_detected", "warning", Aevatar.GAgents.Household.DeviceEventSeverity.Warning)]
+    [InlineData("carbon_monoxide_detected", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
+    [InlineData("glass_break_detected", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
+    [InlineData("lock_tampered", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
+    [InlineData("alarm_triggered", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
     public void ParseCallbackPayload_home_alert_events_map_to_typed_alert_payload(
         string eventType,
         string severity,
@@ -401,6 +409,28 @@ public class DeviceEventEndpointsTests
         inbound.HomeAlert.EntityId.Should().Be("binary_sensor.kitchen");
         inbound.HomeAlert.CorrelationKey.Should().Be("ha-alert-1");
         inbound.HomeAlert.Summary.Should().Be("Kitchen alert");
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_home_alert_events_use_typed_fallback_fields()
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-fallback",
+            source = "home-assistant",
+            event_type = "alarm_triggered",
+            area = "garage",
+            entity_id = "alarm.garage",
+            description = "Garage alarm",
+        });
+
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "ha-bridge");
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert);
+        inbound.HomeAlert.Severity.Should().Be(Aevatar.GAgents.Household.DeviceEventSeverity.Critical);
+        inbound.HomeAlert.CorrelationKey.Should().Be("evt-fallback");
+        inbound.HomeAlert.Summary.Should().Be("Garage alarm");
     }
 
     [Fact]
