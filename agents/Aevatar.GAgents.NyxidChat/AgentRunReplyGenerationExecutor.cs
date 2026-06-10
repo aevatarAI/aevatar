@@ -306,6 +306,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ct)
             .ConfigureAwait(false);
         var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
+        // Interactive reply tools (reply_with_interaction) execute here, during the tool
+        // step — not during the LLM step that emitted the tool calls. The AsyncLocal
+        // collector scope does not survive the actor continuation hop between steps, so
+        // the tool step must open its own scope for relay turns and return the captured
+        // intent as a typed fact on the step result.
+        using var interactiveScope = TryBeginInteractiveScope(request);
         var results = await plan.StepExecutor.ExecuteToolStepAsync(toolCalls, plan.Metadata, plan.ToolContext, ct)
             .ConfigureAwait(false);
 
@@ -320,6 +326,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             if (toolResult.Receipt is not null)
                 toolStepResult.ToolReceipts.Add(toolResult.Receipt.Clone());
         }
+
+        if (TryTakeOutboundIntent(generator) is { } outboundIntent)
+            toolStepResult.OutboundIntent = outboundIntent.Clone();
 
         // Defense-in-depth complement to the Kafka transport fix (commit f2c2319e7):
         // bound the tool-result payload before it enters the

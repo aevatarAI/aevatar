@@ -27,6 +27,80 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class AgentRunGAgentTests
 {
     [Fact]
+    public async Task HandleNextToolStepAsync_MergesToolStepOutboundIntentIntoStepState()
+    {
+        // Regression for the relay interactive-reply scope gap: reply_with_interaction
+        // executes during the tool step, so its captured intent arrives on
+        // AgentRunToolStepResult.outbound_intent and must be merged into the persisted
+        // step state for the finalize path to dispatch the card.
+        var actorRuntime = new DispatchingActorRuntime();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            new PausedReplyGenerationExecutor(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-tool-intent",
+            CorrelationId = "corr-tool-intent",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-tool-intent",
+                CorrelationId = "corr-tool-intent",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 2,
+                MaxToolRounds = 4,
+                PendingToolCalls =
+                {
+                    new AgentRunToolCall
+                    {
+                        Id = "call-1",
+                        Name = "reply_with_interaction",
+                        ArgumentsJson = "{}",
+                    },
+                },
+            },
+        });
+
+        await runtime.HandleNextToolStepAsync(new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = "run-tool-intent",
+            CorrelationId = "corr-tool-intent",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 3,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-tool-intent",
+                RunId = "run-tool-intent",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+            },
+            ToolStepResult = new AgentRunToolStepResult
+            {
+                AdvanceRound = true,
+                OutboundIntent = new MessageContent
+                {
+                    Text = "确认部署到 staging?",
+                    Actions =
+                    {
+                        new ActionElement { ActionId = "confirm_deploy", Label = "确认部署" },
+                    },
+                },
+            },
+        });
+
+        runtime.State.GenerationStep.Should().NotBeNull();
+        runtime.State.GenerationStep!.OutboundIntent.Should().NotBeNull();
+        runtime.State.GenerationStep.OutboundIntent.Actions.Should()
+            .ContainSingle(action => action.ActionId == "confirm_deploy");
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldCreateRunActorAndDispatchStartCommand()
     {
         var actorRuntime = new DispatchingActorRuntime();
