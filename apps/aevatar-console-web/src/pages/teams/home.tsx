@@ -22,7 +22,7 @@ import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import {
   buildTeamDetailHref,
-  buildTeamStudioHref,
+  buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
 import { studioApi } from "@/shared/studio/api";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
@@ -464,6 +464,10 @@ function groupMembersByTeamId(
   return result;
 }
 
+function isWorkflowMember(member: StudioMemberSummary | null | undefined): boolean {
+  return trimOptional(member?.implementationKind).toLowerCase() === "workflow";
+}
+
 function resolveMemberPreviewService(input: {
   readonly member: StudioMemberSummary;
   readonly services: readonly ServiceCatalogSnapshot[];
@@ -583,57 +587,52 @@ function buildTeamRosterPreview(input: {
     )[0];
   const memberCount =
     input.team.memberCount > 0 ? input.team.memberCount : input.members.length;
-  const teamHomeHref = buildScopeHref("/teams", { scopeId: input.scopeId });
   const entryMemberId = trimOptional(input.team.entryMemberId);
-  const preferredEditMemberId =
-    entryMemberId ||
-    (memberCount === 1 && input.members.length === 1
-      ? trimOptional(input.members[0]?.memberId)
-      : "");
-  const memberQuickAction: TeamMemberQuickAction = entryMemberId
+  const entryMember = entryMemberId
+    ? input.members.find((member) => trimOptional(member.memberId) === entryMemberId)
+    : undefined;
+  // Deferred P2: keep the current workflow-member fallback when the entry is non-workflow.
+  // A later pass should surface an explicit entry-unsupported/manage-members state.
+  const preferredWorkflowMember =
+    (entryMember && isWorkflowMember(entryMember) ? entryMember : undefined) ??
+    sortedMembers.find(isWorkflowMember);
+  const preferredWorkflowMemberId = trimOptional(preferredWorkflowMember?.memberId);
+  const memberQuickAction: TeamMemberQuickAction = preferredWorkflowMemberId
     ? {
-        href: buildTeamStudioHref({
-          memberId: entryMemberId,
+        href: buildTeamMemberWorkflowStudioHref({
+          memberId: preferredWorkflowMemberId,
           mode: "edit-member",
-          returnTo: teamHomeHref,
           scopeId: input.scopeId,
           teamId: input.team.teamId,
         }),
-        kind: "edit-entry-member",
-        label: t("teams.home.actions.editEntryMember", "Edit entry member"),
+        kind:
+          preferredWorkflowMemberId === entryMemberId
+            ? "edit-entry-member"
+            : "edit-member",
+        label:
+          preferredWorkflowMemberId === entryMemberId
+            ? t("teams.home.actions.debugEntryWorkflow", "Debug entry workflow")
+            : t("teams.home.actions.debugWorkflow", "Debug workflow"),
       }
-    : preferredEditMemberId
+    : memberCount === 0
       ? {
-          href: buildTeamStudioHref({
-            memberId: preferredEditMemberId,
-            mode: "edit-member",
-            returnTo: teamHomeHref,
+          href: buildTeamMemberWorkflowStudioHref({
+            mode: "create-member",
             scopeId: input.scopeId,
             teamId: input.team.teamId,
           }),
-          kind: "edit-member",
-          label: t("teams.home.actions.editMember", "Edit member"),
+          kind: "create-member",
+          label: t("teams.home.actions.createWorkflowMember", "Create workflow member"),
         }
-      : memberCount === 0
-        ? {
-            href: buildTeamStudioHref({
-              mode: "create-member",
-              returnTo: teamHomeHref,
-              scopeId: input.scopeId,
-              teamId: input.team.teamId,
-            }),
-            kind: "create-member",
-            label: t("teams.home.actions.createMember", "Create member"),
-          }
-        : {
-            href: buildTeamDetailHref({
-              scopeId: input.scopeId,
-              tab: "members",
-              teamId: input.team.teamId,
-            }),
-            kind: "manage-members",
-            label: t("teams.home.actions.manageMembers", "Manage members"),
-          };
+      : {
+          href: buildTeamDetailHref({
+            scopeId: input.scopeId,
+            tab: "members",
+            teamId: input.team.teamId,
+          }),
+          kind: "manage-members",
+          label: t("teams.home.actions.manageMembers", "Manage members"),
+        };
   const firstMemberLabel = pickMeaningfulLabel(
     sortedMembers[0]?.displayName,
     sortedMembers[0]?.memberId,

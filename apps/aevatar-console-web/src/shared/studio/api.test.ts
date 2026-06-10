@@ -1757,6 +1757,88 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('assigns an existing workflow member to a team with the member patch endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        summary: {
+          memberId: 'orders-draft',
+          scopeId: 'scope-1',
+          displayName: 'orders-draft',
+          description: '',
+          implementationKind: 'workflow',
+          lifecycleStage: 'created',
+          publishedServiceId: '',
+          lastBoundRevisionId: null,
+          teamId: 'team-1',
+          createdAt: '2026-04-27T08:10:00Z',
+          updatedAt: '2026-04-27T08:11:00Z',
+        },
+        implementationRef: {
+          implementationKind: 'workflow',
+          workflowId: 'orders-draft',
+        },
+        lastBinding: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.updateMemberTeamAssignment({
+        scopeId: 'scope-1',
+        memberId: 'orders-draft',
+        teamId: 'team-1',
+      }),
+    ).resolves.toEqual({
+      summary: {
+        memberId: 'orders-draft',
+        scopeId: 'scope-1',
+        displayName: 'orders-draft',
+        description: '',
+        implementationKind: 'workflow',
+        lifecycleStage: 'created',
+        publishedServiceId: '',
+        lastBoundRevisionId: null,
+        teamId: 'team-1',
+        createdAt: '2026-04-27T08:10:00Z',
+        updatedAt: '2026-04-27T08:11:00Z',
+      },
+      implementationRef: {
+        actorTypeName: null,
+        implementationKind: 'workflow',
+        scriptId: null,
+        scriptRevision: null,
+        workflowId: 'orders-draft',
+        workflowRevision: null,
+      },
+      lastBinding: null,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members/orders-draft',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'PATCH',
+        body: JSON.stringify({
+          teamId: 'team-1',
+        }),
+      }),
+    );
+  });
+
   it('retires a scope binding revision through the studio binding API', async () => {
     persistAuthSession({
       tokens: {

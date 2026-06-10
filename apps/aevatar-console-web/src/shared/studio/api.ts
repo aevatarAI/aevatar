@@ -1620,6 +1620,24 @@ export const studioApi = {
     );
   },
 
+  updateMemberTeamAssignment(input: {
+    scopeId: string;
+    memberId: string;
+    teamId: string | null;
+  }): Promise<StudioMemberDetail> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeStudioMemberDetail,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          teamId: input.teamId === null ? null : input.teamId.trim(),
+        }),
+      }
+    );
+  },
+
   listWorkflowDrafts(scopeId?: string | null): Promise<StudioWorkflowDraftSummary[]> {
     return requestJson(withOptionalScopeId("/api/workspace/workflow-drafts", scopeId));
   },

@@ -35,6 +35,7 @@ export type TeamTestRosterRow = {
   readonly memberId: string;
   readonly name: string;
   readonly serviceId: string;
+  readonly workflowSupported: boolean;
 };
 
 export type TeamTestLastResult = {
@@ -250,7 +251,9 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={handleNavigate(createMemberHref)}
               type="primary"
             >
-              {intl.formatMessage({ id: "teams.members.actions.createFirst" })}
+              {intl.formatMessage({
+                id: "teams.members.actions.createFirstWorkflow",
+              })}
             </Button>
           ) : null}
         </div>
@@ -340,12 +343,27 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                 </Button>
               ) : (
                 <Button
-                  href={row.buildStudioHref}
-                  disabled={isEntryActionBusy}
-                  onClick={handleNavigate(row.buildStudioHref)}
+                  href={row.workflowSupported ? row.buildStudioHref : undefined}
+                  disabled={isEntryActionBusy || !row.workflowSupported}
+                  onClick={
+                    row.workflowSupported
+                      ? handleNavigate(row.buildStudioHref)
+                      : undefined
+                  }
                   size="small"
+                  title={
+                    row.workflowSupported
+                      ? undefined
+                      : intl.formatMessage({
+                          id: "teams.members.actions.workflowOnlyTitle",
+                        })
+                  }
                 >
-                  {intl.formatMessage({ id: "teams.detail.test.entry.buildFirst" })}
+                  {intl.formatMessage({
+                    id: row.workflowSupported
+                      ? "teams.detail.test.entry.buildFirst"
+                      : "teams.members.actions.workflowOnly",
+                  })}
                 </Button>
               )}
             </Space>
@@ -447,13 +465,31 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           <CompactFactValue value={entryMember?.serviceId || "--"} />
         </div>
         <Space size={8} style={{ flex: "0 1 auto" }} wrap>
-          {entryMember?.editStudioHref ? (
+          {entryMember ? (
             <Button
-              href={entryMember.editStudioHref}
-              onClick={handleNavigate(entryMember.editStudioHref)}
+              href={
+                entryMember.workflowSupported ? entryMember.editStudioHref : undefined
+              }
+              disabled={!entryMember.workflowSupported}
+              onClick={
+                entryMember.workflowSupported
+                  ? handleNavigate(entryMember.editStudioHref)
+                  : undefined
+              }
               size="small"
+              title={
+                entryMember.workflowSupported
+                  ? undefined
+                  : intl.formatMessage({
+                      id: "teams.members.actions.workflowOnlyTitle",
+                    })
+              }
             >
-              {intl.formatMessage({ id: "teams.members.actions.editInStudio" })}
+              {intl.formatMessage({
+                id: entryMember.workflowSupported
+                  ? "teams.members.actions.editWorkflow"
+                  : "teams.members.actions.workflowOnly",
+              })}
             </Button>
           ) : null}
           {onClearEntry ? (

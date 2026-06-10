@@ -159,7 +159,7 @@ describe("TeamsHomePage", () => {
   it("renders the team homepage around real Team roster with member runtime hints", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("button", { name: "编辑成员" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "调试工作流" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看成员" })).toBeTruthy();
     expect(screen.getByText("阿凡达/团队")).toBeTruthy();
@@ -188,7 +188,7 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("button", { name: "Edit member" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Debug workflow" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "View team" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "View members" })).toBeTruthy();
     expect(screen.getByText("My AI teams")).toBeTruthy();
@@ -203,7 +203,7 @@ describe("TeamsHomePage", () => {
   it("keeps team card actions focused on member work and team detail", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    await screen.findByRole("button", { name: "编辑成员" });
+    await screen.findByRole("button", { name: "调试工作流" });
     expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看成员" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
@@ -462,27 +462,21 @@ describe("TeamsHomePage", () => {
     const article = screen
       .getByRole("heading", { level: 4, name: "列表团队 1" })
       .closest("article");
-    expect(article?.firstElementChild?.textContent).toContain("编辑成员");
+    expect(article?.firstElementChild?.textContent).toContain("调试工作流");
     expect(article?.firstElementChild?.textContent).toContain("查看团队");
     expect(article?.firstElementChild?.textContent).toContain("查看成员");
   });
 
-  it("opens the bound member Studio handoff from the primary action", async () => {
+  it("opens the workflow member debugger from the primary action", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    fireEvent.click(await screen.findByRole("button", { name: "编辑成员" }));
+    fireEvent.click(await screen.findByRole("button", { name: "调试工作流" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/studio");
+      expect(window.location.pathname).toBe(
+        "/teams/scope-a/t-support/members/member-alpha/workflow",
+      );
     });
-
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("teamId")).toBe("t-support");
-    expect(params.get("member")).toBe("member:member-alpha");
-    expect(params.get("step")).toBe("build");
-    expect(params.get("tab")).toBe("studio");
-    expect(params.get("returnTo")).toBe("/teams?scopeId=scope-a");
   });
 
   it("uses the entry member as the Teams homepage primary handoff when configured", async () => {
@@ -516,16 +510,13 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    fireEvent.click(await screen.findByRole("button", { name: "编辑入口成员" }));
+    fireEvent.click(await screen.findByRole("button", { name: "调试入口工作流" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/studio");
+      expect(window.location.pathname).toBe(
+        "/teams/scope-a/t-support/members/member-entry/workflow",
+      );
     });
-
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("teamId")).toBe("t-support");
-    expect(params.get("member")).toBe("member:member-entry");
-    expect(params.get("returnTo")).toBe("/teams?scopeId=scope-a");
   });
 
   it("keeps Team detail available as the secondary action", async () => {
@@ -577,11 +568,13 @@ describe("TeamsHomePage", () => {
           ...defaultMembers[0],
           memberId: "member-alpha",
           displayName: "普通成员 A",
+          implementationKind: "gagent",
         },
         {
           ...defaultMembers[0],
           memberId: "member-beta",
           displayName: "普通成员 B",
+          implementationKind: "gagent",
         },
       ],
       nextPageToken: null,
@@ -705,7 +698,7 @@ describe("TeamsHomePage", () => {
     expect(await screen.findByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 3, name: "joker" })).toBeTruthy();
     expect(screen.getByText("ID：t-joker")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "编辑成员" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "调试工作流" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "查看团队" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "查看成员" })).toHaveLength(2);
   });
@@ -789,15 +782,12 @@ describe("TeamsHomePage", () => {
       await screen.findByRole("heading", { level: 3, name: "刚创建的团队" }),
     ).toBeTruthy();
     expect(screen.getByText("ID：t-new")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "创建成员" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建工作流成员" }));
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/studio");
+      expect(window.location.pathname).toBe(
+        "/teams/scope-a/t-new/members/new/workflow",
+      );
     });
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("teamId")).toBe("t-new");
-    expect(params.get("intent")).toBe("create-member");
-    expect(params.get("returnTo")).toBe("/teams?scopeId=scope-a");
     expect(
       screen.queryByText(
         "当前工作空间还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。",
