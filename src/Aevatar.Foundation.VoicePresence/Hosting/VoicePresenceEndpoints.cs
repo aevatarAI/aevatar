@@ -59,10 +59,13 @@ public static class VoicePresenceEndpoints
             var transport = new WebSocketVoiceTransport(ws);
             var mediaPort = resolveMediaPort(ctx);
             var attached = false;
+            var detachHandle = accepted.LeaseHandle;
 
             try
             {
-                await mediaPort.AttachAsync(accepted.LeaseHandle, transport, ctx.RequestAborted);
+                var lifetimeCompleted = await mediaPort.AttachAsync(accepted.LeaseHandle, transport, ctx.RequestAborted);
+                if (!string.IsNullOrWhiteSpace(lifetimeCompleted?.TransportLeaseId))
+                    detachHandle = detachHandle with { ActiveTransportLeaseId = lifetimeCompleted.TransportLeaseId };
                 attached = true;
                 await WaitUntilClosedAsync(transport, ctx.RequestAborted);
             }
@@ -77,7 +80,7 @@ public static class VoicePresenceEndpoints
             finally
             {
                 if (attached)
-                    await mediaPort.DetachAsync(accepted.LeaseHandle, transport, ctx.RequestAborted);
+                    await mediaPort.DetachAsync(detachHandle, transport, ctx.RequestAborted);
             }
         });
     }

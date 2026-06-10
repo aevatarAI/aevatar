@@ -163,8 +163,8 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
-        services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, NoOpVoicePresenceTransportAttachmentPort>();
-        services.TryAddSingleton<IVoiceVolatileMediaStreamPort, FailClosedVoiceVolatileMediaStreamPort>();
+        services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, VoicePresenceTransportAttachmentPort>();
+        services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
         services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
         services.AddVoicePresenceCapabilityProjection();
         services.AddVoicePresenceCapabilityProjectionStore(configuration);
@@ -238,6 +238,17 @@ public static class ServiceCollectionExtensions
                     serviceProvider.GetService<IVoiceToolInvoker>(),
                     serviceProvider.GetService<IVoiceToolCatalog>(),
                     serviceProvider.GetService<ILogger<VoicePresenceModule>>()),
+                (serviceProvider, handle, eventSink, audioSink, ct) => ConnectVoiceProviderSessionAsync(
+                    handle,
+                    new OpenAIRealtimeProvider(
+                        voiceOptions.OpenAIProviderOptions,
+                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>()),
+                    openAIProviderConfig.Clone(),
+                    BuildOpenAIVoiceSessionConfig(configuration, options),
+                    serviceProvider.GetService<IVoiceToolCatalog>(),
+                    eventSink,
+                    audioSink,
+                    ct),
                 BuildOpenAIVoiceSessionConfig(configuration, options).SampleRateHz));
         }
 
@@ -258,10 +269,84 @@ public static class ServiceCollectionExtensions
                     serviceProvider.GetService<IVoiceToolInvoker>(),
                     serviceProvider.GetService<IVoiceToolCatalog>(),
                     serviceProvider.GetService<ILogger<VoicePresenceModule>>()),
+                (serviceProvider, handle, eventSink, audioSink, ct) => ConnectVoiceProviderSessionAsync(
+                    handle,
+                    new MiniCPMRealtimeProvider(
+                        voiceOptions.MiniCPMProviderOptions,
+                        serviceProvider.GetService<ILogger<MiniCPMRealtimeProvider>>()),
+                    miniCpmProviderConfig.Clone(),
+                    BuildMiniCpmVoiceSessionConfig(configuration, options),
+                    serviceProvider.GetService<IVoiceToolCatalog>(),
+                    eventSink,
+                    audioSink,
+                    ct),
                 BuildMiniCpmVoiceSessionConfig(configuration, options).SampleRateHz));
         }
 
         return registrations;
+    }
+
+    private static async Task<RealtimeVoiceProviderSession> ConnectVoiceProviderSessionAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        IRealtimeVoiceProvider provider,
+        VoiceProviderConfig providerConfig,
+        VoiceSessionConfig sessionConfig,
+        IVoiceToolCatalog? toolCatalog,
+        Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+        Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
+        CancellationToken ct)
+    {
+        var providerSession = await provider.ConnectAsync(
+            new VoiceProviderSessionKey(
+                handle.SessionId,
+                handle.OwnerId,
+                handle.ActiveTransportLeaseId ?? string.Empty,
+                0,
+                Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                handle.ActorId,
+                handle.ModuleName),
+            providerConfig,
+            eventSink,
+            audioSink,
+            ct);
+
+        var effectiveSession = await BuildEffectiveVoiceSessionConfigAsync(sessionConfig, toolCatalog, ct);
+        await providerSession.UpdateSessionAsync(effectiveSession, ct);
+        return providerSession;
+    }
+
+    private static async Task<VoiceSessionConfig> BuildEffectiveVoiceSessionConfigAsync(
+        VoiceSessionConfig sessionConfig,
+        IVoiceToolCatalog? toolCatalog,
+        CancellationToken ct)
+    {
+        var effectiveSession = sessionConfig.Clone();
+        if (toolCatalog == null)
+            return effectiveSession;
+
+        var knownNames = new HashSet<string>(
+            effectiveSession.ToolDefinitions
+                .Select(static definition => definition.Name)
+                .Where(static name => !string.IsNullOrWhiteSpace(name)),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var discoveredTool in await toolCatalog.DiscoverAsync(ct))
+        {
+            var toolName = discoveredTool.Name?.Trim();
+            if (string.IsNullOrWhiteSpace(toolName) || !knownNames.Add(toolName))
+                continue;
+
+            effectiveSession.ToolDefinitions.Add(new VoiceToolDefinition
+            {
+                Name = toolName,
+                Description = discoveredTool.Description ?? string.Empty,
+                ParametersSchema = string.IsNullOrWhiteSpace(discoveredTool.ParametersSchema)
+                    ? "{}"
+                    : discoveredTool.ParametersSchema,
+            });
+        }
+
+        return effectiveSession;
     }
 
     private static string? ResolveVoicePresenceDefaultProvider(

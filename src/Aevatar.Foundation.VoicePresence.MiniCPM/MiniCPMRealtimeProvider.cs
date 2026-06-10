@@ -54,12 +54,14 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         VoiceProviderSessionKey sessionKey,
         VoiceProviderConfig config,
         Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+        Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
         CancellationToken ct)
     {
         _ = ct;
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(eventSink);
+        ArgumentNullException.ThrowIfNull(audioSink);
         ValidateProviderConfig(config);
 
         var session = new MiniCPMRealtimeProviderSession(
@@ -69,7 +71,8 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
             _httpClient,
             _options,
             _logger,
-            eventSink);
+            eventSink,
+            audioSink);
         session.Start();
         return Task.FromResult<RealtimeVoiceProviderSession>(session);
     }
@@ -98,6 +101,7 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         private readonly MiniCPMRealtimeProviderOptions _options;
         private readonly ILogger _logger;
         private readonly Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> _eventSink;
+        private readonly Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> _audioSink;
         private readonly CancellationTokenSource _physicalSessionCancellation = new();
         private Task? _completionsLoop;
         private bool _disposed;
@@ -110,7 +114,8 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
             HttpClient httpClient,
             MiniCPMRealtimeProviderOptions options,
             ILogger logger,
-            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink)
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink)
         {
             _callbackKey = sessionKey;
             Endpoint = endpoint;
@@ -119,6 +124,7 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
             _options = options;
             _logger = logger;
             _eventSink = eventSink;
+            _audioSink = audioSink;
         }
 
         public Uri Endpoint { get; }
@@ -374,15 +380,10 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
                 {
                     var wavBytes = Convert.FromBase64String(choice.Audio);
                     var decoded = MiniCPMWaveCodec.DecodePcm16Mono(wavBytes);
-                    await EmitAsync(new VoiceProviderEvent
-                    {
-                        AudioReceived = new VoiceAudioReceived
-                        {
-                            Pcm16 = Google.Protobuf.ByteString.CopyFrom(decoded.Pcm16),
-                            SampleRateHz = decoded.SampleRateHz,
-                            ProviderResponseId = providerResponseId,
-                        },
-                    }, ct);
+                    await EmitAudioAsync(new VoiceProviderAudioFrame(
+                        decoded.Pcm16,
+                        decoded.SampleRateHz,
+                        providerResponseId), ct);
                 }
                 catch (Exception ex) when (ex is FormatException or InvalidDataException)
                 {
@@ -422,6 +423,18 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
             {
                 _logger.LogWarning(ex, "MiniCPM provider callback failed for event {EventCase}.",
                     providerEvent.EventCase);
+            }
+        }
+
+        private async Task EmitAudioAsync(VoiceProviderAudioFrame audioFrame, CancellationToken ct)
+        {
+            try
+            {
+                await _audioSink(_callbackKey, audioFrame, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "MiniCPM provider audio callback failed.");
             }
         }
     }

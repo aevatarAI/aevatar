@@ -81,11 +81,13 @@ public class VoicePresenceModuleFactoryTests
             VoiceProviderSessionKey sessionKey,
             VoiceProviderConfig config,
             Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
             CancellationToken ct)
         {
             _ = sessionKey;
             _ = config;
             _ = eventSink;
+            _ = audioSink;
             _ = ct;
             return Task.FromResult<RealtimeVoiceProviderSession>(new NoopProviderSession());
         }

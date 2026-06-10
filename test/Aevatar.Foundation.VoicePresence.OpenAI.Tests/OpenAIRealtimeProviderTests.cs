@@ -191,20 +191,20 @@ public class OpenAIRealtimeProviderTests
         ]);
         var provider = CreateProvider(session);
         var events = new List<VoiceProviderEvent>();
+        var audioFrames = new List<VoiceProviderAudioFrame>();
         var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await ConnectAsync(provider, events, evt =>
         {
             if (evt.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected)
                 disconnected.TrySetResult();
-        });
+        }, audioFrames);
         await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         events.Select(x => x.EventCase).ShouldBe(
         [
             VoiceProviderEvent.EventOneofCase.SpeechStarted,
             VoiceProviderEvent.EventOneofCase.ResponseStarted,
-            VoiceProviderEvent.EventOneofCase.AudioReceived,
             VoiceProviderEvent.EventOneofCase.FunctionCall,
             VoiceProviderEvent.EventOneofCase.ResponseDone,
             VoiceProviderEvent.EventOneofCase.ResponseStarted,
@@ -214,17 +214,17 @@ public class OpenAIRealtimeProviderTests
         ]);
         events[1].ResponseStarted.ResponseId.ShouldBe(0);
         events[1].ResponseStarted.ProviderResponseId.ShouldBe("resp-1");
-        events[2].AudioReceived.SampleRateHz.ShouldBe(24000);
-        events[2].AudioReceived.ProviderResponseId.ShouldBe("resp-1");
-        events[3].FunctionCall.ResponseId.ShouldBe(0);
-        events[3].FunctionCall.ProviderResponseId.ShouldBe("resp-1");
-        events[4].ResponseDone.ResponseId.ShouldBe(0);
-        events[4].ResponseDone.ProviderResponseId.ShouldBe("resp-1");
-        events[5].ResponseStarted.ResponseId.ShouldBe(0);
-        events[5].ResponseStarted.ProviderResponseId.ShouldBe("resp-2");
-        events[6].ResponseCancelled.ResponseId.ShouldBe(0);
-        events[6].ResponseCancelled.ProviderResponseId.ShouldBe("resp-2");
-        events[7].Error.ErrorCode.ShouldBe("rate_limit");
+        audioFrames.ShouldHaveSingleItem().SampleRateHz.ShouldBe(24000);
+        audioFrames.Single().ProviderResponseId.ShouldBe("resp-1");
+        events[2].FunctionCall.ResponseId.ShouldBe(0);
+        events[2].FunctionCall.ProviderResponseId.ShouldBe("resp-1");
+        events[3].ResponseDone.ResponseId.ShouldBe(0);
+        events[3].ResponseDone.ProviderResponseId.ShouldBe("resp-1");
+        events[4].ResponseStarted.ResponseId.ShouldBe(0);
+        events[4].ResponseStarted.ProviderResponseId.ShouldBe("resp-2");
+        events[5].ResponseCancelled.ResponseId.ShouldBe(0);
+        events[5].ResponseCancelled.ProviderResponseId.ShouldBe("resp-2");
+        events[6].Error.ErrorCode.ShouldBe("rate_limit");
     }
 
     [Fact]
@@ -241,6 +241,7 @@ public class OpenAIRealtimeProviderTests
         var provider = CreateProvider(session);
         var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var seen = new List<VoiceProviderEvent>();
+        var audioFrames = new List<VoiceProviderAudioFrame>();
 
         await provider.ConnectAsync(new VoiceProviderSessionKey("lease-1", "host-1", "transport-1", 1), CreateConfig(),
             (key, evt, ct) =>
@@ -252,13 +253,19 @@ public class OpenAIRealtimeProviderTests
                     disconnected.TrySetResult();
                 return Task.CompletedTask;
             },
+            (key, audio, ct) =>
+            {
+                _ = key;
+                _ = ct;
+                audioFrames.Add(audio);
+                return Task.CompletedTask;
+            },
             CancellationToken.None);
         await session.ReceiveCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        seen.Count(static x => x.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived).ShouldBe(3);
-        seen.Where(static x => x.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived)
-            .Select(static x => x.AudioReceived.Pcm16.ToByteArray().Single())
+        audioFrames.Count.ShouldBe(3);
+        audioFrames.Select(static x => x.Pcm16.ToArray().Single())
             .ShouldBe([1, 2, 3]);
         seen.Any(static x => x.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected).ShouldBeTrue();
     }
@@ -485,12 +492,13 @@ public class OpenAIRealtimeProviderTests
         OpenAIRealtimeProvider provider,
         VoiceProviderConfig? config = null,
         CancellationToken ct = default) =>
-        ConnectAsync(provider, [], onEvent: null, config, ct);
+        ConnectAsync(provider, [], onEvent: null, config: config, ct: ct);
 
     private static Task<RealtimeVoiceProviderSession> ConnectAsync(
         OpenAIRealtimeProvider provider,
         List<VoiceProviderEvent> events,
         Action<VoiceProviderEvent>? onEvent = null,
+        List<VoiceProviderAudioFrame>? audioFrames = null,
         VoiceProviderConfig? config = null,
         CancellationToken ct = default) =>
         provider.ConnectAsync(
@@ -502,6 +510,13 @@ public class OpenAIRealtimeProviderTests
                 _ = token;
                 events.Add(evt);
                 onEvent?.Invoke(evt);
+                return Task.CompletedTask;
+            },
+            (key, audioFrame, token) =>
+            {
+                _ = key;
+                _ = token;
+                audioFrames?.Add(audioFrame);
                 return Task.CompletedTask;
             },
             ct);

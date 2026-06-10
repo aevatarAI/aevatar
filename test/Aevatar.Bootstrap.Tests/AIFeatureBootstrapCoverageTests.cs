@@ -204,7 +204,7 @@ public class AIFeatureBootstrapCoverageTests
         provider.GetRequiredService<IVoicePresenceSessionLeasePort>()
             .Should().NotBeNull();
         provider.GetRequiredService<IVoiceVolatileMediaStreamPort>()
-            .Should().BeOfType<FailClosedVoiceVolatileMediaStreamPort>();
+            .Should().BeOfType<VoiceVolatileMediaStreamPort>();
 
         factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
         defaultModule.Should().BeOfType<VoicePresenceModule>();

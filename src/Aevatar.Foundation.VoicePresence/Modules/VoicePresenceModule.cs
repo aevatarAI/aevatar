@@ -158,9 +158,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             case VoiceModuleSignal.SignalOneofCase.ProviderEventReceived:
                 await HandleProviderEventReceivedAsync(signal.ProviderEventReceived, ctx, ct);
                 break;
-            case VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived:
-                await HandleTransportAudioFrameReceivedAsync(signal.TransportAudioFrameReceived, ctx, ct);
-                break;
             case VoiceModuleSignal.SignalOneofCase.None:
             default:
                 break;
@@ -257,8 +254,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 if (await CloseRemoteSessionAsync(state, "provider_disconnected", ctx, ct))
                     stateChanged = false;
                 break;
-            case VoiceProviderEvent.EventOneofCase.AudioReceived:
-                break;
             case VoiceProviderEvent.EventOneofCase.Error:
             case VoiceProviderEvent.EventOneofCase.None:
             default:
@@ -313,17 +308,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                     static message => new VoiceProviderEvent { FunctionCall = message },
                     state,
                     out normalizedEvent);
-            case VoiceProviderEvent.EventOneofCase.AudioReceived:
-            {
-                var audioReceived = providerEvent.AudioReceived;
-                if (!string.IsNullOrWhiteSpace(audioReceived.ProviderResponseId) &&
-                    state.CancelledProviderResponseIds.Contains(audioReceived.ProviderResponseId))
-                {
-                    return false;
-                }
-
-                return true;
-            }
             case VoiceProviderEvent.EventOneofCase.Disconnected:
             case VoiceProviderEvent.EventOneofCase.Error:
             case VoiceProviderEvent.EventOneofCase.SpeechStarted:
@@ -458,28 +442,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await HandleProviderEventAsync(request.ProviderEvent, ctx, ct);
     }
 
-    private async Task HandleTransportAudioFrameReceivedAsync(
-        VoiceTransportAudioFrameReceived request,
-        IEventHandlerContext ctx,
-        CancellationToken ct)
-    {
-        var state = HydrateRuntimeStateFromActor(ctx);
-        if (request.Pcm16.IsEmpty ||
-            !IsAcceptedTransportSignal(
-                state,
-                request.SessionId,
-                request.TransportLeaseId,
-                request.OwnerId,
-                request.LeaseExpiresAt,
-                request.LeaseEpoch))
-        {
-            return;
-        }
-
-        await using var providerSession = await ConnectProviderSessionAsync(state, ct);
-        await providerSession.SendAudioAsync(request.Pcm16.Memory, ct);
-    }
-
     private async Task HandleTransportAttachRequestedAsync(
         VoiceTransportAttachRequested request,
         IEventHandlerContext ctx,
@@ -517,10 +479,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             state.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
 
         await PersistRuntimeStateAsync(ctx, state, ct);
-
-        await using (await ConnectProviderSessionAsync(state, ct))
-        {
-        }
     }
 
     private async Task HandleTransportDetachRequestedAsync(
@@ -944,7 +902,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             {
                 Disconnected = providerEvent.Disconnected?.Clone(),
             }),
-            VoiceProviderEvent.EventOneofCase.AudioReceived => null,
             _ => null,
         };
     }
@@ -998,6 +955,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             key,
             _providerConfig,
             static (_, _, _) => Task.CompletedTask,
+            static (_, _, _) => Task.CompletedTask,
             ct);
         var effectiveSessionConfig = await BuildEffectiveSessionConfigAsync(ct);
         if (effectiveSessionConfig != null)
@@ -1006,13 +964,15 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         return session;
     }
 
-    private static VoiceProviderSessionKey BuildProviderSessionKey(VoicePresenceRuntimeState state) =>
+    private VoiceProviderSessionKey BuildProviderSessionKey(VoicePresenceRuntimeState state) =>
         new(
             state.ActiveSessionId ?? string.Empty,
             state.ActiveLeaseOwnerId ?? string.Empty,
             state.ActiveTransportLeaseId ?? string.Empty,
             state.LeaseEpoch,
-            state.LeaseExpiresAt?.Clone());
+            state.LeaseExpiresAt?.Clone(),
+            string.Empty,
+            Name);
 
     private async Task ExecuteToolCallAsync(
         VoiceFunctionCallRequested request,

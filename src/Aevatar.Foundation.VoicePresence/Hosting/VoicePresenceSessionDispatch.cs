@@ -90,9 +90,6 @@ internal static class VoicePresenceSessionDispatch
             case VoiceProviderEventReceived providerReceived:
                 signal.ProviderEventReceived = providerReceived.Clone();
                 break;
-            case VoiceTransportAudioFrameReceived audioReceived:
-                signal.TransportAudioFrameReceived = audioReceived.Clone();
-                break;
             default:
                 throw new InvalidOperationException(
                     $"Unsupported voice module signal payload '{message.GetType().Name}'.");

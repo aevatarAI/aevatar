@@ -118,12 +118,6 @@ message VoicePresenceSessionLeaseReleased {
   string reason = 2;
 }
 
-message VoiceAudioReceived {
-  bytes pcm16 = 1;
-  int32 sample_rate_hz = 2;
-  string provider_response_id = 3;
-}
-
 message VoiceResponseStarted {
   int32 response_id = 1;
   string provider_response_id = 2;
@@ -161,8 +155,10 @@ message VoiceProviderDisconnected {
 }
 
 message VoiceProviderEvent {
+  reserved 1;
+  reserved "audio_received";
+
   oneof event {
-    VoiceAudioReceived audio_received = 1;
     VoiceResponseStarted response_started = 2;
     VoiceResponseDone response_done = 3;
     VoiceResponseCancelled response_cancelled = 4;
@@ -247,16 +243,6 @@ message VoiceTransportControlFrameReceived {
   int64 lease_epoch = 6;
 }
 
-message VoiceTransportAudioFrameReceived {
-  string session_id = 1;
-  string transport_lease_id = 2;
-  bytes pcm16 = 3;
-  string owner_id = 4;
-  google.protobuf.Timestamp lease_expires_at = 5;
-  int32 sample_rate_hz = 6;
-  int64 lease_epoch = 7;
-}
-
 message VoiceTransportRelayStopped {
   string session_id = 1;
   string transport_lease_id = 2;
@@ -302,7 +288,9 @@ message VoiceRemoteTransportOutput {
 
 message VoiceModuleSignal {
   reserved 6;
+  reserved 15;
   reserved "remote_audio_input_received";
+  reserved "transport_audio_frame_received";
 
   string module_name = 1;
 
@@ -319,7 +307,6 @@ message VoiceModuleSignal {
     VoiceTransportControlFrameReceived transport_control_frame_received = 12;
     VoiceTransportRelayStopped transport_relay_stopped = 13;
     VoiceProviderEventReceived provider_event_received = 14;
-    VoiceTransportAudioFrameReceived transport_audio_frame_received = 15;
     VoiceTransportLifetimeCompleted transport_lifetime_completed = 16;
   }
 }

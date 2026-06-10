@@ -1,8 +1,8 @@
 namespace Aevatar.Foundation.VoicePresence.Abstractions;
 
 /// <summary>
-/// User-side voice transport. Implementations expose raw media frames; the owner
-/// module decides whether to forward them from its actor turn.
+/// User-side voice transport. Implementations expose raw media frames only to
+/// the volatile media relay; actor-facing paths carry control and lifecycle.
 /// </summary>
 public interface IVoiceTransport : IAsyncDisposable
 {

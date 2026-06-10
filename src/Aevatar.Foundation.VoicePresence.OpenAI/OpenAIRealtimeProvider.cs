@@ -55,15 +55,17 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         VoiceProviderSessionKey sessionKey,
         VoiceProviderConfig config,
         Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+        Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
         CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(eventSink);
+        ArgumentNullException.ThrowIfNull(audioSink);
         ValidateProviderConfig(config);
 
         var session = await _sessionFactory.StartConversationSessionAsync(config, _options.DefaultModel, ct);
-        var providerSession = new OpenAIRealtimeProviderSession(sessionKey, session, this, _logger, eventSink);
+        var providerSession = new OpenAIRealtimeProviderSession(sessionKey, session, this, _logger, eventSink, audioSink);
         providerSession.Start();
         return providerSession;
     }
@@ -80,7 +82,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
     private static string BuildInjectedEventText(VoiceConversationEventInjection injection) =>
         $"External event observed:\n{InjectionJsonFormatter.Format(injection)}";
 
-    private static VoiceProviderEvent? MapSessionEvent(OpenAIRealtimeSessionEvent sessionEvent, int sampleRateHz) =>
+    private static VoiceProviderEvent? MapSessionEvent(OpenAIRealtimeSessionEvent sessionEvent) =>
         sessionEvent switch
         {
             OpenAIRealtimeSpeechStartedEvent => new VoiceProviderEvent
@@ -110,15 +112,6 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                 ResponseDone = new VoiceResponseDone
                 {
                     ProviderResponseId = finished.ProviderResponseId,
-                },
-            },
-            OpenAIRealtimeOutputAudioDeltaEvent audio => new VoiceProviderEvent
-            {
-                AudioReceived = new VoiceAudioReceived
-                {
-                    Pcm16 = Google.Protobuf.ByteString.CopyFrom(audio.Pcm16),
-                    SampleRateHz = sampleRateHz,
-                    ProviderResponseId = audio.ProviderResponseId,
                 },
             },
             OpenAIRealtimeFunctionCallEvent functionCall => new VoiceProviderEvent
@@ -307,6 +300,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         private readonly OpenAIRealtimeProvider _connector;
         private readonly ILogger _logger;
         private readonly Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> _eventSink;
+        private readonly Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> _audioSink;
         private readonly CancellationTokenSource _physicalSessionCancellation = new();
         private Task? _receiveTask;
         private bool _disposed;
@@ -317,13 +311,15 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             IOpenAIRealtimeSession session,
             OpenAIRealtimeProvider connector,
             ILogger logger,
-            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink)
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink)
         {
             _callbackKey = sessionKey;
             _physicalSession = session;
             _connector = connector;
             _logger = logger;
             _eventSink = eventSink;
+            _audioSink = audioSink;
         }
 
         public void Start()
@@ -398,7 +394,16 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             {
                 await foreach (var sessionEvent in _physicalSession.ReceiveEventsAsync(ct).WithCancellation(ct))
                 {
-                    var providerEvent = MapSessionEvent(sessionEvent, _outputSampleRateHz);
+                    if (sessionEvent is OpenAIRealtimeOutputAudioDeltaEvent audio)
+                    {
+                        await EmitAudioAsync(new VoiceProviderAudioFrame(
+                            audio.Pcm16,
+                            _outputSampleRateHz,
+                            audio.ProviderResponseId), ct);
+                        continue;
+                    }
+
+                    var providerEvent = MapSessionEvent(sessionEvent);
                     if (providerEvent != null)
                         await EmitAsync(providerEvent, ct);
                 }
@@ -423,6 +428,18 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             {
                 _logger.LogWarning(ex, "OpenAI realtime provider callback failed for event {EventCase}.",
                     providerEvent.EventCase);
+            }
+        }
+
+        private async Task EmitAudioAsync(VoiceProviderAudioFrame audioFrame, CancellationToken ct)
+        {
+            try
+            {
+                await _audioSink(_callbackKey, audioFrame, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "OpenAI realtime provider audio callback failed.");
             }
         }
     }
