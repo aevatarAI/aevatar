@@ -10,6 +10,7 @@ import React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
+import { studioApi } from '@/shared/studio/api';
 import { createIdleInvokeResult } from './StudioMemberInvokePanel.currentRun';
 import StudioMemberInvokePanel from './StudioMemberInvokePanel';
 import StudioMemberInvokeHistoryPanel from './StudioMemberInvokeHistoryPanel';
@@ -637,6 +638,61 @@ describe('StudioMemberInvokePanel', () => {
         expect.any(AbortSignal),
         {
           teamId: 'team-1',
+        },
+      );
+    });
+  });
+
+  it('allows NyxID chat invokes without endpoint readiness contract', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({});
+    (studioApi.bindScopeGAgent as jest.Mock).mockResolvedValue({});
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'nyxid-chat',
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'NyxID Chat',
+            endpoints: [
+              {
+                description: 'Chat through NyxID.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'invoke',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'nyxid-chat',
+            namespace: 'default',
+            primaryActorId: 'actor-nyxid-chat',
+            serviceId: 'nyxid-chat',
+          },
+        ],
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText('Invocation request input'), {
+      target: {
+        value: 'Ask NyxID.',
+      },
+    });
+
+    expect(scopeRuntimeApi.getMemberEndpointContract).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeGAgent).toHaveBeenCalled();
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-1',
+        {
+          prompt: 'Ask NyxID.',
+        },
+        expect.any(AbortSignal),
+        {
+          serviceId: 'nyxid-chat',
         },
       );
     });

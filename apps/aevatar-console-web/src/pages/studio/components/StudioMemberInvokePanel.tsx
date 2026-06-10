@@ -478,7 +478,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(selectedService?.serviceId) ||
     t("pages.studio.studiomemberinvokepanel.current.members", "current members");
   const invocationReadiness = endpointContract?.invocationReadiness ?? null;
-  const invocationReady = invocationReadiness?.canInvoke === true;
+  const isNyxIdChatService = selectedService?.kind === 'nyxid-chat';
+  const invocationReady =
+    isNyxIdChatService || invocationReadiness?.canInvoke === true;
   const canInvoke = Boolean(
     scopeId &&
       normalizedMemberId &&
@@ -661,7 +663,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       !normalizedMemberId ||
       !endpointId ||
       !serviceId ||
-      selectedService?.kind === 'nyxid-chat'
+      isNyxIdChatService
     ) {
       setEndpointContract(null);
       return;
@@ -698,8 +700,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, [
     normalizedMemberId,
     scopeId,
+    isNyxIdChatService,
     selectedEndpoint?.endpointId,
-    selectedService?.kind,
     selectedService?.serviceId,
   ]);
 
