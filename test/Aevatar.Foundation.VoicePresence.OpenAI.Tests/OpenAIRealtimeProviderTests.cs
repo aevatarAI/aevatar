@@ -106,6 +106,49 @@ public class OpenAIRealtimeProviderTests
     }
 
     [Fact]
+    public async Task UpdateSession_should_use_session_turn_detection_policy()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+        var providerSession = await ConnectAsync(provider);
+
+        await providerSession.UpdateSessionAsync(new VoiceSessionConfig
+        {
+            Voice = "alloy",
+            SampleRateHz = 24000,
+            TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+            VadDetectionThreshold = 0.45f,
+            VadPrefixPaddingMs = 125,
+            VadSilenceDurationMs = 375,
+        }, CancellationToken.None);
+        await providerSession.UpdateSessionAsync(new VoiceSessionConfig
+        {
+            Voice = "alloy",
+            SampleRateHz = 24000,
+            TurnDetectionMode = VoiceTurnDetectionMode.Disabled,
+        }, CancellationToken.None);
+
+        using var serverVadDocument = JsonDocument.Parse(session.SessionUpdateEvents[0]);
+        var turnDetection = serverVadDocument.RootElement
+            .GetProperty("session")
+            .GetProperty("audio")
+            .GetProperty("input")
+            .GetProperty("turn_detection");
+        turnDetection.GetProperty("type").GetString().ShouldBe("server_vad");
+        turnDetection.GetProperty("threshold").GetSingle().ShouldBe(0.45f);
+        turnDetection.GetProperty("prefix_padding_ms").GetInt32().ShouldBe(125);
+        turnDetection.GetProperty("silence_duration_ms").GetInt32().ShouldBe(375);
+
+        using var disabledDocument = JsonDocument.Parse(session.SessionUpdateEvents[1]);
+        disabledDocument.RootElement
+            .GetProperty("session")
+            .GetProperty("audio")
+            .GetProperty("input")
+            .GetProperty("turn_detection")
+            .ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
+    [Fact]
     public async Task SendToolResult_should_add_function_output_and_request_followup_response()
     {
         var session = new FakeSession();

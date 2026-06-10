@@ -270,6 +270,7 @@ message InitializeRoleAgentEvent {
   double compression_threshold = 13;
   bool enable_summarization = 14;
   string role_id = 15;
+  map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 16;
   reserved 9;
   reserved "stream_buffer_capacity";
 }
@@ -337,6 +338,7 @@ message RoleGAgentState {
   PendingToolApprovalState pending_approval = 7;
   string role_id = 8;
   map<string, aevatar.voice.VoicePresenceRuntimeState> voice_presence = 9;
+  map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 10;
 }
 
 // ─── Multi-turn tool approval continuation ───

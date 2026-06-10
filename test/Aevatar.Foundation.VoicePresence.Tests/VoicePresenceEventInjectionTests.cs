@@ -393,6 +393,13 @@ public class VoicePresenceEventInjectionTests
             return false;
         }
 
+        public bool TryGetVoiceSessionDefaults(string moduleName, out VoiceSessionDefaults defaults)
+        {
+            _ = moduleName;
+            defaults = new VoiceSessionDefaults();
+            return false;
+        }
+
         public Task PersistVoicePresenceRuntimeStateAsync(
             string moduleName,
             VoicePresenceRuntimeState runtimeState,

@@ -258,15 +258,9 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
             "Aevatar.Mainnet.Host.Api",
             "ChatRouting",
             "ChatRoutePolicyAdminEndpoints.cs")));
-        var voiceSource = StripLineComments(File.ReadAllText(GetSourcePath(
-            "src",
-            "Aevatar.Mainnet.Host.Api",
-            "Voice",
-            "VoiceDemoBootstrapEndpoints.cs")));
-        var requestPathSource = adminSource + voiceSource;
 
-        requestPathSource.Should().NotContain("ChatRoutePolicyProjectionPort");
-        requestPathSource.Should().NotContain("EnsureProjectionForActorAsync");
+        adminSource.Should().NotContain("ChatRoutePolicyProjectionPort");
+        adminSource.Should().NotContain("EnsureProjectionForActorAsync");
     }
 
     [Fact]
@@ -277,17 +271,31 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
             "Aevatar.Mainnet.Host.Api",
             "ChatRouting",
             "ChatRoutePolicyAdminEndpoints.cs")));
-        var voiceSource = StripLineComments(File.ReadAllText(GetSourcePath(
+
+        adminSource.Should().NotContain("IActorRuntime");
+        adminSource.Should().NotContain("IActorDispatchPort");
+        adminSource.Should().NotContain("EventEnvelope");
+        adminSource.Should().NotContain("CreateDirect");
+    }
+
+    [Fact]
+    public void MainnetHost_ShouldNotKeepHardcodedVoiceDemoBootstrapSurface()
+    {
+        GetOptionalSourcePath("src", "Aevatar.Mainnet.Host.Api", "Voice", "VoiceDemoBootstrapEndpoints.cs")
+            .Should()
+            .BeNull();
+        GetOptionalSourcePath("src", "Aevatar.Mainnet.Host.Api", "wwwroot", "demo", "voice", "index.html")
+            .Should()
+            .BeNull();
+
+        var hostSource = File.ReadAllText(GetSourcePath(
             "src",
             "Aevatar.Mainnet.Host.Api",
-            "Voice",
-            "VoiceDemoBootstrapEndpoints.cs")));
-        var requestPathSource = adminSource + voiceSource;
-
-        requestPathSource.Should().NotContain("IActorRuntime");
-        requestPathSource.Should().NotContain("IActorDispatchPort");
-        requestPathSource.Should().NotContain("EventEnvelope");
-        requestPathSource.Should().NotContain("CreateDirect");
+            "Hosting",
+            "MainnetHostBuilderExtensions.cs"));
+        hostSource.Should().NotContain("MapVoiceDemoBootstrapEndpoints");
+        hostSource.Should().NotContain("/api/demo/voice/bootstrap");
+        hostSource.Should().NotContain("/demo/voice");
     }
 
     // ----- Test fixtures -------------------------------------------------------
@@ -343,17 +351,29 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
 
     private static string GetSourcePath(params string[] relativePath)
     {
+        var candidate = GetOptionalSourcePath(relativePath);
+        if (candidate is not null)
+            return candidate;
+
+        throw new FileNotFoundException($"Could not locate {Path.Combine(relativePath)} from test output directory.");
+    }
+
+    private static string? GetOptionalSourcePath(params string[] relativePath)
+    {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            var candidate = Path.Combine([directory.FullName, .. relativePath]);
-            if (File.Exists(candidate))
-                return candidate;
+            if (!File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+            {
+                directory = directory.Parent;
+                continue;
+            }
 
-            directory = directory.Parent;
+            var candidate = Path.Combine([directory.FullName, .. relativePath]);
+            return File.Exists(candidate) ? candidate : null;
         }
 
-        throw new FileNotFoundException($"Could not locate {Path.Combine(relativePath)} from test output directory.");
+        return null;
     }
 
     private sealed class RecordingChatRoutePolicyCommandPort : IChatRoutePolicyCommandPort

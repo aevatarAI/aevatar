@@ -1735,6 +1735,54 @@ public class VoicePresenceModuleTests
         provider.LastSession.ToolDefinitions.Select(static x => x.Name).ShouldContain("door.close");
     }
 
+    [Fact]
+    public async Task Session_lease_should_merge_module_agent_and_route_voice_defaults()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var agent = new RecordingRoleAgent("voice-agent");
+        agent.State.VoiceSessionDefaults[DefaultModuleName] = new VoiceSessionDefaults
+        {
+            Voice = "verse",
+            Instructions = "agent default",
+            SampleRateHz = 16000,
+            TurnDetectionMode = VoiceTurnDetectionMode.ClientVad,
+            VadDetectionThreshold = 0.35f,
+            VadPrefixPaddingMs = 111,
+            VadSilenceDurationMs = 222,
+        };
+        var ctx = new StubEventHandlerContext(agent: agent);
+
+        await module.InitializeAsync(CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            SessionLeaseRequested = new VoicePresenceSessionLeaseRequested
+            {
+                SessionId = "lease-1",
+                OwnerId = "voice-presence.host",
+                ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+                SessionOverrides = new VoiceSessionOverrides
+                {
+                    Instructions = "route override",
+                    SampleRateHz = 24000,
+                    TurnDetectionMode = VoiceTurnDetectionMode.Disabled,
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        var active = RoleVoiceState(ctx).ActiveSessionConfig;
+        active.ShouldNotBeNull();
+        active.Voice.ShouldBe("verse");
+        active.Instructions.ShouldBe("route override");
+        active.SampleRateHz.ShouldBe(24000);
+        active.TurnDetectionMode.ShouldBe(VoiceTurnDetectionMode.Disabled);
+        active.VadDetectionThreshold.ShouldBe(0.35f);
+        active.VadPrefixPaddingMs.ShouldBe(111);
+        active.VadSilenceDurationMs.ShouldBe(222);
+        RoleVoiceState(ctx).PcmSampleRateHz.ShouldBe(24000);
+    }
+
     private static VoicePresenceModule CreateModule(
         RecordingVoiceProvider provider,
         string? linkId = null,
@@ -2151,6 +2199,18 @@ public class VoicePresenceModuleTests
             return false;
         }
 
+        public bool TryGetVoiceSessionDefaults(string moduleName, out VoiceSessionDefaults defaults)
+        {
+            if (State.VoiceSessionDefaults.TryGetValue(moduleName, out var stored))
+            {
+                defaults = stored.Clone();
+                return true;
+            }
+
+            defaults = new VoiceSessionDefaults();
+            return false;
+        }
+
         public Task PersistVoicePresenceRuntimeStateAsync(
             string moduleName,
             VoicePresenceRuntimeState runtimeState,
@@ -2182,6 +2242,8 @@ public class VoicePresenceModuleTests
     private sealed class RecordingRoleState
     {
         public Dictionary<string, VoicePresenceRuntimeState> VoicePresence { get; } = [];
+
+        public Dictionary<string, VoiceSessionDefaults> VoiceSessionDefaults { get; } = [];
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider

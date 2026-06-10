@@ -22,6 +22,13 @@ enum VoiceRemoteAudioSupport {
   VOICE_REMOTE_AUDIO_SUPPORT_UNAVAILABLE = 3;
 }
 
+enum VoiceTurnDetectionMode {
+  VOICE_TURN_DETECTION_MODE_UNSPECIFIED = 0;
+  VOICE_TURN_DETECTION_MODE_SERVER_VAD = 1;
+  VOICE_TURN_DETECTION_MODE_CLIENT_VAD = 2;
+  VOICE_TURN_DETECTION_MODE_DISABLED = 3;
+}
+
 message VoiceProviderConfig {
   string provider_name = 1;
   string endpoint = 2;
@@ -35,6 +42,30 @@ message VoiceSessionConfig {
   int32 sample_rate_hz = 3;
   repeated string tool_names = 4;
   repeated VoiceToolDefinition tool_definitions = 5;
+  VoiceTurnDetectionMode turn_detection_mode = 6;
+  float vad_detection_threshold = 7;
+  int32 vad_prefix_padding_ms = 8;
+  int32 vad_silence_duration_ms = 9;
+}
+
+message VoiceSessionDefaults {
+  optional string voice = 1;
+  optional string instructions = 2;
+  optional int32 sample_rate_hz = 3;
+  optional VoiceTurnDetectionMode turn_detection_mode = 4;
+  optional float vad_detection_threshold = 5;
+  optional int32 vad_prefix_padding_ms = 6;
+  optional int32 vad_silence_duration_ms = 7;
+}
+
+message VoiceSessionOverrides {
+  optional string voice = 1;
+  optional string instructions = 2;
+  optional int32 sample_rate_hz = 3;
+  optional VoiceTurnDetectionMode turn_detection_mode = 4;
+  optional float vad_detection_threshold = 5;
+  optional int32 vad_prefix_padding_ms = 6;
+  optional int32 vad_silence_duration_ms = 7;
 }
 
 message VoiceToolDefinition {
@@ -91,6 +122,7 @@ message VoicePresenceRuntimeState {
   string active_lease_owner_id = 19;
   repeated VoicePresenceEventDedupeFenceEntry event_dedupe_fence = 20;
   int64 lease_epoch = 21;
+  VoiceSessionConfig active_session_config = 22;
 }
 
 message VoicePresenceRuntimeStateChangedEvent {
@@ -111,6 +143,7 @@ message VoicePresenceSessionLeaseRequested {
   string session_id = 1;
   string owner_id = 2;
   google.protobuf.Timestamp expires_at = 3;
+  VoiceSessionOverrides session_overrides = 4;
 }
 
 message VoicePresenceSessionLeaseReleased {

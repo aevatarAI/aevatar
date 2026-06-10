@@ -71,11 +71,6 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<ChannelWorkflowDraftRunInteractionPort>>(),
                 sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowChatRunInteractionPort>(),
                 sp.GetService<TimeProvider>()));
-        // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
-        //   Old pattern: Mainnet Host/API composed the voice demo agent bootstrap workflow directly.
-        //   New principle: NyxID chat owns the actor-targeted bootstrap command port; hosts only opt into the module.
-        services.TryAddSingleton<IVoiceDemoAgentCommandPort, VoiceDemoAgentCommandPort>();
-
         // ─── Conversation turn-runner override + reply generator ───
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());
         // The CardKit runner depends on Aevatar.AI.ToolProviders.Lark services. AddNyxIdChat()
@@ -103,8 +98,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
-        services.TryAddSingleton<IVoiceDemoAgentCommandPort, VoiceDemoAgentCommandPort>();
-
         // ─── LLM-call middleware that injects channel context into LLM requests ───
         // Lives here (not in Channel.Runtime) because it implements ILLMCallMiddleware
         // (AI.Abstractions); keeping it in NyxidChat lets Channel.Runtime stay free of
