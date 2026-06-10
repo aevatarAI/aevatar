@@ -12,6 +12,8 @@ public interface ILarkNyxClient
     Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct);
     Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct);
     Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct);
+    Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct) =>
+        throw new NotSupportedException("Lark approval instance lookup is not implemented by this client.");
     Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct);
     Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct);
     Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct);
@@ -84,6 +86,11 @@ public sealed record LarkApprovalTaskQueryRequest(
     string? Locale,
     int PageSize,
     string? PageToken,
+    string? UserIdType);
+
+public sealed record LarkApprovalInstanceGetRequest(
+    string InstanceCode,
+    string? Locale,
     string? UserIdType);
 
 public sealed record LarkApprovalTaskActionRequest(

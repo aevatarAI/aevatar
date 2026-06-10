@@ -1,0 +1,67 @@
+name: lark_approval_instance_wait
+description: Wait for a Lark approval instance to reach a terminal status by reusing typed tools and durable workflow primitives.
+steps:
+  - id: preserve_request
+    type: assign
+    parameters:
+      target: "lark_approval_wait_request"
+      value: "$input"
+    next: fetch_instance
+
+  - id: fetch_instance
+    type: tool_call
+    parameters:
+      tool: "lark_approvals_get"
+    next: extract_terminal_kind
+
+  - id: extract_terminal_kind
+    type: transform
+    parameters:
+      op: "json_extract"
+      path: "terminal_kind"
+    next: route_status
+
+  - id: route_status
+    type: switch
+    parameters:
+      on: ${input}
+    branches:
+      approved: finish_terminal
+      rejected: finish_terminal
+      canceled: finish_terminal
+      _default: restore_request_for_retry
+
+  - id: restore_request_for_retry
+    type: assign
+    parameters:
+      target: "lark_approval_wait_request"
+      value: ${lark_approval_wait_request}
+    next: wait_before_retry
+
+  - id: wait_before_retry
+    type: delay
+    parameters:
+      duration_ms: "60000"
+    next: retry_wait
+
+  - id: retry_wait
+    type: workflow_call
+    parameters:
+      workflow: "lark_approval_instance_wait"
+      lifecycle: "transient"
+    timeout_ms: 3600000
+    on_error:
+      strategy: fallback
+      fallback_step: finish_timeout
+
+  - id: finish_terminal
+    type: assign
+    parameters:
+      target: "lark_approval_result"
+      value: ${steps.fetch_instance.output}
+
+  - id: finish_timeout
+    type: assign
+    parameters:
+      target: "lark_approval_result"
+      value: "{\"success\":false,\"timed_out\":true,\"terminal\":false,\"terminal_kind\":\"timeout\"}"

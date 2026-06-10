@@ -318,6 +318,7 @@ steps:
 
 - 作用：调用已注册工具（函数/工具链/MCP 工具）。
 - 常用参数：`tool`。
+- 对外系统状态查询应优先做成只读 typed tool，再由 workflow 用 `tool_call` 编排；例如 Lark 审批实例状态使用 `lark_approvals_get` 返回 `status`、`status_raw`、`terminal`、`terminal_kind` 等控制流字段，workflow 不需要手拼 `nyxid_proxy` 路径。
 
 ```yaml
 steps:
@@ -466,6 +467,12 @@ steps:
       workflow: "shared_enrichment_pipeline"
       lifecycle: "singleton"
 ```
+
+#### 可复用等待模板
+
+长时间等待外部系统进入终态时，优先把“查询一次状态”建成只读 typed tool，再把“等待/重试/超时”建成普通 catalog workflow，通过 `workflow_call` 复用。模板本身只组合现有原语：`tool_call` 获取状态，`switch` 或 `guard` 判断终态，`delay` 做 durable 等待，下一轮用 `workflow_call` 继续，并在调用侧设置明确的 timeout budget。
+
+仓库内示例：`workflows/lark_approval_instance_wait.yaml`。调用方传入包含 `instance_code` 的 JSON 作为 input；`lark_approvals_get` 输出 `terminal=true` 且 `terminal_kind=approved/rejected/canceled` 时结束，非终态走 durable `delay` 后复用同一 workflow，超时输出 `timed_out=true`。不要为某个外部系统新增专用 polling service、专用 actor 或进程内状态表。
 
 ### `dynamic_workflow`
 

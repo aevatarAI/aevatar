@@ -1,6 +1,8 @@
 // ─── WorkflowDefinitionCatalog 测试 ───
 
 using Aevatar.Workflow.Application.Workflows;
+using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Validation;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -69,6 +71,52 @@ public class WorkflowDefinitionCatalogTests
         {
             Directory.Delete(tmpDir, true);
         }
+    }
+
+    [Fact]
+    public void FileLoader_LoadsLarkApprovalInstanceWaitTemplate()
+    {
+        var registry = new WorkflowDefinitionCatalog();
+        var loader = new WorkflowDefinitionFileLoader();
+        var repoRoot = FindRepoRoot();
+
+        var count = loader.LoadInto(
+            registry,
+            [Path.Combine(repoRoot, "workflows")],
+            NullLogger.Instance);
+
+        count.Should().BeGreaterThan(0);
+        var yaml = registry.GetYaml("lark_approval_instance_wait");
+        yaml.Should().NotBeNull();
+        yaml.Should().Contain("lark_approvals_get");
+        yaml.Should().Contain("workflow_call");
+        yaml.Should().Contain("duration_ms");
+
+        var workflow = new WorkflowParser().Parse(yaml!);
+        workflow.Name.Should().Be("lark_approval_instance_wait");
+        workflow.Steps.Should().Contain(step => step.Type == "assign" && step.Parameters["target"] == "lark_approval_wait_request");
+        workflow.Steps.Should().Contain(step => step.Type == "tool_call" && step.Parameters["tool"] == "lark_approvals_get");
+        workflow.Steps.Should().Contain(step => step.Id == "extract_terminal_kind" && step.Parameters["path"] == "terminal_kind");
+        workflow.Steps.Should().Contain(step => step.Type == "switch" && step.Parameters["on"] == "${input}");
+        workflow.Steps.Should().Contain(step => step.Id == "route_status" && step.Branches!["approved"] == "finish_terminal");
+        workflow.Steps.Should().Contain(step => step.Id == "route_status" && step.Branches!["_default"] == "restore_request_for_retry");
+        workflow.Steps.Should().Contain(step => step.Id == "restore_request_for_retry" && step.Parameters["value"] == "${lark_approval_wait_request}");
+        workflow.Steps.Should().Contain(step => step.Type == "workflow_call" && step.Parameters["workflow"] == "lark_approval_instance_wait");
+        workflow.Steps.Should().Contain(step => step.Type == "delay");
+        workflow.Steps.Should().Contain(step => step.Id == "finish_terminal" && step.Parameters["value"] == "${steps.fetch_instance.output}");
+
+        var availableWorkflows = registry.GetNames().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        WorkflowValidator.Validate(
+                workflow,
+                new WorkflowValidator.WorkflowValidationOptions
+                {
+                    RequireKnownStepTypes = true,
+                    KnownStepTypes = WorkflowPrimitiveCatalog.BuiltInCanonicalTypes.ToHashSet(StringComparer.OrdinalIgnoreCase),
+                    RequireResolvableWorkflowCallTargets = true,
+                },
+                availableWorkflows)
+            .Should()
+            .BeEmpty();
     }
 
     [Fact]
@@ -178,5 +226,22 @@ public class WorkflowDefinitionCatalogTests
         autoYaml.Should().Contain("id: classify_route");
         autoYaml.Should().Contain("next: route_intent");
         autoYaml.Should().NotContain("condition: \"```y\"");
+    }
+
+    private static string FindRepoRoot()
+    {
+        var directory = new DirectoryInfo(Directory.GetCurrentDirectory());
+        while (directory != null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")) &&
+                Directory.Exists(Path.Combine(directory.FullName, "workflows")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root for workflow catalog tests.");
     }
 }
