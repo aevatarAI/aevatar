@@ -81,11 +81,13 @@ public class VoicePresenceModuleFactoryTests
             VoiceProviderSessionKey sessionKey,
             VoiceProviderConfig config,
             Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
             CancellationToken ct)
         {
             _ = sessionKey;
             _ = config;
             _ = eventSink;
+            _ = audioSink;
             _ = ct;
             return Task.FromResult<RealtimeVoiceProviderSession>(new NoopProviderSession());
         }
@@ -93,6 +95,7 @@ public class VoicePresenceModuleFactoryTests
         private sealed class NoopProviderSession : RealtimeVoiceProviderSession
         {
             public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) => Task.CompletedTask;
+            public override Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct) => Task.CompletedTask;
             public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) => Task.CompletedTask;
             public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) => Task.CompletedTask;
             public override Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;

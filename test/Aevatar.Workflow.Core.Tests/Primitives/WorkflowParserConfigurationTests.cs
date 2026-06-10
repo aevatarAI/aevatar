@@ -91,6 +91,39 @@ public class WorkflowParserConfigurationTests
     }
 
     [Fact]
+    public void Parse_WhenRoleAndStepDeclareAllowedTools_ShouldBindTypedAgentToolScopes()
+    {
+        var yaml = """
+            name: tool_scope
+            roles:
+              - id: planner
+                allowed_tools: [search, calendar]
+            steps:
+              - id: scoped
+                type: llm_call
+                target_role: planner
+                allowed_tools: [calendar]
+                parameters:
+                  allowed_tools: [search]
+                  prompt_prefix: "Use scoped tool"
+              - id: no_tools
+                type: llm_call
+                target_role: planner
+                allowed_tools: []
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+
+        workflow.Roles.Should().ContainSingle().Subject.AgentToolScope.Should().NotBeNull();
+        workflow.Roles[0].AgentToolScope!.AllowedToolNames.Should().Equal("search", "calendar");
+        workflow.Steps[0].AgentToolScope.Should().NotBeNull();
+        workflow.Steps[0].AgentToolScope!.AllowedToolNames.Should().Equal("calendar");
+        workflow.Steps[0].Parameters.Should().NotContainKey("allowed_tools");
+        workflow.Steps[1].AgentToolScope.Should().NotBeNull();
+        workflow.Steps[1].AgentToolScope!.AllowedToolNames.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Parse_WhenRoleDefinesTopLevelAndExtensionsEventFields_ShouldPreferTopLevel()
     {
         var yaml = """

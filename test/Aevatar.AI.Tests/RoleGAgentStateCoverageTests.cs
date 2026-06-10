@@ -220,6 +220,38 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
+    public async Task VoicePresenceRuntimeStateOwner_ShouldReturnClonedSessionDefaults()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-voice-defaults");
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "voice role",
+            VoiceSessionDefaults =
+            {
+                ["voice_presence"] = new VoiceSessionDefaults
+                {
+                    Voice = "verse",
+                    Instructions = "be brief",
+                    SampleRateHz = 16000,
+                    TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+                },
+            },
+        });
+
+        agent.TryGetVoiceSessionDefaults("voice_presence", out var defaults).Should().BeTrue();
+        defaults.Voice.Should().Be("verse");
+        defaults.SampleRateHz.Should().Be(16000);
+
+        defaults.Voice = "mutated";
+
+        agent.State.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("verse");
+        agent.TryGetVoiceSessionDefaults("missing", out var missing).Should().BeFalse();
+        missing.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task HandleToolApprovalDecision_ShouldIgnoreMissingOrMismatchedPendingApproval()
     {
         using var provider = BuildServiceProvider();

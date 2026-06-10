@@ -102,6 +102,92 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
     }
 
     [Fact]
+    public async Task PutRule_StampsOwnerScopeAndDispatchesRuleCommandToScopeActor()
+    {
+        var commandPort = new RecordingChatRoutePolicyCommandPort();
+        await using var app = await CreateAppAsync(commandPort);
+        var client = app.GetTestClient();
+
+        var body = """
+        {
+          "owner_scope": { "nyx_user_id": "attacker" },
+          "default_target_if_uninitialized": {
+            "forward_to_model": { "model_name": "deepseek/deepseek-chat" }
+          },
+          "rule": {
+            "rule_id": "body-rule",
+            "priority": 100,
+            "match": { "source_kind": "CHAT_SOURCE_KIND_VOICE" },
+            "action": {
+              "forward_to_model": {
+                "tool_choice_hint": {
+                  "voice_attach_target": {
+                    "actor_id": "voice-agent",
+                    "voice_module_name": "voice_presence_openai"
+                  }
+                }
+              }
+            },
+            "description": "voice route"
+          }
+        }
+        """;
+        using var request = new HttpRequestMessage(
+            HttpMethod.Put,
+            $"/api/scopes/{Scope}/chat-route-policy/rules/voice-demo")
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
+        commandPort.Upserts.Should().BeEmpty();
+        commandPort.RuleUpserts.Should().ContainSingle();
+        var (acceptedScope, command) = commandPort.RuleUpserts[0];
+        acceptedScope.Should().Be(Scope);
+        command.OwnerScope.NyxUserId.Should().Be(Scope);
+        command.OwnerScope.Platform.Should().Be(OwnerScope.NyxIdPlatform);
+        command.DefaultTargetIfUninitialized.ForwardToModel.ModelName.Should().Be("deepseek/deepseek-chat");
+        command.Rule.RuleId.Should().Be("voice-demo",
+            "the path rule id is the command identity; body rule_id must not target a different rule");
+        command.Rule.Match.SourceKind.Should().Be(ChatSourceKind.Voice);
+        command.Rule.Action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.ActorId.Should().Be("voice-agent");
+    }
+
+    [Theory]
+    [InlineData("%20%20", "{\"rule\": {\"action\": {\"forward_to_model\": {\"model_name\": \"model\"}}}}", "rule_id_required")]
+    [InlineData("voice-demo", "", "empty_body")]
+    [InlineData("voice-demo", "{", "invalid_body")]
+    [InlineData("voice-demo", "{}", "rule_required")]
+    public async Task PutRule_RejectsInvalidRequestWithoutDispatch(
+        string routeRuleId,
+        string bodyJson,
+        string expectedError)
+    {
+        var commandPort = new RecordingChatRoutePolicyCommandPort();
+        await using var app = await CreateAppAsync(commandPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Put,
+            $"/api/scopes/{Scope}/chat-route-policy/rules/{routeRuleId}")
+        {
+            Content = new StringContent(bodyJson, Encoding.UTF8, "application/json"),
+        };
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        body.Should().Contain(expectedError);
+        commandPort.RuleUpserts.Should().BeEmpty(
+            "REST validation must reject malformed rule upserts before admitting an actor command");
+        commandPort.Upserts.Should().BeEmpty();
+        commandPort.Removals.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task DeleteRule_DispatchesRemoveCommandWithTrimmedRuleId()
     {
         var commandPort = new RecordingChatRoutePolicyCommandPort();
@@ -172,15 +258,9 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
             "Aevatar.Mainnet.Host.Api",
             "ChatRouting",
             "ChatRoutePolicyAdminEndpoints.cs")));
-        var voiceSource = StripLineComments(File.ReadAllText(GetSourcePath(
-            "src",
-            "Aevatar.Mainnet.Host.Api",
-            "Voice",
-            "VoiceDemoBootstrapEndpoints.cs")));
-        var requestPathSource = adminSource + voiceSource;
 
-        requestPathSource.Should().NotContain("ChatRoutePolicyProjectionPort");
-        requestPathSource.Should().NotContain("EnsureProjectionForActorAsync");
+        adminSource.Should().NotContain("ChatRoutePolicyProjectionPort");
+        adminSource.Should().NotContain("EnsureProjectionForActorAsync");
     }
 
     [Fact]
@@ -191,17 +271,31 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
             "Aevatar.Mainnet.Host.Api",
             "ChatRouting",
             "ChatRoutePolicyAdminEndpoints.cs")));
-        var voiceSource = StripLineComments(File.ReadAllText(GetSourcePath(
+
+        adminSource.Should().NotContain("IActorRuntime");
+        adminSource.Should().NotContain("IActorDispatchPort");
+        adminSource.Should().NotContain("EventEnvelope");
+        adminSource.Should().NotContain("CreateDirect");
+    }
+
+    [Fact]
+    public void MainnetHost_ShouldNotKeepHardcodedVoiceDemoBootstrapSurface()
+    {
+        GetOptionalSourcePath("src", "Aevatar.Mainnet.Host.Api", "Voice", "VoiceDemoBootstrapEndpoints.cs")
+            .Should()
+            .BeNull();
+        GetOptionalSourcePath("src", "Aevatar.Mainnet.Host.Api", "wwwroot", "demo", "voice", "index.html")
+            .Should()
+            .BeNull();
+
+        var hostSource = File.ReadAllText(GetSourcePath(
             "src",
             "Aevatar.Mainnet.Host.Api",
-            "Voice",
-            "VoiceDemoBootstrapEndpoints.cs")));
-        var requestPathSource = adminSource + voiceSource;
-
-        requestPathSource.Should().NotContain("IActorRuntime");
-        requestPathSource.Should().NotContain("IActorDispatchPort");
-        requestPathSource.Should().NotContain("EventEnvelope");
-        requestPathSource.Should().NotContain("CreateDirect");
+            "Hosting",
+            "MainnetHostBuilderExtensions.cs"));
+        hostSource.Should().NotContain("MapVoiceDemoBootstrapEndpoints");
+        hostSource.Should().NotContain("/api/demo/voice/bootstrap");
+        hostSource.Should().NotContain("/demo/voice");
     }
 
     // ----- Test fixtures -------------------------------------------------------
@@ -257,22 +351,35 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
 
     private static string GetSourcePath(params string[] relativePath)
     {
+        var candidate = GetOptionalSourcePath(relativePath);
+        if (candidate is not null)
+            return candidate;
+
+        throw new FileNotFoundException($"Could not locate {Path.Combine(relativePath)} from test output directory.");
+    }
+
+    private static string? GetOptionalSourcePath(params string[] relativePath)
+    {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            var candidate = Path.Combine([directory.FullName, .. relativePath]);
-            if (File.Exists(candidate))
-                return candidate;
+            if (!File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+            {
+                directory = directory.Parent;
+                continue;
+            }
 
-            directory = directory.Parent;
+            var candidate = Path.Combine([directory.FullName, .. relativePath]);
+            return File.Exists(candidate) ? candidate : null;
         }
 
-        throw new FileNotFoundException($"Could not locate {Path.Combine(relativePath)} from test output directory.");
+        return null;
     }
 
     private sealed class RecordingChatRoutePolicyCommandPort : IChatRoutePolicyCommandPort
     {
         public List<(string ScopeId, UpsertChatRoutePolicyRequested Command)> Upserts { get; } = [];
+        public List<(string ScopeId, UpsertChatRouteRuleRequested Command)> RuleUpserts { get; } = [];
         public List<(string ScopeId, RemoveChatRouteRuleRequested Command)> Removals { get; } = [];
 
         public Task<ChatRoutePolicyCommandAcceptedReceipt> UpsertAsync(
@@ -285,6 +392,18 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
                 $"chat-route-policy:{scopeId}",
                 "accepted-upsert",
                 "accepted-upsert"));
+        }
+
+        public Task<ChatRoutePolicyCommandAcceptedReceipt> UpsertRuleAsync(
+            string scopeId,
+            UpsertChatRouteRuleRequested command,
+            CancellationToken ct = default)
+        {
+            RuleUpserts.Add((scopeId, command.Clone()));
+            return Task.FromResult(new ChatRoutePolicyCommandAcceptedReceipt(
+                $"chat-route-policy:{scopeId}",
+                "accepted-rule-upsert",
+                "accepted-rule-upsert"));
         }
 
         public Task<ChatRoutePolicyCommandAcceptedReceipt> RemoveRuleAsync(

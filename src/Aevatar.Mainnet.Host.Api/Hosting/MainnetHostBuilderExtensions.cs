@@ -16,6 +16,7 @@ using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
+using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -38,6 +39,7 @@ using Aevatar.GAgents.StatusDashboard.DependencyInjection;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
@@ -64,6 +66,8 @@ public static class MainnetHostBuilderExtensions
     internal const int ContainerHttpPort = 8080;
     internal const string ContainerListenUrl = "http://+:8080";
     internal const string LocalDevelopmentListenUrl = "http://127.0.0.1:5080";
+    private const string DeviceInboundDirectExternalEventTypeUrl =
+        "type.googleapis.com/aevatar.gagents.household.DeviceInbound";
 
     public static WebApplicationBuilder AddAevatarMainnetHost(
         this WebApplicationBuilder builder,
@@ -111,6 +115,7 @@ public static class MainnetHostBuilderExtensions
         builder.AddAevatarPlatform(options =>
         {
             options.EnableMakerExtensions = true;
+            options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
@@ -313,10 +318,6 @@ public static class MainnetHostBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(app);
 
-        // Static files (demo wwwroot) must run before the auth fallback policy so the
-        // voice demo HTML/JS is reachable without a NyxID JWT — the bootstrap POST and
-        // /ws/voice still enforce their own auth. UseDefaultFiles rewrites /demo/voice/
-        // to /demo/voice/index.html before UseStaticFiles serves it.
         app.UseDefaultFiles();
         app.UseStaticFiles();
         app.UseAevatarDefaultHost();
@@ -330,7 +331,6 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();
-        app.MapVoiceDemoBootstrapEndpoints();
         app.MapPolicyAwareVoiceEndpoint();
         app.MapStatusEndpoints();
         app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
@@ -389,5 +389,41 @@ public static class MainnetHostBuilderExtensions
         var value = Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER");
         return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(value, "1", StringComparison.Ordinal);
+    }
+
+    private static void ConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
+    {
+        if (!options.VoicePresence.Module.DirectExternalEventTypeUrls.Contains(
+                DeviceInboundDirectExternalEventTypeUrl,
+                StringComparer.Ordinal))
+        {
+            options.VoicePresence.Module = CloneVoicePresenceModuleOptionsWithDirectEventType(
+                options.VoicePresence.Module,
+                DeviceInboundDirectExternalEventTypeUrl);
+        }
+    }
+
+    private static VoicePresenceModuleOptions CloneVoicePresenceModuleOptionsWithDirectEventType(
+        VoicePresenceModuleOptions options,
+        string typeUrl)
+    {
+        var directEventTypeUrls = options.DirectExternalEventTypeUrls
+            .Append(typeUrl)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        return new VoicePresenceModuleOptions
+        {
+            Name = options.Name,
+            Priority = options.Priority,
+            LinkId = options.LinkId,
+            StaleAfter = options.StaleAfter,
+            DedupeWindow = options.DedupeWindow,
+            ToolExecutionTimeout = options.ToolExecutionTimeout,
+            PendingInjectionCapacity = options.PendingInjectionCapacity,
+            TimeProvider = options.TimeProvider,
+            DirectExternalEventTypeUrls = directEventTypeUrls,
+            DirectExternalEventNoActiveSessionPolicy = options.DirectExternalEventNoActiveSessionPolicy,
+        };
     }
 }

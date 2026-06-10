@@ -103,7 +103,8 @@ public static class PolicyAwareVoiceEndpoints
             new VoiceRealtimeSessionRequest(
                 voiceTarget.ActorId.Trim(),
                 NormalizeOptional(voiceTarget.VoiceModuleName),
-                VoiceRealtimeSessionPurpose.Attach),
+                VoiceRealtimeSessionPurpose.Attach,
+                voiceTarget.SessionOverrides?.Clone()),
             static (_, _) => ValueTask.CompletedTask,
             ct: http.RequestAborted);
 
@@ -220,9 +221,7 @@ public static class PolicyAwareVoiceEndpoints
         var voice = new VoiceInput
         {
             Codec = ParseEnum(http.Request.Query["codec"].ToString(), VoiceCodec.Pcm16),
-            SampleRateHz = ParseInt(http.Request.Query["sample_rate_hz"].ToString()),
             Mode = ParseEnum(http.Request.Query["mode"].ToString(), VoiceConversationMode.Unspecified),
-            VadMode = ParseEnum(http.Request.Query["vad_mode"].ToString(), VadMode.Unspecified),
             VoiceModuleName = NormalizeOptional(http.Request.Query["voice_module_name"].ToString())
                               ?? NormalizeOptional(http.Request.Query["module"].ToString())
                               ?? string.Empty,
@@ -318,9 +317,6 @@ public static class PolicyAwareVoiceEndpoints
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
-
-    private static int ParseInt(string value) =>
-        int.TryParse(value, out var parsed) && parsed > 0 ? parsed : 0;
 
     private static TEnum ParseEnum<TEnum>(string value, TEnum fallback)
         where TEnum : struct, Enum
