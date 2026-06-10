@@ -22,5 +22,6 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="StackExchange.Redis" />
+    <PackageReference Include="UglyToad.PdfPig" />
   </ItemGroup>
 </Project>

@@ -43,8 +43,15 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Text;
+using System.Text.Json;
+using Aevatar.Workflow.Core.Modules;
+using UglyToad.PdfPig.Core;
+using UglyToad.PdfPig.Fonts.Standard14Fonts;
+using UglyToad.PdfPig.Content;
+using UglyToad.PdfPig.Writer;
 using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
 using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ProtoWorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -52,7 +59,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowInfrastructureCoverageTests
 {
     [Fact]
-    public void AddWorkflowInfrastructure_ShouldReplaceReportSink_AndRegisterPorts()
+    public async Task AddWorkflowInfrastructure_ShouldReplaceReportSink_AndRegisterPorts()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -75,6 +82,14 @@ public sealed class WorkflowInfrastructureCoverageTests
             .Should().BeOfType<FileSystemWorkflowFileIngressPort>();
         provider.GetRequiredService<IWorkflowFileArtifactReadPort>()
             .Should().BeSameAs(provider.GetRequiredService<IWorkflowFileIngressPort>());
+        var toolNames = new List<string>();
+        foreach (var toolSource in provider.GetServices<IWorkflowToolSource>())
+        {
+            var tools = await toolSource.GetToolsAsync();
+            toolNames.AddRange(tools.Select(x => x.Name));
+        }
+
+        toolNames.Should().Contain("document_extract");
         services.Should().Contain(x =>
             x.ServiceType == typeof(WorkflowRunActorPort) &&
             x.ImplementationType == typeof(WorkflowRunActorPort));
@@ -493,6 +508,216 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldExtractUtf8TextFromStoredFile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-text-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                Encoding.UTF8.GetBytes("invoice total: 42"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "invoice.txt",
+                MediaType: "text/plain; charset=utf-8"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildDocumentExtractArguments(result.FileRef),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            var rootElement = document.RootElement;
+            rootElement.GetProperty("extraction_kind").GetString().Should().Be("utf8_text");
+            rootElement.GetProperty("media_type").GetString().Should().Be("text/plain");
+            rootElement.GetProperty("text").GetString().Should().Be("invoice total: 42");
+            rootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
+            rootElement.GetProperty("extracted_chars").GetInt32().Should().Be(17);
+            rootElement.GetProperty("file").GetProperty("file_id").GetString().Should().Be(result.FileRef.FileId);
+            rootElement.GetProperty("file").GetProperty("sha256").GetString().Should().Be(result.FileRef.Sha256);
+            output.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+            output.ResultJson.Contains("data_base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldTruncateTextAtRequestedLimit()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-truncate-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                Encoding.UTF8.GetBytes("abcdef"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "long.txt",
+                MediaType: "text/plain"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildDocumentExtractArguments(result.FileRef, maxChars: 3),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("text").GetString().Should().Be("abc");
+            document.RootElement.GetProperty("truncated").GetBoolean().Should().BeTrue();
+            document.RootElement.GetProperty("extracted_chars").GetInt32().Should().Be(3);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldExtractPdfTextFromStoredFile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-pdf-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var pdfBytes = BuildSimplePdf("pdf invoice total 42");
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                pdfBytes,
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "invoice.pdf",
+                MediaType: "application/pdf"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildDocumentExtractArguments(result.FileRef),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("extraction_kind").GetString().Should().Be("pdf_text");
+            document.RootElement.GetProperty("media_type").GetString().Should().Be("application/pdf");
+            document.RootElement.GetProperty("text").GetString().Should().Contain("pdf invoice total 42");
+            document.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
+            output.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldRejectUnsupportedMediaType()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-unsupported-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                new byte[] { 1, 2, 3 },
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "image.png",
+                MediaType: "image/png"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildDocumentExtractArguments(result.FileRef),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("unsupported_media_type");
+            document.RootElement.GetProperty("detail").GetString().Should().Contain("image/png");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldRejectMalformedArguments()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-arguments-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var tool = await GetDocumentExtractToolAsync(CreateFileArtifactPort(root));
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                """{"file_ref":{}}""",
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+            document.RootElement.GetProperty("detail").GetString().Should().Contain("fileId or artifactId");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldRejectInvalidUtf8()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-utf8-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                new byte[] { 0xC3, 0x28 },
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "bad.txt",
+                MediaType: "text/plain"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildDocumentExtractArguments(result.FileRef),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("invalid_text_encoding");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void AddWorkflowCapabilityServices_ShouldSetFileSourceDuplicatePolicyToOverride()
     {
         var services = new ServiceCollection();
@@ -808,6 +1033,54 @@ public sealed class WorkflowInfrastructureCoverageTests
         var act = async () => await provider.GetCapabilitiesAsync(cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    private static FileSystemWorkflowFileIngressPort CreateFileArtifactPort(string root) =>
+        new(Options.Create(new FileSystemWorkflowFileIngressOptions
+        {
+            RootDirectory = root,
+            TimeToLive = TimeSpan.FromMinutes(30),
+        }));
+
+    private static async Task<IWorkflowTool> GetDocumentExtractToolAsync(IWorkflowFileArtifactReadPort readPort)
+    {
+        var source = new WorkflowDocumentExtractToolSource(readPort);
+        var tools = await source.GetToolsAsync();
+        return tools.Should().ContainSingle(x => x.Name == "document_extract").Subject;
+    }
+
+    private static string BuildDocumentExtractArguments(ApplicationWorkflowFileRef fileRef, int? maxChars = null)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["file_ref"] = new Dictionary<string, object?>
+            {
+                ["file_id"] = fileRef.FileId,
+                ["artifact_id"] = fileRef.ArtifactId,
+                ["source_kind"] = fileRef.SourceKind.ToString(),
+                ["source_message_id"] = fileRef.SourceMessageId,
+                ["source_resource_key"] = fileRef.SourceResourceKey,
+                ["file_name"] = fileRef.FileName,
+                ["media_type"] = fileRef.MediaType,
+                ["size_bytes"] = fileRef.SizeBytes,
+                ["sha256"] = fileRef.Sha256,
+                ["created_at_unix_ms"] = fileRef.CreatedAtUnixMs,
+                ["expires_at_unix_ms"] = fileRef.ExpiresAtUnixMs,
+            },
+        };
+        if (maxChars != null)
+            payload["max_chars"] = maxChars.Value;
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private static byte[] BuildSimplePdf(string text)
+    {
+        var builder = new PdfDocumentBuilder();
+        var page = builder.AddPage(PageSize.A4);
+        var font = builder.AddStandard14Font(Standard14Font.Helvetica);
+        page.AddText(text, 12, new PdfPoint(50, 750), font);
+        return builder.Build();
     }
 
     private sealed class FakeReportExporter : IWorkflowRunReportExportPort
