@@ -32,33 +32,13 @@ public sealed class VoiceDemoBootstrapEndpointsTests
     {
         var voiceDemoCommandPort = new RecordingVoiceDemoAgentCommandPort();
         var catalogCommandPort = new RecordingCatalogCommandPort();
-        var existing = new ChatRoutePolicySnapshot(
-            new ChatRouteAction { ForwardToModel = new ForwardToModel { ModelName = "existing-default" } },
-            [
-                new ChatRouteRule
-                {
-                    RuleId = "keep-chat",
-                    Priority = 10,
-                    Match = new ChatRouteMatch { SourceKind = ChatSourceKind.NyxResponses },
-                    Action = new ChatRouteAction { ForwardToModel = new ForwardToModel { ModelName = "kept-model" } },
-                    Description = "preserve non-voice-demo rule",
-                },
-                new ChatRouteRule
-                {
-                    RuleId = "voice-demo",
-                    Priority = 900,
-                    Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
-                    Action = TypedVoiceAttachTarget("old-agent", "voice_presence_openai"),
-                    Description = "remove stale voice demo rule",
-                },
-            ]);
-        var routePolicyQueryPort = new StaticRoutePolicyQueryPort(existing);
         var routePolicyCommandPort = new RecordingChatRoutePolicyCommandPort();
+        var fallbackProvider = new StaticChatRouteFallbackProvider("fallback-model");
         await using var app = await CreateAppAsync(
             voiceDemoCommandPort,
             catalogCommandPort,
             routePolicyCommandPort,
-            routePolicyQueryPort);
+            fallbackProvider);
         var client = app.GetTestClient();
 
         var response = await client.PostAsync("/api/demo/voice/bootstrap", content: null);
@@ -78,39 +58,41 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         demoActorId.Should().Be(RecordingVoiceDemoAgentCommandPort.DemoActorId);
         body["route_policy_actor_id"].ToString().Should().Be($"chat-route-policy:{Scope}");
         body["agent_command_id"].ToString().Should().Be("voice-demo-command");
-        body["route_policy_command_id"].ToString().Should().Be("route-policy-command");
+        body["route_policy_command_id"].ToString().Should().Be("route-policy-rule-command");
 
         voiceDemoCommandPort.Commands.Should().ContainSingle()
             .Which.Should().Be((Scope, "voice_presence_openai"));
         catalogCommandPort.Commands.Should().ContainSingle()
             .Which.AgentId.Should().Be(demoActorId);
 
-        routePolicyCommandPort.Upserts.Should().ContainSingle();
-        var (policyScope, command) = routePolicyCommandPort.Upserts[0];
+        routePolicyCommandPort.Upserts.Should().BeEmpty();
+        routePolicyCommandPort.RuleUpserts.Should().ContainSingle();
+        var (policyScope, command) = routePolicyCommandPort.RuleUpserts[0];
         policyScope.Should().Be(Scope);
         command.OwnerScope.NyxUserId.Should().Be(Scope);
         command.OwnerScope.Platform.Should().Be(RoutingOwnerScope.NyxIdPlatform);
-        command.DefaultTarget.ForwardToModel.ModelName.Should().Be("existing-default");
-        command.Rules.Should().ContainSingle(rule => rule.RuleId == "keep-chat")
-            .Which.Action.ForwardToModel.ModelName.Should().Be("kept-model");
-        var voiceRule = command.Rules.Should().ContainSingle(rule => rule.RuleId == "voice-demo").Subject;
+        command.DefaultTargetIfUninitialized.ForwardToModel.ModelName.Should().Be("fallback-model");
+        var voiceRule = command.Rule;
+        voiceRule.RuleId.Should().Be("voice-demo");
+        voiceRule.Priority.Should().Be(900);
+        voiceRule.Match.SourceKind.Should().Be(ChatSourceKind.Voice);
         voiceRule.Action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.ActorId.Should().Be(demoActorId);
         voiceRule.Action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.VoiceModuleName.Should().Be("voice_presence_openai");
         voiceRule.Action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Should().BeNull();
     }
 
     [Fact]
-    public async Task Bootstrap_DoesNotCreateRoutePolicy_WhenNoExistingPolicyExists()
+    public async Task Bootstrap_UpsertsVoiceRuleWithoutReadingRoutePolicySnapshot()
     {
         var voiceDemoCommandPort = new RecordingVoiceDemoAgentCommandPort();
         var catalogCommandPort = new RecordingCatalogCommandPort();
-        var routePolicyQueryPort = new StaticRoutePolicyQueryPort(null);
         var routePolicyCommandPort = new RecordingChatRoutePolicyCommandPort();
+        var fallbackProvider = new StaticChatRouteFallbackProvider("cold-start-model");
         await using var app = await CreateAppAsync(
             voiceDemoCommandPort,
             catalogCommandPort,
             routePolicyCommandPort,
-            routePolicyQueryPort);
+            fallbackProvider);
         var client = app.GetTestClient();
 
         var response = await client.PostAsync("/api/demo/voice/bootstrap", content: null);
@@ -122,18 +104,20 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         catalogCommandPort.Commands.Should().ContainSingle()
             .Which.AgentId.Should().Be(RecordingVoiceDemoAgentCommandPort.DemoActorId);
         routePolicyCommandPort.Upserts.Should().BeEmpty();
-        body.Should().ContainKey("route_policy_actor_id").WhoseValue.Should().BeNull();
-        body.Should().ContainKey("route_policy_command_id").WhoseValue.Should().BeNull();
+        routePolicyCommandPort.RuleUpserts.Should().ContainSingle();
+        routePolicyCommandPort.RuleUpserts[0].Command
+            .DefaultTargetIfUninitialized.ForwardToModel.ModelName.Should().Be("cold-start-model");
+        body.Should().ContainKey("route_policy_actor_id")
+            .WhoseValue!.ToString().Should().Be($"chat-route-policy:{Scope}");
+        body.Should().ContainKey("route_policy_command_id")
+            .WhoseValue!.ToString().Should().Be("route-policy-rule-command");
     }
-
-    private static ChatRouteAction TypedVoiceAttachTarget(string actorId, string voiceModuleName) =>
-        ChatRouteActionTargets.ForwardToVoiceAttachTarget(actorId, voiceModuleName);
 
     private static async Task<WebApplication> CreateAppAsync(
         RecordingVoiceDemoAgentCommandPort voiceDemoCommandPort,
         RecordingCatalogCommandPort catalogCommandPort,
         RecordingChatRoutePolicyCommandPort routePolicyCommandPort,
-        StaticRoutePolicyQueryPort routePolicyQueryPort)
+        IChatRouteFallbackProvider fallbackProvider)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -143,7 +127,7 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         builder.Services.AddSingleton<IVoiceDemoAgentCommandPort>(voiceDemoCommandPort);
         builder.Services.AddSingleton<IUserAgentCatalogCommandPort>(catalogCommandPort);
         builder.Services.AddSingleton<IChatRoutePolicyCommandPort>(routePolicyCommandPort);
-        builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(routePolicyQueryPort);
+        builder.Services.AddSingleton(fallbackProvider);
 
         var app = builder.Build();
         app.Use(async (context, next) =>
@@ -180,6 +164,7 @@ public sealed class VoiceDemoBootstrapEndpointsTests
     private sealed class RecordingChatRoutePolicyCommandPort : IChatRoutePolicyCommandPort
     {
         public List<(string ScopeId, UpsertChatRoutePolicyRequested Command)> Upserts { get; } = [];
+        public List<(string ScopeId, UpsertChatRouteRuleRequested Command)> RuleUpserts { get; } = [];
 
         public Task<ChatRoutePolicyCommandAcceptedReceipt> UpsertAsync(
             string scopeId,
@@ -191,6 +176,18 @@ public sealed class VoiceDemoBootstrapEndpointsTests
                 $"chat-route-policy:{scopeId}",
                 "route-policy-command",
                 "route-policy-command"));
+        }
+
+        public Task<ChatRoutePolicyCommandAcceptedReceipt> UpsertRuleAsync(
+            string scopeId,
+            UpsertChatRouteRuleRequested command,
+            CancellationToken ct = default)
+        {
+            RuleUpserts.Add((scopeId, command.Clone()));
+            return Task.FromResult(new ChatRoutePolicyCommandAcceptedReceipt(
+                $"chat-route-policy:{scopeId}",
+                "route-policy-rule-command",
+                "route-policy-rule-command"));
         }
 
         public Task<ChatRoutePolicyCommandAcceptedReceipt> RemoveRuleAsync(
@@ -216,11 +213,15 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         public Task TombstoneAsync(string agentId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class StaticRoutePolicyQueryPort(ChatRoutePolicySnapshot? snapshot) : IChatRoutePolicyQueryPort
+    private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
     {
-        public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(
-            RoutingOwnerScope callerScope,
-            CancellationToken ct = default) =>
-            Task.FromResult(snapshot);
+        public ChatRouteDecision GetFallbackDecision() => new()
+        {
+            Action = new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel { ModelName = modelName },
+            },
+            UsedFallback = true,
+        };
     }
 }

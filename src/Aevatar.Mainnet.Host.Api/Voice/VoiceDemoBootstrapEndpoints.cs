@@ -33,7 +33,7 @@ internal static class VoiceDemoBootstrapEndpoints
         [FromServices] IVoiceDemoAgentCommandPort voiceDemoAgentCommandPort,
         [FromServices] IUserAgentCatalogCommandPort catalogCommandPort,
         [FromServices] IChatRoutePolicyCommandPort routePolicyCommandPort,
-        [FromServices] IChatRoutePolicyQueryPort routePolicyQueryPort,
+        [FromServices] IChatRouteFallbackProvider fallbackProvider,
         CancellationToken ct)
     {
         // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
@@ -64,7 +64,7 @@ internal static class VoiceDemoBootstrapEndpoints
             ownerScope,
             actorId,
             routePolicyCommandPort,
-            routePolicyQueryPort,
+            fallbackProvider,
             ct);
 
         return Results.Accepted(value: new
@@ -87,41 +87,26 @@ internal static class VoiceDemoBootstrapEndpoints
         OwnerScope ownerScope,
         string actorId,
         IChatRoutePolicyCommandPort routePolicyCommandPort,
-        IChatRoutePolicyQueryPort routePolicyQueryPort,
+        IChatRouteFallbackProvider fallbackProvider,
         CancellationToken ct)
     {
-        var existing = await routePolicyQueryPort.LookupForCallerAsync(ownerScope, ct);
-        if (existing is null)
-            return null;
-
-        var keptRules = existing.Rules
-            .Where(static rule => !string.Equals(rule.RuleId, RouteRuleId, StringComparison.Ordinal))
-            .Select(static rule => rule.Clone())
-            .ToArray();
-
-        var command = new UpsertChatRoutePolicyRequested
+        var command = new UpsertChatRouteRuleRequested
         {
-            OwnerScope = new OwnerScope
+            OwnerScope = ownerScope.Clone(),
+            DefaultTargetIfUninitialized = fallbackProvider.GetFallbackDecision().Action?.Clone(),
+            Rule = new ChatRouteRule
             {
-                NyxUserId = scopeId,
-                Platform = OwnerScope.NyxIdPlatform,
+                RuleId = RouteRuleId,
+                Priority = 900,
+                Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
+                Action = ChatRouteActionTargets.ForwardToVoiceAttachTarget(
+                    actorId,
+                    VoiceModuleName),
+                Description = "Voice demo typed attach target.",
             },
-            DefaultTarget = existing.DefaultTarget.Clone(),
         };
 
-        command.Rules.AddRange(keptRules);
-        command.Rules.Add(new ChatRouteRule
-        {
-            RuleId = RouteRuleId,
-            Priority = 900,
-            Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
-            Action = ChatRouteActionTargets.ForwardToVoiceAttachTarget(
-                actorId,
-                VoiceModuleName),
-            Description = "Voice demo typed attach target.",
-        });
-
-        return await routePolicyCommandPort.UpsertAsync(scopeId, command, ct);
+        return await routePolicyCommandPort.UpsertRuleAsync(scopeId, command, ct);
     }
 
     private static bool TryResolveScopeId(ClaimsPrincipal user, out string scopeId)
