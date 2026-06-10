@@ -2172,7 +2172,7 @@ v1 cutover step 2 细化为：
 | **Voice Presence** | `VoicePresence` EventModule capability on a target actor; `/ws/voice` policy-aware Host entry; `/ws/voice/{actorId}` dev/admin bypass | 语音是独立 modality：wake word / AEC / VAD / ASR / LLM / TTS 链路完全不同于 IM webhook 模型。VoicePresence 不是独立 router/session GAgent，Voice ↔ Chat 互通接口见 §15.5 open question |
 | **Aevatar Console Web chat 框** | `apps/aevatar-console-web/` | Console 是 aevatar 自有前端 UI，直接调 HTTP API，不走外部 IM channel 链路 |
 | **Direct HTTP API** | `/api/scopes/{scopeId}/...` | 同上 |
-| **DeviceRegistration / HouseholdEntity 设备事件** | `Aevatar.GAgents.Device` + `Aevatar.GAgents.Household` | 设备事件是 sensor push，业务语义和对话无关。transport 虽然也是 webhook，但强行套 channel adapter 抽象会让 `IChannelTransport` / `IChannelOutboundPort` 失焦 |
+| **DeviceRegistration / HouseholdEntity 设备事件** | `Aevatar.GAgents.Device` + `Aevatar.GAgents.Household` | 设备事件是 sensor push，业务语义和对话无关。transport 虽然也是 webhook，但强行套 channel adapter 抽象会让 `IChannelTransport` / `IChannelOutboundPort` 失焦。voice 主动播报复用此路径：NyxID HTTP Event Gateway -> `/api/device-events/{registrationId}` -> typed `DeviceInbound` -> target actor direct envelope；`VoicePresenceModule` 只在 Host 明确配置 exact `Any.TypeUrl`、publisher 为 `device-events.callback`、direct target 等于当前 actor 且存在 active voice session/lease 时注入，v1 无会话 drop+log，不新建 webhook、session router、readmodel lookup 或进程内 active-session registry |
 | **WeChat 个人 bot** | — | transport + capability gap 差异过大，单独 RFC 承接，继承本 RFC 的 `IChannelTransport` + `IChannelOutboundPort` 契约 |
 
 这是**显式的 scope 收缩**，避免抽象被"所有 aevatar 入口都要统一"的诱惑牵引而退化成 LCD（最小公约数）。

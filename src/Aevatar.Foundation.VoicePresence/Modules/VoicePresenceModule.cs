@@ -23,6 +23,7 @@ namespace Aevatar.Foundation.VoicePresence.Modules;
 public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypassModule
 {
     private static readonly JsonFormatter PayloadJsonFormatter = new(JsonFormatter.Settings.Default);
+    private const string TrustedDirectExternalEventPublisherActorId = "device-events.callback";
     private const int DefaultLastDrainAckResponseId = -1;
     private const long DefaultLastDrainAckPlayoutSequence = -1;
 
@@ -30,6 +31,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     private readonly VoiceProviderConfig _providerConfig;
     private readonly VoiceSessionConfig? _sessionConfig;
     private readonly VoicePresenceModuleOptions _options;
+    private readonly IReadOnlySet<string> _directExternalEventTypeUrls;
     private readonly IVoiceToolInvoker? _toolInvoker;
     private readonly IVoiceToolCatalog? _toolCatalog;
     private readonly ILogger _logger;
@@ -47,6 +49,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         _providerConfig = providerConfig?.Clone() ?? throw new ArgumentNullException(nameof(providerConfig));
         _sessionConfig = sessionConfig?.Clone();
         _options = options ?? new VoicePresenceModuleOptions();
+        _directExternalEventTypeUrls = new HashSet<string>(
+            _options.DirectExternalEventTypeUrls,
+            StringComparer.Ordinal);
         _toolInvoker = toolInvoker;
         _toolCatalog = toolCatalog;
         _logger = logger ?? NullLogger.Instance;
@@ -77,7 +82,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         return envelope.Payload.Is(VoiceModuleSignal.Descriptor) ||
                envelope.Payload.Is(VoiceProviderEvent.Descriptor) ||
                envelope.Payload.Is(VoiceControlFrame.Descriptor) ||
-               envelope.Route?.IsPublication() == true;
+               envelope.Route?.IsPublication() == true ||
+               IsConfiguredDirectExternalEvent(envelope, null);
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
@@ -1120,7 +1126,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     {
         var state = HydrateRuntimeStateFromActor(ctx);
 
-        if (!ShouldInjectExternalEvent(envelope, ctx.AgentId))
+        if (!ShouldInjectExternalEvent(envelope, ctx.AgentId, state))
             return;
 
         var now = _options.TimeProvider.GetUtcNow();
@@ -1144,7 +1150,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
-    private bool ShouldInjectExternalEvent(EventEnvelope envelope, string agentId)
+    private bool ShouldInjectExternalEvent(
+        EventEnvelope envelope,
+        string agentId,
+        VoicePresenceRuntimeState state)
     {
         if (envelope.Payload == null)
             return false;
@@ -1157,11 +1166,50 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return false;
         }
 
-        if (envelope.Route?.IsPublication() != true)
+        if (envelope.Route?.IsPublication() == true)
+            return !string.Equals(envelope.Route.PublisherActorId, agentId, StringComparison.Ordinal);
+
+        if (!IsConfiguredDirectExternalEvent(envelope, agentId))
             return false;
 
-        return !string.Equals(envelope.Route.PublisherActorId, agentId, StringComparison.Ordinal);
+        if (HasActiveSession(state))
+            return true;
+
+        if (_options.DirectExternalEventNoActiveSessionPolicy ==
+            VoiceDirectExternalEventNoActiveSessionPolicy.DropAndLog)
+        {
+            _logger.LogInformation(
+                "Dropping direct external voice event: reason=no_active_session envelope_id={EnvelopeId} publisher_actor_id={PublisherActorId} event_type={EventType} target_actor_id={TargetActorId}.",
+                envelope.Id ?? string.Empty,
+                envelope.Route?.PublisherActorId ?? string.Empty,
+                envelope.Payload.TypeUrl ?? string.Empty,
+                envelope.Route?.GetTargetActorId() ?? string.Empty);
+        }
+
+        return false;
     }
+
+    private bool IsConfiguredDirectExternalEvent(EventEnvelope envelope, string? agentId)
+    {
+        if (_directExternalEventTypeUrls.Count == 0 ||
+            envelope.Payload == null ||
+            envelope.Route?.IsDirect() != true ||
+            !string.Equals(
+                envelope.Route.PublisherActorId,
+                TrustedDirectExternalEventPublisherActorId,
+                StringComparison.Ordinal) ||
+            !_directExternalEventTypeUrls.Contains(envelope.Payload.TypeUrl ?? string.Empty))
+        {
+            return false;
+        }
+
+        return agentId == null ||
+               string.Equals(envelope.Route.GetTargetActorId(), agentId, StringComparison.Ordinal);
+    }
+
+    private bool HasActiveSession(VoicePresenceRuntimeState state) =>
+        !string.IsNullOrWhiteSpace(state.ActiveSessionId) &&
+        !IsLeaseExpired(state.LeaseExpiresAt);
 
     private VoicePendingEventInjection BuildPendingInjection(EventEnvelope envelope, DateTimeOffset now)
     {

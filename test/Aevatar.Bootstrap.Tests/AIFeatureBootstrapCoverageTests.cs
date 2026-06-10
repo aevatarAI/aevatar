@@ -21,7 +21,6 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.VoicePresence.Abstractions;
@@ -208,12 +207,79 @@ public class AIFeatureBootstrapCoverageTests
 
         factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
         defaultModule.Should().BeOfType<VoicePresenceModule>();
+        defaultModule.As<VoicePresenceModule>()
+            .CanHandle(new EventEnvelope
+            {
+                Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue
+                {
+                    Value = "doorbell",
+                }),
+                Route = EnvelopeRouteSemantics.CreateDirect("device-events.callback", "voice-agent"),
+            })
+            .Should()
+            .BeFalse();
 
         factory.TryCreate("voice_presence_openai", out var openAIModule).Should().BeTrue();
         openAIModule.Should().BeOfType<VoicePresenceModule>();
 
         factory.TryCreate("voice_presence_minicpm", out var miniCpmModule).Should().BeFalse();
         miniCpmModule.Should().BeNull();
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_ShouldPreserveConfiguredVoiceDirectExternalEventTypeUrls()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+        services.AddLogging();
+        services.AddSingleton<IActorDispatchPort, NoOpActorDispatchPort>();
+        services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
+            new EmptyVoicePresenceCapabilityReader());
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.VoicePresence.Module = new VoicePresenceModuleOptions
+            {
+                DirectExternalEventTypeUrls =
+                [
+                    " type.googleapis.com/example.External ",
+                    "type.googleapis.com/example.External",
+                ],
+            };
+            options.VoicePresence.OpenAIProvider = new VoiceProviderConfig
+            {
+                ProviderName = "openai",
+                ApiKey = "voice-openai-key",
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetServices<IEventModuleFactory<IEventHandlerContext>>()
+            .OfType<VoicePresenceModuleFactory>()
+            .Single();
+
+        factory.TryCreate("voice_presence", out var module).Should().BeTrue();
+        var voiceModule = module.Should().BeOfType<VoicePresenceModule>().Subject;
+
+        voiceModule.CanHandle(new EventEnvelope
+        {
+            Payload = new Google.Protobuf.WellKnownTypes.Any
+            {
+                TypeUrl = "type.googleapis.com/example.External",
+                Value = Google.Protobuf.ByteString.CopyFromUtf8("payload"),
+            },
+            Route = EnvelopeRouteSemantics.CreateDirect("device-events.callback", "voice-agent"),
+        }).Should().BeTrue();
+        voiceModule.CanHandle(new EventEnvelope
+        {
+            Payload = new Google.Protobuf.WellKnownTypes.Any
+            {
+                TypeUrl = "type.googleapis.com/example.Other",
+                Value = Google.Protobuf.ByteString.CopyFromUtf8("payload"),
+            },
+            Route = EnvelopeRouteSemantics.CreateDirect("device-events.callback", "voice-agent"),
+        }).Should().BeFalse();
     }
 
     [Fact]
