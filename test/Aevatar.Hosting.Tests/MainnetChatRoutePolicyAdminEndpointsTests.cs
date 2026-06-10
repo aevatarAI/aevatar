@@ -155,6 +155,38 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         command.Rule.Action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.ActorId.Should().Be("voice-agent");
     }
 
+    [Theory]
+    [InlineData("%20%20", "{\"rule\": {\"action\": {\"forward_to_model\": {\"model_name\": \"model\"}}}}", "rule_id_required")]
+    [InlineData("voice-demo", "", "empty_body")]
+    [InlineData("voice-demo", "{", "invalid_body")]
+    [InlineData("voice-demo", "{}", "rule_required")]
+    public async Task PutRule_RejectsInvalidRequestWithoutDispatch(
+        string routeRuleId,
+        string bodyJson,
+        string expectedError)
+    {
+        var commandPort = new RecordingChatRoutePolicyCommandPort();
+        await using var app = await CreateAppAsync(commandPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Put,
+            $"/api/scopes/{Scope}/chat-route-policy/rules/{routeRuleId}")
+        {
+            Content = new StringContent(bodyJson, Encoding.UTF8, "application/json"),
+        };
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        body.Should().Contain(expectedError);
+        commandPort.RuleUpserts.Should().BeEmpty(
+            "REST validation must reject malformed rule upserts before admitting an actor command");
+        commandPort.Upserts.Should().BeEmpty();
+        commandPort.Removals.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task DeleteRule_DispatchesRemoveCommandWithTrimmedRuleId()
     {

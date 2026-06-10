@@ -92,6 +92,11 @@ internal static class ChatRoutePolicyAdminEndpoints
             return JsonError(StatusCodes.Status400BadRequest, "invalid_body",
                 $"Could not parse request body as UpsertChatRoutePolicyRequested: {ex.Message}");
         }
+        catch (InvalidJsonException ex)
+        {
+            return JsonError(StatusCodes.Status400BadRequest, "invalid_body",
+                $"Could not parse request body as UpsertChatRoutePolicyRequested: {ex.Message}");
+        }
 
         if (command.DefaultTarget is null ||
             command.DefaultTarget.ActionCase == ChatRouteAction.ActionOneofCase.None)
@@ -149,6 +154,11 @@ internal static class ChatRoutePolicyAdminEndpoints
             command = BodyParser.Parse<UpsertChatRouteRuleRequested>(bodyJson);
         }
         catch (InvalidProtocolBufferException ex)
+        {
+            return JsonError(StatusCodes.Status400BadRequest, "invalid_body",
+                $"Could not parse request body as UpsertChatRouteRuleRequested: {ex.Message}");
+        }
+        catch (InvalidJsonException ex)
         {
             return JsonError(StatusCodes.Status400BadRequest, "invalid_body",
                 $"Could not parse request body as UpsertChatRouteRuleRequested: {ex.Message}");
