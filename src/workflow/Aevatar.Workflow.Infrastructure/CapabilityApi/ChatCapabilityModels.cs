@@ -121,6 +121,7 @@ public sealed record WorkflowChatInlineYamlDocumentInput
     public string? Yaml { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChatInputContentPart
 {
     public required string Type { get; init; }
@@ -128,6 +129,25 @@ public sealed record ChatInputContentPart
     public string? DataBase64 { get; init; }
     public string? MediaType { get; init; }
     public string? Uri { get; init; }
+    public string? Name { get; init; }
+    public ChatInputInlineFile? InlineFile { get; init; }
+    public ChatInputFileRef? FileRef { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ChatInputInlineFile
+{
+    public string? DataBase64 { get; init; }
+    public string? MediaType { get; init; }
+    public string? Name { get; init; }
+    public long? SizeBytes { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ChatInputFileRef
+{
+    public string? Uri { get; init; }
+    public string? MediaType { get; init; }
     public string? Name { get; init; }
 }
 
