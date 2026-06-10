@@ -1,8 +1,9 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.AI.Abstractions;
 using Aevatar.AGUI.Contracts;
 using Google.Protobuf;
 
@@ -187,48 +188,25 @@ public sealed class NyxIdChatSessionEventProjector
         NyxIdChatSessionProjectionContext context,
         EventEnvelope envelope)
     {
-        // Refactor (iter1/cluster-004):
-        //   Old pattern: NyxID SSE endpoints subscribed to raw EventEnvelope and inferred terminal state.
-        //   New principle: Projection consumes EventEnvelope once and publishes typed AGUIEvent session frames.
         if (string.IsNullOrWhiteSpace(context.RootActorId) || string.IsNullOrWhiteSpace(context.SessionId))
             return EmptyEntries;
 
-        var mapped = ScopeGAgentAguiEventMapper.TryMap(envelope);
-        if (mapped == null)
+        if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
+            payload?.Is(RoleChatSessionCompletedEvent.Descriptor) != true)
+        {
             return EmptyEntries;
+        }
 
-        FillSessionDefaults(context, mapped);
-        if (mapped.EventCase != AGUIEvent.EventOneofCase.TextMessageEnd)
-            return [Entry(context, mapped)];
-
-        return
-        [
-            Entry(context, mapped),
-            Entry(context, new AGUIEvent
-            {
-                RunFinished = new RunFinishedEvent
-                {
-                    ThreadId = context.RootActorId,
-                    RunId = context.SessionId,
-                },
-            }),
-        ];
+        var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
+        return NyxIdChatCompletionAguiFrameBuilder.Build(context, completed)
+            .Select(frame => Entry(context, frame))
+            .ToArray();
     }
 
     private static ProjectionSessionEventEntry<AGUIEvent> Entry(
         NyxIdChatSessionProjectionContext context,
         AGUIEvent evt) =>
         new(context.RootActorId, context.SessionId, evt);
-
-    private static void FillSessionDefaults(NyxIdChatSessionProjectionContext context, AGUIEvent evt)
-    {
-        if (evt.TextMessageStart != null && string.IsNullOrWhiteSpace(evt.TextMessageStart.MessageId))
-            evt.TextMessageStart.MessageId = context.SessionId;
-        if (evt.TextMessageContent != null && string.IsNullOrWhiteSpace(evt.TextMessageContent.MessageId))
-            evt.TextMessageContent.MessageId = context.SessionId;
-        if (evt.TextMessageEnd != null && string.IsNullOrWhiteSpace(evt.TextMessageEnd.MessageId))
-            evt.TextMessageEnd.MessageId = context.SessionId;
-    }
 }
 
 internal static class NyxIdChatProjectionKinds
