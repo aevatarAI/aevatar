@@ -589,7 +589,7 @@ public class AIFeatureBootstrapCoverageTests
             .Subject;
 
         tool.Name.Should().Be("demo_tool");
-        (await tool.ExecuteAsync(
+        var result = await tool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
                 ArgumentsJson: "{}",
                 RunId: "run-1",
@@ -597,7 +597,10 @@ public class AIFeatureBootstrapCoverageTests
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential()))).Should().Be("""{"ok":true}""");
+                CallerCredential: new WorkflowCallerCredential()));
+
+        result.ResultJson.Should().Be("""{"ok":true}""");
+        result.ManagedHandoff.Should().BeNull();
     }
 
     [Fact]

@@ -58,7 +58,10 @@ public sealed class LocalActorDispatchAdmissionTests
             new InMemoryStreamOptions(),
             NullLoggerFactory.Instance,
             new InMemoryStreamForwardingRegistry());
-        var runtime = new LocalActorRuntime(streams, new ServiceCollection().BuildServiceProvider(), streams);
+        var services = new ServiceCollection()
+            .AddAevatarAgentKindRegistry(builder => builder.Register<OrderedAgent>())
+            .BuildServiceProvider();
+        var runtime = new LocalActorRuntime(streams, services, streams);
         await runtime.CreateAsync<OrderedAgent>("ordered-actor");
         var dispatchPort = new LocalActorDispatchPort(runtime);
 
@@ -105,6 +108,7 @@ public sealed class LocalActorDispatchAdmissionTests
             Propagation = new EnvelopePropagation { CorrelationId = $"corr-{id}" },
         };
 
+    [GAgent("tests.ordered-agent")]
     private sealed class OrderedAgent : IAgent
     {
         public static Channel<string> Handled { get; private set; } = Channel.CreateUnbounded<string>();
