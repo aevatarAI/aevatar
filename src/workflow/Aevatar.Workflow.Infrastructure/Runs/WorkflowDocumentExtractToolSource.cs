@@ -1,8 +1,11 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml;
+using System.Xml.Linq;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core.Modules;
+using System.IO.Compression;
 using UglyToad.PdfPig;
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
@@ -53,13 +56,17 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
                             $"document_extract does not support media type '{mediaType}'.");
 
                     var maxChars = NormalizeMaxChars(arguments.MaxChars);
-                    var extracted = mediaType == "application/pdf"
-                        ? ExtractPdfText(artifact.Content, maxChars)
-                        : await ExtractUtf8TextAsync(artifact.Content, maxChars, ct).ConfigureAwait(false);
+                    var extracted = mediaType switch
+                    {
+                        "application/pdf" => ExtractPdfText(artifact.Content, maxChars),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" =>
+                            ExtractDocxText(artifact.Content, maxChars),
+                        _ => await ExtractUtf8TextAsync(artifact.Content, maxChars, ct).ConfigureAwait(false),
+                    };
 
                     return WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
                         new DocumentExtractResult(
-                            ExtractionKind: mediaType == "application/pdf" ? "pdf_text" : "utf8_text",
+                            ExtractionKind: ResolveExtractionKind(mediaType),
                             MediaType: mediaType,
                             File: ToResultFileRef(descriptor),
                             Text: extracted.Text,
@@ -254,6 +261,40 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
             return new ExtractedText(builder.ToString(), truncated);
         }
 
+        private static ExtractedText ExtractDocxText(Stream content, int maxChars)
+        {
+            using var archive = new ZipArchive(content, ZipArchiveMode.Read, leaveOpen: false);
+            var documentEntry = archive.GetEntry("word/document.xml")
+                ?? throw new InvalidOperationException("DOCX document body was not found.");
+
+            var builder = new StringBuilder(capacity: Math.Min(maxChars, 4096));
+            var truncated = false;
+            using var documentStream = documentEntry.Open();
+            using var xmlReader = XmlReader.Create(documentStream, new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+            });
+            var document = XDocument.Load(xmlReader, LoadOptions.None);
+            XNamespace word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+            foreach (var paragraph in document.Descendants(word + "p"))
+            {
+                var paragraphText = string.Concat(paragraph.Descendants(word + "t")
+                    .Select(element => element.Value));
+                if (paragraphText.Length == 0)
+                    continue;
+
+                if (builder.Length > 0)
+                    AppendBounded(builder, Environment.NewLine, maxChars, ref truncated);
+                AppendBounded(builder, paragraphText, maxChars, ref truncated);
+                if (truncated)
+                    break;
+            }
+
+            return new ExtractedText(builder.ToString(), truncated);
+        }
+
         private static void AppendBounded(
             StringBuilder builder,
             string value,
@@ -287,6 +328,14 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
                 normalized = normalized[..separatorIndex].Trim();
             return normalized.ToLowerInvariant();
         }
+
+        private static string ResolveExtractionKind(string mediaType) =>
+            mediaType switch
+            {
+                "application/pdf" => "pdf_text",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx_text",
+                _ => "utf8_text",
+            };
 
         private static WorkflowDocumentExtractFileRef ToResultFileRef(WorkflowFileRef descriptor) =>
             new(
@@ -331,6 +380,7 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
             "text/markdown",
             "text/csv",
             "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         };
     }
 
