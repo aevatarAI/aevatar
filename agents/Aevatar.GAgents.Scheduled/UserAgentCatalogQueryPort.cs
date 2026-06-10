@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -27,11 +28,14 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
 {
     private readonly IProjectionDocumentReader<UserAgentCatalogDocument, string> _documentReader;
+    private readonly ILogger<UserAgentCatalogQueryPort>? _logger;
 
     public UserAgentCatalogQueryPort(
-        IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader)
+        IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader,
+        ILogger<UserAgentCatalogQueryPort>? logger = null)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _logger = logger;
     }
 
     public async Task<UserAgentCatalogReadModelEntry?> GetForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)
@@ -43,9 +47,29 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         // the projection reader's Get path doesn't take filters. The push-down is on the
         // QueryByCallerAsync sweep path where it actually matters for scale.
         var document = await _documentReader.GetAsync(agentId, ct);
-        if (document == null || document.Tombstoned) return null;
+        if (document == null || document.Tombstoned)
+        {
+            _logger?.LogInformation(
+                "Catalog get-for-caller miss: agentId={AgentId} reason={Reason}",
+                agentId,
+                document == null ? "document_missing" : "tombstoned");
+            return null;
+        }
 
-        return DocumentMatchesCaller(document, caller) ? ToEntry(document) : null;
+        if (!DocumentMatchesCaller(document, caller))
+        {
+            var documentScope = document.OwnerScope;
+            _logger?.LogWarning(
+                "Catalog get-for-caller owner mismatch: agentId={AgentId} " +
+                "callerPlatform={CallerPlatform} callerNyxUser={CallerNyxUser} callerScope={CallerScope} callerSender={CallerSender} " +
+                "docPlatform={DocPlatform} docNyxUser={DocNyxUser} docScope={DocScope} docSender={DocSender}",
+                agentId,
+                caller.Platform, caller.NyxUserId, caller.RegistrationScopeId, caller.SenderId,
+                documentScope?.Platform, documentScope?.NyxUserId, documentScope?.RegistrationScopeId, documentScope?.SenderId);
+            return null;
+        }
+
+        return ToEntry(document);
     }
 
     /// <summary>
@@ -93,6 +117,16 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             cursor = page.NextCursor;
         }
         while (!string.IsNullOrEmpty(cursor));
+
+        if (entries.Count == 0)
+        {
+            _logger?.LogInformation(
+                "Catalog query-by-caller returned no entries: platform={Platform} nyxUser={NyxUserId} scope={RegistrationScopeId} sender={SenderId}",
+                caller.Platform,
+                caller.NyxUserId,
+                caller.RegistrationScopeId,
+                caller.SenderId);
+        }
 
         return entries;
     }

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -18,10 +19,14 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class CompositeCallerScopeResolver : ICallerScopeResolver
 {
     private readonly IReadOnlyList<ICallerScopeResolver> _resolvers;
+    private readonly ILogger<CompositeCallerScopeResolver>? _logger;
 
-    public CompositeCallerScopeResolver(IEnumerable<ICallerScopeResolver> resolvers)
+    public CompositeCallerScopeResolver(
+        IEnumerable<ICallerScopeResolver> resolvers,
+        ILogger<CompositeCallerScopeResolver>? logger = null)
     {
         _resolvers = resolvers?.ToArray() ?? throw new ArgumentNullException(nameof(resolvers));
+        _logger = logger;
     }
 
     public async Task<OwnerScope?> TryResolveAsync(CancellationToken ct = default)
@@ -35,7 +40,16 @@ public sealed class CompositeCallerScopeResolver : ICallerScopeResolver
 
             var scope = await resolver.TryResolveAsync(ct);
             if (scope is not null)
+            {
+                _logger?.LogInformation(
+                    "Caller scope resolved by {Resolver}: platform={Platform} nyxUser={NyxUserId} scope={RegistrationScopeId} sender={SenderId}",
+                    resolver.GetType().Name,
+                    scope.Platform,
+                    scope.NyxUserId,
+                    scope.RegistrationScopeId,
+                    scope.SenderId);
                 return scope;
+            }
         }
 
         return null;
