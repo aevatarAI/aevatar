@@ -480,6 +480,8 @@ describe('studioApi host-session requests', () => {
 
     await expect(studioApi.listWorkflows('scope-1')).resolves.toEqual([
       {
+        activeRevisionId: 'rev-draft',
+        serviceKey: 'svc-draft',
         workflowId: 'workflow-draft',
         name: 'draft-demo',
         description: 'draft copy',
@@ -492,6 +494,8 @@ describe('studioApi host-session requests', () => {
         updatedAtUtc: '2026-04-16T00:00:00Z',
       },
       {
+        activeRevisionId: 'rev-published',
+        serviceKey: 'svc-published',
         workflowId: 'workflow-published',
         name: 'published-demo',
         description: '',

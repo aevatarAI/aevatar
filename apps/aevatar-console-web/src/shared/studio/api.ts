@@ -171,6 +171,8 @@ function toCommittedWorkflowSummary(
   workflow: ScopeWorkflowSummary
 ): StudioWorkflowSummary {
   return {
+    activeRevisionId: trimOptional(workflow.activeRevisionId) ?? null,
+    serviceKey: trimOptional(workflow.serviceKey) ?? null,
     workflowId: workflow.workflowId,
     name: resolveScopeWorkflowName(workflow),
     description: "",
@@ -1771,6 +1773,8 @@ export const studioApi = {
           existing
             ? {
                 ...draft,
+                activeRevisionId: existing.activeRevisionId ?? null,
+                serviceKey: existing.serviceKey ?? null,
                 updatedAtUtc: selectLatestTimestamp(
                   draft.updatedAtUtc,
                   existing.updatedAtUtc

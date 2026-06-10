@@ -9,7 +9,9 @@ import {
   type RuntimeEventAccumulator,
 } from "@/shared/agui/runtimeEventSemantics";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import {
   getLocationSnapshot,
   history,
@@ -47,6 +49,11 @@ import type {
 type TeamMemberWorkflowStudioMode = "new" | "existing";
 type WorkflowPublishTone = "default" | "processing" | "success" | "warning" | "error";
 type WorkflowExecutionStatus = "idle" | "running" | "succeeded" | "failed";
+type WorkflowBindingCandidate = {
+  readonly activeRevisionId?: string | null;
+  readonly serviceKey?: string | null;
+  readonly workflowId: string;
+};
 
 type SaveWorkflowDraftVariables = {
   readonly document: StudioWorkflowDocument;
@@ -264,18 +271,99 @@ function resolveExplicitWorkflowId(
   return trimOptional(implementationRef?.workflowId);
 }
 
+function resolveBoundWorkflowRevisionId(
+  memberDetail: StudioMemberDetail | null | undefined,
+): string {
+  if (
+    trimOptional(memberDetail?.summary.implementationKind).toLowerCase() !==
+    "workflow"
+  ) {
+    return "";
+  }
+
+  return (
+    trimOptional(memberDetail?.implementationRef?.workflowRevision) ||
+    trimOptional(memberDetail?.summary.lastBoundRevisionId) ||
+    trimOptional(memberDetail?.lastBinding?.revisionId)
+  );
+}
+
 function resolveWorkflowDraftReloadIds(
   memberDetail: StudioMemberDetail | null | undefined,
   routeWorkflowId?: string | null,
+  recoveredWorkflowId?: string | null,
 ): readonly string[] {
   const explicitWorkflowId = resolveExplicitWorkflowId(memberDetail);
   const routeDraftWorkflowId = trimOptional(routeWorkflowId);
   const ids = [
     routeDraftWorkflowId,
+    trimOptional(recoveredWorkflowId),
     explicitWorkflowId,
   ].filter(Boolean);
 
   return Array.from(new Set(ids));
+}
+
+function selectPublishedService(
+  services: readonly ServiceCatalogSnapshot[],
+  publishedServiceId: string,
+): ServiceCatalogSnapshot | null {
+  const normalizedServiceId = trimOptional(publishedServiceId);
+  if (!normalizedServiceId) {
+    return null;
+  }
+
+  return (
+    services.find(
+      (service) => trimOptional(service.serviceId) === normalizedServiceId,
+    ) ?? null
+  );
+}
+
+function workflowMatchesPublishedService(
+  workflow: WorkflowBindingCandidate,
+  service: ServiceCatalogSnapshot,
+): boolean {
+  const workflowRevisionId = trimOptional(workflow.activeRevisionId);
+  if (
+    workflowRevisionId &&
+    (trimOptional(service.activeServingRevisionId) === workflowRevisionId ||
+      trimOptional(service.defaultServingRevisionId) === workflowRevisionId)
+  ) {
+    return true;
+  }
+
+  const workflowServiceKey = trimOptional(workflow.serviceKey);
+  return Boolean(
+    workflowServiceKey && workflowServiceKey === trimOptional(service.serviceKey),
+  );
+}
+
+function selectWorkflowForPublishedMember<TWorkflow extends WorkflowBindingCandidate>(input: {
+  readonly boundWorkflowRevisionId: string;
+  readonly publishedService: ServiceCatalogSnapshot | null;
+  readonly workflows: readonly TWorkflow[];
+}): TWorkflow | null {
+  const normalizedRevisionId = trimOptional(input.boundWorkflowRevisionId);
+  if (normalizedRevisionId) {
+    const revisionMatch = input.workflows.find(
+      (workflow) => trimOptional(workflow.activeRevisionId) === normalizedRevisionId,
+    );
+    if (revisionMatch) {
+      return revisionMatch;
+    }
+  }
+
+  if (!input.publishedService) {
+    return null;
+  }
+  const publishedService = input.publishedService;
+
+  return (
+    input.workflows.find((workflow) =>
+      workflowMatchesPublishedService(workflow, publishedService),
+    ) ?? null
+  );
 }
 
 function readWorkflowSourceSignature(
@@ -739,19 +827,68 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   });
   const explicitWorkflowId =
     route.mode === "existing" ? resolveExplicitWorkflowId(memberQuery.data) : "";
-  const workflowDraftReloadIds =
+  const boundWorkflowRevisionId =
     route.mode === "existing"
-      ? resolveWorkflowDraftReloadIds(memberQuery.data, route.workflowId)
-      : [];
+      ? resolveBoundWorkflowRevisionId(memberQuery.data)
+      : "";
   const memberPublishedServiceId = trimOptional(
     memberQuery.data?.summary.publishedServiceId,
   );
+  const shouldResolveWorkflowFromRevision = Boolean(
+    route.mode === "existing" &&
+      route.scopeId &&
+      !trimOptional(route.workflowId) &&
+      (boundWorkflowRevisionId || memberPublishedServiceId),
+  );
+  const workflowRevisionQuery = useQuery({
+    enabled: shouldResolveWorkflowFromRevision,
+    queryKey: [
+      "team-member-workflow-studio",
+      "workflow-by-binding",
+      route.scopeId,
+      boundWorkflowRevisionId,
+      memberPublishedServiceId,
+    ],
+    queryFn: async () => {
+      const [workflows, services] = await Promise.all([
+        studioApi.listWorkflows(route.scopeId),
+        memberPublishedServiceId
+          ? scopeRuntimeApi.listServices(route.scopeId, { take: 200 })
+          : Promise.resolve([] as ServiceCatalogSnapshot[]),
+      ]);
+      const publishedService = selectPublishedService(
+        services,
+        memberPublishedServiceId,
+      );
+      return selectWorkflowForPublishedMember({
+        boundWorkflowRevisionId,
+        publishedService,
+        workflows,
+      });
+    },
+    retry: false,
+  });
+  const recoveredWorkflowId = trimOptional(
+    workflowRevisionQuery.data?.workflowId,
+  );
+  const workflowDraftReloadIds =
+    route.mode === "existing"
+      ? resolveWorkflowDraftReloadIds(
+          memberQuery.data,
+          route.workflowId,
+          recoveredWorkflowId,
+        )
+      : [];
   const workflowQueryKey = getTeamMemberWorkflowStudioWorkflowQueryKey(
     route.scopeId,
     workflowDraftReloadIds,
   );
   const workflowQuery = useQuery({
-    enabled: Boolean(route.scopeId && workflowDraftReloadIds.length),
+    enabled: Boolean(
+      route.scopeId &&
+        workflowDraftReloadIds.length &&
+        !workflowRevisionQuery.isLoading,
+    ),
     queryKey: workflowQueryKey,
     queryFn: async () => {
       let lastError: unknown = null;
@@ -822,6 +959,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const linkedWorkflowMissing =
     route.mode === "existing" &&
     !memberQuery.isLoading &&
+    !workflowRevisionQuery.isLoading &&
     (!workflowDraftReloadIds.length || workflowQuery.isError) &&
     Boolean(memberQuery.data);
   const sourceDocument =
@@ -1238,6 +1376,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const workflowLoading =
     route.mode === "existing" &&
     (memberQuery.isLoading ||
+      workflowRevisionQuery.isLoading ||
       (workflowDraftReloadIds.length > 0 &&
         (workflowQuery.isLoading || parseQuery.isLoading)));
   const workflowHasSteps = Boolean(editableDocument?.steps?.length);

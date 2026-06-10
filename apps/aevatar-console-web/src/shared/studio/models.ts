@@ -98,6 +98,8 @@ export interface StudioWorkspaceSettings {
 }
 
 export interface StudioWorkflowDraftSummary {
+  readonly activeRevisionId?: string | null;
+  readonly serviceKey?: string | null;
   readonly workflowId: string;
   readonly name: string;
   readonly description: string;
