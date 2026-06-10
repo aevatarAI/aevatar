@@ -921,8 +921,8 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Aevatar" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "团队" })).toBeTruthy();
-    expect(screen.getByText("工作区 ID")).toBeTruthy();
-    expect(screen.getByText("scope-1")).toBeTruthy();
+    expect(screen.queryByText("工作区 ID")).toBeNull();
+    expect(screen.queryByText("scope-1")).toBeNull();
     const currentPostureHeading = screen.getByText("启动状态");
     const compositionHeading = screen.getByText("团队构成");
     const configurationHeading = screen.getByText("配置明细");
@@ -1011,7 +1011,7 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
   });
 
-  it("demotes machine-generated long scope ids into compact team metadata", async () => {
+  it("keeps machine-generated scope ids out of team metadata", async () => {
     const longScopeId = "1626c177-917b-4fcc-a5ee-aa74a171b0d6";
 
     window.history.replaceState(
@@ -1028,8 +1028,8 @@ describe("TeamDetailPage", () => {
       await screen.findByRole("heading", { level: 1, name: "当前团队" }),
     ).toBeTruthy();
     expect(screen.queryByText(`Team ${longScopeId}`)).toBeNull();
-    expect(screen.getByText("工作区 ID")).toBeTruthy();
-    expect(screen.getByText("1626c177...71b0d6")).toBeTruthy();
+    expect(screen.queryByText("工作区 ID")).toBeNull();
+    expect(screen.queryByText("1626c177...71b0d6")).toBeNull();
   });
 
   it("falls back to workflowName when Team display name is unavailable and the workflow display name is only the workflow id", async () => {
@@ -1089,7 +1089,7 @@ describe("TeamDetailPage", () => {
     ).toBeNull();
   });
 
-  it("keeps long raw identifiers compact inside overview configuration details", async () => {
+  it("keeps raw identifiers out of overview configuration details", async () => {
     const longRevisionId =
       "rev-20260414154556-4d89bc2a3bf347f8b3bde41d716964f3";
 
@@ -1110,7 +1110,8 @@ describe("TeamDetailPage", () => {
 
     await screen.findByText("配置明细");
 
-    expect(await screen.findByText("revisionId: rev-20260414…716964f3")).toBeTruthy();
+    expect(await screen.findByText("服务路由已配置。")).toBeTruthy();
+    expect(screen.queryByText("revisionId: rev-20260414…716964f3")).toBeNull();
     expect(screen.queryByText(`revisionId: ${longRevisionId}`)).toBeNull();
   });
 
@@ -1203,9 +1204,10 @@ describe("TeamDetailPage", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
-    expect(screen.getByText("member-team-alpha")).toBeTruthy();
+    expect(screen.queryByText("member-team-alpha")).toBeNull();
     expect(screen.getByText("入口成员")).toBeTruthy();
     expect(screen.getByText("已绑定服务")).toBeTruthy();
+    expect(screen.getByText("可以调用。")).toBeTruthy();
     expect(screen.getByRole("link", { name: "调用" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Workflow Studio" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "编辑工作流" })).toBeNull();
@@ -1241,8 +1243,10 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前成员")).toBeTruthy();
-    expect(screen.getAllByText("member-team-alpha").length).toBeGreaterThan(0);
-    expect(screen.getByText("memberId · member-team-alpha")).toBeTruthy();
+    expect((await screen.findAllByText("Team Alpha Operator")).length).toBeGreaterThan(0);
+    expect(screen.getByText("当前从团队成员中选中。")).toBeTruthy();
+    expect(screen.queryByText("member-team-alpha")).toBeNull();
+    expect(screen.queryByText("memberId · member-team-alpha")).toBeNull();
   });
 
   it("guides the user to test the Team when no run is visible yet", async () => {
@@ -1369,8 +1373,9 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("Untitled member1")).toBeTruthy();
-    expect(screen.getByText("member-untitled-member1")).toBeTruthy();
-    expect(screen.getByText("memb...ber1")).toBeTruthy();
+    expect(screen.queryByText("member-untitled-member1")).toBeNull();
+    expect(screen.queryByText("memb...ber1")).toBeNull();
+    expect(screen.getByText("已绑定服务")).toBeTruthy();
 
     await waitFor(() => {
       expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
@@ -1397,7 +1402,7 @@ describe("TeamDetailPage", () => {
 
     expect(await screen.findByText("入口成员")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "设为入口成员" })).toBeNull();
-    expect(screen.getByText("alph...vice")).toBeTruthy();
+    expect(screen.getByText("已绑定服务")).toBeTruthy();
   });
 
   it("sets a Team entry member from the members tab", async () => {
@@ -1504,9 +1509,10 @@ describe("TeamDetailPage", () => {
     const dialog = await screen.findByTestId("team-test-modal-body");
 
     expect(
-      within(dialog).getByText(
-        "当前页面选中的是 member-support，团队测试仍通过入口成员发起。",
-      ),
+      within(dialog).queryByText(/member-support/),
+    ).toBeNull();
+    expect(
+      within(dialog).getByText(/团队测试仍通过入口成员发起。/),
     ).toBeTruthy();
   });
 
@@ -1938,7 +1944,7 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
     expect(await screen.findByText("暂无团队构成")).toBeTruthy();
     expect(screen.getByText("服务待配置")).toBeTruthy();
-    expect(screen.getByText("当前还没有匹配到主服务入口")).toBeTruthy();
+    expect(screen.getAllByText("当前还没有匹配到主服务入口").length).toBeGreaterThan(0);
     expect(screen.queryByText("gagent-1")).toBeNull();
     expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
@@ -1954,10 +1960,10 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
-    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
-    expect(screen.getByText("member-team-alpha")).toBeTruthy();
-    expect(screen.getByText("alph...vice")).toBeTruthy();
+    expect(screen.queryByText("member-team-alpha")).toBeNull();
+    expect(screen.queryByText("alph...vice")).toBeNull();
+    expect(screen.getByText("已绑定服务")).toBeTruthy();
 
     await waitFor(() => {
       expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");

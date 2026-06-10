@@ -1,6 +1,5 @@
 import {
   CheckCircleOutlined,
-  LinkOutlined,
   PlayCircleOutlined,
   StopOutlined,
   WarningOutlined,
@@ -10,9 +9,7 @@ import { useIntl } from "@umijs/max";
 import React from "react";
 import { AevatarInspectorEmpty } from "@/shared/ui/aevatarPageShells";
 import {
-  CompactFactValue,
   DetailPill,
-  FactLine,
   factValueFontFamily,
 } from "./TeamDetailPrimitives";
 import type { TeamTestErrorDescription } from "./teamTestErrors";
@@ -67,7 +64,6 @@ type TeamTestPanelProps = {
   readonly rosterRows: readonly TeamTestRosterRow[];
   readonly rosterSyncing?: boolean;
   readonly status: TeamTestStatus;
-  readonly teamId: string;
 };
 
 function resolveTestStatusPill(
@@ -171,7 +167,6 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
   rosterRows,
   rosterSyncing = false,
   status,
-  teamId,
 }) => {
   const intl = useIntl();
   const { token } = theme.useToken();
@@ -297,7 +292,9 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               }}
             >
               <Typography.Text strong>{row.name}</Typography.Text>
-              <FactLine monospace rows={1} secondary text={row.memberId} />
+              <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                {row.implementationKind}
+              </Typography.Text>
             </div>
             <Space size={6} style={{ flex: "1 1 150px" }} wrap>
               <DetailPill
@@ -392,7 +389,6 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             <Typography.Text strong>
               {intl.formatMessage({ id: "teams.detail.test.entry.notInRoster" })}
             </Typography.Text>
-            <CompactFactValue value={normalizedEntryMemberId} />
           </Space>
           {renderEntrySelection()}
         </div>
@@ -438,27 +434,11 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               />
             ) : null}
           </Space>
-          <CompactFactValue
-            color={token.colorTextSecondary}
-            head={8}
-            strong={false}
-            tail={6}
-            value={normalizedEntryMemberId}
-          />
-        </div>
-        <div
-          style={{
-            display: "flex",
-            flex: "1 1 180px",
-            flexDirection: "column",
-            gap: 4,
-            minWidth: 0,
-          }}
-        >
           <Typography.Text style={{ fontSize: 12 }} type="secondary">
-            {intl.formatMessage({ id: "teams.detail.test.service.label" })}
+            {entryMember?.canInvokeAsEntry
+              ? intl.formatMessage({ id: "teams.detail.test.entry.configuredReady" })
+              : intl.formatMessage({ id: "teams.detail.test.entry.configuredNeedsBinding" })}
           </Typography.Text>
-          <CompactFactValue value={entryMember?.serviceId || "--"} />
         </div>
         <Space size={8} style={{ flex: "0 1 auto" }} wrap>
           {entryMember?.workflowSupported ? (
@@ -557,9 +537,6 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                 style={resolveTestStatusPill(token, lastResult.status)}
                 text={formatStatusLabel(lastResult.status, intl)}
               />
-              {lastResult.runId ? (
-                <CompactFactValue head={6} tail={6} value={lastResult.runId} />
-              ) : null}
             </Space>
           </div>
         ) : null}
@@ -667,16 +644,9 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           }}
         >
           <span>{intl.formatMessage({ id: "teams.detail.test.history.title" })}</span>
-          <Space size={6}>
-            <LinkOutlined />
-            <CompactFactValue
-              color={token.colorTextSecondary}
-              head={8}
-              strong={false}
-              tail={6}
-              value={teamId}
-            />
-          </Space>
+          <Typography.Text style={{ fontSize: 12 }} type="secondary">
+            {formatStatusLabel(status, intl)}
+          </Typography.Text>
         </div>
         <Typography.Paragraph
           style={{

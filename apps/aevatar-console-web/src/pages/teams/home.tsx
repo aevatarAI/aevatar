@@ -858,18 +858,6 @@ const TeamRosterCard: React.FC<{
         </span>
       </div>
 
-      <Typography.Text
-        title={preview.teamId}
-        ellipsis={{ tooltip: preview.teamId }}
-        style={{
-          color: token.colorTextSecondary,
-          display: "block",
-          fontSize: 12,
-        }}
-      >
-        {t("pages.teams.home.id", "ID：")}{preview.teamId}
-      </Typography.Text>
-
       <div
         style={{
           borderTop: `1px solid ${token.colorBorderSecondary}`,
@@ -978,18 +966,6 @@ const TeamRosterRow: React.FC<{
           >
             {preview.attentionDetail}
           </Typography.Paragraph>
-          <Typography.Text
-            title={preview.teamId}
-            ellipsis={{ tooltip: preview.teamId }}
-            style={{
-              color: token.colorTextSecondary,
-              display: "block",
-              fontSize: 12,
-              marginTop: 4,
-            }}
-          >
-            {t("pages.teams.home.id.2", "ID：")}{preview.teamId}
-          </Typography.Text>
         </div>
 
         <div className="teams-home-roster-row-actions">

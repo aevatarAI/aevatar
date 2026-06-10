@@ -154,11 +154,13 @@ describe('StudioMemberInvokePanel', () => {
     ).toBeTruthy();
     const targetSummary = screen.getByTestId('studio-invoke-target-summary');
     expect(targetSummary).toHaveTextContent('workspace-demo');
-    expect(targetSummary).toHaveTextContent('Member: default');
+    expect(targetSummary).toHaveTextContent('Member: workspace-demo');
     expect(targetSummary).toHaveTextContent('Service: workspace-demo');
-    expect(targetSummary).toHaveTextContent('Endpoint: Submit (submit)');
+    expect(targetSummary).toHaveTextContent('Endpoint: Submit');
     expect(targetSummary).toHaveTextContent('Lifecycle: Active');
     expect(targetSummary).toHaveTextContent('Ready');
+    expect(targetSummary).not.toHaveTextContent('Member: default');
+    expect(targetSummary).not.toHaveTextContent('Endpoint: Submit (submit)');
     expect(targetSummary).not.toHaveTextContent('Command ID');
     expect(targetSummary).not.toHaveTextContent('Actor ID');
     expect(targetSummary).not.toHaveTextContent('Member ID');
@@ -168,7 +170,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getAllByText('Output').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Timeline')).toBeTruthy();
     expect(screen.getByText('Events')).toBeTruthy();
-    expect(screen.getByText('Metadata')).toBeTruthy();
+    expect(screen.getByText('Details')).toBeTruthy();
     expect(screen.getByText('Advanced typed payload')).toBeTruthy();
     expect(screen.queryByLabelText('Payload base64')).toBeNull();
     expect(screen.getByTestId('studio-invoke-playground-actions')).toBeTruthy();
@@ -201,7 +203,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(currentRunViewport.style.overflow).toBe('visible');
     expect(invokeComposerDock.style.flex).toBe('0 0 auto');
     expect(screen.getByRole('button', { name: 'Invoke' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy();
     expect(
       screen.getByText('Send a prompt above to create the first run.'),
@@ -284,6 +286,82 @@ describe('StudioMemberInvokePanel', () => {
     );
     expect(screen.getAllByText('Select an endpoint before invoking.').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole('button', { name: 'Invoke' })).toBeDisabled();
+  });
+
+  it('uses the member-run summary variant without duplicating service implementation facts', async () => {
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'member-with-a-very-long-stable-identifier-1234567890',
+        memberRevision: {
+          allocationWeight: 100,
+          artifactHash: 'hash-workflow',
+          createdAt: '2026-03-26T07:00:00Z',
+          deploymentId: 'dep-workflow',
+          failureReason: '',
+          implementationKind: 'workflow',
+          inlineWorkflowCount: 1,
+          isActiveServing: true,
+          isDefaultServing: true,
+          isServingTarget: true,
+          preparedAt: '2026-03-26T07:01:00Z',
+          primaryActorId: 'actor-workflow',
+          publishedAt: '2026-03-26T07:02:00Z',
+          retiredAt: null,
+          revisionId: 'rev-workflow',
+          scriptDefinitionActorId: '',
+          scriptId: '',
+          scriptRevision: '',
+          scriptSourceHash: '',
+          servingState: 'Active',
+          staticActorTypeName: '',
+          status: 'Published',
+          workflowDefinitionActorId: 'scope-workflow:scope-1:workspace-demo',
+          workflowName: 'workspace-demo',
+        },
+        scopeId: 'scope-1',
+        selectedMemberLabel:
+          'Extremely long member display name that should truncate visually but remain available on hover',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'workspace-demo-service',
+            endpoints: [
+              {
+                description: 'Chat with the member.',
+                displayName: 'Primary chat endpoint with a long label',
+                endpointId: 'chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-workflow',
+            serviceId: 'member-workspace-demo',
+          },
+        ],
+        targetSummaryVariant: 'member-run',
+        teamId: 'team-1',
+      }),
+    );
+
+    const targetSummary = await screen.findByTestId('studio-invoke-target-summary');
+    expect(targetSummary).toHaveTextContent(
+      'Extremely long member display name that should truncate visually but remain available on hover',
+    );
+    expect(targetSummary).toHaveTextContent(
+      'Endpoint: Primary chat endpoint with a long label',
+    );
+    expect(targetSummary).toHaveTextContent('Status: Active');
+    expect(targetSummary).not.toHaveTextContent(
+      'member-with-a-very-long-stable-identifier-1234567890',
+    );
+    expect(targetSummary).not.toHaveTextContent('(chat)');
+    expect(targetSummary).not.toHaveTextContent('Member:');
+    expect(targetSummary).not.toHaveTextContent('Service: workspace-demo-service');
+    expect(targetSummary).not.toHaveTextContent('Workflow');
+    expect(targetSummary).not.toHaveTextContent('Team: team-1');
   });
 
   it('prefers final run output over intermediate assistant text for chat invoke results', async () => {
@@ -466,7 +544,6 @@ describe('StudioMemberInvokePanel', () => {
         selectedHistoryId: 'run-0',
         onCopyInput: jest.fn(),
         onCopyOutput: jest.fn(),
-        onCopyRunId: jest.fn(),
         onRetryAsNewRun: jest.fn(),
         onSelectEntry: jest.fn(),
       }),
@@ -480,7 +557,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('Run history (12)')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy input' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy output' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy run id' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Copy run id' })).toBeNull();
     expect(
       screen.getByTestId('studio-invoke-history-readonly-guidance'),
     ).toHaveTextContent(
@@ -498,7 +575,6 @@ describe('StudioMemberInvokePanel', () => {
     const idleResult = createIdleInvokeResult();
     const copyInput = jest.fn();
     const copyOutput = jest.fn();
-    const copyRunId = jest.fn();
     const retryAsNewRun = jest.fn();
 
     render(
@@ -536,7 +612,6 @@ describe('StudioMemberInvokePanel', () => {
         selectedHistoryId: 'failed-run',
         onCopyInput: copyInput,
         onCopyOutput: copyOutput,
-        onCopyRunId: copyRunId,
         onRetryAsNewRun: retryAsNewRun,
         onSelectEntry: jest.fn(),
       }),
@@ -548,7 +623,7 @@ describe('StudioMemberInvokePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy output' }));
     expect(copyOutput).toHaveBeenCalledWith('failed-run');
 
-    expect(screen.getByRole('button', { name: 'Copy run id' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Copy run id' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry as new run' }));
     expect(retryAsNewRun).toHaveBeenCalledWith('failed-run');
@@ -766,7 +841,7 @@ describe('StudioMemberInvokePanel', () => {
     });
   });
 
-  it('records runs into read-only Run history and keeps technical fields in Metadata', async () => {
+  it('records runs into read-only Run history without exposing internal identifiers', async () => {
     const onObserveSessionChange = jest.fn();
 
     render(
@@ -858,16 +933,20 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Metadata' }));
-    expect(screen.getByText('Full Run ID')).toBeTruthy();
-    expect(screen.getByText('run-1')).toBeTruthy();
-    expect(screen.getByText('Command ID')).toBeTruthy();
-    expect(screen.getByText('cmd-1')).toBeTruthy();
-    expect(screen.getByText('Actor ID')).toBeTruthy();
-    expect(screen.getByText('actor-1')).toBeTruthy();
-    expect(screen.getByText('Member ID')).toBeTruthy();
-    expect(screen.getByText('default')).toBeTruthy();
-    expect(screen.getByText('Advanced details')).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: 'Details' }));
+    expect(screen.getByText('Run details')).toBeTruthy();
+    expect(screen.getByText('Status')).toBeTruthy();
+    expect(screen.getAllByText('Succeeded').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Endpoint')).toBeTruthy();
+    expect(screen.getAllByText('Submit').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Full Run ID')).toBeNull();
+    expect(screen.queryByText('run-1')).toBeNull();
+    expect(screen.queryByText('Command ID')).toBeNull();
+    expect(screen.queryByText('cmd-1')).toBeNull();
+    expect(screen.queryByText('Actor ID')).toBeNull();
+    expect(screen.queryByText('actor-1')).toBeNull();
+    expect(screen.queryByText('Member ID')).toBeNull();
+    expect(screen.getByText('Event payload')).toBeTruthy();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
@@ -891,7 +970,7 @@ describe('StudioMemberInvokePanel', () => {
     );
     expect(screen.getByRole('button', { name: 'Copy input' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy output' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy run id' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Copy run id' })).toBeNull();
     expect(
       screen.getByRole('button', { name: 'Retry as new run' }),
     ).toBeTruthy();
@@ -904,10 +983,6 @@ describe('StudioMemberInvokePanel', () => {
     expect(message.success).toHaveBeenCalledWith('Input copied.');
 
     expect(screen.getByRole('button', { name: 'Copy output' })).toBeDisabled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Copy run id' }));
-    expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith('run-1');
-    expect(message.success).toHaveBeenCalledWith('Run id copied.');
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry as new run' }));
     expect(screen.getByLabelText('Invocation request input')).toHaveValue(
@@ -1185,9 +1260,10 @@ describe('StudioMemberInvokePanel', () => {
     });
 
     expect(screen.getByText('Run history (1)')).toBeTruthy();
-    fireEvent.click(screen.getByRole('tab', { name: 'Metadata' }));
-    expect(screen.getByText('Command ID')).toBeTruthy();
-    expect(screen.getByText('cmd-only')).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: 'Details' }));
+    expect(screen.getByText('Run details')).toBeTruthy();
+    expect(screen.queryByText('Command ID')).toBeNull();
+    expect(screen.queryByText('cmd-only')).toBeNull();
     expect(screen.queryByRole('button', { name: '打开运行记录' })).toBeNull();
   });
 

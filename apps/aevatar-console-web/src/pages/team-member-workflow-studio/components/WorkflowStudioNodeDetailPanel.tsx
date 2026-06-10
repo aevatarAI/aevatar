@@ -649,12 +649,12 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
         >
           <div style={{ minWidth: 0 }}>
             <Typography.Text strong style={{ color: token.colorTextHeading }}>
-              {stepDraft.id}
+              {nodeTypeLabel}
             </Typography.Text>
             <Typography.Paragraph
               style={{ color: token.colorTextSecondary, margin: `${token.marginXXS}px 0 0` }}
             >
-              {nodeTypeLabel}
+              {t("teamMemberWorkflowStudio.nodeInspector.selectedNode", "Selected node")}
             </Typography.Paragraph>
           </div>
           <Button
@@ -691,10 +691,6 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
                 margin: `${token.marginSM}px 0 0`,
               }}
             >
-              <InspectorField
-                label={t("teamMemberWorkflowStudio.nodeInspector.stepId", "Step ID")}
-                value={stepDraft.id}
-              />
               <InspectorField
                 label={t("teamMemberWorkflowStudio.nodeInspector.type", "Type")}
                 value={nodeTypeLabel}

@@ -119,7 +119,6 @@ const enUSMessages = {
   'teams.home.summary.actionable': 'Teams needing action',
   'teams.home.summary.healthy': 'Recently completed teams',
   'teams.home.summary.total': 'Total AI teams',
-  'teams.home.team.identity': 'Team ID: {teamId}',
   'teams.home.team.unnamed': 'Unnamed team',
   'teams.home.title': 'My AI teams',
   'teams.home.view.cards': 'Card view',
@@ -172,8 +171,8 @@ const enUSMessages = {
   'teams.detail.messages.updateFailed': 'Failed to update team.',
   'teams.detail.messages.updateSuccess': 'Team updated.',
   'teams.detail.meta.memberCount': '{count, plural, one {# member} other {# members}}',
-  'teams.detail.meta.scopeId': 'Scope ID',
-  'teams.detail.meta.teamId': 'Team ID',
+  'teams.detail.meta.scopeId': 'Workspace',
+  'teams.detail.meta.teamId': 'Team',
   'teams.detail.overview.cards.currentRun': 'Latest run',
   'teams.detail.overview.cards.currentMember': 'Current member',
   'teams.detail.overview.cards.currentService': 'Current service',
@@ -201,8 +200,25 @@ const enUSMessages = {
   'teams.detail.overview.fallback.primaryService': 'Primary service',
   'teams.detail.overview.fallback.serviceEntry': 'Service entry {serviceId}',
   'teams.detail.overview.fallback.teamWorkflow': 'Team workflow',
-  'teams.detail.overview.identity.noService': 'No additional service identity yet',
+  'teams.detail.overview.identity.noService': 'No service is visible yet',
   'teams.detail.overview.identity.noVisibleRun': 'No visible run synced yet',
+  'teams.detail.overview.composition.memberDraft': 'Not bound yet.',
+  'teams.detail.overview.composition.memberReady':
+    'Bound and ready to receive traffic.',
+  'teams.detail.overview.configuration.versionAvailable':
+    'Current serving version is available.',
+  'teams.detail.overview.configuration.versionPending':
+    'Serving version is pending.',
+  'teams.detail.overview.configuration.workflowLinked': 'Workflow draft is linked.',
+  'teams.detail.overview.configuration.workflowPending':
+    'Workflow draft is not linked yet.',
+  'teams.detail.overview.member.selectedCaption':
+    "Selected from this team's members.",
+  'teams.detail.overview.run.visibleCaption': 'Latest run is available.',
+  'teams.detail.overview.service.boundCaption':
+    'Traffic is routed through the bound service.',
+  'teams.detail.overview.service.boundFallback': 'Bound service',
+  'teams.detail.overview.service.configuredCaption': 'Service routing is configured.',
   'teams.detail.overview.pill.run': 'Run · {value}',
   'teams.detail.overview.pill.runMissing': 'No recent visible run',
   'teams.detail.overview.pill.service': 'Service · {value}',
@@ -491,13 +507,16 @@ const enUSMessages = {
   'teams.members.empty.title': 'This team has no members yet',
   'teams.members.entry': 'Entry member',
   'teams.members.selected': 'Selected',
+  'teams.members.unnamed': 'Untitled member',
   'teams.members.service.bound': 'Bound service',
+  'teams.members.service.needsBinding':
+    'Bind this member before invoking it.',
   'teams.members.service.notBound': 'Not bound yet',
-  'teams.members.fallback.team': 'Team {teamId}',
+  'teams.members.service.ready': 'Ready to invoke.',
   'teams.members.loading.description': 'Reading members for this team.',
   'teams.members.loading.title': 'Reading member roster',
   'teams.members.noSelection.description':
-    'The current route has no team ID, so only runtime-observed member identities can be shown.',
+    'Choose a team from the list to review its members.',
   'teams.members.noSelection.title': 'No real team selected',
   'teams.members.roster': 'Member roster',
   'teams.members.syncing.description':
@@ -515,8 +534,8 @@ const enUSMessages = {
   'pages.teammemberinvoke.endpoint.missing.description':
     'The published service has no callable endpoints available to this page.',
   'pages.teammemberinvoke.fact.member': 'Member',
-  'pages.teammemberinvoke.fact.revision': 'Revision',
-  'pages.teammemberinvoke.fact.service': 'Published service',
+  'pages.teammemberinvoke.fact.revision': 'Serving state',
+  'pages.teammemberinvoke.fact.service': 'Service',
   'pages.teammemberinvoke.fact.workflow': 'Implementation',
   'pages.teammemberinvoke.implementation.workflow': 'Workflow',
   'pages.teammemberinvoke.load.failed':
@@ -533,7 +552,9 @@ const enUSMessages = {
     'Published service is not visible yet.',
   'pages.teammemberinvoke.service.pending.description':
     'The member binding exists, but the service catalog has not exposed its callable endpoints yet.',
-  'pages.teammemberinvoke.title': 'Invoke workflow member',
+  'pages.teammemberinvoke.title': 'Run member',
+  'pages.teammemberinvoke.revision.ready': 'Ready',
+  'pages.teammemberinvoke.service.bound': 'Bound service',
   'pages.teammemberinvoke.unbound': 'This workflow member is not bound yet.',
   'pages.teammemberinvoke.unbound.description':
     'Bind this workflow member first so it has a published callable service and endpoint contract.',
@@ -632,7 +653,6 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeDetail.rawConfigurationError':
     'Raw node configuration must be a JSON object.',
   'teamMemberWorkflowStudio.nodeDetail.sectionAria': 'Node detail',
-  'teamMemberWorkflowStudio.nodeDetail.stepId': 'Step ID: {stepId}',
   'teamMemberWorkflowStudio.nodeDetail.updateNode': 'Update node',
   'teamMemberWorkflowStudio.nodeInspector.basics': 'Basics',
   'teamMemberWorkflowStudio.nodeInspector.branches': 'Branches',
@@ -646,7 +666,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeInspector.resizeHandle':
     'Resize node inspector',
   'teamMemberWorkflowStudio.nodeInspector.sectionAria': 'Node inspector',
-  'teamMemberWorkflowStudio.nodeInspector.stepId': 'Step ID',
+  'teamMemberWorkflowStudio.nodeInspector.selectedNode': 'Selected node',
   'teamMemberWorkflowStudio.nodeInspector.targetRole': 'Target role',
   'teamMemberWorkflowStudio.nodeInspector.type': 'Type',
   'teamMemberWorkflowStudio.nodeLibrary.closeAria': 'Close node library',
@@ -677,6 +697,8 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.title': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': 'unknown',
+  'pages.studio.studiomembercurrentrunpanel.details': 'Details',
+  'pages.studio.studiomemberinvokepanel.endpoint': 'Endpoint',
 };
 
 export default enUSMessages;

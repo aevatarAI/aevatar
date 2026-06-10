@@ -4,7 +4,7 @@ import {
   PlusOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
-import { Button, Space, Tooltip, Typography, theme } from "antd";
+import { Button, Tooltip, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
 import {
@@ -14,10 +14,7 @@ import {
 import {
   DetailPill,
   FactLine,
-  CompactFactValue,
-  factValueFontFamily,
 } from "../components/TeamDetailPrimitives";
-import { t } from "@/shared/i18n/messages";
 
 type TeamRosterMemberRow = {
   readonly canInvokeAsEntry: boolean;
@@ -45,7 +42,6 @@ type TeamMembersTabProps = {
   readonly rosterLoading?: boolean;
   readonly rosterRows?: readonly TeamRosterMemberRow[];
   readonly rosterSyncing?: boolean;
-  readonly rosterTeamId?: string;
   readonly createMemberHref?: string;
   readonly entryActionBusyMemberId?: string;
   readonly onClearEntry?: () => void;
@@ -63,21 +59,198 @@ const ellipsisTextStyle: React.CSSProperties = {
 };
 
 const tableGridTemplateColumns =
-  "minmax(260px, 1.7fr) minmax(150px, 0.75fr) minmax(180px, 0.8fr) minmax(330px, max-content)";
+  "minmax(280px, 1.45fr) minmax(140px, 0.5fr) minmax(180px, 0.65fr) minmax(260px, 0.8fr)";
+
+const tableShellStyle: React.CSSProperties = {
+  borderRadius: 8,
+  overflow: "hidden",
+};
+
+const tableScrollStyle: React.CSSProperties = {
+  overflowX: "auto",
+};
+
+const tableInnerStyle: React.CSSProperties = {
+  minWidth: 0,
+  width: "100%",
+  "--team-members-grid-template": tableGridTemplateColumns,
+} as React.CSSProperties;
+
+const responsiveTableStyle = `
+@media (max-width: 760px) {
+  .team-members-table-header {
+    display: none !important;
+  }
+
+  .team-members-table-row {
+    align-items: flex-start !important;
+    gap: 12px !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-height: 0 !important;
+    padding: 16px 18px !important;
+  }
+
+  .team-members-table-actions {
+    width: 100% !important;
+  }
+
+  .team-members-table-primary-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    width: 100% !important;
+  }
+
+  .team-members-table-invoke-action,
+  .team-members-table-studio-action {
+    min-width: 0 !important;
+    padding-inline: 8px !important;
+    width: 100% !important;
+  }
+
+  .team-members-table-entry-action {
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .team-members-table-primary-actions {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+`;
+
+const tableHeaderStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "grid",
+  fontSize: 12,
+  fontWeight: 700,
+  gap: 20,
+  gridTemplateColumns: tableGridTemplateColumns,
+  padding: "10px 18px",
+};
+
+const tableHeaderActionStyle: React.CSSProperties = {
+  justifySelf: "start",
+};
+
+const rosterRowBaseStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "grid",
+  gap: 20,
+  gridTemplateColumns: tableGridTemplateColumns,
+  minHeight: 82,
+  padding: "14px 18px",
+};
+
+const memberNameRowStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  gap: 8,
+  minWidth: 0,
+};
+
+const memberCellStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  minWidth: 0,
+};
+
+const implementationCellStyle: React.CSSProperties = {
+  alignItems: "flex-start",
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  minWidth: 0,
+};
+
+const serviceCellStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  minWidth: 0,
+};
+
+const actionCellStyle: React.CSSProperties = {
+  alignItems: "flex-start",
+  display: "grid",
+  gap: 10,
+  justifyItems: "start",
+  minWidth: 0,
+};
+
+const primaryActionsStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "grid",
+  gap: 8,
+  gridTemplateColumns: "minmax(104px, max-content) minmax(148px, max-content)",
+  justifyContent: "start",
+  minWidth: 0,
+};
+
+const invokeActionStyle: React.CSSProperties = {
+  fontWeight: 650,
+  height: 32,
+  justifyContent: "center",
+  minWidth: 104,
+  paddingInline: 12,
+};
+
+const studioActionStyle: React.CSSProperties = {
+  height: 32,
+  justifyContent: "center",
+  minWidth: 148,
+  paddingInline: 12,
+};
+
+const entryActionStyle: React.CSSProperties = {
+  height: 32,
+  justifyContent: "center",
+  minWidth: 260,
+  paddingInline: 12,
+};
+
+const panelHeaderStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 12,
+  justifyContent: "space-between",
+  marginBottom: 12,
+  minWidth: 0,
+};
+
+const panelTitleGroupStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 10,
+  minWidth: 0,
+};
+
+const panelTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 800,
+  lineHeight: "24px",
+  margin: 0,
+};
+
+const panelCreateActionStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  minWidth: 0,
+};
 
 const EllipsisText: React.FC<{
   readonly children: string;
-  readonly monospace?: boolean;
   readonly strong?: boolean;
   readonly style?: React.CSSProperties;
   readonly type?: "secondary";
-}> = ({ children, monospace = false, strong = false, style, type }) => (
+}> = ({ children, strong = false, style, type }) => (
   <Tooltip placement="topLeft" title={children}>
     <Typography.Text
       strong={strong}
       style={{
         ...ellipsisTextStyle,
-        fontFamily: monospace ? factValueFontFamily : undefined,
         ...style,
       }}
       type={type}
@@ -97,11 +270,20 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   rosterLoading = false,
   rosterRows = [],
   rosterSyncing = false,
-  rosterTeamId = "",
 }) => {
   const intl = useIntl();
   const { token } = theme.useToken();
   const isEntryActionBusy = entryActionBusyMemberId.trim().length > 0;
+  const tableFrameStyle: React.CSSProperties = {
+    ...tableShellStyle,
+    border: `1px solid ${token.colorBorderSecondary}`,
+  };
+  const tableHeadStyle: React.CSSProperties = {
+    ...tableHeaderStyle,
+    background: token.colorFillQuaternary,
+    borderBottom: `1px solid ${token.colorBorderSecondary}`,
+    color: token.colorTextSecondary,
+  };
   const handleNavigate = React.useCallback(
     (href: string) => (event: React.MouseEvent<HTMLElement>) => {
       if (!href || !onNavigate) {
@@ -115,10 +297,12 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <AevatarPanel
-        title={intl.formatMessage({ id: "teams.members.title" })}
-        extra={
-          <Space size={10} wrap>
+      <AevatarPanel>
+        <div style={panelHeaderStyle}>
+          <div style={panelTitleGroupStyle}>
+            <Typography.Title level={3} style={panelTitleStyle}>
+              {intl.formatMessage({ id: "teams.members.title" })}
+            </Typography.Title>
             <Typography.Text style={{ fontSize: 12 }} type="secondary">
               {rosterRows.length > 0
                 ? intl.formatMessage(
@@ -127,29 +311,29 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                   )
                 : intl.formatMessage({ id: "teams.members.roster" })}
             </Typography.Text>
-            {createMemberHref ? (
-              <Button
-                href={createMemberHref}
-                icon={<PlusOutlined />}
-                onClick={handleNavigate(createMemberHref)}
-                size="small"
-                style={{
-                  borderRadius: 999,
-                  boxShadow: token.boxShadowTertiary,
-                  fontWeight: 600,
-                  height: 30,
-                  paddingInline: 14,
-                }}
-                type="primary"
-              >
-                {intl.formatMessage({
-                  id: "teams.members.actions.createWorkflowMember",
-                })}
-              </Button>
-            ) : null}
-          </Space>
-        }
-      >
+          </div>
+          {createMemberHref ? (
+            <Button
+              href={createMemberHref}
+              icon={<PlusOutlined />}
+              onClick={handleNavigate(createMemberHref)}
+              size="small"
+              style={{
+                ...panelCreateActionStyle,
+                borderRadius: 999,
+                boxShadow: token.boxShadowTertiary,
+                fontWeight: 600,
+                height: 30,
+                paddingInline: 14,
+              }}
+              type="primary"
+            >
+              {intl.formatMessage({
+                id: "teams.members.actions.createWorkflowMember",
+              })}
+            </Button>
+          ) : null}
+        </div>
         <Typography.Text style={{ maxWidth: 720 }} type="secondary">
           {intl.formatMessage({ id: "teams.members.description" })}
         </Typography.Text>
@@ -178,34 +362,17 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             })}
           />
         ) : rosterRows.length > 0 ? (
-          <div
-            style={{
-              border: "1px solid var(--ant-colorBorderSecondary)",
-              borderRadius: 18,
-              overflow: "hidden",
-            }}
-          >
-            <div style={{ overflowX: "auto" }}>
-              <div style={{ minWidth: 1060 }}>
-                <div
-                  style={{
-                    background: "var(--ant-colorBgContainerDisabled)",
-                    borderBottom: "1px solid var(--ant-colorBorderSecondary)",
-                    color: "var(--ant-colorTextSecondary)",
-                    display: "grid",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    gap: 16,
-                    gridTemplateColumns: tableGridTemplateColumns,
-                    padding: "12px 16px",
-                  }}
-                >
+          <div style={tableFrameStyle}>
+            <div style={tableScrollStyle}>
+              <div style={tableInnerStyle}>
+                <style>{responsiveTableStyle}</style>
+                <div className="team-members-table-header" style={tableHeadStyle}>
                   <span>{intl.formatMessage({ id: "teams.members.columns.member" })}</span>
                   <span>
                     {intl.formatMessage({ id: "teams.members.columns.implementation" })}
                   </span>
                   <span>{intl.formatMessage({ id: "teams.members.columns.service" })}</span>
-                  <span style={{ justifySelf: "flex-end" }}>
+                  <span style={tableHeaderActionStyle}>
                     {intl.formatMessage({ id: "teams.members.columns.actions" })}
                   </span>
                 </div>
@@ -221,37 +388,27 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
 
                   return (
                     <div
+                      className="team-members-table-row"
                       key={row.key}
                       style={{
+                        ...rosterRowBaseStyle,
                         alignItems: "center",
                         background: row.isEntryMember
-                          ? "linear-gradient(90deg, var(--ant-colorPrimaryBg) 0%, var(--ant-colorBgContainer) 30%)"
+                          ? `linear-gradient(90deg, ${token.colorPrimaryBg} 0%, ${token.colorBgContainer} 30%)`
                           : row.isSelectedMember
-                            ? "var(--ant-colorFillQuaternary)"
+                            ? token.colorFillQuaternary
                             : token.colorBgContainer,
                         borderTop:
-                          index === 0 ? "none" : "1px solid var(--ant-colorBorderSecondary)",
+                          index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
                         boxShadow: row.isEntryMember
-                          ? "inset 4px 0 0 var(--ant-colorSuccess)"
+                          ? `inset 4px 0 0 ${token.colorSuccess}`
                           : row.isSelectedMember
-                            ? "inset 4px 0 0 var(--ant-colorInfo)"
+                            ? `inset 4px 0 0 ${token.colorInfo}`
                             : undefined,
-                        display: "grid",
-                        gap: 16,
-                        gridTemplateColumns: tableGridTemplateColumns,
-                        minHeight: 86,
-                        padding: "14px 16px",
                       }}
                     >
-                      <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                        <div
-                          style={{
-                            alignItems: "center",
-                            display: "flex",
-                            gap: 8,
-                            minWidth: 0,
-                          }}
-                        >
+                      <div style={memberCellStyle}>
+                        <div style={memberNameRowStyle}>
                           <EllipsisText strong>{row.name}</EllipsisText>
                           {row.isEntryMember ? (
                             <DetailPill
@@ -276,46 +433,18 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                             />
                           ) : null}
                         </div>
-                        <Space size={8} style={{ minWidth: 0 }} wrap>
-                          <EllipsisText
-                            monospace
-                            style={{
-                              color: token.colorTextSecondary,
-                              fontSize: 12,
-                              maxWidth: 180,
-                            }}
-                            type="secondary"
-                          >
-                            {row.memberId}
-                          </EllipsisText>
-                          <Typography.Text style={{ color: token.colorTextQuaternary }}>
-                            ·
-                          </Typography.Text>
-                          <div style={{ maxWidth: 300, minWidth: 0 }}>
+                        {row.description ? (
+                          <div style={{ maxWidth: 360, minWidth: 0 }}>
                             <FactLine
                               monospace={false}
-                              rows={1}
+                              rows={2}
                               secondary
-                              text={
-                                row.description ||
-                                intl.formatMessage(
-                                  { id: "teams.members.fallback.team" },
-                                  { teamId: rosterTeamId || "--" },
-                                )
-                              }
+                              text={row.description}
                             />
                           </div>
-                        </Space>
+                        ) : null}
                       </div>
-                      <div
-                        style={{
-                          alignItems: "flex-start",
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 6,
-                          minWidth: 0,
-                        }}
-                      >
+                      <div style={implementationCellStyle}>
                         <Typography.Text strong>{row.implementationKind}</Typography.Text>
                         <DetailPill
                           compact
@@ -328,70 +457,80 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           text={row.lifecycleLabel}
                         />
                       </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                        <CompactFactValue
-                          color={row.isServiceBound ? token.colorText : token.colorTextTertiary}
-                          head={4}
-                          maxWidth={160}
+                      <div style={serviceCellStyle}>
+                        <Typography.Text
                           strong={row.isServiceBound}
-                          tail={4}
-                          value={row.serviceId}
-                        />
-                        <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                          type={row.isServiceBound ? undefined : "secondary"}
+                        >
                           {row.isServiceBound
                             ? intl.formatMessage({ id: "teams.members.service.bound" })
                             : intl.formatMessage({ id: "teams.members.service.notBound" })}
                         </Typography.Text>
+                        <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                          {row.isServiceBound
+                            ? intl.formatMessage({ id: "teams.members.service.ready" })
+                            : intl.formatMessage({ id: "teams.members.service.needsBinding" })}
+                        </Typography.Text>
                       </div>
-                      <Space
-                        wrap
-                        size={8}
-                        style={{ justifyContent: "flex-end", width: "100%" }}
-                      >
-                        <Button
-                          href={row.canInvokeMember ? row.invokeHref : undefined}
-                          disabled={!row.canInvokeMember}
-                          icon={<PlayCircleOutlined />}
-                          onClick={
-                            row.canInvokeMember
-                              ? handleNavigate(row.invokeHref)
-                              : undefined
-                          }
-                          size="small"
-                          style={
-                            row.canInvokeMember
-                              ? { color: token.colorSuccess, fontWeight: 600 }
-                              : undefined
-                          }
-                          title={row.canInvokeMember ? undefined : invokeDisabledReason}
-                          type="text"
+                      <div className="team-members-table-actions" style={actionCellStyle}>
+                        <div
+                          className="team-members-table-primary-actions"
+                          style={primaryActionsStyle}
                         >
-                          {intl.formatMessage({ id: "teams.members.actions.invokeWorkflow" })}
-                        </Button>
-                        <Button
-                          href={row.workflowSupported ? row.studioHref : undefined}
-                          disabled={!row.workflowSupported}
-                          icon={<ToolOutlined />}
-                          onClick={
-                            row.workflowSupported
-                              ? handleNavigate(row.studioHref)
-                              : undefined
-                          }
-                          size="small"
-                          title={
-                            row.workflowSupported
-                              ? undefined
-                              : intl.formatMessage({
-                                  id: "teams.members.actions.workflowOnlyTitle",
-                                })
-                          }
-                          type="default"
-                        >
-                          {intl.formatMessage({ id: "teams.members.actions.workflowStudio" })}
-                        </Button>
+                          <Button
+                            className="team-members-table-invoke-action"
+                            href={row.canInvokeMember ? row.invokeHref : undefined}
+                            disabled={!row.canInvokeMember}
+                            icon={<PlayCircleOutlined />}
+                            onClick={
+                              row.canInvokeMember
+                                ? handleNavigate(row.invokeHref)
+                                : undefined
+                            }
+                            size="small"
+                            style={{
+                              ...invokeActionStyle,
+                              ...(row.canInvokeMember
+                                ? {
+                                    background: token.colorSuccessBg,
+                                    borderColor: token.colorSuccessBorder,
+                                    color: token.colorSuccess,
+                                  }
+                                : null),
+                            }}
+                            title={row.canInvokeMember ? undefined : invokeDisabledReason}
+                            type="default"
+                          >
+                            {intl.formatMessage({ id: "teams.members.actions.invokeWorkflow" })}
+                          </Button>
+                          <Button
+                            className="team-members-table-studio-action"
+                            href={row.workflowSupported ? row.studioHref : undefined}
+                            disabled={!row.workflowSupported}
+                            icon={<ToolOutlined />}
+                            onClick={
+                              row.workflowSupported
+                                ? handleNavigate(row.studioHref)
+                                : undefined
+                            }
+                            size="small"
+                            style={studioActionStyle}
+                            title={
+                              row.workflowSupported
+                                ? undefined
+                                : intl.formatMessage({
+                                    id: "teams.members.actions.workflowOnlyTitle",
+                                  })
+                            }
+                            type="default"
+                          >
+                            {intl.formatMessage({ id: "teams.members.actions.workflowStudio" })}
+                          </Button>
+                        </div>
                         {row.isEntryMember ? (
                           <Button
                             icon={<CheckCircleOutlined />}
+                            className="team-members-table-entry-action"
                             disabled={
                               rowBusy ||
                               (isEntryActionBusy && entryActionBusyMemberId !== row.memberId)
@@ -399,12 +538,17 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                             loading={entryActionBusyMemberId === row.memberId}
                             onClick={onClearEntry}
                             size="small"
-                            type="text"
+                            style={{
+                              ...entryActionStyle,
+                              color: token.colorTextSecondary,
+                            }}
+                            type="default"
                           >
                             {intl.formatMessage({ id: "teams.members.actions.clearEntry" })}
                           </Button>
                         ) : row.canInvokeAsEntry && onSetEntry ? (
                           <Button
+                            className="team-members-table-entry-action"
                             disabled={
                               rowBusy ||
                               (isEntryActionBusy &&
@@ -413,19 +557,23 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                             loading={entryActionBusyMemberId === row.memberId}
                             onClick={() => onSetEntry(row.memberId)}
                             size="small"
-                            type="text"
+                            style={{
+                              ...entryActionStyle,
+                              color: token.colorTextSecondary,
+                            }}
+                            type="default"
                           >
                             {intl.formatMessage({ id: "teams.members.actions.setEntry" })}
                           </Button>
                         ) : null}
-                      </Space>
+                      </div>
                     </div>
                   );
                 })}
               </div>
             </div>
           </div>
-        ) : rosterTeamId ? (
+        ) : createMemberHref ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <AevatarInspectorEmpty
               compact

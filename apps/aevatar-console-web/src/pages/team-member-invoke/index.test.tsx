@@ -32,14 +32,18 @@ jest.mock("../studio/components/StudioMemberInvokePanel", () => ({
     scopeId?: string;
     selectedMemberLabel?: string;
     services?: Array<{ serviceId: string }>;
+    targetSummaryVariant?: string;
+    teamId?: string;
   }) => {
     const React = require("react");
     return React.createElement("div", { "data-testid": "member-invoke-panel" }, [
       React.createElement("span", { key: "scope" }, `scope:${props.scopeId}`),
       React.createElement("span", { key: "member" }, `member:${props.memberId}`),
-      React.createElement("span", { key: "target" }, `target:${props.runtimeTarget}`),
+      React.createElement("span", { key: "target" }, `target:${props.runtimeTarget ?? "default"}`),
+      React.createElement("span", { key: "team" }, `team:${props.teamId}`),
       React.createElement("span", { key: "service" }, `service:${props.initialServiceId}`),
       React.createElement("span", { key: "label" }, `label:${props.selectedMemberLabel}`),
+      React.createElement("span", { key: "variant" }, `variant:${props.targetSummaryVariant}`),
       React.createElement(
         "span",
         { key: "services" },
@@ -174,9 +178,10 @@ describe("TeamMemberInvokePage", () => {
     );
   });
 
-  it("renders the invoke workbench with an explicit member runtime target", async () => {
+  it("renders the invoke workbench with Studio team-context routing", async () => {
     renderWithQueryClient(React.createElement(TeamMemberInvokePage));
 
+    expect(await screen.findByText("Run member")).toBeTruthy();
     expect(await screen.findByTestId("member-invoke-panel")).toHaveTextContent(
       "scope:scope-1",
     );
@@ -184,7 +189,10 @@ describe("TeamMemberInvokePage", () => {
       "member:member-alpha",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
-      "target:member",
+      "target:default",
+    );
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "team:team-1",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
       "service:svc-alpha",
@@ -192,6 +200,11 @@ describe("TeamMemberInvokePage", () => {
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
       "services:svc-alpha",
     );
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "variant:member-run",
+    );
+    expect(screen.queryByRole("button", { name: "Team members" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Workflow Studio" })).toBeNull();
     expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
       appId: "default",
     });
@@ -293,5 +306,6 @@ describe("TeamMemberInvokePage", () => {
       await screen.findByText("This workflow member is not bound yet."),
     ).toBeTruthy();
     expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Workflow Studio" })).toHaveLength(1);
   });
 });

@@ -1,10 +1,6 @@
-import {
-  ArrowLeftOutlined,
-  EditOutlined,
-  PlayCircleOutlined,
-} from "@ant-design/icons";
+import { EditOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Space, Spin, Typography, theme } from "antd";
+import { Button, Spin } from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
@@ -23,14 +19,12 @@ import {
 } from "@/shared/runs/scopeConsole";
 import { studioApi } from "@/shared/studio/api";
 import {
-  formatStudioMemberLifecycleStage,
   normalizeStudioMemberBindingImplementationKind,
 } from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
   AevatarPanel,
-  AevatarStatusTag,
 } from "@/shared/ui/aevatarPageShells";
 import { describeError } from "@/shared/ui/errorText";
 import StudioMemberInvokePanel from "../studio/components/StudioMemberInvokePanel";
@@ -70,33 +64,11 @@ function readTeamMemberInvokeRouteState(
   };
 }
 
-function formatTargetLabel(value: string | null | undefined): string {
-  const normalized = trimOptional(value);
-  return normalized || "--";
-}
-
-const factGridStyle: React.CSSProperties = {
-  display: "grid",
-  gap: 12,
-  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-};
-
-const factCardStyle: React.CSSProperties = {
-  border: "1px solid var(--ant-colorBorderSecondary)",
-  borderRadius: 8,
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-  minWidth: 0,
-  padding: "10px 12px",
-};
-
 const invokeStageStyle: React.CSSProperties = {
   minHeight: 520,
 };
 
 const TeamMemberInvokePage: React.FC = () => {
-  const { token } = theme.useToken();
   const locationSnapshot = React.useSyncExternalStore(
     subscribeToLocationChanges,
     getLocationSnapshot,
@@ -206,8 +178,6 @@ const TeamMemberInvokePage: React.FC = () => {
       : null);
   const memberLabel =
     trimOptional(memberSummary?.displayName) ||
-    trimOptional(memberSummary?.memberId) ||
-    route.memberId ||
     t("pages.teammemberinvoke.member", "Member");
   const isLoading =
     memberQuery.isLoading || bindingQuery.isLoading || servicesQuery.isLoading;
@@ -293,86 +263,12 @@ const TeamMemberInvokePage: React.FC = () => {
 
   return (
     <AevatarPageShell
+      breadcrumbRender={false}
       layoutMode="document"
       onBack={() => history.push(backHref)}
-      title={t("pages.teammemberinvoke.title", "Invoke workflow member")}
-      extra={
-        <Space wrap>
-          <Button
-            icon={<ArrowLeftOutlined />}
-            onClick={() => history.push(backHref)}
-          >
-            {t("pages.teammemberinvoke.back", "Team members")}
-          </Button>
-          <Button
-            icon={<EditOutlined />}
-            onClick={() => history.push(workflowStudioHref)}
-          >
-            {t("pages.teammemberinvoke.open.studio", "Workflow Studio")}
-          </Button>
-        </Space>
-      }
+      title={t("pages.teammemberinvoke.title", "Run member")}
     >
-      <AevatarPanel
-        title={
-          <Space size={8} wrap>
-            <PlayCircleOutlined style={{ color: token.colorPrimary }} />
-            <span>{memberLabel}</span>
-          </Space>
-        }
-        description={t(
-          "pages.teammemberinvoke.description",
-          "Run the bound published workflow member and keep the runtime observation pinned to this member.",
-        )}
-        extra={
-          memberSummary ? (
-            <AevatarStatusTag
-              domain="asset"
-              label={formatStudioMemberLifecycleStage(memberSummary.lifecycleStage)}
-              status={memberSummary.lifecycleStage}
-            />
-          ) : null
-        }
-      >
-        <div style={factGridStyle}>
-          <div style={factCardStyle}>
-            <Typography.Text type="secondary">
-              {t("pages.teammemberinvoke.fact.member", "Member")}
-            </Typography.Text>
-            <Typography.Text copyable={{ text: route.memberId }} ellipsis strong>
-              {formatTargetLabel(route.memberId)}
-            </Typography.Text>
-          </div>
-          <div style={factCardStyle}>
-            <Typography.Text type="secondary">
-              {t("pages.teammemberinvoke.fact.service", "Published service")}
-            </Typography.Text>
-            <Typography.Text copyable={Boolean(publishedServiceId)} ellipsis strong>
-              {formatTargetLabel(publishedServiceId)}
-            </Typography.Text>
-          </div>
-          <div style={factCardStyle}>
-            <Typography.Text type="secondary">
-              {t("pages.teammemberinvoke.fact.revision", "Revision")}
-            </Typography.Text>
-            <Typography.Text ellipsis strong>
-              {formatTargetLabel(memberRevision?.revisionId || lastBinding?.revisionId)}
-            </Typography.Text>
-          </div>
-          <div style={factCardStyle}>
-            <Typography.Text type="secondary">
-              {t("pages.teammemberinvoke.fact.workflow", "Implementation")}
-            </Typography.Text>
-            <Typography.Text ellipsis strong>
-              {memberKind === "workflow"
-                ? t("pages.teammemberinvoke.implementation.workflow", "Workflow")
-                : formatTargetLabel(memberKind)}
-            </Typography.Text>
-          </div>
-        </div>
-      </AevatarPanel>
-
-      <AevatarPanel ghost layoutMode="document" style={invokeStageStyle}>
+      <div style={invokeStageStyle}>
         {isLoading ? (
           <div
             style={{
@@ -398,7 +294,7 @@ const TeamMemberInvokePage: React.FC = () => {
                 onClick={() => history.push(workflowStudioHref)}
                 type="primary"
               >
-                {t("pages.teammemberinvoke.resolve.in.studio", "Open Workflow Studio")}
+                {t("pages.teammemberinvoke.open.studio", "Workflow Studio")}
               </Button>
             }
             title={blockedState.message}
@@ -414,13 +310,14 @@ const TeamMemberInvokePage: React.FC = () => {
             initialServiceId={publishedServiceId}
             memberId={route.memberId}
             memberRevision={memberRevision}
-            runtimeTarget="member"
+            teamId={route.teamId}
             scopeId={route.scopeId}
             selectedMemberLabel={memberLabel}
             services={invokeServices}
+            targetSummaryVariant="member-run"
           />
         )}
-      </AevatarPanel>
+      </div>
     </AevatarPageShell>
   );
 };
