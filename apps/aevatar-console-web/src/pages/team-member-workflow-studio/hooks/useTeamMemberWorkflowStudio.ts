@@ -1547,7 +1547,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     );
     setEditableDocument(result.document);
     setSelectedEdgeId("");
-    setSelectedNodeId(result.nodeId);
+    setSelectedNodeId("");
     setDirty(true);
   }, [editableDocument, selectedEdgeId]);
   const updateSelectedStepConfiguration = React.useCallback(
