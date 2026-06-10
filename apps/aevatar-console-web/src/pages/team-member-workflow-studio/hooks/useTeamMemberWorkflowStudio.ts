@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { message } from "antd";
 import { AGUIEventType } from "@aevatar-react-sdk/types";
 import React from "react";
@@ -85,6 +85,13 @@ type CreatedWorkflowMember = {
   readonly memberId: string;
   readonly savedDraft: SavedWorkflowDraft;
 };
+
+function getTeamMemberWorkflowStudioTeamQueryKey(
+  scopeId: string,
+  teamId: string,
+) {
+  return ["team-member-workflow-studio", "team", scopeId, teamId] as const;
+}
 
 type TeamMemberWorkflowStudioState = {
   readonly publishMember: () => void;
@@ -516,6 +523,7 @@ async function saveWorkflowDraft(input: {
 }
 
 export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
+  const queryClient = useQueryClient();
   const locationSnapshot = React.useSyncExternalStore(
     subscribeToLocationChanges,
     getLocationSnapshot,
@@ -552,9 +560,34 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   });
   const teamQuery = useQuery({
     enabled: Boolean(route.scopeId && route.teamId),
-    queryKey: ["team-member-workflow-studio", "team", route.scopeId, route.teamId],
+    queryKey: getTeamMemberWorkflowStudioTeamQueryKey(
+      route.scopeId,
+      route.teamId,
+    ),
     queryFn: () => studioApi.getTeam(route.scopeId, route.teamId),
   });
+  const refreshTeamMemberSurfaces = React.useCallback(
+    async (scopeId: string, teamId: string) => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: getTeamMemberWorkflowStudioTeamQueryKey(scopeId, teamId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["teams", "team-members", scopeId, teamId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["teams", "team-summary", scopeId, teamId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["teams", "members", scopeId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["teams", "roster", scopeId],
+        }),
+      ]);
+    },
+    [queryClient],
+  );
   const workspaceSettingsQuery = useQuery({
     enabled: Boolean(route.scopeId),
     queryKey: [
@@ -763,15 +796,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         throw new Error("Workflow draft save did not return a stable member id.");
       }
 
-      const createdMember = await studioApi.createMember({
+      const assignedMember = await studioApi.updateMemberTeamAssignment({
         scopeId: route.scopeId,
-        displayName: savedDraft.title,
-        implementationKind: "workflow",
-        description: trimOptional(savedDraft.document.description),
         memberId,
         teamId: route.teamId,
       });
-      const createdMemberId = trimOptional(createdMember.memberId) || memberId;
+      const createdMemberId =
+        trimOptional(assignedMember.summary.memberId) || memberId;
       const serialized = await studioApi.serializeYaml({
         document: {
           ...savedDraft.document,
@@ -800,7 +831,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     onSuccess: ({ memberId, savedDraft }) => {
       applySavedDraft(savedDraft);
-      void teamQuery.refetch();
+      void refreshTeamMemberSurfaces(route.scopeId, route.teamId);
       void message.success("Workflow member created.");
       history.replace(
         buildTeamMemberWorkflowStudioHref({
