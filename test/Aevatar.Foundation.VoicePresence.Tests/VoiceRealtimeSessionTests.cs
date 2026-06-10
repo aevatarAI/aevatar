@@ -352,6 +352,59 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
+    public async Task VoicePresenceTransportAttachmentPort_should_dispatch_attach_signal_and_return_active_transport_lease_handle()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var port = new VoicePresenceTransportAttachmentPort(dispatchPort);
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var handle = CreateLeaseHandle(expiresAt);
+
+        var attached = await port.AttachAsync(handle, new PassiveVoiceTransport(), CancellationToken.None);
+
+        attached.ActiveTransportLeaseId.ShouldNotBeNullOrWhiteSpace();
+        dispatchPort.Dispatches.ShouldHaveSingleItem().ActorId.ShouldBe("agent-1");
+        var signal = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<VoiceModuleSignal>();
+        signal.ModuleName.ShouldBe("voice_presence");
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportAttachRequested);
+        signal.TransportAttachRequested.SessionId.ShouldBe("lease-1");
+        signal.TransportAttachRequested.OwnerId.ShouldBe("host-1");
+        signal.TransportAttachRequested.TransportLeaseId.ShouldBe(attached.ActiveTransportLeaseId);
+        signal.TransportAttachRequested.LeaseExpiresAt.ToDateTimeOffset().ShouldBe(expiresAt.ToUniversalTime());
+    }
+
+    [Fact]
+    public async Task VoicePresenceTransportAttachmentPort_should_dispatch_detach_signal_for_active_transport_lease()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var port = new VoicePresenceTransportAttachmentPort(dispatchPort);
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var handle = CreateLeaseHandle(expiresAt, activeTransportLeaseId: "transport-1");
+
+        await port.DetachAsync(handle, new PassiveVoiceTransport(), CancellationToken.None);
+
+        dispatchPort.Dispatches.ShouldHaveSingleItem().ActorId.ShouldBe("agent-1");
+        var signal = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<VoiceModuleSignal>();
+        signal.ModuleName.ShouldBe("voice_presence");
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportDetachRequested);
+        signal.TransportDetachRequested.SessionId.ShouldBe("lease-1");
+        signal.TransportDetachRequested.OwnerId.ShouldBe("host-1");
+        signal.TransportDetachRequested.TransportLeaseId.ShouldBe("transport-1");
+        signal.TransportDetachRequested.Reason.ShouldBe("host_transport_detached");
+        signal.TransportDetachRequested.LeaseExpiresAt.ToDateTimeOffset().ShouldBe(expiresAt.ToUniversalTime());
+    }
+
+    [Fact]
+    public async Task VoicePresenceTransportAttachmentPort_should_not_dispatch_detach_without_active_transport_lease()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var port = new VoicePresenceTransportAttachmentPort(dispatchPort);
+
+        await port.DetachAsync(CreateLeaseHandle(), null, CancellationToken.None);
+
+        dispatchPort.Dispatches.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_lease_signal_and_return_accepted_handle()
     {
         var dispatchPort = new RecordingDispatchPort();
