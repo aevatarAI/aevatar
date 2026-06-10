@@ -18,6 +18,7 @@ using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using WorkflowRunCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 
@@ -276,6 +277,10 @@ public sealed class AevatarInvocationDispatcher
         if (scope.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
+        var callerCredential = ResolveWorkflowCallerCredential(AgentToolRequestContext.Current);
+        if (callerCredential.Error != null)
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(callerCredential.Error), callerCredential.Error);
+
         var metadata = BuildPayloadHeaders(request.Inputs.Headers);
         var source = workflowYamls is { Length: > 0 }
             ? WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId)
@@ -289,7 +294,8 @@ public sealed class AevatarInvocationDispatcher
             InputParts: ToWorkflowInputParts(request.Inputs),
             Metadata: metadata,
             ScopeId: scope.Value!.ScopeId,
-            LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current));
+            LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current),
+            CallerCredential: callerCredential.Value);
 
         var result = await _workflowDispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded || result.Receipt == null)
@@ -963,6 +969,21 @@ public sealed class AevatarInvocationDispatcher
             context.Routing.NyxIdRoutePreference);
     }
 
+    private static WorkflowCallerCredentialResolution ResolveWorkflowCallerCredential(AgentToolExecutionContext? context)
+    {
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(context?.Credentials.NyxIdAccessToken);
+        if (parsed.IsInvalid)
+        {
+            return WorkflowCallerCredentialResolution.Failed(Error(
+                WorkflowChatRunStartError.InvalidCallerCredential.ToString(),
+                "Caller credential is invalid."));
+        }
+
+        return WorkflowCallerCredentialResolution.Success(parsed.IsMissing
+            ? null
+            : new WorkflowRunCallerCredential(parsed.NormalizedBearerToken));
+    }
+
     private static bool TryGetManagedWorkflowRuntimeContext(
         AgentToolExecutionContext? context,
         out AgentWorkflowRuntimeContext workflowRuntimeContext)
@@ -1097,6 +1118,17 @@ public sealed class AevatarInvocationDispatcher
         public static CallerScopeResolution Success(InvocationCallerScope scope) => new(scope, null);
 
         public static CallerScopeResolution Failed(InvocationToolError error) => new(null, error);
+    }
+
+    private sealed record WorkflowCallerCredentialResolution(
+        WorkflowRunCallerCredential? Value,
+        InvocationToolError? Error)
+    {
+        public static WorkflowCallerCredentialResolution Success(WorkflowRunCallerCredential? credential) =>
+            new(credential, null);
+
+        public static WorkflowCallerCredentialResolution Failed(InvocationToolError error) =>
+            new(null, error);
     }
 
     private sealed record ActorTargetResolution(string ActorId, InvocationToolError? Error)
