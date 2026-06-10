@@ -83,6 +83,48 @@ public class WorkflowLoopModuleExpressionEvaluationTests
     }
 
     [Fact]
+    public async Task DispatchStep_ShouldPreserveEscapedExpressionOpenInParameters()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "tool",
+                    Type = "tool_call",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["code"] = """
+                            const user = `$${event.user_id}`;
+                            echo "$${HOME}"
+                            """,
+                        ["mixed"] = "literal=$${input}; evaluated=${input}",
+                    },
+                },
+            ],
+        };
+
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "run-escaped",
+            Input = "hello",
+        }), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["code"].Should().Contain("const user = `${event.user_id}`;");
+        request.Parameters["code"].Should().Contain("echo \"${HOME}\"");
+        request.Parameters["mixed"].Should().Be("literal=${input}; evaluated=hello");
+    }
+
+    [Fact]
     public async Task DispatchStep_WhenLlmCallOmitsRole_ShouldAssignImplicitAssistantTarget()
     {
         var workflow = new WorkflowDefinition
@@ -111,6 +153,52 @@ public class WorkflowLoopModuleExpressionEvaluationTests
 
         var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event.Should().BeOfType<StepRequestEvent>().Subject;
         request.TargetRole.Should().Be("assistant");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_ShouldHydrateTypedWorkflowRuntimeBeforeFirstStepDispatch()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "tool",
+                    Type = "tool_call",
+                },
+            ],
+        };
+
+        var ctx = new CapturingContext();
+        var stateHost = (IWorkflowExecutionStateHost)ctx.Agent;
+        var module = new WorkflowExecutionKernel(workflow, stateHost);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "child-run",
+            Input = "hello",
+            WorkflowRuntime = new WorkflowToolRuntimeContextPayload
+            {
+                ParentActorId = " parent-actor ",
+                ParentRunId = " parent-run ",
+                ParentStepId = " parent-step ",
+                RootRunId = " root-run ",
+                Depth = 3,
+            },
+        }), ctx, CancellationToken.None);
+
+        stateHost.ExecutionContextSnapshot.WorkflowRuntime.Should().NotBeNull();
+        stateHost.ExecutionContextSnapshot.WorkflowRuntime!.ParentActorId.Should().Be("parent-actor");
+        stateHost.ExecutionContextSnapshot.WorkflowRuntime.ParentRunId.Should().Be("parent-run");
+        stateHost.ExecutionContextSnapshot.WorkflowRuntime.ParentStepId.Should().Be("parent-step");
+        stateHost.ExecutionContextSnapshot.WorkflowRuntime.RootRunId.Should().Be("root-run");
+        stateHost.ExecutionContextSnapshot.WorkflowRuntime.Depth.Should().Be(3);
+        ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Which.StepId.Should().Be("tool");
     }
 
     [Fact]
@@ -318,6 +406,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         {
             ExecutionContextState.Llm = null;
             ExecutionContextState.CallerCredential = null;
+            ExecutionContextState.WorkflowRuntime = null;
             return Task.CompletedTask;
         }
 
@@ -366,6 +455,8 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             state.Llm = null;
         if (delta.ClearCallerCredential)
             state.CallerCredential = null;
+        if (delta.ClearWorkflowRuntime)
+            state.WorkflowRuntime = null;
         if (delta.Llm != null)
         {
             state.Llm = new WorkflowLlmExecutionContextState
@@ -383,6 +474,18 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
+            };
+        }
+
+        if (delta.WorkflowRuntime != null)
+        {
+            state.WorkflowRuntime = new WorkflowToolRuntimeContextState
+            {
+                ParentActorId = delta.WorkflowRuntime.ParentActorId,
+                ParentRunId = delta.WorkflowRuntime.ParentRunId,
+                ParentStepId = delta.WorkflowRuntime.ParentStepId,
+                RootRunId = delta.WorkflowRuntime.RootRunId,
+                Depth = delta.WorkflowRuntime.Depth,
             };
         }
     }

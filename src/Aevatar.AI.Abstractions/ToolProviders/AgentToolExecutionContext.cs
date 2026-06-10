@@ -13,9 +13,34 @@ public sealed record AgentToolExecutionContext(
     AgentToolSenderBindingContext SenderBinding,
     LLMRequestRoutingContext Routing,
     AgentToolConnectedServicesContext ConnectedServices,
+    AgentWorkflowRuntimeContext WorkflowRuntime,
     AgentSkillRecoveryContext SkillRecovery,
     IReadOnlyDictionary<string, string> ExternalMetadata)
 {
+    public AgentToolExecutionContext(
+        AgentToolRequestIdentity Request,
+        AgentToolCredentials Credentials,
+        AgentToolCallerContext Caller,
+        AgentToolChannelContext Channel,
+        AgentToolSenderBindingContext SenderBinding,
+        LLMRequestRoutingContext Routing,
+        AgentToolConnectedServicesContext ConnectedServices,
+        AgentSkillRecoveryContext SkillRecovery,
+        IReadOnlyDictionary<string, string> ExternalMetadata)
+        : this(
+            Request,
+            Credentials,
+            Caller,
+            Channel,
+            SenderBinding,
+            Routing,
+            ConnectedServices,
+            AgentWorkflowRuntimeContext.Empty,
+            SkillRecovery,
+            ExternalMetadata)
+    {
+    }
+
     public AgentToolVisibilityScope ToolVisibility { get; init; } = AgentToolVisibilityScope.Unrestricted;
 
     public static AgentToolExecutionContext Empty { get; } = new(
@@ -26,6 +51,7 @@ public sealed record AgentToolExecutionContext(
         AgentToolSenderBindingContext.Empty,
         LLMRequestRoutingContext.Empty,
         AgentToolConnectedServicesContext.Empty,
+        AgentWorkflowRuntimeContext.Empty,
         AgentSkillRecoveryContext.Empty,
         new Dictionary<string, string>(StringComparer.Ordinal));
 
@@ -108,6 +134,21 @@ public sealed record AgentToolSenderBindingContext(string? BindingId)
 public sealed record AgentToolConnectedServicesContext(string? ContextJson)
 {
     public static AgentToolConnectedServicesContext Empty { get; } = new((string?)null);
+}
+
+public sealed record AgentWorkflowRuntimeContext(
+    string? ParentActorId,
+    string? ParentRunId,
+    string? ParentStepId,
+    string? RootRunId,
+    int Depth)
+{
+    public static AgentWorkflowRuntimeContext Empty { get; } = new(null, null, null, null, 0);
+
+    public bool HasManagedParent =>
+        !string.IsNullOrWhiteSpace(ParentActorId) &&
+        !string.IsNullOrWhiteSpace(ParentRunId) &&
+        !string.IsNullOrWhiteSpace(ParentStepId);
 }
 
 public sealed record AgentSkillRecoveryContext(

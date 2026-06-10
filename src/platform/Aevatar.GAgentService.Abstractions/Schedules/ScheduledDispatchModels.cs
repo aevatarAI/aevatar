@@ -220,7 +220,8 @@ public sealed record ScheduledServiceInvocationDispatchReceipt(
 public sealed record ScheduledServiceInvocationDispatchRequest(
     ServiceInvocationRequest Request,
     ScheduledServiceInvocationAuth? Auth = null,
-    IReadOnlyDictionary<string, string>? Headers = null);
+    IReadOnlyDictionary<string, string>? Headers = null,
+    bool ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential = false);
 
 public interface IScheduledServiceInvocationDispatchPort
 {

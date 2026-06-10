@@ -25,7 +25,8 @@ public static class ToolCallMiddlewareChainFactory
         effectiveToolMiddlewares.Add(new ToolApprovalMiddleware(
             approvalHandler ?? MissingApprovalHandler.Instance,
             hooks));
-        effectiveToolMiddlewares.AddRange(toolMiddlewares);
+        effectiveToolMiddlewares.AddRange(toolMiddlewares.Where(static middleware =>
+            middleware is not ToolApprovalMiddleware));
         return effectiveToolMiddlewares;
     }
 }

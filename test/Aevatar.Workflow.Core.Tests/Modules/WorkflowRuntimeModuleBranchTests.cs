@@ -276,6 +276,85 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldPopulateWorkflowRuntimeContextFromActorOwnedExecutionState()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext
+        {
+            ExecutionContextState =
+            {
+                WorkflowRuntime = new WorkflowToolRuntimeContextState
+                {
+                    ParentActorId = " upstream-parent ",
+                    ParentRunId = " upstream-run ",
+                    ParentStepId = " upstream-step ",
+                    RootRunId = " root-run ",
+                    Depth = 2,
+                },
+            },
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reply",
+                StepType = "llm_call",
+                RunId = "run-llm-runtime",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var intent = DispatchedLlmIntent(ctx);
+        intent.WorkflowRuntimeContext.Should().NotBeNull();
+        intent.WorkflowRuntimeContext.ParentActorId.Should().Be("agent-1");
+        intent.WorkflowRuntimeContext.ParentRunId.Should().Be("run-llm-runtime");
+        intent.WorkflowRuntimeContext.ParentStepId.Should().Be("reply");
+        intent.WorkflowRuntimeContext.RootRunId.Should().Be("root-run");
+        intent.WorkflowRuntimeContext.Depth.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task LlmCallModule_WhenCompletionReportsManagedHandoff_ShouldLeaveParentStepPending()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reply",
+                StepType = "llm_call",
+                RunId = "run-llm-handoff",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+        var intent = DispatchedLlmIntent(ctx);
+        var watchdog = ctx.Scheduled.Single();
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = intent.SessionId,
+                Success = true,
+                ManagedHandoff = new WorkflowManagedHandoffOutcome
+                {
+                    ParentActorId = "agent-1",
+                    ParentRunId = "run-llm-handoff",
+                    ParentStepId = "reply",
+                    InvocationId = "run-llm-handoff:workflow_tool:reply:call-1",
+                    ChildRunId = "run-llm-handoff:workflow_tool:reply:call-1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Canceled.Should().ContainSingle(x => x.CallbackId == watchdog.CallbackId);
+        ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task LlmCallModule_ShouldIgnoreMetadataOnlyCallerCredential()
     {
         var module = new LLMCallModule();
@@ -1109,6 +1188,8 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 ExecutionContextState.Llm = null;
             if (delta.ClearCallerCredential)
                 ExecutionContextState.CallerCredential = null;
+            if (delta.ClearWorkflowRuntime)
+                ExecutionContextState.WorkflowRuntime = null;
             if (delta.Llm != null)
             {
                 ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
@@ -1129,6 +1210,18 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 };
             }
 
+            if (delta.WorkflowRuntime != null)
+            {
+                ExecutionContextState.WorkflowRuntime = new WorkflowToolRuntimeContextState
+                {
+                    ParentActorId = delta.WorkflowRuntime.ParentActorId,
+                    ParentRunId = delta.WorkflowRuntime.ParentRunId,
+                    ParentStepId = delta.WorkflowRuntime.ParentStepId,
+                    RootRunId = delta.WorkflowRuntime.RootRunId,
+                    Depth = delta.WorkflowRuntime.Depth,
+                };
+            }
+
             return Task.CompletedTask;
         }
 
@@ -1137,6 +1230,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ct.ThrowIfCancellationRequested();
             ExecutionContextState.Llm = null;
             ExecutionContextState.CallerCredential = null;
+            ExecutionContextState.WorkflowRuntime = null;
             return Task.CompletedTask;
         }
 

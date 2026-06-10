@@ -96,7 +96,11 @@ public sealed class ScheduledDispatchServiceInvocationTests
             Payload = Any.Pack(new ChatRequestEvent
             {
                 Prompt = "hello",
-                Metadata = { ["trace"] = "kept" },
+                ConnectorHttpAuthorization = "Bearer stored-token",
+                Metadata =
+                {
+                    ["trace"] = "kept",
+                },
                 LlmControl = new LLMControlContextPayload
                 {
                     ModelOverride = "sonnet",
@@ -107,7 +111,15 @@ public sealed class ScheduledDispatchServiceInvocationTests
             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
             "proxy"));
 
-        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            original,
+            auth,
+            new Dictionary<string, string>
+            {
+                ["connector.http.authorization"] = "Bearer header-token",
+                ["schedule"] = "scheduled",
+            },
+            ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential: true));
 
         credentialExchange.Sources.Should().ContainSingle()
             .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
@@ -116,9 +128,77 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
         invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token-1");
         invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
+        invokedChat.ConnectorHttpAuthorization.Should().Be("Bearer sender-token-1");
         invokedChat.Metadata.Should().Contain("trace", "kept");
+        invokedChat.Metadata.Should().NotContainKey("connector.http.authorization");
+        invokedChat.Metadata.Should().Contain("schedule", "scheduled");
         invokedChat.Metadata.Should().NotContainValue("sender-token-1");
-        original.Payload.Unpack<ChatRequestEvent>().LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        invokedChat.Metadata.Should().NotContainValue("Bearer sender-token-1");
+        var originalChat = original.Payload.Unpack<ChatRequestEvent>();
+        originalChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        originalChat.LlmControl.ModelOverride.Should().Be("sonnet");
+        originalChat.ConnectorHttpAuthorization.Should().Be("Bearer stored-token");
+        originalChat.Metadata.Should().Contain("trace", "kept");
+        originalChat.Metadata.Should().NotContainKey("schedule");
+        originalChat.Metadata.Should().NotContainKey("connector.http.authorization");
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithAuthAndDefaultProjection_ShouldOnlyInjectSenderTokenIntoLlmControl()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-2");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var original = new ServiceInvocationRequest
+        {
+            CommandId = "cmd-invoke",
+            CorrelationId = "corr-invoke",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                Metadata =
+                {
+                    ["trace"] = "kept",
+                },
+                LlmControl = new LLMControlContextPayload
+                {
+                    ModelOverride = "opus",
+                },
+            }),
+        };
+        var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+            "proxy"));
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            original,
+            auth,
+            new Dictionary<string, string>
+            {
+                ["connector.http.authorization"] = "Bearer header-token",
+                ["schedule"] = "scheduled",
+            }));
+
+        credentialExchange.Sources.Should().ContainSingle()
+            .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
+        var invoked = invocationPort.Requests.Should().ContainSingle().Which;
+        invoked.Should().NotBeSameAs(original);
+        var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token-2");
+        invokedChat.LlmControl.ModelOverride.Should().Be("opus");
+        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        invokedChat.Metadata.Should().Contain("trace", "kept");
+        invokedChat.Metadata.Should().NotContainKey("connector.http.authorization");
+        invokedChat.Metadata.Should().Contain("schedule", "scheduled");
+        invokedChat.Metadata.Should().NotContainValue("sender-token-2");
+        invokedChat.Metadata.Should().NotContainValue("Bearer sender-token-2");
+        var originalChat = original.Payload.Unpack<ChatRequestEvent>();
+        originalChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        originalChat.LlmControl.ModelOverride.Should().Be("opus");
+        originalChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        originalChat.Metadata.Should().Contain("trace", "kept");
+        originalChat.Metadata.Should().NotContainKey("schedule");
+        originalChat.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
@@ -166,6 +246,38 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("exchange failed");
+        credentialExchange.Sources.Should().ContainSingle();
+        invocationPort.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("Bearer sender-token")]
+    [InlineData("sender token")]
+    public async Task ScheduledServiceInvocationDispatchPort_WithAuthMalformedToken_ShouldFailBeforeInvocation(
+        string accessToken)
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort(accessToken);
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+            "proxy"));
+
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            auth));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(string.IsNullOrWhiteSpace(accessToken)
+                ? "Scheduled service invocation sender NyxID credential exchange returned an empty access token."
+                : "Scheduled service invocation sender NyxID credential exchange returned an invalid access token.");
         credentialExchange.Sources.Should().ContainSingle();
         invocationPort.Requests.Should().BeEmpty();
     }

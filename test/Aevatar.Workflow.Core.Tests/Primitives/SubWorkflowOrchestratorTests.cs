@@ -115,6 +115,8 @@ public sealed class SubWorkflowOrchestratorTests
                 ParentRunId = "parent-run",
                 ParentStepId = "step-a",
                 WorkflowName = "sub_flow",
+                RootRunId = "root-run",
+                RequestedDepth = 2,
             },
             new WorkflowRunState(),
             CancellationToken.None);
@@ -127,6 +129,8 @@ public sealed class SubWorkflowOrchestratorTests
         registered.DefinitionActorId.Should().Be("workflow-definition:sub_flow");
         registered.TimeoutCallbackId.Should().NotBeNullOrWhiteSpace();
         registered.TimeoutMs.Should().Be(30_000);
+        registered.RootRunId.Should().Be("root-run");
+        registered.RequestedDepth.Should().Be(2);
         harness.ScheduledTimeouts.Should().ContainSingle(x =>
             x.CallbackId == registered.TimeoutCallbackId &&
             x.DueTime == TimeSpan.FromMilliseconds(30_000));
@@ -187,6 +191,8 @@ public sealed class SubWorkflowOrchestratorTests
                 WorkflowName = "sub_flow",
                 Input = "payload-a",
                 Lifecycle = WorkflowCallLifecycle.Singleton,
+                RootRunId = "root-run",
+                RequestedDepth = 2,
             },
             state,
             CancellationToken.None);
@@ -220,7 +226,9 @@ public sealed class SubWorkflowOrchestratorTests
             x.ParentId == "owner-1" &&
             x.ChildId == childActorId);
         harness.Persisted.OfType<SubWorkflowDefinitionResolvedEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-1");
-        harness.Persisted.OfType<SubWorkflowInvocationRegisteredEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-1");
+        var registeredInvocation = harness.Persisted.OfType<SubWorkflowInvocationRegisteredEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-1").Subject;
+        registeredInvocation.RootRunId.Should().Be("root-run");
+        registeredInvocation.Depth.Should().Be(2);
         harness.Persisted.Should().NotContain(x => x is SubWorkflowBindingUpsertedEvent);
         harness.CancelledLeases.Should().ContainSingle(x => x.CallbackId == resolutionState.PendingSubWorkflowDefinitionResolutions[0].TimeoutCallbackId);
         harness.Sent.Should().ContainSingle(x => x.TargetActorId == childActorId);
@@ -228,6 +236,85 @@ public sealed class SubWorkflowOrchestratorTests
         start.RunId.Should().Be("invoke-1");
         start.Parameters["workflow_call.parent_run_id"].Should().Be("parent-run");
         start.Parameters["workflow_call.parent_step_id"].Should().Be("step-a");
+        start.WorkflowRuntime.ParentActorId.Should().Be("owner-1");
+        start.WorkflowRuntime.ParentRunId.Should().Be("parent-run");
+        start.WorkflowRuntime.ParentStepId.Should().Be("step-a");
+        start.WorkflowRuntime.RootRunId.Should().Be("root-run");
+        start.WorkflowRuntime.Depth.Should().Be(2);
+        start.Parameters.Keys.Should().NotContain(key => key.StartsWith("workflow_runtime.", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenRequestedDepthExceedsLimit_ShouldPublishFailureBeforeSideEffects()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+            MaxSubWorkflowDepth = 2,
+        };
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-too-deep",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-depth",
+                WorkflowName = "sub_flow",
+                RequestedDepth = 3,
+            },
+            state,
+            CancellationToken.None);
+
+        var failure = harness.Published.Should().ContainSingle().Subject.Message.Should().BeOfType<StepCompletedEvent>().Subject;
+        failure.StepId.Should().Be("step-depth");
+        failure.RunId.Should().Be("parent-run");
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("depth");
+        harness.Persisted.Should().BeEmpty();
+        harness.Runtime.CreateRequests.Should().BeEmpty();
+        harness.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenActiveFanoutLimitIsReached_ShouldPublishFailureBeforeSideEffects()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+            MaxActiveSubWorkflows = 1,
+        };
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+        state.PendingSubWorkflowInvocations.Add(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "existing",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-existing",
+            WorkflowName = "sub_flow",
+            ChildRunId = "existing-child",
+        });
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-fanout",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-fanout",
+                WorkflowName = "sub_flow",
+            },
+            state,
+            CancellationToken.None);
+
+        var failure = harness.Published.Should().ContainSingle().Subject.Message.Should().BeOfType<StepCompletedEvent>().Subject;
+        failure.StepId.Should().Be("step-fanout");
+        failure.RunId.Should().Be("parent-run");
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("active");
+        harness.Persisted.Should().BeEmpty();
+        harness.Runtime.CreateRequests.Should().BeEmpty();
+        harness.Sent.Should().BeEmpty();
     }
 
     [Fact]

@@ -11,6 +11,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.AGUI.Contracts;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -677,6 +678,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command!.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.Prompt.Should().Be("run workflow");
         harness.WorkflowDispatch.Command.ScopeId.Should().Be("scope-1");
+        harness.WorkflowDispatch.Command.CallerCredential!.BearerToken.Should().Be("access-token");
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("x-workflow", "yes");
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command.Metadata);
         ShouldCarryWorkflowLlmControlValues(harness.WorkflowDispatch.Command.LlmControl);
@@ -729,6 +731,25 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflow_WhenServerSetCallerCredentialIsMalformed_ShouldReturnStructuredError()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-workflow-invalid-credential", accessToken: "Bearer access-token");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalidcallercredential");
+        harness.WorkflowDispatch.Command.Should().BeNull();
+    }
+
+    [Fact]
     public async Task InvokeGAgentForChatRun_WhenValidationFails_ShouldMapTypedErrorCodeAndPreserveRequest()
     {
         var harness = new Harness();
@@ -751,6 +772,77 @@ public sealed class AevatarInvocationToolSourceTests
         result.ScopeId.Should().BeEmpty();
         result.WaitMode.Should().Be(ChatRunSubRunWaitMode.Unspecified);
         result.CompletionObserved.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InvokeGAgentForChatRun_ShouldPreserveWorkflowRuntimeInCanonicalToolContextPayload()
+    {
+        var harness = new Harness();
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "call-gagent-runtime",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "parent-actor",
+                "parent-run",
+                "parent-step",
+                "root-run",
+                2));
+        var request = BuildChatRunRequest(
+            "response-gagent",
+            "call-gagent-runtime-tool",
+            "aevatar_invoke_gagent",
+            """
+            {
+              "actor_id": "actor-1",
+              "payload": { "prompt": "run gagent" }
+            }
+            """);
+
+        var result = await dispatcher.InvokeGAgentForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty();
+        harness.ActorDispatch.Calls.Should().ContainSingle();
+        var chatRequest = harness.ActorDispatch.Calls.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.ToolContext.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
+        chatRequest.ToolContext.WorkflowRuntime.ParentRunId.Should().Be("parent-run");
+        chatRequest.ToolContext.WorkflowRuntime.ParentStepId.Should().Be("parent-step");
+        chatRequest.ToolContext.WorkflowRuntime.RootRunId.Should().Be("root-run");
+        chatRequest.ToolContext.WorkflowRuntime.Depth.Should().Be(2);
+        chatRequest.ToolContext.SkillRecovery.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenTrustedWorkflowRuntimeExists_ShouldCreateManagedHandoffReceipt()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-managed-workflow",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "parent-actor",
+                "parent-run",
+                "parent-step",
+                "root-run",
+                2));
+
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "child-flow",
+              "inputs": { "prompt": "run child" },
+              "wait": "stream"
+            }
+            """);
+        var receipt = tool.CreateSuccessReceipt("call-managed-workflow", tool.Name, output);
+
+        receipt.Should().NotBeNull();
+        receipt!.ManagedWorkflowHandoff.Should().NotBeNull();
+        receipt.ManagedWorkflowHandoff.ParentActorId.Should().Be("parent-actor");
+        receipt.ManagedWorkflowHandoff.ParentRunId.Should().Be("parent-run");
+        receipt.ManagedWorkflowHandoff.ParentStepId.Should().Be("parent-step");
+        receipt.ManagedWorkflowHandoff.InvocationId.Should().Be("parent-run:workflow_tool:parent-step:call-managed-workflow");
+        receipt.ManagedWorkflowHandoff.ChildRunId.Should().Be("parent-run:workflow_tool:parent-step:call-managed-workflow");
     }
 
     [Fact]
@@ -842,6 +934,7 @@ public sealed class AevatarInvocationToolSourceTests
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command!.Metadata);
         ShouldCarryWorkflowLlmControlValues(harness.WorkflowDispatch.Command.LlmControl);
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
+        harness.WorkflowDispatch.Command.CallerCredential!.BearerToken.Should().Be("access-token");
     }
 
     [Fact]
@@ -907,6 +1000,127 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCode(output).Should().Be("workflownotfound");
+    }
+
+    [Theory]
+    [InlineData("parent_actor_id")]
+    [InlineData("parent_run_id")]
+    [InlineData("parent_step_id")]
+    [InlineData("root_run_id")]
+    [InlineData("depth")]
+    [InlineData("requested_depth")]
+    [InlineData("workflow_runtime_context")]
+    [InlineData("workflow_call_context")]
+    public async Task StartWorkflow_ShouldRejectPublicWorkflowRuntimeFields(string forbiddenField)
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-workflow-forged");
+        var output = await tool.ExecuteAsync($$"""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "{{forbiddenField}}": "forged"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        output.Should().Contain(forbiddenField);
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ActorDispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenTrustedWorkflowRuntimeExists_ShouldDispatchManagedChildStartToParentActor()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-managed-workflow",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "parent-actor",
+                "parent-run",
+                "parent-step",
+                "root-run",
+                2));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "child-flow",
+              "inputs": { "prompt": "run child" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ActorDispatch.Calls.Should().ContainSingle();
+        var call = harness.ActorDispatch.Calls.Single();
+        call.ActorId.Should().Be("parent-actor");
+        call.Envelope.Route.PublisherActorId.Should().Be("parent-actor");
+        call.Envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        call.Envelope.Propagation.CorrelationId.Should().Be("call-managed-workflow");
+
+        var requested = call.Envelope.Payload.Unpack<SubWorkflowInvokeRequestedEvent>();
+        requested.InvocationId.Should().Be("parent-run:workflow_tool:parent-step:call-managed-workflow");
+        requested.ParentRunId.Should().Be("parent-run");
+        requested.ParentStepId.Should().Be("parent-step");
+        requested.WorkflowName.Should().Be("child-flow");
+        requested.Input.Should().Be("run child");
+        requested.RequestedByActorId.Should().Be("parent-actor");
+        requested.RootRunId.Should().Be("root-run");
+        requested.RequestedDepth.Should().Be(3);
+
+        var result = Read(output);
+        result.GetProperty("run_id").GetString().Should().Be(requested.InvocationId);
+        result.GetProperty("actor_id").GetString().Should().Be("parent-actor");
+        result.GetProperty("status").GetString().Should().Be("accepted");
+        result.GetProperty("stream_topic").GetString()
+            .Should()
+            .Be("aevatar://actors/parent-actor/runs/parent-run%3Aworkflow_tool%3Aparent-step%3Acall-managed-workflow");
+    }
+
+    [Theory]
+    [InlineData(
+        """
+        {
+          "workflow_id": "child-flow",
+          "actor_id": "definition-actor",
+          "inputs": { "prompt": "run child" }
+        }
+        """,
+        "actor_id")]
+    [InlineData(
+        """
+        {
+          "workflow_id": "child-flow",
+          "workflow_yamls": ["name: child_flow\nsteps: []"],
+          "inputs": { "prompt": "run child" }
+        }
+        """,
+        "workflow_yamls")]
+    public async Task StartWorkflow_WhenTrustedWorkflowRuntimeExists_ShouldRejectTopLevelStartOptions(
+        string argumentsJson,
+        string field)
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-managed-workflow-invalid",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "parent-actor",
+                "parent-run",
+                "parent-step",
+                "root-run",
+                1));
+        var output = await tool.ExecuteAsync(argumentsJson);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        output.Should().Contain(field);
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ActorDispatch.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -1297,6 +1511,8 @@ public sealed class AevatarInvocationToolSourceTests
     private static void ShouldCarryTypedTrustedCallerValues(WorkflowChatRunRequest command)
     {
         command.ScopeId.Should().Be("scope-1");
+        command.CallerCredential.Should().NotBeNull();
+        command.CallerCredential!.BearerToken.Should().Be("access-token");
         ShouldCarryWorkflowLlmControlValues(command.LlmControl);
     }
 
@@ -1346,17 +1562,23 @@ public sealed class AevatarInvocationToolSourceTests
         llmControl!.ModelOverride.Should().Be("model-1");
         llmControl.MaxToolRoundsOverride.Should().Be(4);
         llmControl.UserMemoryPrompt.Should().Be("memory");
+        llmControl.RoutePreference.Should().Be("route-1");
     }
 
-    private static AgentToolContextScope PushContext(string callId, string? scopeId = "scope-1") =>
+    private static AgentToolContextScope PushContext(
+        string callId,
+        string? scopeId = "scope-1",
+        string? accessToken = "access-token",
+        AgentWorkflowRuntimeContext? workflowRuntime = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity("request-1", callId),
-            new AgentToolCredentials("access-token", "org-token", "sender-token"),
+            new AgentToolCredentials(accessToken, "org-token", "sender-token"),
             new AgentToolCallerContext(scopeId, "owner-1", "response-1"),
             new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
             new AgentToolSenderBindingContext("binding-1"),
             new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
+            workflowRuntime ?? AgentWorkflowRuntimeContext.Empty,
             AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {

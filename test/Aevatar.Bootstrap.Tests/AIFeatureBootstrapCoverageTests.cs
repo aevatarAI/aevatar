@@ -2,9 +2,11 @@ using System.Collections;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
@@ -579,6 +581,9 @@ public class AIFeatureBootstrapCoverageTests
         services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
 
         await using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IToolApprovalHandler>().Should().BeOfType<YieldApprovalHandler>();
+        provider.GetServices<IToolCallMiddleware>().Should().ContainSingle(x => x is ToolApprovalMiddleware);
+
         var workflowSource = provider.GetServices<IWorkflowToolSource>()
             .Should()
             .ContainSingle()
@@ -589,7 +594,7 @@ public class AIFeatureBootstrapCoverageTests
             .Subject;
 
         tool.Name.Should().Be("demo_tool");
-        (await tool.ExecuteAsync(
+        var result = await tool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
                 ArgumentsJson: "{}",
                 RunId: "run-1",
@@ -597,7 +602,8 @@ public class AIFeatureBootstrapCoverageTests
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential()))).Should().Be("""{"ok":true}""");
+                CallerCredential: new WorkflowCallerCredential()));
+        result.ResultJson.Should().Be("""{"ok":true}""");
     }
 
     [Fact]

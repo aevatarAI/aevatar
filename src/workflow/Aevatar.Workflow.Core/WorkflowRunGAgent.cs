@@ -273,7 +273,10 @@ public sealed class WorkflowRunGAgent
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
-        var executionContextDelta = MergeExecutionContextDeltas(callerCredentialDelta, llmControlDelta);
+        var executionContextDelta = MergeExecutionContextDeltas(
+            callerCredentialDelta,
+            llmControlDelta,
+            WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta());
         var executionInput = ResolveExecutionInput(request);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
@@ -341,6 +344,7 @@ public sealed class WorkflowRunGAgent
             Input = request.Input ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
+            ExecutionContextDelta = WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta(),
             Attempt = State.ForkAttempt,
         });
 
@@ -896,6 +900,10 @@ public sealed class WorkflowRunGAgent
                 merged.Llm = delta.Llm.Clone();
             if (delta.CallerCredential != null)
                 merged.CallerCredential = delta.CallerCredential.Clone();
+            if (delta.ClearWorkflowRuntime)
+                merged.ClearWorkflowRuntime = true;
+            if (delta.WorkflowRuntime != null)
+                merged.WorkflowRuntime = delta.WorkflowRuntime.Clone();
         }
 
         return merged;
@@ -912,6 +920,8 @@ public sealed class WorkflowRunGAgent
             state.Llm = null;
         if (delta.ClearCallerCredential)
             state.CallerCredential = null;
+        if (delta.ClearWorkflowRuntime)
+            state.WorkflowRuntime = null;
 
         if (delta.Llm != null)
         {
@@ -931,6 +941,18 @@ public sealed class WorkflowRunGAgent
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = parsed.IsValid ? parsed.NormalizedBearerToken ?? string.Empty : string.Empty,
+            };
+        }
+
+        if (delta.WorkflowRuntime != null)
+        {
+            state.WorkflowRuntime = new WorkflowToolRuntimeContextState
+            {
+                ParentActorId = delta.WorkflowRuntime.ParentActorId?.Trim() ?? string.Empty,
+                ParentRunId = WorkflowRunIdNormalizer.Normalize(delta.WorkflowRuntime.ParentRunId),
+                ParentStepId = delta.WorkflowRuntime.ParentStepId?.Trim() ?? string.Empty,
+                RootRunId = WorkflowRunIdNormalizer.Normalize(delta.WorkflowRuntime.RootRunId),
+                Depth = Math.Max(0, delta.WorkflowRuntime.Depth),
             };
         }
     }

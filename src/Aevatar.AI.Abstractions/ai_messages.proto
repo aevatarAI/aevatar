@@ -99,7 +99,8 @@ message AgentToolExecutionContextPayload {
   AgentToolConnectedServicesContextPayload connected_services = 7;
   map<string, string> external_metadata = 8;
   AgentSkillRecoveryContextPayload skill_recovery = 9;
-  AgentToolVisibilityScopePayload tool_visibility = 10;
+  AgentWorkflowRuntimeContextPayload workflow_runtime = 10;
+  AgentToolVisibilityScopePayload tool_visibility = 11;
 }
 
 message AgentSkillRecoveryContextPayload {
@@ -157,6 +158,14 @@ message AgentToolConnectedServicesContextPayload {
   string context_json = 1;
 }
 
+message AgentWorkflowRuntimeContextPayload {
+  string parent_actor_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string root_run_id = 4;
+  int32 depth = 5;
+}
+
 message TextMessageStartEvent   { string session_id = 1; string agent_id = 2; }
 message TextMessageContentEvent { string delta = 1; string session_id = 2; }
 message TextMessageReasoningEvent { string delta = 1; string session_id = 2; }
@@ -195,6 +204,16 @@ message AgentToolReceipt {
   string error_code = 12;
   string error_message = 13;
   string result_json = 14;
+  ManagedWorkflowHandoffReceipt managed_workflow_handoff = 15;
+}
+
+message ManagedWorkflowHandoffReceipt {
+  string parent_actor_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string invocation_id = 4;
+  string child_run_id = 5;
+  string stream_topic = 6;
 }
 
 message ToolResultEvent {
