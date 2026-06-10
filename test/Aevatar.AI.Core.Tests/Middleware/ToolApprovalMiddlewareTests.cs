@@ -33,7 +33,11 @@ public class ToolApprovalMiddlewareTests
     [Fact]
     public async Task ForAgentRuntime_NullApprovalHandler_AllowsNeverRequireTool()
     {
-        var middlewares = ToolCallMiddlewareChainFactory.ForAgentRuntime([], null, null);
+        var duplicateHandler = new ScriptedApprovalHandler(ToolApprovalResult.Denied("duplicate"));
+        var middlewares = ToolCallMiddlewareChainFactory.ForAgentRuntime(
+            [new ToolApprovalMiddleware(duplicateHandler)],
+            null,
+            null);
         var ctx = new ToolCallContext
         {
             Tool = new FakeAgentTool("search", ToolApprovalMode.NeverRequire),
@@ -51,6 +55,7 @@ public class ToolApprovalMiddlewareTests
 
         nextExecuted.Should().BeTrue();
         ctx.Terminate.Should().BeFalse();
+        duplicateHandler.Requests.Should().BeEmpty();
     }
 
     [Theory]
