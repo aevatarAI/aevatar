@@ -1,5 +1,6 @@
 using System.Net;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
@@ -85,7 +86,7 @@ public sealed class OrnnSkillClientTests
     [Fact]
     public async Task SearchSkillsAsync_OnNyxIdProxy404_SurfacesSlugBindingHint()
     {
-        // 404 from NyxID proxy means the slug isn't resolvable — the user hasn't bound an
+        // 404 from NyxID proxy means the slug isn't resolvable: the user hasn't bound an
         // Ornn service or the deployment's slug differs. The LLM-facing error must tell the
         // model exactly that so it can guide the user rather than retry mechanically (which
         // is what we observed in mainnet after the first NyxID-proxy refactor).
@@ -278,6 +279,23 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task GetSkillJsonAsync_WhenNyxIdProxyForbidsAccess_ShouldThrowAccessDenied()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": "forbidden" }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillJsonAsync("scoped-agent-key", "daily-report");
+
+        var assertion = await act.Should().ThrowAsync<RemoteSkillFetchException>();
+        assertion.Which.FailureKind.Should().Be(RemoteSkillFetchFailureKind.AccessDenied);
+        assertion.Which.HttpStatus.Should().Be(403);
+        assertion.Which.Message.Should().Contain("missing proxy scope or service authorization");
+        assertion.Which.Message.Should().Contain("ornn-api");
+    }
+
+    [Fact]
     public async Task GetSkillJsonAsync_ReturnsNullWhenPerCallTimeoutFiresOnSlowUpstream()
     {
         // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied call to
@@ -319,7 +337,7 @@ public sealed class OrnnSkillClientTests
     [Fact]
     public async Task GetSkillJsonAsync_DoesNotMaskCallerCancellationAsTimeoutError()
     {
-        // If the caller cancels, we must NOT log the failure as "exceeded per-call budget" —
+        // If the caller cancels, we must NOT log the failure as "exceeded per-call budget";
         // that misroutes the diagnosis. Letting the OperationCanceledException propagate keeps
         // caller cancellation semantically distinct from our own per-call timeout fallback.
         var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();

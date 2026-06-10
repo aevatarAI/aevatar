@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.AI.ToolProviders.NyxId;
 using Microsoft.Extensions.Logging;
 
@@ -26,10 +27,12 @@ internal sealed class ScheduledAgentApiKeyIssuer
         string token,
         ScheduledAgentServiceSlugs serviceSlugs,
         string agentId,
+        string skillName,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(skillName);
         ArgumentNullException.ThrowIfNull(serviceSlugs);
 
         var slugs = RequiredSlugs(serviceSlugs).Distinct(StringComparer.Ordinal).ToArray();
@@ -47,7 +50,7 @@ internal sealed class ScheduledAgentApiKeyIssuer
             JsonSerializer.Serialize(new
             {
                 name = $"aevatar-scheduled-agent-{agentId}",
-                scopes = "read write",
+                scopes = "read write proxy",
                 platform = "generic",
                 allow_all_services = false,
                 allow_all_nodes = true,
@@ -55,7 +58,23 @@ internal sealed class ScheduledAgentApiKeyIssuer
             }, JsonOptions),
             ct);
 
-        return ExtractIssuedKey(response);
+        var issuedKey = ExtractIssuedKey(response);
+        if (!issuedKey.Success)
+            return issuedKey;
+
+        var ornnSlug = GetOrnnServiceSlug();
+        var preflight = await PreflightSkillFetchAsync(client, issuedKey.FullKey!, ornnSlug, skillName, ct);
+        if (preflight.Success)
+            return issuedKey;
+
+        await TryRevokeAsync(token, issuedKey.ApiKeyId ?? string.Empty, CancellationToken.None);
+        return ScheduledAgentApiKeyIssueResult.Failed(
+            preflight.Error ?? "scheduled_skill_preflight_failed",
+            preflight.Detail,
+            preflight.Hint,
+            preflight.HttpStatus,
+            ornnSlug,
+            skillName.Trim());
     }
 
     public async Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)
@@ -82,7 +101,7 @@ internal sealed class ScheduledAgentApiKeyIssuer
 
     private IEnumerable<string> RequiredSlugs(ScheduledAgentServiceSlugs serviceSlugs)
     {
-        var ornnSlug = Normalize(_options.OrnnServiceSlug) ?? ScheduledAgentCreatorOptions.DefaultOrnnServiceSlug;
+        var ornnSlug = GetOrnnServiceSlug();
         yield return ornnSlug;
         yield return serviceSlugs.PrimaryOutboundSlug;
 
@@ -91,6 +110,61 @@ internal sealed class ScheduledAgentApiKeyIssuer
         {
             yield return serviceSlugs.FailureNotificationSlug;
         }
+    }
+
+    private async Task<ScheduledAgentSkillPreflightResult> PreflightSkillFetchAsync(
+        NyxIdApiClient client,
+        string apiKey,
+        string ornnSlug,
+        string skillName,
+        CancellationToken ct)
+    {
+        var normalizedSkillName = skillName.Trim();
+        var response = await client.ProxyRequestAsync(
+            apiKey,
+            ornnSlug,
+            $"/api/v1/skills/{Uri.EscapeDataString(normalizedSkillName)}/json",
+            "GET",
+            null,
+            null,
+            ct);
+
+        if (!TryReadErrorEnvelope(response, out var status, out var body, out var message))
+            return ScheduledAgentSkillPreflightResult.Succeeded();
+
+        var detailSuffix = string.IsNullOrWhiteSpace(body)
+            ? message
+            : body;
+        var detail = status switch
+        {
+            403 => $"NyxID proxy returned 403 while fetching scheduled skill '{normalizedSkillName}' with the newly issued agent key. " +
+                   $"The key is missing proxy scope or service authorization for service '{ornnSlug}'." +
+                   (string.IsNullOrWhiteSpace(detailSuffix) ? string.Empty : $" Response: {detailSuffix}"),
+            404 => $"NyxID proxy returned 404 while fetching scheduled skill '{normalizedSkillName}' through service '{ornnSlug}'." +
+                   (string.IsNullOrWhiteSpace(detailSuffix) ? string.Empty : $" Response: {detailSuffix}"),
+            _ => $"NyxID proxy preflight failed while fetching scheduled skill '{normalizedSkillName}' through service '{ornnSlug}'" +
+                 (status.HasValue ? $" with status {status.Value}" : string.Empty) +
+                 (string.IsNullOrWhiteSpace(detailSuffix) ? "." : $". Response: {detailSuffix}"),
+        };
+
+        return status switch
+        {
+            403 => ScheduledAgentSkillPreflightResult.Failed(
+                "scheduled_skill_preflight_access_denied",
+                detail,
+                "Connect the Ornn service in NyxID and recreate the scheduled agent so its scoped key includes proxy access to that UserService.",
+                status),
+            404 => ScheduledAgentSkillPreflightResult.Failed(
+                "scheduled_skill_preflight_skill_not_found",
+                detail,
+                "Check skill_ref and ensure the referenced Ornn skill is visible to the scheduled agent credential.",
+                status),
+            _ => ScheduledAgentSkillPreflightResult.Failed(
+                "scheduled_skill_preflight_failed",
+                detail,
+                "Fix the NyxID Ornn service binding or skill reference, then retry scheduled agent creation.",
+                status),
+        };
     }
 
     private static ScheduledAgentServiceResolution ResolveServiceIds(string json, IReadOnlyCollection<string> requiredSlugs)
@@ -205,6 +279,48 @@ internal sealed class ScheduledAgentApiKeyIssuer
         }
     }
 
+    private static bool TryReadErrorEnvelope(
+        string? response,
+        out int? status,
+        out string? body,
+        out string? message)
+    {
+        status = null;
+        body = null;
+        message = null;
+
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            message = "empty_response";
+            return true;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("error", out var error) ||
+                error.ValueKind is JsonValueKind.False or JsonValueKind.Null)
+            {
+                return false;
+            }
+
+            status = root.TryGetProperty("status", out var statusValue) &&
+                     statusValue.ValueKind == JsonValueKind.Number &&
+                     statusValue.TryGetInt32(out var parsedStatus)
+                ? parsedStatus
+                : null;
+            body = ReadString(root, "body");
+            message = ReadString(root, "message");
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static string? ReadString(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? Normalize(value.GetString())
@@ -216,10 +332,31 @@ internal sealed class ScheduledAgentApiKeyIssuer
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
     }
 
+    private string GetOrnnServiceSlug() =>
+        Normalize(_options.OrnnServiceSlug) ?? ScheduledAgentCreatorOptions.DefaultOrnnServiceSlug;
+
     private sealed record ScheduledAgentServiceResolution(IReadOnlyList<string> ServiceIds, string? Error)
     {
         public static ScheduledAgentServiceResolution Failed(string error) => new([], error);
     }
+}
+
+internal sealed record ScheduledAgentSkillPreflightResult(
+    bool Success,
+    string? Error,
+    string? Detail,
+    string? Hint,
+    int? HttpStatus)
+{
+    public static ScheduledAgentSkillPreflightResult Succeeded() =>
+        new(true, null, null, null, null);
+
+    public static ScheduledAgentSkillPreflightResult Failed(
+        string error,
+        string detail,
+        string hint,
+        int? httpStatus) =>
+        new(false, error, detail, hint, httpStatus);
 }
 
 internal sealed record ScheduledAgentServiceSlugs(
@@ -230,11 +367,38 @@ internal sealed record ScheduledAgentApiKeyIssueResult(
     bool Success,
     string? ApiKeyId,
     string? FullKey,
-    string? Error)
+    string? Error,
+    string? Detail = null,
+    string? Hint = null,
+    int? HttpStatus = null,
+    string? ServiceSlug = null,
+    string? SkillRef = null)
 {
+    private static readonly JsonSerializerOptions ErrorJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     public static ScheduledAgentApiKeyIssueResult Succeeded(string apiKeyId, string fullKey) =>
         new(true, apiKeyId, fullKey, null);
 
-    public static ScheduledAgentApiKeyIssueResult Failed(string error) =>
-        new(false, null, null, error);
+    public static ScheduledAgentApiKeyIssueResult Failed(
+        string error,
+        string? detail = null,
+        string? hint = null,
+        int? httpStatus = null,
+        string? serviceSlug = null,
+        string? skillRef = null) =>
+        new(false, null, null, error, detail, hint, httpStatus, serviceSlug, skillRef);
+
+    public string ToErrorJson() =>
+        JsonSerializer.Serialize(new
+        {
+            error = Error ?? "api_key_issue_failed",
+            detail = Detail,
+            hint = Hint,
+            http_status = HttpStatus,
+            service_slug = ServiceSlug,
+            skill_ref = SkillRef,
+        }, ErrorJsonOptions);
 }
