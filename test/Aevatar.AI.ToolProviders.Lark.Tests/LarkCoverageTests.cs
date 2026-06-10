@@ -470,6 +470,14 @@ public sealed class LarkCoverageTests
             _ = ct;
             return Task.FromResult("""{"code":0,"data":{"file_token":"file_default"}}""");
         }
+
+        public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"code":"approval_file_default"}}""");
+        }
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

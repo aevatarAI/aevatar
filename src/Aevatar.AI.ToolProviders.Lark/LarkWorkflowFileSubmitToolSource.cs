@@ -38,7 +38,11 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
         ILarkNyxClient client) : IWorkflowTool
     {
         private const string Target = "lark_drive_media";
+        private const string DriveMediaTarget = "lark_drive_media";
+        private const string ApprovalFileTarget = "lark_approval_file";
         private const long MaxFileBytes = 20L * 1024L * 1024L;
+        private const long MaxApprovalImageBytes = 10L * 1024L * 1024L;
+        private const long MaxApprovalAttachmentBytes = 30L * 1024L * 1024L;
         private const int MaxFileNameLength = 250;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
@@ -72,8 +76,9 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
             }
 
             var token = Normalize(request.CallerCredential.BearerToken);
+            var errorTarget = NormalizeTarget(arguments.Target);
             if (token == null)
-                return Error("missing_bearer", "workflow_file_submit requires a workflow caller bearer token.");
+                return Error(errorTarget, "missing_bearer", "workflow_file_submit requires a workflow caller bearer token.");
 
             var argumentValidation = ValidateArguments(arguments, request, out var argumentFileName);
             if (argumentValidation != null)
@@ -86,7 +91,7 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
             }
             catch (Exception ex) when (IsSafeArtifactFailure(ex))
             {
-                return Error("artifact_unavailable", SafeArtifactDetail(ex));
+                return Error(errorTarget, "artifact_unavailable", SafeArtifactDetail(ex));
             }
 
             var descriptorValidation = ValidateDescriptor(
@@ -106,50 +111,49 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
             }
             catch (Exception ex) when (IsSafeArtifactFailure(ex))
             {
-                return Error("artifact_unavailable", SafeArtifactDetail(ex));
+                return Error(errorTarget, "artifact_unavailable", SafeArtifactDetail(ex));
             }
 
             await using (artifact.Content.ConfigureAwait(false))
             {
                 if (!DescriptorMatchesValidatedDescriptor(artifact.FileRef, descriptor))
-                    return Error("invalid_file_scope", "workflow_file_submit artifact owner does not match the current workflow context.");
+                    return Error(errorTarget, "invalid_file_scope", "workflow_file_submit artifact owner does not match the current workflow context.");
 
                 string response;
                 try
                 {
-                    response = await _client.UploadDriveMediaAsync(
+                    response = await UploadAsync(
                         token,
-                        new LarkDriveMediaUploadRequest(
-                            uploadFileName,
-                            arguments.ParentType,
-                            arguments.ParentNode,
-                            descriptor.SizeBytes,
-                            contentType,
-                            artifact.Content,
-                            arguments.Checksum,
-                            arguments.Extra),
+                        arguments,
+                        descriptor,
+                        uploadFileName,
+                        contentType,
+                        artifact.Content,
                         ct).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    return Error("provider_call_failed", "Lark media upload request failed.");
+                    return Error(arguments.Target, "provider_call_failed", "Lark file upload request failed.");
                 }
 
                 if (TryParseProviderError(response, out var providerError))
-                    return Error(providerError.Error, providerError.Detail, providerError.Code);
+                    return Error(arguments.Target, providerError.Error, providerError.Detail, providerError.Code);
 
                 var success = ParseSuccess(response);
-                if (string.IsNullOrWhiteSpace(success.FileToken))
-                    return Error("missing_file_token", "Lark media upload response did not include file_token.");
+                if (!TryResolveOutputCode(arguments.Target, success, out var outputFieldName, out var outputCode, out var missingError))
+                    return Error(arguments.Target, missingError, "Lark file upload response did not include the required file code.");
 
                 return WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
                     new WorkflowFileSubmitResult(
                         Success: true,
                         Provider: "lark",
-                        Target: Target,
-                        FileToken: success.FileToken,
-                        ParentType: arguments.ParentType,
-                        ParentNode: arguments.ParentNode,
+                        Target: arguments.Target,
+                        FileToken: arguments.Target == DriveMediaTarget ? outputCode : null,
+                        FileCode: arguments.Target == ApprovalFileTarget ? outputCode : null,
+                        OutputField: outputFieldName,
+                        ParentType: arguments.Target == DriveMediaTarget ? arguments.ParentType : null,
+                        ParentNode: arguments.Target == DriveMediaTarget ? arguments.ParentNode : null,
+                        FileType: arguments.Target == ApprovalFileTarget ? arguments.FileType : null,
                         FileName: uploadFileName,
                         SizeBytes: descriptor.SizeBytes,
                         Code: success.Code),
@@ -163,33 +167,36 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
             out string? argumentFileName)
         {
             argumentFileName = null;
-            if (!string.Equals(arguments.Target, Target, StringComparison.Ordinal))
-                return Error("invalid_target", "workflow_file_submit only supports target lark_drive_media.");
+            if (!AllowedTargets.Contains(arguments.Target))
+                return Error(arguments.Target, "invalid_target", "workflow_file_submit only supports lark_drive_media and lark_approval_file targets.");
 
-            if (!AllowedParentTypes.Contains(arguments.ParentType))
-                return Error("unsupported_parent_type", "workflow_file_submit does not support the requested parent_type.");
+            if (arguments.Target == DriveMediaTarget && !AllowedParentTypes.Contains(arguments.ParentType))
+                return Error(arguments.Target, "unsupported_parent_type", "workflow_file_submit does not support the requested parent_type.");
 
-            if (string.IsNullOrWhiteSpace(arguments.ParentNode))
-                return Error("missing_parent_node", "workflow_file_submit requires parent_node.");
+            if (arguments.Target == DriveMediaTarget && string.IsNullOrWhiteSpace(arguments.ParentNode))
+                return Error(arguments.Target, "missing_parent_node", "workflow_file_submit requires parent_node.");
+
+            if (arguments.Target == ApprovalFileTarget && !AllowedApprovalFileTypes.Contains(arguments.FileType))
+                return Error(arguments.Target, "unsupported_file_type", "workflow_file_submit lark_approval_file requires file_type image or attachment.");
 
             if (!HasStableFileRef(arguments.FileRef))
-                return Error("invalid_file_ref", "workflow_file_submit file_ref requires file_id or artifact_id.");
+                return Error(arguments.Target, "invalid_file_ref", "workflow_file_submit file_ref requires file_id or artifact_id.");
 
             var requestedRunId = Normalize(arguments.FileRef.OwnerRunId);
             var requestedScopeId = Normalize(arguments.FileRef.OwnerScopeId);
             if (requestedRunId == null || !MatchesAnyRunContext(requestedRunId, request))
-                return Error("invalid_file_scope", "workflow_file_submit requires a file_ref owned by the current workflow run.");
+                return Error(arguments.Target, "invalid_file_scope", "workflow_file_submit requires a file_ref owned by the current workflow run.");
             if (requestedScopeId != null && !MatchesScopeContext(requestedScopeId, request))
-                return Error("invalid_file_scope", "workflow_file_submit file_ref owner_scope_id does not match the current workflow scope.");
+                return Error(arguments.Target, "invalid_file_scope", "workflow_file_submit file_ref owner_scope_id does not match the current workflow scope.");
 
             if (arguments.FileRef.SizeBytes <= 0)
-                return Error("invalid_file_size", "workflow_file_submit file_ref size_bytes must be greater than zero.");
-            if (arguments.FileRef.SizeBytes > MaxFileBytes)
-                return Error("file_too_large", "workflow_file_submit supports files up to 20971520 bytes.");
+                return Error(arguments.Target, "invalid_file_size", "workflow_file_submit file_ref size_bytes must be greater than zero.");
+            if (arguments.FileRef.SizeBytes > ResolveMaxFileBytes(arguments))
+                return Error(arguments.Target, "file_too_large", "workflow_file_submit file_ref exceeds the target size limit.");
 
             argumentFileName = ResolveFileName(arguments.FileName, arguments.FileRef.FileName);
             return argumentFileName is { Length: > MaxFileNameLength }
-                ? Error("invalid_file_name", "workflow_file_submit file_name must be 250 characters or fewer.")
+                ? Error(arguments.Target, "invalid_file_name", "workflow_file_submit file_name must be 250 characters or fewer.")
                 : null;
         }
 
@@ -205,26 +212,26 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
             contentType = string.Empty;
 
             if (descriptor.SizeBytes <= 0)
-                return Error("invalid_file_size", "workflow_file_submit artifact size_bytes must be greater than zero.");
-            if (descriptor.SizeBytes > MaxFileBytes)
-                return Error("file_too_large", "workflow_file_submit supports files up to 20971520 bytes.");
+                return Error(arguments.Target, "invalid_file_size", "workflow_file_submit artifact size_bytes must be greater than zero.");
+            if (descriptor.SizeBytes > ResolveMaxFileBytes(arguments))
+                return Error(arguments.Target, "file_too_large", "workflow_file_submit artifact exceeds the target size limit.");
             if (arguments.FileRef.SizeBytes > 0 && descriptor.SizeBytes != arguments.FileRef.SizeBytes)
-                return Error("artifact_size_mismatch", "workflow_file_submit artifact size does not match file_ref size_bytes.");
+                return Error(arguments.Target, "artifact_size_mismatch", "workflow_file_submit artifact size does not match file_ref size_bytes.");
             if (!DescriptorOwnerMatches(descriptor, request))
-                return Error("invalid_file_scope", "workflow_file_submit artifact owner does not match the current workflow context.");
+                return Error(arguments.Target, "invalid_file_scope", "workflow_file_submit artifact owner does not match the current workflow context.");
 
             var resolvedFileName = ResolveFileName(arguments.FileName, descriptor.FileName) ?? argumentFileName;
             if (resolvedFileName == null)
-                return Error("missing_file_name", "workflow_file_submit requires file_name from arguments or artifact descriptor.");
+                return Error(arguments.Target, "missing_file_name", "workflow_file_submit requires file_name from arguments or artifact descriptor.");
             if (resolvedFileName.Length > MaxFileNameLength)
-                return Error("invalid_file_name", "workflow_file_submit file_name must be 250 characters or fewer.");
+                return Error(arguments.Target, "invalid_file_name", "workflow_file_submit file_name must be 250 characters or fewer.");
 
             var resolvedContentType = NormalizeMediaType(descriptor.MediaType) ??
                                       NormalizeMediaType(arguments.FileRef.MediaType);
             if (resolvedContentType == null)
-                return Error("unsupported_media_type", "workflow_file_submit requires a workflow file media type.");
-            if (!AllowedMediaTypes.Contains(resolvedContentType))
-                return Error("unsupported_media_type", "workflow_file_submit does not support the requested media type.");
+                return Error(arguments.Target, "unsupported_media_type", "workflow_file_submit requires a workflow file media type.");
+            if (!IsAllowedMediaType(arguments, resolvedContentType))
+                return Error(arguments.Target, "unsupported_media_type", "workflow_file_submit does not support the requested media type.");
 
             uploadFileName = resolvedFileName;
             contentType = resolvedContentType;
@@ -252,6 +259,7 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
                 OptionalString(root, "parentType", "parent_type") ?? string.Empty,
                 OptionalString(root, "parentNode", "parent_node") ?? string.Empty,
                 OptionalString(root, "fileName", "file_name"),
+                OptionalString(root, "fileType", "file_type") ?? string.Empty,
                 OptionalString(root, "checksum", "checksum"),
                 OptionalString(root, "extra", "extra"));
         }
@@ -356,6 +364,42 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
             !string.IsNullOrWhiteSpace(fileRef.FileId) ||
             !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
+        private Task<string> UploadAsync(
+            string token,
+            WorkflowFileSubmitArguments arguments,
+            WorkflowFileRef descriptor,
+            string uploadFileName,
+            string contentType,
+            Stream content,
+            CancellationToken ct)
+        {
+            if (arguments.Target == ApprovalFileTarget)
+            {
+                return _client.UploadApprovalFileAsync(
+                    token,
+                    new LarkApprovalFileUploadRequest(
+                        uploadFileName,
+                        arguments.FileType,
+                        descriptor.SizeBytes,
+                        contentType,
+                        content),
+                    ct);
+            }
+
+            return _client.UploadDriveMediaAsync(
+                token,
+                new LarkDriveMediaUploadRequest(
+                    uploadFileName,
+                    arguments.ParentType,
+                    arguments.ParentNode,
+                    descriptor.SizeBytes,
+                    contentType,
+                    content,
+                    arguments.Checksum,
+                    arguments.Extra),
+                ct);
+        }
+
         private static bool MatchesAnyRunContext(string ownerRunId, WorkflowToolExecutionRequest request) =>
             string.Equals(ownerRunId, Normalize(request.RunId), StringComparison.Ordinal) ||
             string.Equals(ownerRunId, Normalize(request.RuntimeContext.ParentRunId), StringComparison.Ordinal) ||
@@ -391,6 +435,12 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
         private static string? ResolveFileName(string? argumentFileName, string? descriptorFileName) =>
             Normalize(argumentFileName) ?? Normalize(descriptorFileName);
 
+        private static string? NormalizeTarget(string? target)
+        {
+            var normalized = Normalize(target);
+            return normalized != null && AllowedTargets.Contains(normalized) ? normalized : null;
+        }
+
         private static string? NormalizeMediaType(string? mediaType)
         {
             if (string.IsNullOrWhiteSpace(mediaType))
@@ -411,7 +461,23 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
                 : root;
             return new WorkflowFileSubmitProviderSuccess(
                 TryReadString(data, "file_token") ?? TryReadString(root, "file_token"),
+                TryReadString(data, "code") ?? TryReadString(data, "file_code") ?? TryReadString(root, "file_code"),
                 TryReadInt(root, "code"));
+        }
+
+        private static bool TryResolveOutputCode(
+            string target,
+            WorkflowFileSubmitProviderSuccess success,
+            out string outputFieldName,
+            out string outputCode,
+            out string missingError)
+        {
+            outputFieldName = target == ApprovalFileTarget ? "file_code" : "file_token";
+            outputCode = target == ApprovalFileTarget
+                ? Normalize(success.FileCode) ?? string.Empty
+                : Normalize(success.FileToken) ?? string.Empty;
+            missingError = target == ApprovalFileTarget ? "missing_file_code" : "missing_file_token";
+            return !string.IsNullOrWhiteSpace(outputCode);
         }
 
         private static bool TryParseProviderError(string? response, out WorkflowFileSubmitProviderError error)
@@ -472,6 +538,7 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
         }
 
         private static WorkflowToolExecutionResult Error(
+            string? target,
             string error,
             string detail,
             int? code = null) =>
@@ -479,11 +546,14 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
                 new WorkflowFileSubmitError(
                     Success: false,
                     Provider: "lark",
-                    Target: Target,
+                    Target: string.IsNullOrWhiteSpace(target) ? null : target,
                     Error: error,
                     Detail: detail,
                     Code: code),
                 JsonOptions));
+
+        private static WorkflowToolExecutionResult Error(string error, string detail) =>
+            Error(target: null, error, detail);
 
         private static bool IsSafeArtifactFailure(Exception ex) =>
             ex is FileNotFoundException ||
@@ -500,6 +570,24 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
                 _ => "Workflow file artifact content could not be read.",
             };
 
+        private static long ResolveMaxFileBytes(WorkflowFileSubmitArguments arguments) =>
+            arguments.Target == ApprovalFileTarget
+                ? arguments.FileType == "image" ? MaxApprovalImageBytes : MaxApprovalAttachmentBytes
+                : MaxFileBytes;
+
+        private static bool IsAllowedMediaType(WorkflowFileSubmitArguments arguments, string mediaType) =>
+            arguments.Target == ApprovalFileTarget
+                ? arguments.FileType == "image"
+                    ? AllowedApprovalImageMediaTypes.Contains(mediaType)
+                    : AllowedApprovalAttachmentMediaTypes.Contains(mediaType)
+                : AllowedMediaTypes.Contains(mediaType);
+
+        private static readonly HashSet<string> AllowedTargets = new(StringComparer.Ordinal)
+        {
+            DriveMediaTarget,
+            ApprovalFileTarget,
+        };
+
         private static readonly HashSet<string> AllowedParentTypes = new(StringComparer.Ordinal)
         {
             "doc_image",
@@ -511,6 +599,32 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
             "docx_image",
             "docx_file",
             "ccm_import_open",
+        };
+
+        private static readonly HashSet<string> AllowedApprovalFileTypes = new(StringComparer.Ordinal)
+        {
+            "image",
+            "attachment",
+        };
+
+        private static readonly HashSet<string> AllowedApprovalImageMediaTypes = new(StringComparer.Ordinal)
+        {
+            "image/jpeg",
+            "image/png",
+        };
+
+        private static readonly HashSet<string> AllowedApprovalAttachmentMediaTypes = new(StringComparer.Ordinal)
+        {
+            "application/msword",
+            "application/octet-stream",
+            "application/pdf",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "image/jpeg",
+            "image/png",
+            "text/csv",
+            "text/plain",
         };
 
         private static readonly HashSet<string> AllowedMediaTypes = new(StringComparer.Ordinal)
@@ -537,10 +651,11 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
         string ParentType,
         string ParentNode,
         string? FileName,
+        string FileType,
         string? Checksum,
         string? Extra);
 
-    private sealed record WorkflowFileSubmitProviderSuccess(string? FileToken, int? Code);
+    private sealed record WorkflowFileSubmitProviderSuccess(string? FileToken, string? FileCode, int? Code);
 
     private sealed record WorkflowFileSubmitProviderError(string Error, string Detail, int? Code);
 
@@ -548,9 +663,12 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
         bool Success,
         string Provider,
         string Target,
-        string FileToken,
-        string ParentType,
-        string ParentNode,
+        string? FileToken,
+        string? FileCode,
+        string OutputField,
+        string? ParentType,
+        string? ParentNode,
+        string? FileType,
         string FileName,
         long SizeBytes,
         int? Code);
@@ -558,7 +676,7 @@ public sealed class LarkWorkflowFileSubmitToolSource : IWorkflowToolSource
     private sealed record WorkflowFileSubmitError(
         bool Success,
         string Provider,
-        string Target,
+        string? Target,
         string Error,
         string Detail,
         int? Code);

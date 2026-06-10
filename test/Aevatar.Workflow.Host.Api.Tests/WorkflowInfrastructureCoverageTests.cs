@@ -42,8 +42,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using System.Xml;
+using System.Xml.Linq;
 using Aevatar.Workflow.Core.Modules;
 using UglyToad.PdfPig.Core;
 using UglyToad.PdfPig.Fonts.Standard14Fonts;
@@ -670,6 +673,82 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldExtractDocxTextFromStoredFile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-docx-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var docxBytes = BuildSimpleDocx("invoice total 42", "approved by finance");
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                docxBytes,
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "invoice.docx",
+                MediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildDocumentExtractArguments(result.FileRef),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("extraction_kind").GetString().Should().Be("docx_text");
+            document.RootElement.GetProperty("media_type").GetString()
+                .Should().Be("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+            document.RootElement.GetProperty("text").GetString()
+                .Should().Be($"invoice total 42{Environment.NewLine}approved by finance");
+            document.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
+            output.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+            output.ResultJson.Should().NotContain("word/document.xml");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldTruncateDocxTextAtRequestedLimit()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-docx-truncate-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                BuildSimpleDocx("abcdef"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "long.docx",
+                MediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildDocumentExtractArguments(result.FileRef, maxChars: 3),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("text").GetString().Should().Be("abc");
+            document.RootElement.GetProperty("truncated").GetBoolean().Should().BeTrue();
+            document.RootElement.GetProperty("extracted_chars").GetInt32().Should().Be(3);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WorkflowDocumentExtractTool_ShouldRejectUnsupportedMediaType()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-unsupported-tests", Guid.NewGuid().ToString("N"));
@@ -1128,6 +1207,48 @@ public sealed class WorkflowInfrastructureCoverageTests
         var font = builder.AddStandard14Font(Standard14Font.Helvetica);
         page.AddText(text, 12, new PdfPoint(50, 750), font);
         return builder.Build();
+    }
+
+    private static byte[] BuildSimpleDocx(params string[] paragraphs)
+    {
+        XNamespace word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        var document = new XDocument(
+            new XElement(word + "document",
+                new XAttribute(XNamespace.Xmlns + "w", word.NamespaceName),
+                new XElement(word + "body",
+                    paragraphs.Select(paragraph =>
+                        new XElement(word + "p",
+                            new XElement(word + "r",
+                                new XElement(word + "t",
+                                    new XAttribute(XNamespace.Xml + "space", "preserve"),
+                                    paragraph)))))));
+
+        using var package = new MemoryStream();
+        using (var archive = new ZipArchive(package, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var contentTypes = archive.CreateEntry("[Content_Types].xml");
+            using (var stream = contentTypes.Open())
+            using (var writer = XmlWriter.Create(stream, new XmlWriterSettings { Encoding = Encoding.UTF8 }))
+            {
+                XNamespace contentTypesNs = "http://schemas.openxmlformats.org/package/2006/content-types";
+                new XDocument(
+                    new XElement(contentTypesNs + "Types",
+                        new XElement(contentTypesNs + "Default",
+                            new XAttribute("Extension", "xml"),
+                            new XAttribute("ContentType", "application/xml")),
+                        new XElement(contentTypesNs + "Override",
+                            new XAttribute("PartName", "/word/document.xml"),
+                            new XAttribute("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"))))
+                    .WriteTo(writer);
+            }
+
+            var body = archive.CreateEntry("word/document.xml");
+            using var bodyStream = body.Open();
+            using var bodyWriter = XmlWriter.Create(bodyStream, new XmlWriterSettings { Encoding = Encoding.UTF8 });
+            document.WriteTo(bodyWriter);
+        }
+
+        return package.ToArray();
     }
 
     private sealed class FakeReportExporter : IWorkflowRunReportExportPort
