@@ -9,6 +9,10 @@ public interface ILarkNyxClient
     Task<string> DeleteMessageReactionAsync(string token, LarkMessageReactionDeleteRequest request, CancellationToken ct);
     Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct);
     Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct);
+    Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+        string token,
+        LarkMessageResourceDownloadRequest request,
+        CancellationToken ct);
     Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct);
     Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct);
     Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct);
@@ -64,6 +68,25 @@ public sealed record LarkMessageSearchRequest(
 
 public sealed record LarkMessagesBatchGetRequest(
     IReadOnlyList<string> MessageIds);
+
+public enum LarkMessageResourceKind
+{
+    Image,
+    File,
+}
+
+public sealed record LarkMessageResourceDownloadRequest(
+    string MessageId,
+    string ResourceKey,
+    LarkMessageResourceKind Kind);
+
+public sealed record LarkMessageResourceDownloadResult(
+    bool Succeeded,
+    byte[] Content,
+    string? ContentType = null,
+    string? FileName = null,
+    string? Detail = null,
+    int HttpStatus = 0);
 
 public sealed record LarkChatSearchRequest(
     string? Query,

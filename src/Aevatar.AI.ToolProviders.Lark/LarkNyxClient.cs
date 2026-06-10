@@ -192,6 +192,35 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
+    public async Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+        string token,
+        LarkMessageResourceDownloadRequest request,
+        CancellationToken ct)
+    {
+        ValidateMessageResourceRequest(request);
+        var resourceType = request.Kind switch
+        {
+            LarkMessageResourceKind.Image => "image",
+            LarkMessageResourceKind.File => "file",
+            _ => throw new ArgumentException("Lark message resource kind must be image or file.", nameof(request)),
+        };
+
+        var response = await _nyxClient.ProxyGetBinaryResponseAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/im/v1/messages/{Uri.EscapeDataString(request.MessageId.Trim())}/resources/{Uri.EscapeDataString(request.ResourceKey.Trim())}?type={resourceType}",
+            extraHeaders: null,
+            ct);
+
+        return new LarkMessageResourceDownloadResult(
+            response.Succeeded,
+            response.Content,
+            response.ContentType,
+            response.FileName,
+            response.Detail,
+            response.HttpStatus);
+    }
+
     public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct)
     {
         var query = $"page_size={request.PageSize}";
@@ -403,6 +432,19 @@ public sealed class LarkNyxClient : ILarkNyxClient
         if (string.IsNullOrWhiteSpace(userIdType))
             return "open-apis/approval/v4/tasks/forward";
         return $"open-apis/approval/v4/tasks/forward?user_id_type={Uri.EscapeDataString(userIdType.Trim())}";
+    }
+
+    private static void ValidateMessageResourceRequest(LarkMessageResourceDownloadRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.MessageId))
+            throw new ArgumentException("Lark message id is required.", nameof(request));
+        if (!request.MessageId.Trim().StartsWith("om_", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Lark message id must start with om_.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.ResourceKey))
+            throw new ArgumentException("Lark message resource key is required.", nameof(request));
+        if (request.Kind is not (LarkMessageResourceKind.Image or LarkMessageResourceKind.File))
+            throw new ArgumentException("Lark message resource kind must be image or file.", nameof(request));
     }
 
     private static IReadOnlyList<Dictionary<string, object?>> BuildTextBlocks(string markdownText)

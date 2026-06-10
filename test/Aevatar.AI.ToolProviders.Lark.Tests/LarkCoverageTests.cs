@@ -366,6 +366,17 @@ public sealed class LarkCoverageTests
             return Task.FromResult("""{"code":0,"data":{"items":[]}}""");
         }
 
+        public Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+            string token,
+            LarkMessageResourceDownloadRequest request,
+            CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult(new LarkMessageResourceDownloadResult(true, []));
+        }
+
         public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct)
         {
             _ = token;

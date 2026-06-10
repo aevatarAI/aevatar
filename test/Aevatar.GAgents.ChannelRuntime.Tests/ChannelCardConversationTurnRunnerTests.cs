@@ -362,6 +362,12 @@ public sealed class ChannelCardConversationTurnRunnerTests
         public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
+        public Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+            string token,
+            LarkMessageResourceDownloadRequest request,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 

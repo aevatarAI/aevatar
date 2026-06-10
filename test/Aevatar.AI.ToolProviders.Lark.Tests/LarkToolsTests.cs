@@ -1663,6 +1663,97 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkNyxClient_DownloadMessageResource_ShouldShapeImageResourceProxyRequest()
+    {
+        var payload = new byte[] { 1, 2, 3, 4 };
+        var handler = new RecordingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payload),
+            };
+            response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+            response.Content.Headers.ContentDisposition =
+                System.Net.Http.Headers.ContentDispositionHeaderValue.Parse("attachment; filename=\"receipt.png\"");
+            return response;
+        });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        var result = await client.DownloadMessageResourceAsync(
+            "token-123",
+            new LarkMessageResourceDownloadRequest("om_123", "img_v3_abc", LarkMessageResourceKind.Image),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Content.Should().Equal(payload);
+        result.ContentType.Should().Be("image/png");
+        result.FileName.Should().Be("receipt.png");
+        result.HttpStatus.Should().Be(200);
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/resources/img_v3_abc?type=image");
+        handler.LastBody.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_DownloadMessageResource_ShouldShapeFileResourceProxyRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent([9, 8, 7]),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.DownloadMessageResourceAsync(
+            "token-123",
+            new LarkMessageResourceDownloadRequest("om_123", "file_v3_abc", LarkMessageResourceKind.File),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/resources/file_v3_abc?type=file");
+    }
+
+    [Theory]
+    [InlineData("", "img_v3_abc", LarkMessageResourceKind.Image)]
+    [InlineData("msg_123", "img_v3_abc", LarkMessageResourceKind.Image)]
+    [InlineData("om_123", "", LarkMessageResourceKind.Image)]
+    [InlineData("om_123", "img_v3_abc", (LarkMessageResourceKind)99)]
+    public async Task LarkNyxClient_DownloadMessageResource_ShouldValidateInputs(
+        string messageId,
+        string resourceKey,
+        LarkMessageResourceKind kind)
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent([]),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await FluentActions.Invoking(() => client.DownloadMessageResourceAsync(
+                "token-123",
+                new LarkMessageResourceDownloadRequest(messageId, resourceKey, kind),
+                CancellationToken.None))
+            .Should().ThrowAsync<ArgumentException>();
+        handler.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task LarkNyxClient_SearchChats_ShapesProxyRequest()
     {
         var handler = new RecordingHandler(_ =>
@@ -1879,6 +1970,10 @@ public class LarkToolsTests
         public string ReactionDeleteResponse { get; set; } = """{"code":0,"data":{}}""";
         public string MessageSearchResponse { get; set; } = """{"code":0,"data":{"items":[],"count":0}}""";
         public string MessagesBatchGetResponse { get; set; } = """{"code":0,"data":{"items":[]}}""";
+        public LarkMessageResourceDownloadResult MessageResourceResponse { get; set; } = new(
+            true,
+            [],
+            "application/octet-stream");
         public string SearchResponse { get; set; } = """{"code":0,"data":{"items":[],"total":0}}""";
         public string AppendSheetResponse { get; set; } = """{"code":0,"data":{"updates":{}}}""";
         public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
@@ -1897,6 +1992,7 @@ public class LarkToolsTests
         public LarkMessageReactionDeleteRequest? LastReactionDeleteRequest { get; private set; }
         public LarkMessageSearchRequest? LastMessageSearchRequest { get; private set; }
         public LarkMessagesBatchGetRequest? LastBatchGetRequest { get; private set; }
+        public LarkMessageResourceDownloadRequest? LastMessageResourceRequest { get; private set; }
         public LarkChatSearchRequest? LastSearchRequest { get; private set; }
         public LarkSheetAppendRowsRequest? LastSheetAppendRequest { get; private set; }
         public LarkApprovalTaskQueryRequest? LastApprovalQueryRequest { get; private set; }
@@ -1947,6 +2043,15 @@ public class LarkToolsTests
         {
             LastBatchGetRequest = request;
             return Task.FromResult(MessagesBatchGetResponse);
+        }
+
+        public Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+            string token,
+            LarkMessageResourceDownloadRequest request,
+            CancellationToken ct)
+        {
+            LastMessageResourceRequest = request;
+            return Task.FromResult(MessageResourceResponse);
         }
 
         public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct)
