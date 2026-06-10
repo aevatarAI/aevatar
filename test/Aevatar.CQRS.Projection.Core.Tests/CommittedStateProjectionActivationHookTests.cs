@@ -25,6 +25,25 @@ public sealed class CommittedStateProjectionActivationHookTests
     }
 
     [Fact]
+    public async Task BeforePublishAsync_ShouldOnlyEnsureProjectionScopeBeforeNormalPublication()
+    {
+        var activation = new RecordingActivationService<TestLease>();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var hook = CreateHook(
+            [new StaticPlanProvider(BuildPlan("actor-1", "projection-a", typeof(TestLease)))],
+            services =>
+            {
+                services.AddSingleton<IProjectionScopeActivationService<TestLease>>(activation);
+                services.AddSingleton<IActorDispatchPort>(dispatchPort);
+            });
+
+        await hook.BeforePublishAsync(BuildContext(), CancellationToken.None);
+
+        activation.Requests.Should().ContainSingle();
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task BeforePublishAsync_ShouldDeduplicateDuplicatePlansWithinOnePublication()
     {
         var activation = new RecordingActivationService<TestLease>();
@@ -151,6 +170,18 @@ public sealed class CommittedStateProjectionActivationHookTests
     {
         public Task<TLease> EnsureAsync(ProjectionScopeStartRequest request, CancellationToken ct = default) =>
             Task.FromException<TLease>(new InvalidOperationException("activation failed"));
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string actorId, EventEnvelope envelope)> Dispatched { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Dispatched.Add((actorId, envelope));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
     }
 
     private sealed class RecordingActivationService<TLease> : IProjectionScopeActivationService<TLease>

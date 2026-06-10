@@ -55,24 +55,50 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProviderTests
     }
 
     [Fact]
-    public void GetPlans_ShouldMapScriptDefinitionUpsertedToAuthorityMaterializationScope()
+    public void GetPlans_ShouldMapScriptDefinitionAuthorityMutationsToAuthorityMaterializationScope()
     {
         var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
 
-        var plans = provider.GetPlans(BuildContext(
-            typeof(ScriptDefinitionGAgent),
+        IMessage[] mutationEvents =
+        [
             new ScriptDefinitionUpsertedEvent
             {
                 ScriptId = "my-script",
                 ScriptRevision = "rev-1",
             },
-            "user-script-definition:scope-1:my-script:rev-1")).ToArray();
+            new ScriptReadModelSchemaDeclaredEvent
+            {
+                ScriptId = "my-script",
+                ScriptRevision = "rev-1",
+            },
+            new ScriptReadModelSchemaValidatedEvent
+            {
+                ScriptId = "my-script",
+                ScriptRevision = "rev-1",
+            },
+            new ScriptReadModelSchemaActivationFailedEvent
+            {
+                ScriptId = "my-script",
+                ScriptRevision = "rev-1",
+            },
+        ];
 
-        plans.Should().ContainSingle();
-        plans[0].LeaseType.Should().Be(typeof(ScriptAuthorityRuntimeLease));
-        plans[0].StartRequest.RootActorId.Should().Be("user-script-definition:scope-1:my-script:rev-1");
-        plans[0].StartRequest.ProjectionKind.Should().Be("script-authority-read-model");
-        plans[0].StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+        var plans = mutationEvents
+            .Select(evt => provider.GetPlans(BuildContext(
+                typeof(ScriptDefinitionGAgent),
+                evt,
+                "user-script-definition:scope-1:my-script:rev-1")).ToArray())
+            .ToArray();
+
+        plans.Should().OnlyContain(plan => plan.Length == 1);
+        plans.Select(plan => plan[0].LeaseType)
+            .Should().OnlyContain(leaseType => leaseType == typeof(ScriptAuthorityRuntimeLease));
+        plans.Select(plan => plan[0].StartRequest.RootActorId)
+            .Should().OnlyContain(actorId => actorId == "user-script-definition:scope-1:my-script:rev-1");
+        plans.Select(plan => plan[0].StartRequest.ProjectionKind)
+            .Should().OnlyContain(kind => kind == "script-authority-read-model");
+        plans.Select(plan => plan[0].StartRequest.Mode)
+            .Should().OnlyContain(mode => mode == ProjectionRuntimeMode.DurableMaterialization);
     }
 
     [Fact]
