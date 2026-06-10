@@ -55,6 +55,7 @@ roles:
     event_routes: |
       event.type == ChatRequestEvent -> llm_handler
     connectors: [my_api, my_mcp]
+    allowed_tools: [web_search, calendar_lookup]
     extensions:
       event_modules: "fallback_module"
       event_routes: "event.type == X -> fallback_module"
@@ -62,6 +63,7 @@ roles:
 
 - `agent_kind` 是可选的稳定 kind token；配置后由 `WorkflowRunGAgent` 通过 Foundation runtime 创建该 role actor；省略时默认 `workflow.role-agent`。
 - `roles` 配置会透传到 `InitializeRoleAgentEvent`，并在 role actor 运行时生效。
+- `allowed_tools` 是 role 级 agent tool 可见范围上限；省略表示不限制，显式 `[]` 表示该 role 默认不暴露 agent tool。
 - `event_modules/event_routes` 合并优先级：平铺字段 > `extensions.*`。
 - `workflow yaml roles` 与独立 `role yaml` 共享同一归一化语义，避免双套解析规则。
 - step 只能通过 `target_role` / `role` 指向角色；`parameters.agent_type` 与 `parameters.agent_id` 不是 workflow DSL。
@@ -335,9 +337,13 @@ steps:
   - id: analyze
     type: llm_call
     target_role: analyst
+    allowed_tools: [web_search]
     parameters:
       prompt_prefix: "Analyze this input:"
 ```
+
+- `allowed_tools` 可写在 `llm_call` step 根部，用于收窄目标 role 的工具范围；省略继承 role 上限，显式 `[]` 表示本次 LLM call 不暴露 agent tool。
+- role 与 step 均配置时取交集；同一结果会同时限制 provider 可见的 `LLMRequest.Tools` 与执行期 tool lookup。
 
 ### `tool_call`
 

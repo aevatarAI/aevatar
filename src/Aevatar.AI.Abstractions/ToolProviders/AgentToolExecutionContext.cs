@@ -41,6 +41,8 @@ public sealed record AgentToolExecutionContext(
     {
     }
 
+    public AgentToolVisibilityScope ToolVisibility { get; init; } = AgentToolVisibilityScope.Unrestricted;
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,
@@ -58,6 +60,42 @@ public sealed record AgentToolExecutionContext(
 
     internal static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolNames)
+{
+    public static AgentToolVisibilityScope Unrestricted { get; } = new((IReadOnlySet<string>?)null);
+
+    public static AgentToolVisibilityScope Empty { get; } = new(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+    public bool IsRestricted => AllowedToolNames is not null;
+
+    public bool Allows(string? toolName)
+    {
+        if (AllowedToolNames is null)
+            return true;
+
+        if (string.IsNullOrWhiteSpace(toolName))
+            return false;
+
+        return AllowedToolNames.Contains(toolName.Trim());
+    }
+
+    public static AgentToolVisibilityScope FromAllowedToolNames(IEnumerable<string>? toolNames)
+    {
+        if (toolNames is null)
+            return Unrestricted;
+
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var toolName in toolNames)
+        {
+            var normalized = AgentToolExecutionContext.Normalize(toolName);
+            if (normalized is not null)
+                allowed.Add(normalized);
+        }
+
+        return new AgentToolVisibilityScope(allowed);
+    }
 }
 
 public sealed record AgentToolRequestIdentity(string? RequestId, string? CallId)

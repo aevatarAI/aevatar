@@ -8,6 +8,8 @@ internal interface IOpenAIRealtimeSession : IAsyncDisposable
 
     Task SendInputAudioAsync(BinaryData audio, CancellationToken ct);
 
+    Task SendInputImageAsync(BinaryData inputImageEvent, CancellationToken ct);
+
     Task AddItemAsync(RealtimeItem item, CancellationToken ct);
 
     Task StartResponseAsync(CancellationToken ct);

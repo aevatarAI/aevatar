@@ -693,6 +693,89 @@ public sealed class IdempotentStepExecutionTests
         request.StepParameters.InteractionSpec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
     }
 
+    [Fact]
+    public async Task StartWorkflow_WithRoleAndStepToolScopes_ShouldDispatchIntersection()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var workflow = new WorkflowDefinition
+        {
+            Name = "tool-scope-workflow",
+            Roles =
+            [
+                new RoleDefinition
+                {
+                    Id = "worker",
+                    Name = "Worker",
+                    AgentToolScope = new WorkflowAgentToolScopeDefinition
+                    {
+                        AllowedToolNames = ["search", "calendar"],
+                    },
+                },
+            ],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "scoped",
+                    Type = "llm_call",
+                    TargetRole = "worker",
+                    AgentToolScope = new WorkflowAgentToolScopeDefinition
+                    {
+                        AllowedToolNames = ["calendar", "forbidden"],
+                    },
+                },
+            ],
+        };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-tools", Input = "hello" }), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.StepParameters.AgentToolScope.Should().NotBeNull();
+        request.StepParameters.AgentToolScope.AllowedToolNames.Should().Equal("calendar");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithPresentEmptyStepToolScope_ShouldDispatchNoToolsScope()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var workflow = new WorkflowDefinition
+        {
+            Name = "no-tools-workflow",
+            Roles =
+            [
+                new RoleDefinition
+                {
+                    Id = "worker",
+                    Name = "Worker",
+                    AgentToolScope = new WorkflowAgentToolScopeDefinition
+                    {
+                        AllowedToolNames = ["search"],
+                    },
+                },
+            ],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "scoped",
+                    Type = "llm_call",
+                    TargetRole = "worker",
+                    AgentToolScope = new WorkflowAgentToolScopeDefinition(),
+                },
+            ],
+        };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-no-tools", Input = "hello" }), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.StepParameters.AgentToolScope.Should().NotBeNull();
+        request.StepParameters.AgentToolScope.AllowedToolNames.Should().BeEmpty();
+    }
+
     // ──── Test infrastructure ────
 
     private static readonly string[] DefaultStartVariableKeys =

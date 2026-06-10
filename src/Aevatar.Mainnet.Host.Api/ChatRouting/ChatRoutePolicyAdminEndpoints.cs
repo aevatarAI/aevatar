@@ -19,6 +19,7 @@ namespace Aevatar.Mainnet.Host.Api.ChatRouting;
 /// service), so the generic <c>/api/scopes/{scopeId}/invoke/{endpointId}</c>
 /// surface can't address it. This endpoint dispatches
 /// <see cref="UpsertChatRoutePolicyRequested"/> /
+/// <see cref="UpsertChatRouteRuleRequested"/> /
 /// <see cref="RemoveChatRouteRuleRequested"/> through the chat route policy
 /// application command port.
 ///
@@ -48,6 +49,7 @@ internal static class ChatRoutePolicyAdminEndpoints
             .WithTags("ChatRoutePolicy");
 
         group.MapPut("", HandleUpsertAsync);
+        group.MapPut("/rules/{ruleId}", HandleUpsertRuleAsync);
         group.MapDelete("/rules/{ruleId}", HandleRemoveRuleAsync);
         group.MapGet("", HandleGetAsync);
 
@@ -90,6 +92,11 @@ internal static class ChatRoutePolicyAdminEndpoints
             return JsonError(StatusCodes.Status400BadRequest, "invalid_body",
                 $"Could not parse request body as UpsertChatRoutePolicyRequested: {ex.Message}");
         }
+        catch (InvalidJsonException ex)
+        {
+            return JsonError(StatusCodes.Status400BadRequest, "invalid_body",
+                $"Could not parse request body as UpsertChatRoutePolicyRequested: {ex.Message}");
+        }
 
         if (command.DefaultTarget is null ||
             command.DefaultTarget.ActionCase == ChatRouteAction.ActionOneofCase.None)
@@ -116,6 +123,66 @@ internal static class ChatRoutePolicyAdminEndpoints
             actor_id = receipt.ActorId,
             command_id = receipt.CommandId,
             note = "Upsert dispatched. Re-query GET to observe materialized state.",
+        });
+    }
+
+    /// <summary>
+    /// PUT /api/scopes/{scopeId}/chat-route-policy/rules/{ruleId}
+    /// </summary>
+    private static async Task<IResult> HandleUpsertRuleAsync(
+        HttpContext http,
+        string scopeId,
+        string ruleId,
+        [FromServices] IChatRoutePolicyCommandPort commandPort,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        if (string.IsNullOrWhiteSpace(ruleId))
+            return JsonError(StatusCodes.Status400BadRequest, "rule_id_required", "rule_id path segment is required.");
+
+        UpsertChatRouteRuleRequested command;
+        try
+        {
+            using var reader = new StreamReader(http.Request.Body);
+            var bodyJson = await reader.ReadToEndAsync(ct);
+            if (string.IsNullOrWhiteSpace(bodyJson))
+                return JsonError(StatusCodes.Status400BadRequest, "empty_body",
+                    "Request body is required: protobuf-JSON of UpsertChatRouteRuleRequested.");
+
+            command = BodyParser.Parse<UpsertChatRouteRuleRequested>(bodyJson);
+        }
+        catch (InvalidProtocolBufferException ex)
+        {
+            return JsonError(StatusCodes.Status400BadRequest, "invalid_body",
+                $"Could not parse request body as UpsertChatRouteRuleRequested: {ex.Message}");
+        }
+        catch (InvalidJsonException ex)
+        {
+            return JsonError(StatusCodes.Status400BadRequest, "invalid_body",
+                $"Could not parse request body as UpsertChatRouteRuleRequested: {ex.Message}");
+        }
+
+        if (command.Rule is null)
+            return JsonError(StatusCodes.Status400BadRequest, "rule_required",
+                "rule is required: a rule upsert must include the ChatRouteRule payload.");
+
+        command.OwnerScope = new OwnerScope
+        {
+            NyxUserId = scopeId,
+            Platform = OwnerScope.NyxIdPlatform,
+            RegistrationScopeId = string.Empty,
+            SenderId = string.Empty,
+        };
+        command.Rule.RuleId = ruleId.Trim();
+
+        var receipt = await commandPort.UpsertRuleAsync(scopeId, command, ct);
+        return Results.Accepted(value: new
+        {
+            actor_id = receipt.ActorId,
+            command_id = receipt.CommandId,
+            note = "Rule upsert dispatched. Re-query GET to observe materialized state.",
         });
     }
 

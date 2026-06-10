@@ -72,6 +72,25 @@ public sealed class StreamingToolExecutor
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(toolCall);
 
+        if (!IsToolVisible(toolCall.Name))
+        {
+            var unauthorized = new ToolExecutionEntry(
+                Call: toolCall,
+                Tool: null,
+                IsConcurrencySafe: true)
+            {
+                Status = ToolStatus.Completed,
+                Result = new ToolExecutionResult(
+                    toolCall.Id,
+                    toolCall.Name,
+                    ToolManager.BuildErrorJson($"Tool '{toolCall.Name}' is not available in this context."),
+                    IsError: true),
+            };
+            state.Tools.Add(unauthorized);
+            Advance(state);
+            return;
+        }
+
         var tool = _tools.Get(toolCall.Name);
         var tracked = new ToolExecutionEntry(
             Call: toolCall,
@@ -301,6 +320,17 @@ public sealed class StreamingToolExecutor
 
             // Re-resolve tool after hooks — hooks may have rewritten the tool name.
             var effectiveToolName = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName!;
+            if (!IsToolVisible(effectiveToolName))
+            {
+                return new ToolExecutionCompletion(
+                    new ToolExecutionResult(
+                        call.Id,
+                        call.Name,
+                        ToolManager.BuildErrorJson($"Tool '{effectiveToolName}' is not available in this context."),
+                        IsError: true),
+                    SchedulerFault: true);
+            }
+
             var effectiveTool = _tools.Get(effectiveToolName) ?? tracked.Tool ?? new NullAgentTool(call.Name);
 
             // If the hook changed the tool name to a different tool, re-evaluate concurrency
@@ -404,6 +434,9 @@ public sealed class StreamingToolExecutor
                 SchedulerFault: false);
         }
     }
+
+    private bool IsToolVisible(string? toolName) =>
+        (_toolContext ?? AgentToolRequestContext.Current)?.ToolVisibility.Allows(toolName) ?? true;
 
     private sealed class NullAgentTool(string name) : IAgentTool
     {

@@ -86,6 +86,20 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return false;
     }
 
+    public bool TryGetVoiceSessionDefaults(string moduleName, out VoiceSessionDefaults defaults)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+
+        if (State.VoiceSessionDefaults.TryGetValue(moduleName, out var stored))
+        {
+            defaults = stored.Clone();
+            return true;
+        }
+
+        defaults = new VoiceSessionDefaults();
+        return false;
+    }
+
     // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
     //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
     //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
@@ -1204,6 +1218,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         next.RoleName = evt.RoleName ?? string.Empty;
         next.EventModules = NormalizeModuleExtensionText(evt.EventModules);
         next.EventRoutes = NormalizeModuleExtensionText(evt.EventRoutes);
+        next.VoiceSessionDefaults.Clear();
+        foreach (var entry in evt.VoiceSessionDefaults)
+        {
+            var moduleName = NormalizeModuleExtensionText(entry.Key);
+            if (string.IsNullOrWhiteSpace(moduleName))
+                continue;
+
+            next.VoiceSessionDefaults[moduleName] = entry.Value?.Clone() ?? new VoiceSessionDefaults();
+        }
         overrides.ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName.Trim();
         overrides.Model = string.IsNullOrWhiteSpace(evt.Model) ? string.Empty : evt.Model.Trim();
         overrides.SystemPrompt = evt.SystemPrompt ?? string.Empty;

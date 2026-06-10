@@ -71,7 +71,15 @@ public sealed class PolicyAwareVoiceEndpointsTests
                         SourceKind = ChatSourceKind.Voice,
                         Channel = "lark",
                     },
-                    Action = VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+                    Action = VoiceAttachTarget(
+                        "voice-agent-lark",
+                        "voice_presence_openai",
+                        new VoiceSessionOverrides
+                        {
+                            Voice = "verse",
+                            SampleRateHz = 16000,
+                            TurnDetectionMode = VoiceTurnDetectionMode.Disabled,
+                        }),
                 },
             ]));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]);
@@ -100,11 +108,14 @@ public sealed class PolicyAwareVoiceEndpointsTests
         context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         wsFeature.AcceptCalls.Should().Be(1);
         catalog.Requests.Should().BeEmpty();
-        session.Requests.Should().ContainSingle()
-            .Which.Should().Be(new VoiceRealtimeSessionRequest(
-                "voice-agent-lark",
-                "voice_presence_openai",
-                VoiceRealtimeSessionPurpose.Attach));
+        var request = session.Requests.Should().ContainSingle().Which;
+        request.ActorId.Should().Be("voice-agent-lark");
+        request.ModuleName.Should().Be("voice_presence_openai");
+        request.Purpose.Should().Be(VoiceRealtimeSessionPurpose.Attach);
+        request.SessionOverrides.Should().NotBeNull();
+        request.SessionOverrides!.Voice.Should().Be("verse");
+        request.SessionOverrides.SampleRateHz.Should().Be(16000);
+        request.SessionOverrides.TurnDetectionMode.Should().Be(VoiceTurnDetectionMode.Disabled);
         attachedTransports.Should().ContainSingle();
         detachedTransports.Should().ContainSingle()
             .Which.Should().BeSameAs(attachedTransports.Single());
@@ -275,8 +286,14 @@ public sealed class PolicyAwareVoiceEndpointsTests
             },
         };
 
-    private static ChatRouteAction VoiceAttachTarget(string actorId, string voiceModuleName) =>
-        ChatRouteActionTargets.ForwardToVoiceAttachTarget(actorId, voiceModuleName);
+    private static ChatRouteAction VoiceAttachTarget(
+        string actorId,
+        string voiceModuleName,
+        VoiceSessionOverrides? overrides = null) =>
+        ChatRouteActionTargets.ForwardToVoiceAttachTarget(
+            actorId,
+            voiceModuleName,
+            sessionOverrides: overrides);
 
     private static ChatRouteAction ForwardToModel(string modelName) =>
         new()

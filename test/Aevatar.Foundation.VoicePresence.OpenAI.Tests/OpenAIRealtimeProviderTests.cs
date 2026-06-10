@@ -106,6 +106,49 @@ public class OpenAIRealtimeProviderTests
     }
 
     [Fact]
+    public async Task UpdateSession_should_use_session_turn_detection_policy()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+        var providerSession = await ConnectAsync(provider);
+
+        await providerSession.UpdateSessionAsync(new VoiceSessionConfig
+        {
+            Voice = "alloy",
+            SampleRateHz = 24000,
+            TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+            VadDetectionThreshold = 0.45f,
+            VadPrefixPaddingMs = 125,
+            VadSilenceDurationMs = 375,
+        }, CancellationToken.None);
+        await providerSession.UpdateSessionAsync(new VoiceSessionConfig
+        {
+            Voice = "alloy",
+            SampleRateHz = 24000,
+            TurnDetectionMode = VoiceTurnDetectionMode.Disabled,
+        }, CancellationToken.None);
+
+        using var serverVadDocument = JsonDocument.Parse(session.SessionUpdateEvents[0]);
+        var turnDetection = serverVadDocument.RootElement
+            .GetProperty("session")
+            .GetProperty("audio")
+            .GetProperty("input")
+            .GetProperty("turn_detection");
+        turnDetection.GetProperty("type").GetString().ShouldBe("server_vad");
+        turnDetection.GetProperty("threshold").GetSingle().ShouldBe(0.45f);
+        turnDetection.GetProperty("prefix_padding_ms").GetInt32().ShouldBe(125);
+        turnDetection.GetProperty("silence_duration_ms").GetInt32().ShouldBe(375);
+
+        using var disabledDocument = JsonDocument.Parse(session.SessionUpdateEvents[1]);
+        disabledDocument.RootElement
+            .GetProperty("session")
+            .GetProperty("audio")
+            .GetProperty("input")
+            .GetProperty("turn_detection")
+            .ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
+    [Fact]
     public async Task SendToolResult_should_add_function_output_and_request_followup_response()
     {
         var session = new FakeSession();
@@ -191,20 +234,20 @@ public class OpenAIRealtimeProviderTests
         ]);
         var provider = CreateProvider(session);
         var events = new List<VoiceProviderEvent>();
+        var audioFrames = new List<VoiceProviderAudioFrame>();
         var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await ConnectAsync(provider, events, evt =>
         {
             if (evt.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected)
                 disconnected.TrySetResult();
-        });
+        }, audioFrames);
         await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         events.Select(x => x.EventCase).ShouldBe(
         [
             VoiceProviderEvent.EventOneofCase.SpeechStarted,
             VoiceProviderEvent.EventOneofCase.ResponseStarted,
-            VoiceProviderEvent.EventOneofCase.AudioReceived,
             VoiceProviderEvent.EventOneofCase.FunctionCall,
             VoiceProviderEvent.EventOneofCase.ResponseDone,
             VoiceProviderEvent.EventOneofCase.ResponseStarted,
@@ -214,17 +257,17 @@ public class OpenAIRealtimeProviderTests
         ]);
         events[1].ResponseStarted.ResponseId.ShouldBe(0);
         events[1].ResponseStarted.ProviderResponseId.ShouldBe("resp-1");
-        events[2].AudioReceived.SampleRateHz.ShouldBe(24000);
-        events[2].AudioReceived.ProviderResponseId.ShouldBe("resp-1");
-        events[3].FunctionCall.ResponseId.ShouldBe(0);
-        events[3].FunctionCall.ProviderResponseId.ShouldBe("resp-1");
-        events[4].ResponseDone.ResponseId.ShouldBe(0);
-        events[4].ResponseDone.ProviderResponseId.ShouldBe("resp-1");
-        events[5].ResponseStarted.ResponseId.ShouldBe(0);
-        events[5].ResponseStarted.ProviderResponseId.ShouldBe("resp-2");
-        events[6].ResponseCancelled.ResponseId.ShouldBe(0);
-        events[6].ResponseCancelled.ProviderResponseId.ShouldBe("resp-2");
-        events[7].Error.ErrorCode.ShouldBe("rate_limit");
+        audioFrames.ShouldHaveSingleItem().SampleRateHz.ShouldBe(24000);
+        audioFrames.Single().ProviderResponseId.ShouldBe("resp-1");
+        events[2].FunctionCall.ResponseId.ShouldBe(0);
+        events[2].FunctionCall.ProviderResponseId.ShouldBe("resp-1");
+        events[3].ResponseDone.ResponseId.ShouldBe(0);
+        events[3].ResponseDone.ProviderResponseId.ShouldBe("resp-1");
+        events[4].ResponseStarted.ResponseId.ShouldBe(0);
+        events[4].ResponseStarted.ProviderResponseId.ShouldBe("resp-2");
+        events[5].ResponseCancelled.ResponseId.ShouldBe(0);
+        events[5].ResponseCancelled.ProviderResponseId.ShouldBe("resp-2");
+        events[6].Error.ErrorCode.ShouldBe("rate_limit");
     }
 
     [Fact]
@@ -241,6 +284,7 @@ public class OpenAIRealtimeProviderTests
         var provider = CreateProvider(session);
         var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var seen = new List<VoiceProviderEvent>();
+        var audioFrames = new List<VoiceProviderAudioFrame>();
 
         await provider.ConnectAsync(new VoiceProviderSessionKey("lease-1", "host-1", "transport-1", 1), CreateConfig(),
             (key, evt, ct) =>
@@ -252,13 +296,19 @@ public class OpenAIRealtimeProviderTests
                     disconnected.TrySetResult();
                 return Task.CompletedTask;
             },
+            (key, audio, ct) =>
+            {
+                _ = key;
+                _ = ct;
+                audioFrames.Add(audio);
+                return Task.CompletedTask;
+            },
             CancellationToken.None);
         await session.ReceiveCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        seen.Count(static x => x.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived).ShouldBe(3);
-        seen.Where(static x => x.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived)
-            .Select(static x => x.AudioReceived.Pcm16.ToByteArray().Single())
+        audioFrames.Count.ShouldBe(3);
+        audioFrames.Select(static x => x.Pcm16.ToArray().Single())
             .ShouldBe([1, 2, 3]);
         seen.Any(static x => x.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected).ShouldBeTrue();
     }
@@ -286,6 +336,64 @@ public class OpenAIRealtimeProviderTests
         await providerSession.SendAudioAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None);
 
         session.SentAudio.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task SendInputImage_should_emit_openai_conversation_item_and_start_response()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+
+        var providerSession = await ConnectAsync(provider);
+        await providerSession.SendInputImageAsync(new VoiceInputImage
+        {
+            MediaType = "image/png",
+            Data = Google.Protobuf.ByteString.CopyFrom([1, 2, 3]),
+        }, CancellationToken.None);
+
+        session.InputImageEvents.Count.ShouldBe(1);
+        using var document = JsonDocument.Parse(session.InputImageEvents.Single());
+        var root = document.RootElement;
+        root.GetProperty("type").GetString().ShouldBe("conversation.item.create");
+        var item = root.GetProperty("item");
+        item.GetProperty("type").GetString().ShouldBe("message");
+        item.GetProperty("role").GetString().ShouldBe("user");
+        var content = item.GetProperty("content")[0];
+        content.GetProperty("type").GetString().ShouldBe("input_image");
+        content.GetProperty("image_url").GetString()
+            .ShouldBe($"data:image/png;base64,{Convert.ToBase64String([1, 2, 3])}");
+        session.StartResponseCalls.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task SendInputImage_empty_should_be_noop()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+
+        var providerSession = await ConnectAsync(provider);
+        await providerSession.SendInputImageAsync(new VoiceInputImage
+        {
+            MediaType = "image/png",
+        }, CancellationToken.None);
+
+        session.InputImageEvents.ShouldBeEmpty();
+        session.StartResponseCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task SendInputImage_should_reject_non_image_media_type()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+        var providerSession = await ConnectAsync(provider);
+
+        await Should.ThrowAsync<ArgumentException>(() =>
+            providerSession.SendInputImageAsync(new VoiceInputImage
+            {
+                MediaType = "application/octet-stream",
+                Data = Google.Protobuf.ByteString.CopyFrom([1]),
+            }, CancellationToken.None));
     }
 
     [Fact]
@@ -485,12 +593,13 @@ public class OpenAIRealtimeProviderTests
         OpenAIRealtimeProvider provider,
         VoiceProviderConfig? config = null,
         CancellationToken ct = default) =>
-        ConnectAsync(provider, [], onEvent: null, config, ct);
+        ConnectAsync(provider, [], onEvent: null, config: config, ct: ct);
 
     private static Task<RealtimeVoiceProviderSession> ConnectAsync(
         OpenAIRealtimeProvider provider,
         List<VoiceProviderEvent> events,
         Action<VoiceProviderEvent>? onEvent = null,
+        List<VoiceProviderAudioFrame>? audioFrames = null,
         VoiceProviderConfig? config = null,
         CancellationToken ct = default) =>
         provider.ConnectAsync(
@@ -502,6 +611,13 @@ public class OpenAIRealtimeProviderTests
                 _ = token;
                 events.Add(evt);
                 onEvent?.Invoke(evt);
+                return Task.CompletedTask;
+            },
+            (key, audioFrame, token) =>
+            {
+                _ = key;
+                _ = token;
+                audioFrames?.Add(audioFrame);
                 return Task.CompletedTask;
             },
             ct);
@@ -544,6 +660,8 @@ public class OpenAIRealtimeProviderTests
 
         public List<BinaryData> SentAudio { get; } = [];
 
+        public List<string> InputImageEvents { get; } = [];
+
         public List<RealtimeItem> AddedItems { get; } = [];
 
         public int StartResponseCalls { get; private set; }
@@ -564,6 +682,13 @@ public class OpenAIRealtimeProviderTests
         {
             _ = ct;
             SentAudio.Add(audio);
+            return Task.CompletedTask;
+        }
+
+        public Task SendInputImageAsync(BinaryData inputImageEvent, CancellationToken ct)
+        {
+            _ = ct;
+            InputImageEvents.Add(inputImageEvent.ToString());
             return Task.CompletedTask;
         }
 
@@ -611,6 +736,7 @@ public class OpenAIRealtimeProviderTests
     {
         public Task SendSessionUpdateAsync(BinaryData sessionUpdateEvent, CancellationToken ct) => Task.CompletedTask;
         public Task SendInputAudioAsync(BinaryData audio, CancellationToken ct) => Task.CompletedTask;
+        public Task SendInputImageAsync(BinaryData inputImageEvent, CancellationToken ct) => Task.CompletedTask;
         public Task AddItemAsync(RealtimeItem item, CancellationToken ct) => Task.CompletedTask;
         public Task StartResponseAsync(CancellationToken ct) => Task.CompletedTask;
         public Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
