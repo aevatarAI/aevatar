@@ -67,12 +67,26 @@ public static class AevatarPlatformHostBuilderExtensions
                 Category = "dependency",
                 ProbeAsync = static async (serviceProvider, cancellationToken) =>
                 {
-                    var documentReader = serviceProvider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
-                    _ = await documentReader.QueryAsync(new ProjectionDocumentQuery
+                    var indexProbe = serviceProvider.GetService<IProjectionIndexConsistencyProbe<WorkflowExecutionCurrentStateDocument>>();
+                    if (indexProbe != null)
                     {
-                        Take = 1,
-                    }, cancellationToken);
-                    return AevatarHealthContributorResult.Healthy("Workflow document read model is reachable.");
+                        var consistency = await indexProbe.CheckIndexConsistencyAsync(cancellationToken);
+                        return ProjectionIndexDiagnostics.ToContributorResult(consistency);
+                    }
+
+                    var documentReader = serviceProvider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
+                    try
+                    {
+                        _ = await documentReader.QueryAsync(new ProjectionDocumentQuery
+                        {
+                            Take = 1,
+                        }, cancellationToken);
+                        return AevatarHealthContributorResult.Healthy("Workflow document read model is reachable.");
+                    }
+                    catch (ProjectionIndexSchemaDriftException exception)
+                    {
+                        return ProjectionIndexDiagnostics.ToUnhealthyContributorResult(exception);
+                    }
                 },
             });
             builder.Services.AddAevatarHealthContributor(new AevatarHealthContributorRegistration
