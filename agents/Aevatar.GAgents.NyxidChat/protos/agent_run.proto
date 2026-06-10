@@ -153,6 +153,11 @@ message AgentRunToolStepResult {
   repeated AgentRunChatMessage result_messages = 1;
   bool advance_round = 2;
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 3;
+  // Interactive reply intent captured while the tool step executed (for example
+  // reply_with_interaction). Tools run during the tool step, not the LLM step,
+  // so the executor surfaces the captured intent here for the run actor to
+  // merge into AgentRunReplyStepState.outbound_intent.
+  aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 4;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry

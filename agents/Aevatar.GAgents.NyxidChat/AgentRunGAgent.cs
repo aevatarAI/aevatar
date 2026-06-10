@@ -784,6 +784,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.AppendedHistory.AddRange(
             result.ResultMessages.Select(AgentRunReplyStepMappers.ToConversationHistoryEntry));
         next.ToolReceipts.AddRange(result.ToolReceipts.Select(receipt => receipt.Clone()));
+        if (result.OutboundIntent is not null)
+            next.OutboundIntent = result.OutboundIntent.Clone();
         if (result.AdvanceRound)
             next.Round++;
         return next;
