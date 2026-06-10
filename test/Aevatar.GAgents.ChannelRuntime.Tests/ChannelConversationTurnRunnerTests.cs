@@ -1009,6 +1009,70 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldContinueGenericButtonClickToLlm_WhenButtonCarriesActionId()
+    {
+        // Regression: reply_with_interaction buttons (e.g. the /deploy confirmation card)
+        // are the LLM's own question to the user; the click must continue the conversation
+        // as an LLM turn instead of being dropped as unrecognized.
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+        var activity = BuildCardActionActivity("evt-card-button-1");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.ActionId = "confirm_deploy";
+        activity.Content.CardAction.SubmittedValue = "deploy-staging";
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Be("[card_action] confirm_deploy: deploy-staging");
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldContinueGenericButtonClickToLlm_WithoutSubmittedValue()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+        var activity = BuildCardActionActivity("evt-card-button-2");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.ActionId = "cancel_deploy";
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Be("[card_action] cancel_deploy");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldNotPromoteButtonToLlm_WhenTypedWorkflowResumePayloadAttached()
+    {
+        // A button carrying a typed payload belongs to its dedicated router; if that
+        // router declines (e.g. dispatch service unavailable) the click must not leak
+        // into a generic LLM turn that bypasses the typed contract.
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+        var activity = BuildCardActionActivity("evt-card-button-typed-1");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.ActionId = "approve_step";
+        activity.Content.CardAction.WorkflowResume = new WorkflowResumeActionPayload
+        {
+            ActorId = "actor-1",
+            RunId = "run-1",
+            StepId = "step-1",
+            Approved = true,
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.LlmReplyRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldIgnoreCardAction_WhenFormFieldsExistButActionKindIsNotFormSubmit()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
