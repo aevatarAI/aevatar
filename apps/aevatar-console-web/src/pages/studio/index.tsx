@@ -795,16 +795,29 @@ function resolveWorkflowIdFromMemberWorkflowReference(
   }
 
   if (memberId) {
-    return resolveWorkflowIdFromRouteValue(memberId, workflows, {
-      allowDirectIdFallback: true,
+    const resolvedByMemberId = resolveWorkflowIdFromRouteValue(memberId, workflows, {
+      allowDirectIdFallback: false,
       workflowFile,
     });
+    if (resolvedByMemberId) {
+      return resolvedByMemberId;
+    }
   }
 
   const displayName = trimOptional(input.displayName);
-  return displayName
-    ? resolveWorkflowIdFromRouteValue(displayName, workflows, {
-        allowDirectIdFallback: false,
+  if (displayName) {
+    const resolvedByDisplayName = resolveWorkflowIdFromRouteValue(displayName, workflows, {
+      allowDirectIdFallback: false,
+      workflowFile,
+    });
+    if (resolvedByDisplayName) {
+      return resolvedByDisplayName;
+    }
+  }
+
+  return memberId
+    ? resolveWorkflowIdFromRouteValue(memberId, workflows, {
+        allowDirectIdFallback: true,
         workflowFile,
       })
     : '';

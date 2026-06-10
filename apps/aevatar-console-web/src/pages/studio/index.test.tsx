@@ -3662,6 +3662,62 @@ describe("StudioPage", () => {
     });
   });
 
+  it("matches workflow member display names before falling back to direct member ids", async () => {
+    mockStudioMembers = [
+      {
+        ...mockStudioMembers[0],
+        memberId: "m-1",
+        displayName: "Workflow One",
+        publishedServiceId: "",
+        lastBoundRevisionId: null,
+      },
+    ];
+    mockWorkflowSummaries = [
+      {
+        ...mockWorkflowSummaries[0],
+        workflowId: "wf-1",
+        name: "Workflow One",
+        fileName: "workflow-one.yaml",
+        filePath: "scope://scope-1/workflow-one.yaml",
+      },
+    ];
+    mockWorkflowFile = {
+      ...mockWorkflowFile,
+      workflowId: "wf-1",
+      name: "Workflow One",
+      fileName: "workflow-one.yaml",
+      filePath: "scope://scope-1/workflow-one.yaml",
+      yaml: "name: Workflow One\nsteps: []\n",
+      document: {
+        ...mockParsedDocument,
+        name: "Workflow One",
+      },
+    };
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValue(mockWorkflowSummaries);
+    (studioApi.getWorkflow as jest.Mock).mockImplementation(
+      async (workflowId: string) => {
+        if (workflowId !== "wf-1") {
+          throw new Error(`Unexpected workflow id: ${workflowId}`);
+        }
+
+        return mockWorkflowFile;
+      }
+    );
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&member=member%3Am-1&step=bind&tab=bindings"
+    );
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(studioApi.getWorkflow).toHaveBeenCalledWith("wf-1", "scope-1");
+      expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("m-1", "scope-1");
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBe("member:m-1");
+      expect(searchParams.get("focus")).toBe("workflow:wf-1");
+    });
+  });
+
   it("canonicalizes a legacy service member link to the real backend member identity", async () => {
     renderStudioPage(
       "/studio?scopeId=scope-1&memberId=default&step=invoke&tab=invoke"
