@@ -911,6 +911,33 @@ jest.mock("@/shared/studio/api", () => ({
         return nextMember;
       }
     ),
+    createMemberWithId: jest.fn(
+      async (input: {
+        scopeId: string;
+        memberId: string;
+        displayName: string;
+        implementationKind: "workflow" | "script" | "gagent";
+        description?: string | null;
+        teamId?: string | null;
+      }) => {
+        const nextMemberId = input.memberId.trim();
+        const nextMember = {
+          memberId: nextMemberId,
+          scopeId: input.scopeId,
+          displayName: input.displayName.trim(),
+          description: input.description?.trim() || "",
+          implementationKind: input.implementationKind,
+          lifecycleStage: "created",
+          publishedServiceId: `member-${nextMemberId}`,
+          lastBoundRevisionId: null,
+          teamId: input.teamId ?? null,
+          createdAt: "2026-04-27T08:10:00Z",
+          updatedAt: "2026-04-27T08:10:00Z",
+        };
+        mockStudioMembers = [nextMember, ...mockStudioMembers];
+        return nextMember;
+      }
+    ),
     getSkillsHealth: jest.fn(async () => ({
       baseUrl: "https://ornn.chrono-ai.fun",
       reachable: true,
@@ -4699,9 +4726,10 @@ describe("StudioPage", () => {
     expect(
       window.localStorage.getItem("aevatar:studio:script-drafts:v1"),
     ).toContain("refund-handler");
-    expect(studioApi.createMember).toHaveBeenCalledWith(
+    expect(studioApi.createMemberWithId).toHaveBeenCalledWith(
       expect.objectContaining({
         scopeId: "scope-1",
+        memberId: "refund-handler",
         displayName: "Refund Handler",
         implementationKind: "script",
       }),

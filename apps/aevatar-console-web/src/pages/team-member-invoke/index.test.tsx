@@ -1,6 +1,7 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
+import { history } from "@/shared/navigation/history";
 import { studioApi } from "@/shared/studio/api";
 import {
   cleanupTestQueryClients,
@@ -83,7 +84,7 @@ function createBinding(overrides?: Record<string, unknown>) {
   };
 }
 
-function createService() {
+function createService(overrides?: Record<string, unknown>) {
   return {
     activeServingRevisionId: "rev-alpha",
     appId: "default",
@@ -108,6 +109,7 @@ function createService() {
     serviceKey: "scope-1:svc-alpha",
     tenantId: "default",
     updatedAt: "2026-06-01T00:10:00Z",
+    ...(overrides ?? {}),
   };
 }
 
@@ -193,6 +195,69 @@ describe("TeamMemberInvokePage", () => {
     expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
       appId: "default",
     });
+  });
+
+  it("updates the invoke target when navigating between member invoke routes", async () => {
+    (studioApi.getMember as jest.Mock).mockImplementation(
+      (_scopeId: string, memberId: string) =>
+        Promise.resolve(
+          createWorkflowMember({
+            displayName:
+              memberId === "member-beta" ? "Beta Workflow" : "Alpha Workflow",
+            lastBoundRevisionId:
+              memberId === "member-beta" ? "rev-beta" : "rev-alpha",
+            memberId,
+            publishedServiceId:
+              memberId === "member-beta" ? "svc-beta" : "svc-alpha",
+          }),
+        ),
+    );
+    (studioApi.getMemberBinding as jest.Mock).mockImplementation(
+      (_scopeId: string, memberId: string) =>
+        Promise.resolve(
+          createBinding({
+            publishedServiceId:
+              memberId === "member-beta" ? "svc-beta" : "svc-alpha",
+            revisionId: memberId === "member-beta" ? "rev-beta" : "rev-alpha",
+          }),
+        ),
+    );
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([
+      createService(),
+      createService({
+        activeServingRevisionId: "rev-beta",
+        defaultServingRevisionId: "rev-beta",
+        deploymentId: "dep-beta",
+        displayName: "Beta Workflow",
+        primaryActorId: "actor-beta",
+        serviceId: "svc-beta",
+        serviceKey: "scope-1:svc-beta",
+      }),
+    ]);
+
+    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+
+    expect(await screen.findByTestId("member-invoke-panel")).toHaveTextContent(
+      "member:member-alpha",
+    );
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "service:svc-alpha",
+    );
+
+    history.push("/teams/scope-1/team-1/members/member-beta/invoke");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+        "member:member-beta",
+      );
+    });
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "service:svc-beta",
+    );
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "label:Beta Workflow",
+    );
+    expect(studioApi.getMember).toHaveBeenCalledWith("scope-1", "member-beta");
   });
 
   it("blocks non-workflow members", async () => {

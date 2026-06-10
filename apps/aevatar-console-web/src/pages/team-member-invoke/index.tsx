@@ -8,7 +8,11 @@ import { Button, Space, Spin, Typography, theme } from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
-import { history } from "@/shared/navigation/history";
+import {
+  getLocationSnapshot,
+  history,
+  subscribeToLocationChanges,
+} from "@/shared/navigation/history";
 import {
   buildTeamDetailHref,
   buildTeamMemberWorkflowStudioHref,
@@ -93,7 +97,15 @@ const invokeStageStyle: React.CSSProperties = {
 
 const TeamMemberInvokePage: React.FC = () => {
   const { token } = theme.useToken();
-  const route = React.useMemo(() => readTeamMemberInvokeRouteState(), []);
+  const locationSnapshot = React.useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    () => "",
+  );
+  const route = React.useMemo(
+    () => readTeamMemberInvokeRouteState(),
+    [locationSnapshot],
+  );
   const backHref = buildTeamDetailHref({
     memberId: route.memberId || undefined,
     scopeId: route.scopeId,
