@@ -22,6 +22,7 @@ owner: eanzhao
 |---|---|---|
 | `POST /api/chat` | HTTP + SSE | 发起一次 run，并持续接收运行时 envelope 投影流 |
 | `GET /api/ws/chat` | WebSocket | 与 `/api/chat` 同能力，使用 WS 封装 |
+| `POST /api/workflow-webhooks/{routeKey}` | HTTP JSON | 认证外部 webhook，并按 Host binding 启动新 run |
 | `POST /api/workflows/resume` | HTTP JSON | 恢复 `human_input/human_approval` 挂起步骤 |
 | `POST /api/workflows/signal` | HTTP JSON | 向等待信号的步骤发送 signal |
 
@@ -35,6 +36,7 @@ owner: eanzhao
 - 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - 命令主链路不额外经过 ingress queue/stream；stream 保留给 actor envelope 的投影、实时输出与读侧观察。
 - `command.ack` / `accepted=true` 对外只应被解释为“系统接受了该次交互并返回追踪句柄”，不应被解释为领域事件已提交或 ReadModel 已可见。
+- Webhook ingress 是 start-run 入口，不是 `wait_signal` continuation；外部 JSON 只在 Host/Adapter 边界解析，进入应用层后只保留 typed `WorkflowExternalIngressContext` 与 `WorkflowChatRunRequest`。
 
 ## 2. 输入模型（chat）
 
@@ -131,6 +133,21 @@ owner: eanzhao
 - 不自动执行，只输出最终 YAML（适合手动触发最终 run）。
 
 ## 4. Human Approval / Human Input 如何继续
+
+### Webhook start-run
+
+`POST /api/workflow-webhooks/{routeKey}` 用于外部系统认证后启动新的 workflow run。`routeKey` 只匹配 Host 配置里的 binding；workflow 名称、scope、delivery id 来源、prompt 映射与 HMAC header 都由 `WorkflowWebhookIngress` options 承载，不在生产代码硬编码具体 workflow。
+
+运行语义：
+
+- Host 读取 raw JSON、执行 HMAC 校验、按 binding 映射 delivery id 与 prompt，然后构造 typed `WorkflowChatRunRequest`。
+- `CommandIdSeed` 与 `CorrelationIdSeed` 使用稳定格式 `webhook:{routeKey}:{sourceId}:{deliveryId}`。
+- `WorkflowChatRequestEvent.external_ingress` 承载 typed route/source/delivery/fingerprint/auth 信息；这些稳定语义不得塞进 `Metadata`。
+- 防重放由 `IWorkflowWebhookReplayStore` 承载，生产实现必须是 durable/distributed first-writer-wins store；显式 in-memory 实现只允许本地或测试使用。
+- 启用 webhook ingress 但没有 replay store 时，Host fail closed 返回 `503 WEBHOOK_REPLAY_STORE_UNAVAILABLE`。
+- 成功响应是 `202 Accepted`，只表示命令已被接受并可追踪；不承诺 run 已提交、执行完成或 readmodel 已刷新。
+
+`POST /api/workflows/signal` 仍只用于已有 run 的 `wait_signal` continuation，必须携带已知 `actorId + runId + signalName`，不能作为新 run webhook trigger 使用。
 
 当 run 到 `human_input` 或 `human_approval`，运行时 envelope 投影流会发出 `HUMAN_INPUT_REQUEST`，包含：
 

@@ -58,6 +58,27 @@ message WorkflowCallerCredential {
   string bearer_token = 1;
 }
 
+message WorkflowExternalIngressContext {
+  string route_key = 1;
+  string source_id = 2;
+  string delivery_id = 3;
+  int64 received_at_unix_ms = 4;
+  string content_type = 5;
+  string payload_fingerprint = 6;
+  string auth_scheme = 7;
+  string principal_subject = 8;
+}
+
+message WorkflowWebhookReplayRecord {
+  string route_key = 1;
+  string source_id = 2;
+  string delivery_id = 3;
+  string payload_fingerprint = 4;
+  int64 received_at_unix_ms = 5;
+  string command_id = 6;
+  string correlation_id = 7;
+}
+
 message WorkflowChatRequestEvent {
   reserved 9;
   reserved "connector_http_authorization";
@@ -71,6 +92,7 @@ message WorkflowChatRequestEvent {
   WorkflowLlmControlContext llm_control = 8;
   WorkflowCallerCredential caller_credential = 10;
   WorkflowRunForkSeed fork_seed = 11;
+  WorkflowExternalIngressContext external_ingress = 12;
 }
 
 message WorkflowRunForkSeed

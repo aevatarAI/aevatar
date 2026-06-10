@@ -57,6 +57,16 @@ public sealed record WorkflowLlmControl(
 
 public sealed record WorkflowCallerCredential(string? BearerToken = null);
 
+public sealed record WorkflowExternalIngressContext(
+    string RouteKey,
+    string SourceId,
+    string DeliveryId,
+    long ReceivedAtUnixMs,
+    string? ContentType = null,
+    string? PayloadFingerprint = null,
+    string? AuthScheme = null,
+    string? PrincipalSubject = null);
+
 public sealed record WorkflowChatRunForkSeed(
     string SourceRunId,
     string StartAtStepId,
@@ -173,6 +183,7 @@ public sealed record WorkflowChatRunRequest(
     string? CommandIdSeed = null,
     string? CorrelationIdSeed = null,
     WorkflowChatRunForkSeed? ForkSeed = null,
+    WorkflowExternalIngressContext? ExternalIngress = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;

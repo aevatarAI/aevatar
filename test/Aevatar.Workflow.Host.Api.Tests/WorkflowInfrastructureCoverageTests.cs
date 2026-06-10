@@ -156,6 +156,24 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public void MapWorkflowCapabilityEndpoints_ShouldMapWorkflowWebhookRoute()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddLogging();
+        builder.Services.AddWorkflowCapability(new ConfigurationBuilder().Build());
+        var app = builder.Build();
+
+        app.MapWorkflowCapabilityEndpoints();
+
+        ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .Should()
+            .Contain("/api/workflow-webhooks/{routeKey}");
+    }
+
+    [Fact]
     public void MapWorkflowCapabilityEndpoints_WhenScheduleDependenciesAreRegistered_ShouldMapScheduleRoutes()
     {
         var builder = WebApplication.CreateBuilder();
@@ -255,8 +273,59 @@ public sealed class WorkflowInfrastructureCoverageTests
             x.ServiceType == typeof(IWorkflowFileIngressPort) &&
             x.ImplementationType == typeof(FileSystemWorkflowFileIngressPort));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(WorkflowWebhookIngressRequestBuilder));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(IWorkflowWebhookReplayStore) &&
+            x.ImplementationType == typeof(InMemoryWorkflowWebhookReplayStore));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(IWorkflowWebhookReplayStore) &&
+            x.ImplementationType == typeof(RedisWorkflowWebhookReplayStore));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityServices_ShouldRegisterInMemoryWebhookReplayStoreOnlyWhenExplicitlyConfigured()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowWebhookIngressOptions.SectionName}:Enabled"] = "true",
+                [$"{WorkflowWebhookIngressOptions.SectionName}:UseInMemoryReplayStore"] = "true",
+            })
+            .Build();
+
+        services.AddWorkflowCapability(configuration);
+
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowWebhookReplayStore) &&
+            x.ImplementationType == typeof(InMemoryWorkflowWebhookReplayStore));
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityServices_ShouldRegisterRedisWebhookReplayStore_WhenConnectionStringConfigured()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowWebhookIngressOptions.SectionName}:RedisConnectionString"] = "localhost:6379,abortConnect=false",
+                [$"{WorkflowWebhookIngressOptions.SectionName}:UseInMemoryReplayStore"] = "true",
+            })
+            .Build();
+
+        services.AddWorkflowCapability(configuration);
+
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowWebhookReplayStore) &&
+            x.ImplementationType == typeof(RedisWorkflowWebhookReplayStore));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(IWorkflowWebhookReplayStore) &&
+            x.ImplementationType == typeof(InMemoryWorkflowWebhookReplayStore));
     }
 
     [Fact]
