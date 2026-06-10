@@ -831,6 +831,72 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_WhenBoundToolSchemaIsRejected_RetriesWithOwnerNoTools()
+    {
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("conversation:c");
+        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var providerFactory = new RejectToolsThenReplyProviderFactory();
+        var toolSource = new CountingAgentRunToolSource(new AgentRunNoopTool());
+        var replyGenerator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [toolSource],
+            localSkillCatalog: new LocalSkillCatalog());
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var activity = BuildRelayActivity();
+        activity.TransportExtras ??= new TransportExtras();
+        activity.TransportExtras.NyxUserAccessToken = "sender-runtime-token";
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-bound-schema-fallback",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-bound-schema-fallback",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
+            }).ToPayload(),
+            LlmControl = new LLMControlContext(
+                "owner-token",
+                "owner-token",
+                "sender-runtime-token",
+                "owner-model",
+                "/api/v1/proxy/s/owner",
+                4,
+                null).ToPayload(),
+            Metadata =
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-bound-schema-fallback",
+            },
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.ProducedReplyText.Should().Be("owner fallback reply");
+        runtime.State.GenerationStep.Should().NotBeNull();
+        runtime.State.GenerationStep!.FinalNoToolsStep.Should().BeTrue();
+        providerFactory.Requests.Should().HaveCount(2);
+        providerFactory.Requests[0].Tools.Should().NotBeNull();
+        providerFactory.Requests[0].ToolContext!.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        providerFactory.Requests[0].LlmControl!.NyxIdAccessToken.Should().Be("sender-runtime-token");
+
+        providerFactory.Requests[1].Tools.Should().BeNull();
+        providerFactory.Requests[1].ToolContext!.SenderBinding.BindingId.Should().BeNull();
+        providerFactory.Requests[1].ToolContext!.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        providerFactory.Requests[1].LlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("owner-token");
+    }
+
+    [Fact]
     public async Task HandleStartAsync_WhenLongRunningLarkAutomation_ShouldRunInteractionPublishThenScheduleTools()
     {
         var targetActor = Substitute.For<IActor>();
@@ -2771,8 +2837,29 @@ public sealed class AgentRunGAgentTests
             if (_replyGenerator is IAgentRunStepConversationReplyGenerator)
             {
                 // Sync (PR #1106 r2): production dispatches step continuations back through the run actor inbox.
-                var stepContinuation = await _inner.BuildLlmStepContinuationAsync(request, ct);
-                await _agent.HandleNextLlmStepAsync(stepContinuation);
+                try
+                {
+                    var stepContinuation = await _inner.BuildLlmStepContinuationAsync(request, ct);
+                    await _agent.HandleNextLlmStepAsync(stepContinuation);
+                }
+                catch (Exception ex) when (BuildOwnerFallbackCommand(request, ex) is { } fallback)
+                {
+                    await _agent.HandleOwnerFallbackStepAsync(fallback);
+                }
+                catch (Exception ex)
+                {
+                    await _agent.HandleReplyGenerationFailedAsync(new AgentRunReplyGenerationFailed
+                    {
+                        RunId = request.RunId,
+                        CorrelationId = request.Request.CorrelationId,
+                        TargetActorId = request.Request.TargetActorId,
+                        ErrorCode = "llm_reply_failed",
+                        ErrorSummary = ex.Message,
+                        FailedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        Attempt = request.Attempt,
+                        Request = request.Request.Clone(),
+                    });
+                }
                 return;
             }
 
@@ -2822,6 +2909,29 @@ public sealed class AgentRunGAgentTests
             AgentRunReplyStepExecutionRequest request,
             CancellationToken ct) =>
             _inner.BuildToolStepContinuationAsync(request, ct);
+
+        private static AgentRunOwnerFallbackStepRequested? BuildOwnerFallbackCommand(
+            AgentRunReplyStepExecutionRequest request,
+            Exception ex)
+        {
+            if (request.StepState.FinalNoToolsStep)
+                return null;
+            if (!string.IsNullOrWhiteSpace(request.StepState.AccumulatedText))
+                return null;
+            if (!LlmOwnerFallbackPolicy.IsRetryable(ex))
+                return null;
+
+            return new AgentRunOwnerFallbackStepRequested
+            {
+                RunId = request.RunId,
+                CorrelationId = request.Request.CorrelationId,
+                TargetActorId = request.Request.TargetActorId,
+                Attempt = request.Attempt,
+                StepIndex = request.StepIndex + 1,
+                Reason = ex.Message ?? string.Empty,
+                Request = request.Request.Clone(),
+            };
+        }
 
         private async Task<AgentRunNextLlmStepRequestedEvent> BuildLegacyLlmStepContinuationAsync(
             AgentRunReplyStepExecutionRequest request,
@@ -3361,6 +3471,35 @@ public sealed class AgentRunGAgentTests
                     ArgumentsJson = "{}",
                 },
             };
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
+    private sealed class RejectToolsThenReplyProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "reject-tools-then-reply";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            if (request.Tools is { Count: > 0 })
+            {
+                throw new InvalidOperationException(
+                    "Invalid schema for function 'aevatar_observe_run': schema must have type 'object' and not have 'oneOf' at the top level (HTTP 400).");
+            }
+
+            yield return new LLMStreamChunk { DeltaContent = "owner fallback reply" };
             await Task.CompletedTask;
             yield return new LLMStreamChunk { IsLast = true };
         }

@@ -52,4 +52,6 @@ public sealed record AgentRunReplyStepPlan(
     AgentToolExecutionContext ToolContext,
     IReadOnlyList<ChatMessage> InitialMessages,
     int MaxToolRounds,
-    bool DisableTools = false);
+    bool DisableTools = false,
+    LLMControlContext? OwnerFallbackLlmControl = null,
+    AgentToolExecutionContext? OwnerFallbackToolContext = null);

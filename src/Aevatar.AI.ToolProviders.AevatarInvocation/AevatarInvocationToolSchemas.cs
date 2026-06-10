@@ -47,5 +47,6 @@ internal static class AevatarInvocationToolSchemas
             ["gagent_terminal_correlation"],
             ["gagent_terminal_session"],
             ["workflow_current_state"],
-        ]);
+        ],
+        emitTopLevelOneOf: false);
 }

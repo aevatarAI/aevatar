@@ -131,6 +131,8 @@ message AgentRunReplyStepState {
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 20;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 21;
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 22;
+  aevatar.ai.LLMControlContextPayload owner_fallback_llm_control = 23;
+  aevatar.ai.AgentToolExecutionContextPayload owner_fallback_tool_context = 24;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
@@ -289,6 +291,20 @@ message AgentRunReplyGenerationFailed {
   int64 failed_at_unix_ms = 6;
   int32 attempt = 7;
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 8;
+}
+
+// Transient self-message used when a sender-owned LLM/tool-enabled attempt is
+// rejected before it produces a useful reply. The actor converts it into a
+// persisted AgentRunReplyStepStateUpdatedEvent that clears sender binding and
+// disables tools, then continues through the normal LLM-step chain.
+message AgentRunOwnerFallbackStepRequested {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int32 step_index = 5;
+  string reason = 6;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 7;
 }
 
 // Transient timeout signal emitted by the callback scheduler. It carries only

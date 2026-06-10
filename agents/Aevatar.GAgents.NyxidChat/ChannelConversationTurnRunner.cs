@@ -199,6 +199,28 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                         .ConfigureAwait(false));
             }
 
+            // Generic reply_with_interaction buttons mirror the form_submit path: the
+            // click is the user's answer to the LLM's own card, so it continues the
+            // conversation as an LLM turn. Typed payloads (workflow resume, LLM
+            // selection, agent builder) were already consumed by their routers above.
+            if (TryBuildGenericButtonClickLlmText(activity.Content?.CardAction, out var buttonClickText))
+            {
+                var buttonInbound = WithText(inbound, buttonClickText);
+                var buttonInboundEvent = ToInboundEvent(
+                    activity,
+                    registration,
+                    buttonInbound);
+                return ConversationTurnResult.LlmReplyRequested(
+                    await BuildLlmReplyRequestAsync(
+                            activity,
+                            registration,
+                            buttonInboundEvent,
+                            runtimeContext,
+                            senderBinding,
+                            ct)
+                        .ConfigureAwait(false));
+            }
+
             // A card_action that survived both routers has no actionable meaning for this
             // bot: promoting it into an LLM turn would send a blank user message and waste
             // a model call. Return a no-reply completion instead of falling through.
@@ -1658,6 +1680,28 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return false;
 
         text = string.Join("\n", lines);
+        return true;
+    }
+
+    private static bool TryBuildGenericButtonClickLlmText(CardActionSubmission? cardAction, out string text)
+    {
+        text = string.Empty;
+        if (cardAction is null ||
+            cardAction.ActionKind != ActionElementKind.Button ||
+            string.IsNullOrWhiteSpace(cardAction.ActionId))
+        {
+            return false;
+        }
+
+        // Typed payloads belong to their dedicated routers; reaching this point with one
+        // attached means that router declined, and promoting it to a generic LLM turn
+        // would bypass the typed contract.
+        if (cardAction.WorkflowResume is not null || cardAction.LlmSelection is not null)
+            return false;
+
+        text = string.IsNullOrWhiteSpace(cardAction.SubmittedValue)
+            ? $"[card_action] {cardAction.ActionId}"
+            : $"[card_action] {cardAction.ActionId}: {cardAction.SubmittedValue}";
         return true;
     }
 
