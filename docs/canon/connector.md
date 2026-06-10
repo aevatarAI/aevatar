@@ -134,6 +134,8 @@ roles:
 
 这一步只负责“传授权信息”，不直接执行 connector。
 
+注意：`roles[].connectors` 只约束 `connector_call` 对中心化 connector 的访问；它不控制 LLM agent tool。`llm_call` 的 agent tool 可见范围使用 role/step 根部的 `allowed_tools`，并通过 typed `agent_tool_scope` 传到 AI 工具执行上下文。
+
 ## 3.2 connector_call 执行主链路
 
 `ConnectorCallModule` 处理 `StepRequestEvent`（`step_type == connector_call`）：
