@@ -1,4 +1,14 @@
-import { Alert, Button, Collapse, Input, Select, Space, Typography } from "antd";
+import { CloseOutlined } from "@ant-design/icons";
+import {
+  Alert,
+  Button,
+  Collapse,
+  Input,
+  Select,
+  Space,
+  Typography,
+  theme,
+} from "antd";
 import React from "react";
 import {
   applyStudioNodeConfigurationValues,
@@ -17,13 +27,156 @@ type WorkflowStudioNodeDetailPanelProps = {
   readonly onClose: () => void;
   readonly onConfigurationChange: (parametersText: string) => void;
   readonly stepDraft: StudioStepInspectorDraft | null;
-  readonly width?: number;
 };
+
+const DEFAULT_PANEL_WIDTH = 420;
+const MIN_PANEL_WIDTH = 360;
+const MAX_PANEL_WIDTH = 500;
+
+function buildInspectorCss(screenMd: number): string {
+  return `
+.workflow-studio-node-inspector {
+  color: var(--workflow-node-inspector-text);
+}
+
+.workflow-studio-node-inspector__resize {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  bottom: 0;
+  cursor: ew-resize;
+  display: flex;
+  justify-content: center;
+  left: calc(var(--workflow-node-inspector-resize-hit-width) / -2);
+  padding: 0;
+  position: absolute;
+  top: 0;
+  width: var(--workflow-node-inspector-resize-hit-width);
+}
+
+.workflow-studio-node-inspector__resize::after {
+  background: var(--workflow-node-inspector-resize);
+  border-radius: var(--workflow-node-inspector-pill-radius);
+  content: "";
+  height: var(--workflow-node-inspector-resize-grip-height);
+  width: var(--workflow-node-inspector-resize-grip-width);
+}
+
+.workflow-studio-node-inspector__resize:hover::after,
+.workflow-studio-node-inspector__resize:focus-visible::after {
+  background: var(--workflow-node-inspector-resize-active);
+}
+
+.workflow-studio-node-inspector__body::-webkit-scrollbar {
+  width: var(--workflow-node-inspector-scrollbar-width);
+}
+
+.workflow-studio-node-inspector__body::-webkit-scrollbar-thumb {
+  background: var(--workflow-node-inspector-scroll-thumb);
+  border: 3px solid var(--workflow-node-inspector-surface);
+  border-radius: var(--workflow-node-inspector-pill-radius);
+}
+
+@media (max-width: ${screenMd}px) {
+  .workflow-studio-node-inspector {
+    border-left: 0 !important;
+    border-radius: var(--workflow-node-inspector-mobile-radius) var(--workflow-node-inspector-mobile-radius) 0 0 !important;
+    border-top: 1px solid var(--workflow-node-inspector-border) !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    max-height: calc(100vh - var(--workflow-node-inspector-mobile-offset)) !important;
+    max-width: none !important;
+    right: 0 !important;
+    top: auto !important;
+    width: auto !important;
+  }
+
+  .workflow-studio-node-inspector__resize {
+    display: none;
+  }
+}
+`;
+}
 
 const fieldStackStyle: React.CSSProperties = {
   display: "grid",
-  gap: 6,
+  gap: "var(--workflow-node-inspector-field-gap)",
 };
+
+type InspectorCssVariables = React.CSSProperties & Record<`--${string}`, string>;
+
+function toPx(value: number | string): string {
+  return typeof value === "number" ? `${value}px` : value;
+}
+
+function doubledPx(value: number | string): string {
+  return typeof value === "number" ? `${value * 2}px` : `calc(${value} * 2)`;
+}
+
+function clampPanelWidth(width: number): number {
+  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width));
+}
+
+function displayValue(value: string): string {
+  return value.trim() || t("teamMemberWorkflowStudio.nodeInspector.notSet", "Not set");
+}
+
+function summarizeBranches(branchesText: string): string {
+  try {
+    const parsed = JSON.parse(branchesText) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return t("teamMemberWorkflowStudio.nodeInspector.noBranches", "No branches");
+    }
+
+    const entries = Object.entries(parsed)
+      .map(([label, target]) => [label.trim(), String(target ?? "").trim()])
+      .filter(([label, target]) => Boolean(label) && Boolean(target));
+
+    if (entries.length === 0) {
+      return t("teamMemberWorkflowStudio.nodeInspector.noBranches", "No branches");
+    }
+
+    return entries.map(([label, target]) => `${label} -> ${target}`).join(", ");
+  } catch {
+    return t(
+      "teamMemberWorkflowStudio.nodeInspector.branchesUnavailable",
+      "Branches unavailable",
+    );
+  }
+}
+
+function InspectorField({
+  label,
+  value,
+}: {
+  readonly label: string;
+  readonly value: string;
+}) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <dt
+        style={{
+          color: "var(--workflow-node-inspector-muted)",
+          fontSize: "var(--workflow-node-inspector-caption-size)",
+          fontWeight: 600,
+          lineHeight: 1.4,
+        }}
+      >
+        {label}
+      </dt>
+      <dd
+        style={{
+          color: "var(--workflow-node-inspector-text)",
+          lineHeight: 1.5,
+          margin: "var(--workflow-node-inspector-field-gap) 0 0",
+          overflowWrap: "anywhere",
+        }}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
 
 function readDraftParameters(stepDraft: StudioStepInspectorDraft): Record<string, unknown> {
   try {
@@ -66,8 +219,14 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
   onClose,
   onConfigurationChange,
   stepDraft,
-  width = 420,
 }) => {
+  const { token } = theme.useToken();
+  const [panelWidth, setPanelWidth] = React.useState(DEFAULT_PANEL_WIDTH);
+  const [resizing, setResizing] = React.useState(false);
+  const resizeStartRef = React.useRef<{
+    readonly startWidth: number;
+    readonly startX: number;
+  } | null>(null);
   const {
     configurationValues,
     rawConfigurationText,
@@ -75,13 +234,104 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     setRawConfigurationText,
   } = useConfigurationState(stepDraft);
 
+  React.useEffect(() => {
+    if (!resizing) {
+      return;
+    }
+
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+
+    return () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+    };
+  }, [resizing]);
+
   if (!stepDraft) {
     return null;
   }
 
+  const overlayInset = token.padding;
+  const inspectorCss = buildInspectorCss(token.screenMD);
+  const inspectorVariables: InspectorCssVariables = {
+    "--workflow-node-inspector-border": token.colorBorderSecondary,
+    "--workflow-node-inspector-border-strong": token.colorBorder,
+    "--workflow-node-inspector-caption-size": toPx(token.fontSizeSM),
+    "--workflow-node-inspector-field-gap": toPx(token.paddingXXS),
+    "--workflow-node-inspector-header-gap": toPx(token.paddingSM),
+    "--workflow-node-inspector-mobile-offset": token.sizeXXL
+      ? toPx(token.sizeXXL)
+      : token.controlHeightLG
+        ? doubledPx(token.controlHeightLG)
+        : doubledPx(token.paddingXL),
+    "--workflow-node-inspector-mobile-radius": toPx(token.borderRadiusLG),
+    "--workflow-node-inspector-muted": token.colorTextSecondary,
+    "--workflow-node-inspector-panel-radius": toPx(token.borderRadiusLG),
+    "--workflow-node-inspector-pill-radius": toPx(token.borderRadiusSM),
+    "--workflow-node-inspector-resize": token.colorBorder,
+    "--workflow-node-inspector-resize-active": token.colorPrimary,
+    "--workflow-node-inspector-resize-grip-height": token.controlHeightLG
+      ? toPx(token.controlHeightLG)
+      : doubledPx(token.paddingLG),
+    "--workflow-node-inspector-resize-grip-width": toPx(token.lineWidthBold),
+    "--workflow-node-inspector-resize-hit-width": toPx(token.controlHeightXS),
+    "--workflow-node-inspector-scroll-thumb": token.colorTextQuaternary,
+    "--workflow-node-inspector-scrollbar-width": toPx(token.controlHeightXS),
+    "--workflow-node-inspector-section-gap": toPx(token.paddingLG),
+    "--workflow-node-inspector-section-radius": toPx(token.borderRadius),
+    "--workflow-node-inspector-surface": token.colorBgElevated,
+    "--workflow-node-inspector-surface-muted": token.colorFillAlter,
+    "--workflow-node-inspector-text": token.colorText,
+    "--workflow-node-inspector-text-strong": token.colorTextHeading,
+  };
   const schema = getStudioNodeConfigurationSchema(stepDraft.type);
   const hasSemanticFields = schema.fields.length > 0;
   const nodeTypeLabel = formatStudioStepTypeLabel(stepDraft.type);
+  const branchesSummary = summarizeBranches(stepDraft.branchesText);
+
+  const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    resizeStartRef.current = {
+      startWidth: panelWidth,
+      startX: event.clientX,
+    };
+    setResizing(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const updateResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!resizeStartRef.current) {
+      return;
+    }
+
+    const delta = resizeStartRef.current.startX - event.clientX;
+    setPanelWidth(clampPanelWidth(resizeStartRef.current.startWidth + delta));
+  };
+
+  const stopResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!resizeStartRef.current) {
+      return;
+    }
+
+    resizeStartRef.current = null;
+    setResizing(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const resizeWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return;
+    }
+
+    event.preventDefault();
+    const direction = event.key === "ArrowLeft" ? 1 : -1;
+    setPanelWidth((currentWidth) => clampPanelWidth(currentWidth + direction * 16));
+  };
 
   const updateFieldValue = (fieldName: string, value: string) => {
     setConfigurationValues((current) => ({
@@ -146,54 +396,152 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
   };
 
   return (
-    <aside
-      aria-label={t(
-        "teamMemberWorkflowStudio.nodeDetail.sectionAria",
-        "Node detail",
-      )}
-      style={{
-        background: "#ffffff",
-        borderLeft: "1px solid #e5e7eb",
-        display: "flex",
-        flexDirection: "column",
-        flexShrink: 0,
-        minHeight: 0,
-        width,
-      }}
-    >
-      <header
+    <>
+      <style>{inspectorCss}</style>
+      <aside
+        aria-label={t(
+          "teamMemberWorkflowStudio.nodeInspector.sectionAria",
+          "Node inspector",
+        )}
+        className="workflow-studio-node-inspector"
+        data-testid="workflow-node-inspector"
         style={{
-          borderBottom: "1px solid #e5e7eb",
-          padding: "16px 18px",
+          ...inspectorVariables,
+          background: token.colorBgElevated,
+          border: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
+          borderLeft: `${token.lineWidth}px ${token.lineType} ${token.colorBorder}`,
+          borderRadius: token.borderRadiusLG,
+          bottom: overlayInset,
+          boxShadow: token.boxShadowSecondary,
+          display: "flex",
+          flexDirection: "column",
+          maxWidth: `calc(100% - ${doubledPx(overlayInset)})`,
+          minHeight: 0,
+          overflow: "hidden",
+          position: "absolute",
+          right: overlayInset,
+          top: overlayInset,
+          width: panelWidth,
+          zIndex: token.zIndexPopupBase,
         }}
       >
-        <Space align="start" style={{ justifyContent: "space-between", width: "100%" }}>
+        <div
+          aria-label={t(
+            "teamMemberWorkflowStudio.nodeInspector.resizeHandle",
+            "Resize node inspector",
+          )}
+          aria-orientation="vertical"
+          aria-valuemax={MAX_PANEL_WIDTH}
+          aria-valuemin={MIN_PANEL_WIDTH}
+          aria-valuenow={panelWidth}
+          className="workflow-studio-node-inspector__resize"
+          onKeyDown={resizeWithKeyboard}
+          onPointerCancel={stopResize}
+          onPointerDown={startResize}
+          onPointerMove={updateResize}
+          onPointerUp={stopResize}
+          role="separator"
+          tabIndex={0}
+        />
+        <header
+          style={{
+            alignItems: "flex-start",
+            borderBottom: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
+            display: "flex",
+            gap: token.paddingSM,
+            justifyContent: "space-between",
+            padding: `${toPx(token.padding)} ${toPx(token.paddingLG)}`,
+          }}
+        >
           <div style={{ minWidth: 0 }}>
-            <Typography.Text strong style={{ color: "#111827", fontSize: 16 }}>
-              {nodeTypeLabel}
+            <Typography.Text strong style={{ color: token.colorTextHeading }}>
+              {stepDraft.id}
             </Typography.Text>
             <Typography.Paragraph
-              style={{ color: "#6b7280", margin: "2px 0 0" }}
+              style={{ color: token.colorTextSecondary, margin: `${token.marginXXS}px 0 0` }}
             >
-              {t("teamMemberWorkflowStudio.nodeDetail.stepId", "Step ID: {stepId}", {
-                stepId: stepDraft.id,
-              })}
+              {nodeTypeLabel}
             </Typography.Paragraph>
           </div>
-          <Button onClick={onClose} size="small">
-            {t("teamMemberWorkflowStudio.common.close", "Close")}
-          </Button>
-        </Space>
-      </header>
-      <div
-        style={{
-          display: "grid",
-          gap: 16,
-          overflow: "auto",
-          padding: 18,
-        }}
-      >
-        <section style={{ display: "grid", gap: 14 }}>
+          <Button
+            aria-label={t(
+              "teamMemberWorkflowStudio.nodeInspector.closeAria",
+              "Close node inspector",
+            )}
+            icon={<CloseOutlined />}
+            onClick={onClose}
+            size="small"
+            type="text"
+          />
+        </header>
+        <div
+          className="workflow-studio-node-inspector__body"
+          style={{
+            display: "grid",
+            gap: token.paddingLG,
+            overflow: "auto",
+            padding: token.paddingLG,
+          }}
+        >
+          <section aria-labelledby="workflow-node-inspector-basics-heading">
+            <Typography.Text
+              id="workflow-node-inspector-basics-heading"
+              strong
+            >
+              {t("teamMemberWorkflowStudio.nodeInspector.basics", "Basics")}
+            </Typography.Text>
+            <dl
+              style={{
+                display: "grid",
+                gap: token.paddingSM,
+                margin: `${token.marginSM}px 0 0`,
+              }}
+            >
+              <InspectorField
+                label={t("teamMemberWorkflowStudio.nodeInspector.stepId", "Step ID")}
+                value={stepDraft.id}
+              />
+              <InspectorField
+                label={t("teamMemberWorkflowStudio.nodeInspector.type", "Type")}
+                value={nodeTypeLabel}
+              />
+              <InspectorField
+                label={t(
+                  "teamMemberWorkflowStudio.nodeInspector.targetRole",
+                  "Target role",
+                )}
+                value={displayValue(stepDraft.targetRole)}
+              />
+            </dl>
+          </section>
+          <section aria-labelledby="workflow-node-inspector-flow-heading">
+            <Typography.Text id="workflow-node-inspector-flow-heading" strong>
+              {t("teamMemberWorkflowStudio.nodeInspector.flow", "Flow")}
+            </Typography.Text>
+            <dl
+              style={{
+                display: "grid",
+                gap: token.paddingSM,
+                margin: `${token.marginSM}px 0 0`,
+              }}
+            >
+              <InspectorField
+                label={t(
+                  "teamMemberWorkflowStudio.nodeInspector.nextStep",
+                  "Next step",
+                )}
+                value={displayValue(stepDraft.next)}
+              />
+              <InspectorField
+                label={t(
+                  "teamMemberWorkflowStudio.nodeInspector.branches",
+                  "Branches",
+                )}
+                value={branchesSummary}
+              />
+            </dl>
+          </section>
+        <section style={{ display: "grid", gap: token.padding }}>
           <Space
             align="start"
             style={{ justifyContent: "space-between", width: "100%" }}
@@ -206,7 +554,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
                 )}
               </Typography.Text>
               <Typography.Paragraph
-                style={{ color: "#6b7280", margin: "2px 0 0" }}
+                style={{ color: token.colorTextSecondary, margin: `${token.marginXXS}px 0 0` }}
               >
                 {t(
                   "teamMemberWorkflowStudio.nodeDetail.configurationDescription",
@@ -229,12 +577,12 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           {hasSemanticFields ? (
             schema.fields.map((field) => (
               <div key={field.name} style={fieldStackStyle}>
-                <Typography.Text strong style={{ color: "#374151", fontSize: 13 }}>
+                <Typography.Text strong style={{ color: token.colorText }}>
                   {formatConsoleMessage(field.label)}
                 </Typography.Text>
                 {renderFieldControl(field)}
                 {field.description ? (
-                  <Typography.Text style={{ color: "#6b7280", fontSize: 12 }}>
+                  <Typography.Text style={{ color: token.colorTextSecondary }}>
                     {formatConsoleMessage(field.description)}
                   </Typography.Text>
                 ) : null}
@@ -270,8 +618,8 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
                 "Advanced raw configuration",
               ),
               children: (
-                <div style={{ display: "grid", gap: 10 }}>
-                  <Typography.Paragraph style={{ color: "#6b7280", margin: 0 }}>
+                <div style={{ display: "grid", gap: token.paddingXS }}>
+                  <Typography.Paragraph style={{ color: token.colorTextSecondary, margin: 0 }}>
                     {t(
                       "teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription",
                       "Use this only when a node option is not available as a guided field.",
@@ -302,13 +650,14 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             },
           ]}
           style={{
-            background: "#f9fafb",
-            border: "1px solid #e5e7eb",
-            borderRadius: 8,
+            background: token.colorFillAlter,
+            border: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
+            borderRadius: token.borderRadius,
           }}
         />
-      </div>
-    </aside>
+        </div>
+      </aside>
+    </>
   );
 };
 

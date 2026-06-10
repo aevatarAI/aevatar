@@ -157,6 +157,28 @@ const mockWorkflowDocument = {
   ],
 };
 
+const mockBranchingWorkflowDocument = {
+  ...mockWorkflowDocument,
+  steps: [
+    {
+      id: "triage",
+      type: "llm_call",
+      targetRole: "assistant",
+      parameters: { prompt_prefix: "Triage the request" },
+      next: "guard",
+      branches: { urgent: "guard" },
+    },
+    {
+      id: "guard",
+      type: "guard",
+      targetRole: "",
+      parameters: { check: "not_empty", on_fail: "fail" },
+      next: null,
+      branches: {},
+    },
+  ],
+};
+
 function createSseResponse(): Response {
   return {} as Response;
 }
@@ -266,6 +288,19 @@ async function flushAsyncWork() {
   for (let index = 0; index < 5; index += 1) {
     await Promise.resolve();
   }
+}
+
+function createPointerDragEvent(
+  type: "pointerdown" | "pointermove" | "pointerup",
+  clientX: number,
+): Event {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX,
+  });
+  Object.defineProperty(event, "pointerId", { value: 7 });
+  return event;
 }
 
 describe("TeamMemberWorkflowStudioPage", () => {
@@ -1086,7 +1121,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
   });
 
-  it("opens node detail and applies guided configuration edits into the workflow document", async () => {
+  it("opens the floating node inspector and applies guided configuration edits into the workflow document", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1135,12 +1170,22 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByText("nodes:1")).toBeTruthy();
     });
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
-    expect(screen.getByLabelText("Node detail")).toBeTruthy();
-    expect(screen.getByText("LLM call")).toBeTruthy();
-    expect(screen.getByText("Step ID: triage")).toBeTruthy();
+    const inspector = screen.getByLabelText("Node inspector");
+    expect(inspector).toHaveStyle({
+      position: "absolute",
+      width: "420px",
+    });
+    expect(screen.getByLabelText("Resize node inspector")).toBeTruthy();
+    expect(within(inspector).getAllByText("triage").length).toBeGreaterThan(0);
+    expect(within(inspector).getAllByText("LLM call").length).toBeGreaterThan(0);
+    expect(within(inspector).getByText("Basics")).toBeTruthy();
+    expect(within(inspector).getByText("Step ID")).toBeTruthy();
+    expect(within(inspector).getByText("Type")).toBeTruthy();
+    expect(within(inspector).getByText("Target role")).toBeTruthy();
+    expect(within(inspector).getByText("assistant")).toBeTruthy();
     expect(screen.queryByText("llm_call")).toBeNull();
     expect(screen.queryByText("Input")).toBeNull();
-    expect(screen.getByText("Configuration")).toBeTruthy();
+    expect(within(inspector).getByText("Configuration")).toBeTruthy();
     expect(screen.getByLabelText("Instruction")).toHaveValue("Triage the request");
     expect(screen.queryByText("Parameters")).toBeNull();
     expect(screen.queryByLabelText("Raw node configuration")).toBeNull();
@@ -1172,7 +1217,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
   });
 
-  it("resizes the node detail panel from the canvas divider", async () => {
+  it("keeps the node inspector mounted while switching selected nodes", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1208,42 +1253,172 @@ describe("TeamMemberWorkflowStudioPage", () => {
       name: "Workflow Alpha",
       workflowId: "workflow-alpha",
       yaml: "name: Workflow Alpha\nsteps: []\n",
-      document: mockWorkflowDocument,
+      document: mockBranchingWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
     });
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByText("nodes:2")).toBeTruthy();
     });
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+    const inspector = screen.getByLabelText("Node inspector");
+    expect(within(inspector).getAllByText("triage").length).toBeGreaterThan(0);
+    expect(within(inspector).getAllByText("LLM call").length).toBeGreaterThan(0);
 
-    const detailPanel = screen.getByLabelText("Node detail");
-    const resizeHandle = screen.getByRole("separator", {
-      name: "Resize side panel",
-    });
-    expect(resizeHandle).toHaveAttribute("aria-orientation", "vertical");
-    expect(detailPanel).toHaveStyle({ width: "420px" });
-
-    fireEvent.mouseDown(resizeHandle, { clientX: 600 });
-    fireEvent.mouseMove(window, { clientX: 500 });
-    fireEvent.mouseUp(window);
+    fireEvent.click(screen.getByRole("button", { name: "node:step:guard" }));
 
     await waitFor(() => {
-      expect(detailPanel).toHaveStyle({ width: "520px" });
-      expect(resizeHandle).toHaveAttribute("aria-valuenow", "520");
+      expect(screen.getByLabelText("Node inspector")).toBe(inspector);
+      expect(within(inspector).getAllByText("Guard").length).toBeGreaterThan(0);
+      expect(within(inspector).getByText("No branches")).toBeTruthy();
+    });
+    expect(within(inspector).queryByText("triage")).toBeNull();
+  });
+
+  it("resizes the node inspector with keyboard controls and clamps width", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha/members/member-alpha/workflow",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockBranchingWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
     });
 
-    fireEvent.keyDown(resizeHandle, { key: "ArrowRight" });
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
     await waitFor(() => {
-      expect(detailPanel).toHaveStyle({ width: "496px" });
+      expect(screen.getByText("nodes:2")).toBeTruthy();
     });
 
-    fireEvent.keyDown(resizeHandle, { key: "Home" });
-    await waitFor(() => {
-      expect(detailPanel).toHaveStyle({ width: "320px" });
+    fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+    const inspector = screen.getByLabelText("Node inspector");
+    const resizeHandle = screen.getByLabelText("Resize node inspector");
+    expect(inspector).toHaveStyle({ width: "420px" });
+    expect(resizeHandle).toHaveAttribute("aria-valuemin", "360");
+    expect(resizeHandle).toHaveAttribute("aria-valuemax", "500");
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "420");
+
+    for (let index = 0; index < 10; index += 1) {
+      fireEvent.keyDown(resizeHandle, { key: "ArrowLeft" });
+    }
+
+    expect(inspector).toHaveStyle({ width: "500px" });
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "500");
+
+    for (let index = 0; index < 20; index += 1) {
+      fireEvent.keyDown(resizeHandle, { key: "ArrowRight" });
+    }
+
+    expect(inspector).toHaveStyle({ width: "360px" });
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
+  });
+
+  it("resizes the node inspector with pointer drag and restores page resize styles", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha/members/member-alpha/workflow",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
     });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockBranchingWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByText("nodes:2")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+    const inspector = screen.getByLabelText("Node inspector");
+    const resizeHandle = screen.getByLabelText("Resize node inspector");
+    const setPointerCapture = jest.fn();
+    const releasePointerCapture = jest.fn();
+    resizeHandle.setPointerCapture = setPointerCapture;
+    resizeHandle.releasePointerCapture = releasePointerCapture;
+    resizeHandle.hasPointerCapture = jest.fn(() => true);
+    document.body.style.cursor = "default";
+    document.body.style.userSelect = "text";
+
+    fireEvent(resizeHandle, createPointerDragEvent("pointerdown", 480));
+
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
+    expect(document.body.style.cursor).toBe("ew-resize");
+    expect(document.body.style.userSelect).toBe("none");
+
+    fireEvent(resizeHandle, createPointerDragEvent("pointermove", 240));
+
+    expect(inspector).toHaveStyle({ width: "500px" });
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "500");
+
+    fireEvent(resizeHandle, createPointerDragEvent("pointerup", 240));
+
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(document.body.style.cursor).toBe("default");
+    expect(document.body.style.userSelect).toBe("text");
   });
 
   it("shows a node detail error for invalid parameter JSON", async () => {
@@ -1363,7 +1538,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "node:step:wait_for_signal" }),
     );
-    expect(screen.getByText("Wait for signal")).toBeTruthy();
+    expect(screen.getAllByText("Wait for signal").length).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText("Signal name"), {
       target: { value: "approval-ready" },
     });
@@ -1455,7 +1630,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "node:step:cache_response" }));
 
-    expect(screen.getByText("Cache")).toBeTruthy();
+    expect(screen.getAllByText("Cache").length).toBeGreaterThan(0);
     expect(screen.getByText("Cached node")).toBeTruthy();
     expect(screen.getByText("LLM call")).toBeTruthy();
     expect(screen.queryByText("llm_call")).toBeNull();

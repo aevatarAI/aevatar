@@ -577,6 +577,21 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeDetail.sectionAria': 'Node detail',
   'teamMemberWorkflowStudio.nodeDetail.stepId': 'Step ID: {stepId}',
   'teamMemberWorkflowStudio.nodeDetail.updateNode': 'Update node',
+  'teamMemberWorkflowStudio.nodeInspector.basics': 'Basics',
+  'teamMemberWorkflowStudio.nodeInspector.branches': 'Branches',
+  'teamMemberWorkflowStudio.nodeInspector.branchesUnavailable':
+    'Branches unavailable',
+  'teamMemberWorkflowStudio.nodeInspector.closeAria': 'Close node inspector',
+  'teamMemberWorkflowStudio.nodeInspector.flow': 'Flow',
+  'teamMemberWorkflowStudio.nodeInspector.nextStep': 'Next step',
+  'teamMemberWorkflowStudio.nodeInspector.noBranches': 'No branches',
+  'teamMemberWorkflowStudio.nodeInspector.notSet': 'Not set',
+  'teamMemberWorkflowStudio.nodeInspector.resizeHandle':
+    'Resize node inspector',
+  'teamMemberWorkflowStudio.nodeInspector.sectionAria': 'Node inspector',
+  'teamMemberWorkflowStudio.nodeInspector.stepId': 'Step ID',
+  'teamMemberWorkflowStudio.nodeInspector.targetRole': 'Target role',
+  'teamMemberWorkflowStudio.nodeInspector.type': 'Type',
   'teamMemberWorkflowStudio.nodeLibrary.closeAria': 'Close node library',
   'teamMemberWorkflowStudio.nodeLibrary.emptySearch':
     'No nodes match this search.',

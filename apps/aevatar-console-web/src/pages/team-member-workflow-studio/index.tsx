@@ -56,7 +56,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
   const [executionPanelHeight, setExecutionPanelHeight] = React.useState(
     EXECUTION_PANEL_DEFAULT_HEIGHT,
   );
-  const sidePanelOpen = studio.runOptionsOpen || Boolean(studio.selectedStepDraft);
+  const sidePanelOpen = studio.runOptionsOpen;
   const executionPanelOpen = Boolean(studio.executionDetail || studio.executionError);
 
   React.useEffect(
@@ -367,7 +367,6 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
               onClose={studio.selectCanvas}
               onConfigurationChange={studio.updateSelectedStepConfiguration}
               stepDraft={studio.selectedStepDraft}
-              width={sidePanelWidth}
             />
           )}
         </section>
