@@ -158,7 +158,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                 ["input"] = new JsonObject
                 {
                     ["format"] = BuildPcmAudioFormat(sampleRateHz),
-                    ["turn_detection"] = BuildTurnDetection(),
+                    ["turn_detection"] = BuildTurnDetection(session),
                 },
                 ["output"] = new JsonObject
                 {
@@ -247,17 +247,31 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             ["rate"] = sampleRateHz,
         };
 
-    private JsonNode? BuildTurnDetection()
+    private JsonNode? BuildTurnDetection(VoiceSessionConfig session)
     {
-        if (!_options.EnableServerVad)
-            return null;
+        return session.TurnDetectionMode switch
+        {
+            VoiceTurnDetectionMode.Disabled or VoiceTurnDetectionMode.ClientVad => null,
+            VoiceTurnDetectionMode.Unspecified when !_options.EnableServerVad => null,
+            VoiceTurnDetectionMode.Unspecified or VoiceTurnDetectionMode.ServerVad => BuildServerVadTurnDetection(session),
+            _ => null,
+        };
+    }
 
+    private JsonObject BuildServerVadTurnDetection(VoiceSessionConfig session)
+    {
         return new JsonObject
         {
             ["type"] = "server_vad",
-            ["threshold"] = _options.DetectionThreshold,
-            ["prefix_padding_ms"] = (int)_options.PrefixPadding.TotalMilliseconds,
-            ["silence_duration_ms"] = (int)_options.SilenceDuration.TotalMilliseconds,
+            ["threshold"] = session.VadDetectionThreshold > 0
+                ? session.VadDetectionThreshold
+                : _options.DetectionThreshold,
+            ["prefix_padding_ms"] = session.VadPrefixPaddingMs > 0
+                ? session.VadPrefixPaddingMs
+                : (int)_options.PrefixPadding.TotalMilliseconds,
+            ["silence_duration_ms"] = session.VadSilenceDurationMs > 0
+                ? session.VadSilenceDurationMs
+                : (int)_options.SilenceDuration.TotalMilliseconds,
             ["interrupt_response"] = _options.InterruptResponseOnSpeech,
             ["create_response"] = _options.AutoCreateResponse,
         };

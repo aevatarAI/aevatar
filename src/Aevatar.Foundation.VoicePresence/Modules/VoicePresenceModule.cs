@@ -70,10 +70,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
     public bool IsInitialized { get; private set; }
 
-    public int PcmSampleRateHz =>
-        _sessionConfig is { SampleRateHz: > 0 }
-            ? _sessionConfig.SampleRateHz
-            : WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz;
+    public int PcmSampleRateHz => ResolveConfiguredSampleRateHz(_sessionConfig);
 
     // ── IEventModule ──────────────────────────────────────────
 
@@ -498,10 +495,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         state.ActiveLeaseOwnerId = request.OwnerId;
         state.ActiveTransportLeaseId = request.TransportLeaseId;
         state.LeaseEpoch = request.LeaseEpoch > 0 ? request.LeaseEpoch : NextLeaseEpoch(state);
-        state.Initialized = IsInitialized;
-        state.PcmSampleRateHz = PcmSampleRateHz;
-        if (state.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified)
-            state.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
+        RefreshCapabilityFacts(state, ctx);
 
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
@@ -842,13 +836,11 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return;
         }
 
-        state.Initialized = IsInitialized;
-        state.PcmSampleRateHz = PcmSampleRateHz;
         state.ActiveSessionId = request.SessionId;
         state.ActiveLeaseOwnerId = request.OwnerId;
         state.LeaseExpiresAt = request.ExpiresAt?.Clone();
         state.LeaseEpoch = NextLeaseEpoch(state);
-        state.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
+        RefreshCapabilityFacts(state, ctx, request.SessionOverrides);
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
@@ -1012,7 +1004,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             static (_, _, _) => Task.CompletedTask,
             static (_, _, _) => Task.CompletedTask,
             ct);
-        var effectiveSessionConfig = await BuildEffectiveSessionConfigAsync(ct);
+        var effectiveSessionConfig = await BuildEffectiveSessionConfigAsync(state, ct);
         if (effectiveSessionConfig != null)
             await session.UpdateSessionAsync(effectiveSessionConfig, ct);
 
@@ -1086,9 +1078,11 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await providerSession.SendToolResultAsync(request.CallId, resultJson, ct);
     }
 
-    private async Task<VoiceSessionConfig?> BuildEffectiveSessionConfigAsync(CancellationToken ct)
+    private async Task<VoiceSessionConfig?> BuildEffectiveSessionConfigAsync(
+        VoicePresenceRuntimeState state,
+        CancellationToken ct)
     {
-        var effectiveSession = _sessionConfig?.Clone();
+        var effectiveSession = ResolveBaseSessionConfig(state);
         if (_toolCatalog == null)
             return effectiveSession;
 
@@ -1134,6 +1128,15 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         }
 
         return effectiveSession;
+    }
+
+    private VoiceSessionConfig? ResolveBaseSessionConfig(VoicePresenceRuntimeState state)
+    {
+        if (state.ActiveSessionConfig != null)
+            return state.ActiveSessionConfig.Clone();
+
+        var effectiveSession = _sessionConfig?.Clone();
+        return effectiveSession == null ? null : NormalizeProviderSessionConfig(effectiveSession);
     }
 
     private static string BuildToolErrorJson(string message) =>
@@ -1449,7 +1452,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         CancellationToken ct)
     {
         var normalized = NormalizeRuntimeState(state);
-        ApplyTransportFacts(normalized);
+        RefreshCapabilityFacts(normalized, ctx, preserveActiveSessionConfig: true);
 
         if (ctx.Agent is not IVoicePresenceRuntimeStateOwner stateOwner)
             return;
@@ -1457,13 +1460,98 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await stateOwner.PersistVoicePresenceRuntimeStateAsync(Name, normalized, ct);
     }
 
-    private void ApplyTransportFacts(VoicePresenceRuntimeState state)
+    private void RefreshCapabilityFacts(
+        VoicePresenceRuntimeState state,
+        IEventHandlerContext ctx,
+        VoiceSessionOverrides? sessionOverrides = null,
+        bool preserveActiveSessionConfig = false)
     {
+        if (preserveActiveSessionConfig &&
+            sessionOverrides == null &&
+            state.ActiveSessionConfig != null)
+        {
+            state.ActiveSessionConfig = NormalizeProviderSessionConfig(state.ActiveSessionConfig);
+        }
+        else
+        {
+            state.ActiveSessionConfig = BuildResolvedProviderSessionConfig(ctx, sessionOverrides);
+        }
+
         state.Initialized = IsInitialized;
-        state.PcmSampleRateHz = PcmSampleRateHz;
+        state.PcmSampleRateHz = ResolveConfiguredSampleRateHz(state.ActiveSessionConfig);
         if (state.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified)
             state.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
     }
+
+    private VoiceSessionConfig BuildResolvedProviderSessionConfig(
+        IEventHandlerContext ctx,
+        VoiceSessionOverrides? sessionOverrides)
+    {
+        var session = _sessionConfig?.Clone() ?? new VoiceSessionConfig();
+        if (ctx.Agent is IVoicePresenceRuntimeStateOwner stateOwner &&
+            stateOwner.TryGetVoiceSessionDefaults(Name, out var defaults))
+        {
+            ApplyDefaults(session, defaults);
+        }
+
+        ApplyOverrides(session, sessionOverrides);
+        return NormalizeProviderSessionConfig(session);
+    }
+
+    private static void ApplyDefaults(VoiceSessionConfig session, VoiceSessionDefaults defaults)
+    {
+        if (defaults.HasVoice)
+            session.Voice = defaults.Voice?.Trim() ?? string.Empty;
+        if (defaults.HasInstructions)
+            session.Instructions = defaults.Instructions ?? string.Empty;
+        if (defaults.HasSampleRateHz)
+            session.SampleRateHz = defaults.SampleRateHz;
+        if (defaults.HasTurnDetectionMode)
+            session.TurnDetectionMode = defaults.TurnDetectionMode;
+        if (defaults.HasVadDetectionThreshold)
+            session.VadDetectionThreshold = defaults.VadDetectionThreshold;
+        if (defaults.HasVadPrefixPaddingMs)
+            session.VadPrefixPaddingMs = defaults.VadPrefixPaddingMs;
+        if (defaults.HasVadSilenceDurationMs)
+            session.VadSilenceDurationMs = defaults.VadSilenceDurationMs;
+    }
+
+    private static void ApplyOverrides(VoiceSessionConfig session, VoiceSessionOverrides? overrides)
+    {
+        if (overrides == null)
+            return;
+
+        if (overrides.HasVoice)
+            session.Voice = overrides.Voice?.Trim() ?? string.Empty;
+        if (overrides.HasInstructions)
+            session.Instructions = overrides.Instructions ?? string.Empty;
+        if (overrides.HasSampleRateHz)
+            session.SampleRateHz = overrides.SampleRateHz;
+        if (overrides.HasTurnDetectionMode)
+            session.TurnDetectionMode = overrides.TurnDetectionMode;
+        if (overrides.HasVadDetectionThreshold)
+            session.VadDetectionThreshold = overrides.VadDetectionThreshold;
+        if (overrides.HasVadPrefixPaddingMs)
+            session.VadPrefixPaddingMs = overrides.VadPrefixPaddingMs;
+        if (overrides.HasVadSilenceDurationMs)
+            session.VadSilenceDurationMs = overrides.VadSilenceDurationMs;
+    }
+
+    private static VoiceSessionConfig NormalizeProviderSessionConfig(VoiceSessionConfig session)
+    {
+        var normalized = session.Clone();
+        normalized.Voice = normalized.Voice?.Trim() ?? string.Empty;
+        normalized.Instructions ??= string.Empty;
+        normalized.SampleRateHz = ResolveConfiguredSampleRateHz(normalized);
+        if (normalized.TurnDetectionMode == VoiceTurnDetectionMode.Unspecified)
+            normalized.TurnDetectionMode = VoiceTurnDetectionMode.ServerVad;
+        return normalized;
+    }
+
+    private static int ResolveConfiguredSampleRateHz(VoiceSessionConfig? session) =>
+        session is { SampleRateHz: > 0 }
+            ? session.SampleRateHz
+            : WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz;
 
     private static VoicePresenceRuntimeState NormalizeRuntimeState(VoicePresenceRuntimeState? state)
     {
@@ -1480,6 +1568,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             normalized.PcmSampleRateHz = WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz;
         if (normalized.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified)
             normalized.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
+        if (normalized.ActiveSessionConfig != null)
+            normalized.ActiveSessionConfig = NormalizeProviderSessionConfig(normalized.ActiveSessionConfig);
 
         return normalized;
     }
