@@ -168,6 +168,33 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
+    public void ToPayloadAndFromPayload_ShouldPreserveRestrictedToolVisibility()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["search"]),
+        };
+
+        var payload = AgentToolExecutionContextMapper.ToPayload(context);
+        var mapped = AgentToolExecutionContextMapper.FromPayload(payload);
+
+        payload.ToolVisibility.Should().NotBeNull();
+        payload.ToolVisibility.AllowedToolNames.Should().Equal("search");
+        mapped.ToolVisibility.IsRestricted.Should().BeTrue();
+        mapped.ToolVisibility.Allows("search").Should().BeTrue();
+        mapped.ToolVisibility.Allows("calendar").Should().BeFalse();
+    }
+
+    [Fact]
+    public void ToPayload_WhenToolVisibilityUnrestricted_ShouldOmitVisibilityPayload()
+    {
+        var payload = AgentToolExecutionContextMapper.ToPayload(AgentToolExecutionContext.Empty);
+
+        payload.ToolVisibility.Should().BeNull();
+        AgentToolExecutionContextMapper.FromPayload(payload).ToolVisibility.IsRestricted.Should().BeFalse();
+    }
+
+    [Fact]
     public void FromMetadata_ShouldIgnoreOwnedControlKeysAndKeepExternalMetadata()
     {
         var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)

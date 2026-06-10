@@ -613,6 +613,65 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
+    public async Task UnauthorizedTool_ShouldReturnNotAvailableWithoutExecutingTool()
+    {
+        var executed = false;
+        var tools = new ToolManager();
+        tools.Register(new DelegateAgentTool("blocked", _ =>
+        {
+            executed = true;
+            return "{}";
+        }));
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["allowed"]),
+            });
+        using var executionState = executor.CreateExecutionState();
+
+        executor.AddTool(executionState, new ToolCall { Id = "tc-blocked", Name = "blocked", ArgumentsJson = "{}" });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().ContainSingle();
+        results[0].CallId.Should().Be("tc-blocked");
+        results[0].IsError.Should().BeTrue();
+        results[0].Result.Should().Contain("not available");
+        executed.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HookRewrite_ToUnauthorizedTool_ShouldReturnNotAvailable()
+    {
+        var tools = new ToolManager();
+        tools.Register(new DelegateAgentTool("allowed", _ => "{}"));
+        tools.Register(new DelegateAgentTool("blocked", _ => """{"blocked":true}"""));
+        var hooks = new AgentHookPipeline([new RewriteToolNameHook("allowed", "blocked")]);
+        var executor = new StreamingToolExecutor(
+            tools,
+            hooks,
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["allowed"]),
+            });
+        using var executionState = executor.CreateExecutionState();
+
+        executor.AddTool(executionState, new ToolCall { Id = "tc-rewrite", Name = "allowed", ArgumentsJson = "{}" });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().ContainSingle();
+        results[0].CallId.Should().Be("tc-rewrite");
+        results[0].IsError.Should().BeTrue();
+        results[0].Result.Should().Contain("not available");
+    }
+
+    [Fact]
     public async Task ReceiptWorthyFormula_ShouldIgnoreNonReadOnlyAlone_AndEmitForApprovalDestructiveOrSideEffect()
     {
         var tools = new ToolManager();
