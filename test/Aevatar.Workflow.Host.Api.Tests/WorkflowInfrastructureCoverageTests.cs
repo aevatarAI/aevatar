@@ -366,7 +366,9 @@ public sealed class WorkflowInfrastructureCoverageTests
                 Encoding.UTF8.GetBytes("hello"),
                 ApplicationWorkflowFileSourceKind.ChatInput,
                 FileName: "hello.png",
-                MediaType: "image/png"));
+                MediaType: "image/png",
+                OwnerRunId: "run-1",
+                OwnerScopeId: "scope-1"));
 
             var descriptor = result.FileRef;
             descriptor.FileId.Should().StartWith("wf-file-");
@@ -378,6 +380,8 @@ public sealed class WorkflowInfrastructureCoverageTests
             descriptor.Sha256.Should().Be("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
             descriptor.CreatedAtUnixMs.Should().BeGreaterThan(0);
             descriptor.ExpiresAtUnixMs.Should().BeGreaterThan(descriptor.CreatedAtUnixMs);
+            descriptor.OwnerRunId.Should().Be("run-1");
+            descriptor.OwnerScopeId.Should().Be("scope-1");
 
             var storedPath = Path.Combine(root, descriptor.FileId!, "content.bin");
             File.Exists(storedPath).Should().BeTrue();
@@ -435,6 +439,49 @@ public sealed class WorkflowInfrastructureCoverageTests
             {
                 (await reader.ReadToEndAsync()).Should().Be("stored document");
             }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FileSystemWorkflowFileIngressPort_ShouldBindOwnerForOwnerlessArtifact()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-file-owner-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = new FileSystemWorkflowFileIngressPort(
+                Options.Create(new FileSystemWorkflowFileIngressOptions
+                {
+                    RootDirectory = root,
+                    TimeToLive = TimeSpan.FromMinutes(30),
+                }));
+
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                Encoding.UTF8.GetBytes("stored document"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "invoice.txt",
+                MediaType: "text/plain"));
+            result.FileRef.OwnerRunId.Should().BeNull();
+
+            var ownershipPort = (IWorkflowFileArtifactOwnershipPort)port;
+            await ownershipPort.BindOwnerAsync(result.FileRef, "run-1", "scope-1");
+
+            var readPort = (IWorkflowFileArtifactReadPort)port;
+            var bound = await readPort.DescribeAsync(result.FileRef with
+            {
+                OwnerRunId = "run-1",
+                OwnerScopeId = "scope-1",
+            });
+            bound.OwnerRunId.Should().Be("run-1");
+            bound.OwnerScopeId.Should().Be("scope-1");
+
+            await ownershipPort.Invoking(x => x.BindOwnerAsync(result.FileRef, "run-2", "scope-1").AsTask())
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*already bound*");
         }
         finally
         {

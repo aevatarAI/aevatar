@@ -21,6 +21,7 @@ public interface ILarkNyxClient
     Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct);
     Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct);
     Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct);
+    Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct);
 }
 
 public sealed record LarkSendMessageRequest(
@@ -143,3 +144,13 @@ public sealed record LarkDrivePermissionRequest(
     LarkDocxVisibility Visibility,
     string? ReceiveId,
     string? ReceiveIdType);
+
+public sealed record LarkDriveMediaUploadRequest(
+    string FileName,
+    string ParentType,
+    string ParentNode,
+    long Size,
+    string ContentType,
+    Stream Content,
+    string? Checksum = null,
+    string? Extra = null);

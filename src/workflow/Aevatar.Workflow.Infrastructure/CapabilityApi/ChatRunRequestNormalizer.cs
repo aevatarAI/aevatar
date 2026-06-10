@@ -472,7 +472,8 @@ internal static class ChatRunRequestNormalizer
                 content,
                 WorkflowFileSourceKind.ChatInput,
                 FileName: NormalizeContentPartValue(inlineFile.Name),
-                MediaType: NormalizeContentPartValue(inlineFile.MediaType)),
+                MediaType: NormalizeContentPartValue(inlineFile.MediaType),
+                OwnerScopeId: NormalizeContentPartValue(inlineFile.OwnerScopeId)),
             cancellationToken);
 
         return new FileInputNormalizationResult(
@@ -518,6 +519,8 @@ internal static class ChatRunRequestNormalizer
             Sha256 = NormalizeContentPartValue(fileRef.Sha256),
             CreatedAtUnixMs = createdAtUnixMs,
             ExpiresAtUnixMs = expiresAtUnixMs,
+            OwnerRunId = NormalizeContentPartValue(fileRef.OwnerRunId),
+            OwnerScopeId = NormalizeContentPartValue(fileRef.OwnerScopeId),
         };
 
         return new FileInputNormalizationResult(

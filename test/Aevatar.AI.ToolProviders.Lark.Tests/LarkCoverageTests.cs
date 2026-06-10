@@ -4,6 +4,7 @@ using System.Text;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -141,10 +142,31 @@ public sealed class LarkCoverageTests
         services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IAgentToolSource) &&
             descriptor.ImplementationType == typeof(LarkAgentToolSource));
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IWorkflowToolSource) &&
+            descriptor.ImplementationType == typeof(LarkWorkflowFileSubmitToolSource));
 
         services.Single(descriptor => descriptor.ServiceType == typeof(LarkToolOptions))
             .ImplementationInstance.Should().BeOfType<LarkToolOptions>()
             .Which.ProviderSlug.Should().Be("custom-provider");
+    }
+
+    [Fact]
+    public async Task AddLarkTools_WorkflowFileSubmitSource_ShouldBeSafeWithoutArtifactReadPort()
+    {
+        var services = new ServiceCollection();
+        services.AddLarkTools(options =>
+        {
+            options.ProviderSlug = "api-lark-bot";
+            options.EnableWorkflowFileSubmit = true;
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        var source = provider.GetServices<IWorkflowToolSource>().Should().ContainSingle().Subject;
+        var tools = await source.GetToolsAsync();
+
+        tools.Should().BeEmpty();
     }
 
     [Fact]
@@ -439,6 +461,14 @@ public sealed class LarkCoverageTests
             _ = request;
             _ = ct;
             return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"file_token":"file_default"}}""");
         }
     }
 

@@ -16,4 +16,5 @@ public sealed class LarkToolOptions
     public bool EnableApprovalsGet { get; set; } = true;
     public bool EnableApprovalsAct { get; set; } = true;
     public bool EnableDocxCreate { get; set; } = true;
+    public bool EnableWorkflowFileSubmit { get; set; }
 }

@@ -244,6 +244,8 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
+            if (bool.TryParse(builder.Configuration["Aevatar:Lark:EnableWorkflowFileSubmit"], out var enableWorkflowFileSubmit))
+                o.EnableWorkflowFileSubmit = enableWorkflowFileSubmit;
         });
         builder.Services.AddTelegramTools(o =>
         {

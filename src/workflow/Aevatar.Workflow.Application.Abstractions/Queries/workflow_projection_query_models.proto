@@ -37,6 +37,8 @@ message WorkflowRunFileRef {
   string sha256 = 9;
   int64 created_at_unix_ms = 10;
   int64 expires_at_unix_ms = 11;
+  string owner_run_id = 12;
+  string owner_scope_id = 13;
 }
 
 message WorkflowActorProjectionState {

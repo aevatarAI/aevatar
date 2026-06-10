@@ -7,7 +7,10 @@ using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSo
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
-public sealed class FileSystemWorkflowFileIngressPort : IWorkflowFileIngressPort, IWorkflowFileArtifactReadPort
+public sealed class FileSystemWorkflowFileIngressPort :
+    IWorkflowFileIngressPort,
+    IWorkflowFileArtifactReadPort,
+    IWorkflowFileArtifactOwnershipPort
 {
     private const string ArtifactIdPrefix = "workflow-file://";
     private const string ContentFileName = "content.bin";
@@ -54,6 +57,8 @@ public sealed class FileSystemWorkflowFileIngressPort : IWorkflowFileIngressPort
             Sha256 = sha256,
             CreatedAtUnixMs = now.ToUnixTimeMilliseconds(),
             ExpiresAtUnixMs = ResolveExpiresAtUnixMs(now, request.ExpiresAtUnixMs, _options.Value.TimeToLive),
+            OwnerRunId = Normalize(request.OwnerRunId),
+            OwnerScopeId = Normalize(request.OwnerScopeId),
         };
         await File.WriteAllBytesAsync(
             Path.Combine(artifactDirectory, DescriptorFileName),
@@ -67,16 +72,42 @@ public sealed class FileSystemWorkflowFileIngressPort : IWorkflowFileIngressPort
         WorkflowFileRef fileRef,
         CancellationToken cancellationToken = default)
     {
-        var artifactDirectory = ResolveArtifactDirectory(fileRef);
-        var descriptorPath = Path.Combine(artifactDirectory, DescriptorFileName);
-        if (!File.Exists(descriptorPath))
-            throw new FileNotFoundException("Workflow file descriptor was not found.", descriptorPath);
-
-        var descriptorBytes = await File.ReadAllBytesAsync(descriptorPath, cancellationToken);
-        var descriptor = ToApplication(ProtoWorkflowFileRef.Parser.ParseFrom(descriptorBytes));
+        var descriptor = await ReadDescriptorAsync(fileRef, cancellationToken);
         ValidateRequestedDescriptor(fileRef, descriptor);
         ValidateNotExpired(descriptor);
         return descriptor;
+    }
+
+    public async ValueTask BindOwnerAsync(
+        WorkflowFileRef fileRef,
+        string ownerRunId,
+        string? ownerScopeId,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedRunId = Normalize(ownerRunId)
+                              ?? throw new ArgumentException("Workflow file owner run id is required.", nameof(ownerRunId));
+        var normalizedScopeId = Normalize(ownerScopeId);
+        var descriptor = await ReadDescriptorAsync(fileRef, cancellationToken);
+        ValidateRequestedDescriptorWithoutOwner(fileRef, descriptor);
+        ValidateNotExpired(descriptor);
+        ValidateOwnerCanBind(descriptor.OwnerRunId, normalizedRunId, "run id");
+        if (normalizedScopeId != null)
+            ValidateOwnerCanBind(descriptor.OwnerScopeId, normalizedScopeId, "scope id");
+
+        var effectiveScopeId = normalizedScopeId ?? descriptor.OwnerScopeId;
+        if (string.Equals(descriptor.OwnerRunId, normalizedRunId, StringComparison.Ordinal) &&
+            string.Equals(descriptor.OwnerScopeId, effectiveScopeId, StringComparison.Ordinal))
+            return;
+
+        var bound = descriptor with
+        {
+            OwnerRunId = normalizedRunId,
+            OwnerScopeId = effectiveScopeId,
+        };
+        await File.WriteAllBytesAsync(
+            ResolveDescriptorPath(fileRef),
+            ToProto(bound).ToByteArray(),
+            cancellationToken);
     }
 
     public async ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
@@ -162,6 +193,21 @@ public sealed class FileSystemWorkflowFileIngressPort : IWorkflowFileIngressPort
             ? Path.Combine(AppContext.BaseDirectory, "workflow-file-artifacts")
             : rootDirectory.Trim());
 
+    private async ValueTask<WorkflowFileRef> ReadDescriptorAsync(
+        WorkflowFileRef fileRef,
+        CancellationToken cancellationToken)
+    {
+        var descriptorPath = ResolveDescriptorPath(fileRef);
+        if (!File.Exists(descriptorPath))
+            throw new FileNotFoundException("Workflow file descriptor was not found.", descriptorPath);
+
+        var descriptorBytes = await File.ReadAllBytesAsync(descriptorPath, cancellationToken);
+        return ToApplication(ProtoWorkflowFileRef.Parser.ParseFrom(descriptorBytes));
+    }
+
+    private string ResolveDescriptorPath(WorkflowFileRef fileRef) =>
+        Path.Combine(ResolveArtifactDirectory(fileRef), DescriptorFileName);
+
     private static long ResolveExpiresAtUnixMs(
         DateTimeOffset now,
         long? requestedExpiresAtUnixMs,
@@ -181,6 +227,17 @@ public sealed class FileSystemWorkflowFileIngressPort : IWorkflowFileIngressPort
 
     private static void ValidateRequestedDescriptor(WorkflowFileRef requested, WorkflowFileRef descriptor)
     {
+        ValidateRequestedDescriptorWithoutOwner(requested, descriptor);
+        if (!string.IsNullOrWhiteSpace(requested.OwnerRunId) &&
+            !string.Equals(requested.OwnerRunId.Trim(), descriptor.OwnerRunId, StringComparison.Ordinal))
+            throw new InvalidOperationException("Workflow file descriptor owner run id does not match the requested owner.");
+        if (!string.IsNullOrWhiteSpace(requested.OwnerScopeId) &&
+            !string.Equals(requested.OwnerScopeId.Trim(), descriptor.OwnerScopeId, StringComparison.Ordinal))
+            throw new InvalidOperationException("Workflow file descriptor owner scope id does not match the requested owner.");
+    }
+
+    private static void ValidateRequestedDescriptorWithoutOwner(WorkflowFileRef requested, WorkflowFileRef descriptor)
+    {
         if (!string.IsNullOrWhiteSpace(requested.FileId) &&
             !string.Equals(requested.FileId.Trim(), descriptor.FileId, StringComparison.Ordinal))
             throw new InvalidOperationException("Workflow file descriptor id does not match the requested file id.");
@@ -192,6 +249,13 @@ public sealed class FileSystemWorkflowFileIngressPort : IWorkflowFileIngressPort
             throw new InvalidOperationException("Workflow file descriptor hash does not match the requested hash.");
         if (requested.SizeBytes > 0 && requested.SizeBytes != descriptor.SizeBytes)
             throw new InvalidOperationException("Workflow file descriptor size does not match the requested size.");
+    }
+
+    private static void ValidateOwnerCanBind(string? existingOwner, string requestedOwner, string ownerName)
+    {
+        if (!string.IsNullOrWhiteSpace(existingOwner) &&
+            !string.Equals(existingOwner.Trim(), requestedOwner, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Workflow file descriptor owner {ownerName} is already bound.");
     }
 
     private static void ValidateNotExpired(WorkflowFileRef descriptor)
@@ -230,6 +294,8 @@ public sealed class FileSystemWorkflowFileIngressPort : IWorkflowFileIngressPort
             Sha256 = source.Sha256 ?? string.Empty,
             CreatedAtUnixMs = source.CreatedAtUnixMs,
             ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId ?? string.Empty,
+            OwnerScopeId = source.OwnerScopeId ?? string.Empty,
         };
 
     private static WorkflowFileRef ToApplication(ProtoWorkflowFileRef source) =>
@@ -246,6 +312,8 @@ public sealed class FileSystemWorkflowFileIngressPort : IWorkflowFileIngressPort
             Sha256 = Normalize(source.Sha256),
             CreatedAtUnixMs = source.CreatedAtUnixMs,
             ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = Normalize(source.OwnerRunId),
+            OwnerScopeId = Normalize(source.OwnerScopeId),
         };
 
     private static ProtoWorkflowFileSourceKind ToProtoSourceKind(WorkflowFileSourceKind source) =>
