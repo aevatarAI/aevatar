@@ -172,6 +172,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        if (evt.ManagedHandoff != null && !string.IsNullOrWhiteSpace(evt.ManagedHandoff.InvocationId))
+        {
+            await RemovePendingAsync(sessionId, pending, ctx, ct);
+            return;
+        }
+
         ctx.Logger.LogInformation(
             "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=completed output_len={OutputLen} output_redacted=true",
             pending.RunId,
@@ -380,6 +386,19 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             TimeoutMs = timeoutMs,
             RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
             StepId = stepId,
+        };
+        var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
+            ctx,
+            ctx.AgentId ?? string.Empty,
+            request.RunId ?? string.Empty,
+            stepId);
+        intent.WorkflowRuntimeContext = new WorkflowToolRuntimeContextPayload
+        {
+            ParentActorId = runtimeContext.ParentActorId,
+            ParentRunId = runtimeContext.ParentRunId,
+            ParentStepId = runtimeContext.ParentStepId,
+            RootRunId = runtimeContext.RootRunId,
+            Depth = runtimeContext.Depth,
         };
         if (WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm))
         {

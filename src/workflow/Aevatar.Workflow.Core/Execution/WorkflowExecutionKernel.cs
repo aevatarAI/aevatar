@@ -122,6 +122,13 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.Usage = new WorkflowUsageMetricsState();
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
+        if (evt.WorkflowRuntime != null)
+        {
+            await _stateHost.UpdateExecutionContextAsync(
+                WorkflowRunExecutionContextStateAccess.BuildWorkflowRuntimeDelta(evt.WorkflowRuntime),
+                ct);
+        }
+
         var forkSeed = evt.ForkSeed;
         var hasForkSeedStart = forkSeed != null && !string.IsNullOrWhiteSpace(forkSeed.StartAtStepId);
         if (hasForkSeedStart)

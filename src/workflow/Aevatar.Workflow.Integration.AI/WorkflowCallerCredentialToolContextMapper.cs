@@ -7,15 +7,28 @@ internal static class WorkflowCallerCredentialToolContextMapper
 {
     public static AgentToolExecutionContext FromCredential(WorkflowCallerCredential? credential)
     {
+        return FromCredential(credential, AgentWorkflowRuntimeContext.Empty);
+    }
+
+    public static AgentToolExecutionContext FromCredential(
+        WorkflowCallerCredential? credential,
+        AgentWorkflowRuntimeContext workflowRuntimeContext)
+    {
         var token = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
-        if (token.IsMissing)
-            return AgentToolExecutionContext.Empty;
         if (token.IsInvalid)
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
 
-        return AgentToolExecutionContext.Empty with
+        var context = AgentToolExecutionContext.Empty with
         {
-            Credentials = AgentToolCredentials.Empty with
+            WorkflowRuntime = workflowRuntimeContext,
+        };
+
+        if (token.IsMissing)
+            return context;
+
+        return context with
+        {
+            Credentials = context.Credentials with
             {
                 NyxIdAccessToken = token.NormalizedBearerToken,
                 NyxIdOrgToken = token.NormalizedBearerToken,
