@@ -1,9 +1,7 @@
 import {
   CloudUploadOutlined,
   DeleteOutlined,
-  DownOutlined,
   EditOutlined,
-  MoreOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   SaveOutlined,
@@ -12,7 +10,6 @@ import {
 import {
   Breadcrumb,
   Button,
-  Dropdown,
   Input,
   Segmented,
   Space,
@@ -32,26 +29,24 @@ type WorkflowStudioHeaderProps = {
   readonly publishTone: "default" | "processing" | "success" | "warning" | "error";
   readonly canRunActiveMember: boolean;
   readonly canSave: boolean;
-  readonly canSetTeamEntry: boolean;
   readonly dirty: boolean;
   readonly activeMemberRunPending: boolean;
   readonly activeMemberRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
   readonly onAddNode: () => void;
+  readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
   readonly onOpenRunOptions: () => void;
   readonly onRunActiveMember: () => void;
   readonly onNavigateBack: () => void;
   readonly onSave: () => void;
-  readonly onSetTeamEntry: () => void;
   readonly onTitleChange: (title: string) => void;
   readonly savePending: boolean;
   readonly savePlaceholderReason?: string;
+  readonly selectedEdgeId: string;
   readonly selectedNodeId: string;
   readonly selectedTab: "editor" | "runs";
   readonly onTabChange: (tab: "editor" | "runs") => void;
-  readonly teamEntryNotice: string;
-  readonly teamEntryPending: boolean;
   readonly teamName: string;
   readonly workflowTitle: string;
 };
@@ -380,102 +375,73 @@ const HeaderTabs: React.FC<HeaderTabsProps> = ({
 
 type HeaderNodeActionsProps = {
   readonly canSave: boolean;
-  readonly canSetTeamEntry: boolean;
+  readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
   readonly onSave: () => void;
-  readonly onSetTeamEntry: () => void;
   readonly savePending: boolean;
   readonly savePlaceholderReason?: string;
+  readonly selectedEdgeId: string;
   readonly selectedNodeId: string;
-  readonly teamEntryNotice: string;
-  readonly teamEntryPending: boolean;
 };
 
 const HeaderNodeActions: React.FC<HeaderNodeActionsProps> = ({
   canSave,
-  canSetTeamEntry,
+  onDeleteConnection,
   onDeleteNode,
   onSave,
-  onSetTeamEntry,
   savePending,
   savePlaceholderReason,
+  selectedEdgeId,
   selectedNodeId,
-  teamEntryNotice,
-  teamEntryPending,
-}) => (
-  <section
-    aria-label={t(
-      "teamMemberWorkflowStudio.header.nodeActionsAria",
-      "Workflow draft and node actions",
-    )}
-    data-testid="workflow-header-node-actions"
-    style={{
-      alignItems: "center",
-      display: "flex",
-      flexWrap: "wrap",
-      gap: 8,
-      justifyContent: "flex-end",
-      minWidth: 0,
-    }}
-  >
-    <Button
-      disabled={!selectedNodeId}
-      icon={<DeleteOutlined />}
-      onClick={onDeleteNode}
-      size="small"
-    >
-      {t("teamMemberWorkflowStudio.header.deleteNode", "Delete node")}
-    </Button>
-    <Button
-      disabled={!canSave}
-      icon={<SaveOutlined />}
-      loading={savePending}
-      onClick={onSave}
-      size="small"
-      title={
-        canSave
-          ? t("teamMemberWorkflowStudio.header.saveDraft", "Save draft")
-          : savePlaceholderReason
-      }
-      type="primary"
-    >
-      {t("teamMemberWorkflowStudio.header.save", "Save")}
-    </Button>
-    <Dropdown
-      menu={{
-        items: [
-          {
-            disabled: !canSetTeamEntry,
-            key: "set-team-entry",
-            label: t(
-              "teamMemberWorkflowStudio.header.setAsTeamEntry",
-              "Set as Team entry",
-            ),
-          },
-        ],
-        onClick: ({ key }) => {
-          if (key === "set-team-entry" && canSetTeamEntry) {
-            onSetTeamEntry();
-          }
-        },
+}) => {
+  const hasSelectedConnection = Boolean(selectedEdgeId);
+  const hasSelectedNode = Boolean(selectedNodeId);
+  const deleteLabel = hasSelectedConnection
+    ? t("teamMemberWorkflowStudio.header.deleteConnection", "Delete connection")
+    : t("teamMemberWorkflowStudio.header.deleteNode", "Delete node");
+
+  return (
+    <section
+      aria-label={t(
+        "teamMemberWorkflowStudio.header.nodeActionsAria",
+        "Workflow draft and node actions",
+      )}
+      data-testid="workflow-header-node-actions"
+      style={{
+        alignItems: "center",
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 8,
+        justifyContent: "flex-end",
+        minWidth: 0,
       }}
-      trigger={["click"]}
     >
       <Button
-        aria-label={t(
-          "teamMemberWorkflowStudio.header.moreActionsAria",
-          "More workflow actions",
-        )}
-        icon={<MoreOutlined />}
-        loading={teamEntryPending}
+        disabled={!hasSelectedConnection && !hasSelectedNode}
+        icon={<DeleteOutlined />}
+        onClick={hasSelectedConnection ? onDeleteConnection : onDeleteNode}
         size="small"
-        title={teamEntryNotice}
       >
-        <DownOutlined />
+        {deleteLabel}
       </Button>
-    </Dropdown>
-  </section>
-);
+      <Button
+        disabled={!canSave}
+        icon={<SaveOutlined />}
+        loading={savePending}
+        onClick={onSave}
+        size="small"
+        title={
+          canSave
+            ? t("teamMemberWorkflowStudio.header.saveDraft", "Save draft")
+            : savePlaceholderReason
+        }
+        type="primary"
+      >
+        {t("teamMemberWorkflowStudio.header.save", "Save")}
+      </Button>
+    </section>
+  );
+};
 
 const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   memberPublished,
@@ -486,26 +452,24 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   publishTone,
   canRunActiveMember,
   canSave,
-  canSetTeamEntry,
   dirty,
   activeMemberRunPending,
   activeMemberRunPlaceholderReason,
   onPublishMember,
   onAddNode,
+  onDeleteConnection,
   onDeleteNode,
   onOpenRunOptions,
   onRunActiveMember,
   onNavigateBack,
   onSave,
-  onSetTeamEntry,
   onTitleChange,
   savePending,
   savePlaceholderReason,
+  selectedEdgeId,
   selectedNodeId,
   selectedTab,
   onTabChange,
-  teamEntryNotice,
-  teamEntryPending,
   teamName,
   workflowTitle,
 }) => {
@@ -586,15 +550,13 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
         <HeaderTabs onTabChange={onTabChange} selectedTab={selectedTab} />
         <HeaderNodeActions
           canSave={canSave}
-          canSetTeamEntry={canSetTeamEntry}
+          onDeleteConnection={onDeleteConnection}
           onDeleteNode={onDeleteNode}
           onSave={onSave}
-          onSetTeamEntry={onSetTeamEntry}
           savePending={savePending}
           savePlaceholderReason={savePlaceholderReason}
+          selectedEdgeId={selectedEdgeId}
           selectedNodeId={selectedNodeId}
-          teamEntryNotice={teamEntryNotice}
-          teamEntryPending={teamEntryPending}
         />
       </div>
     </header>

@@ -50,7 +50,16 @@ describe('GraphCanvas', () => {
       type: 'studioWorkflowNode',
     },
   ];
-  const edges: any[] = [];
+  const edges: any[] = [
+    {
+      id: 'edge:assert:publish:linear',
+      source: 'step:assert',
+      target: 'step:publish',
+      data: {
+        kind: 'next',
+      },
+    },
+  ];
 
   beforeEach(() => {
     mockReactFlowRender.mockClear();
@@ -89,6 +98,32 @@ describe('GraphCanvas', () => {
 
     expect(reactFlowProps.deleteKeyCode).toBeNull();
     expect(reactFlowProps.onBeforeDelete).toBeUndefined();
+  });
+
+  it('routes studio edge deletion through the parent callback before mutating the graph', async () => {
+    const onDeleteEdges = jest.fn(async () => undefined);
+
+    render(
+      <GraphCanvas
+        edges={edges}
+        nodes={nodes}
+        onDeleteEdges={onDeleteEdges}
+        variant="studio"
+      />,
+    );
+
+    const reactFlowProps = mockReactFlowRender.mock.calls.at(-1)?.[0] as any;
+
+    expect(reactFlowProps.deleteKeyCode).toBeUndefined();
+    await act(async () => {
+      await expect(
+        reactFlowProps.onBeforeDelete?.({
+          edges,
+          nodes: [],
+        }),
+      ).resolves.toBe(false);
+    });
+    expect(onDeleteEdges).toHaveBeenCalledWith(['edge:assert:publish:linear']);
   });
 
   it('renders studio nodes with their product label instead of the backend step type id', () => {

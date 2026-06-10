@@ -14,9 +14,12 @@ type WorkflowStudioCanvasProps = {
   readonly onAddFirstStep?: () => void;
   readonly onCanvasSelect?: () => void;
   readonly onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
+  readonly onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
   readonly onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
+  readonly onEdgeSelect?: (edgeId: string) => void;
   readonly onNodeLayoutChange?: (nodes: Node<StudioGraphNodeData>[]) => void;
   readonly onNodeSelect?: (nodeId: string) => void;
+  readonly selectedEdgeId?: string;
   readonly selectedNodeId?: string;
 };
 
@@ -27,9 +30,12 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
   onAddFirstStep,
   onCanvasSelect,
   onConnectNodes,
+  onDeleteEdges,
   onDeleteNodes,
+  onEdgeSelect,
   onNodeLayoutChange,
   onNodeSelect,
+  selectedEdgeId,
   selectedNodeId,
 }) => (
   <div
@@ -60,9 +66,12 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
       }
       onCanvasSelect={onCanvasSelect}
       onConnectNodes={onConnectNodes}
+      onDeleteEdges={onDeleteEdges}
       onDeleteNodes={onDeleteNodes}
+      onEdgeSelect={onEdgeSelect}
       onNodeLayoutChange={onNodeLayoutChange as (nodes: Node[]) => void}
       onNodeSelect={onNodeSelect}
+      selectedEdgeId={selectedEdgeId}
       selectedNodeId={selectedNodeId}
       variant="studio"
     />

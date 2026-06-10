@@ -54,6 +54,7 @@ type GraphCanvasProps = {
   }) => void;
   onConnectNodes?: (sourceId: string, targetId: string) => void;
   onNodeLayoutChange?: (nodes: Node[]) => void;
+  onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
   onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
 };
 
@@ -271,6 +272,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   onCanvasContextMenu,
   onConnectNodes,
   onNodeLayoutChange,
+  onDeleteEdges,
   onDeleteNodes,
 }) => {
   const [localNodes, setLocalNodes] = useNodesState(nodes);
@@ -433,20 +435,30 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         nodesDraggable={isStudioVariant}
         nodesConnectable={Boolean(isStudioVariant && onConnectNodes)}
         elementsSelectable
-        deleteKeyCode={isStudioVariant && !onDeleteNodes ? null : undefined}
+        deleteKeyCode={
+          isStudioVariant && !onDeleteNodes && !onDeleteEdges ? null : undefined
+        }
         onNodesChange={isStudioVariant ? handleNodesChange : undefined}
         onBeforeDelete={
-          isStudioVariant && onDeleteNodes
-            ? async ({ nodes: nodesToDelete }) => {
+          isStudioVariant && (onDeleteNodes || onDeleteEdges)
+            ? async ({ edges: edgesToDelete, nodes: nodesToDelete }) => {
                 const nodeIds = nodesToDelete
                   .map((node) => String(node.id ?? '').trim())
                   .filter(Boolean);
-                if (nodeIds.length === 0) {
+                const edgeIds = edgesToDelete
+                  .map((edge) => String(edge.id ?? '').trim())
+                  .filter(Boolean);
+                if (nodeIds.length === 0 && edgeIds.length === 0) {
                   return false;
                 }
 
                 try {
-                  await onDeleteNodes(nodeIds);
+                  if (nodeIds.length > 0) {
+                    await onDeleteNodes?.(nodeIds);
+                  }
+                  if (edgeIds.length > 0) {
+                    await onDeleteEdges?.(edgeIds);
+                  }
                 } catch {
                   // Keep the local graph unchanged until the parent document confirms deletion.
                 }
