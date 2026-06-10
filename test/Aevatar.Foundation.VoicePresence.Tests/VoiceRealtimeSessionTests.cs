@@ -10,7 +10,9 @@ using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Projection;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
+using System.Runtime.CompilerServices;
 
 namespace Aevatar.Foundation.VoicePresence.Tests;
 
@@ -212,29 +214,37 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
-    public async Task FailClosedVoiceVolatileMediaStreamPort_should_throw_public_reason_on_attach_and_release_on_detach()
+    public async Task VoiceVolatileMediaStreamPort_should_cleanup_attachment_when_registration_has_no_media_connector()
     {
         var leasePort = new RecordingLeasePort();
         var attachmentPort = new RecordingAttachmentPort();
-        var port = new FailClosedVoiceVolatileMediaStreamPort(attachmentPort, leasePort);
+        var port = new VoiceVolatileMediaStreamPort(
+            attachmentPort,
+            leasePort,
+            [new VoicePresenceModuleRegistration(["voice_presence"], _ => throw new InvalidOperationException())],
+            new ServiceCollection().BuildServiceProvider(),
+            new RecordingDispatchPort());
         var handle = CreateLeaseHandle(activeTransportLeaseId: "transport-1");
 
-        port.SupportsRemoteAudio.ShouldBeFalse();
+        port.SupportsRemoteAudio.ShouldBeTrue();
         var ex = await Should.ThrowAsync<VoiceVolatileMediaStreamUnavailableException>(
             () => port.AttachAsync(handle, new PassiveVoiceTransport(), CancellationToken.None));
         ex.Message.ShouldBe(VoiceVolatileMediaStreamUnavailableException.Reason);
-
-        await port.DetachAsync(handle, new PassiveVoiceTransport(), CancellationToken.None);
 
         attachmentPort.DetachedHandles.ShouldHaveSingleItem().ShouldBe(handle);
         leasePort.ReleaseRequests.ShouldHaveSingleItem().Handle.ShouldBe(handle);
     }
 
     [Fact]
-    public async Task FailClosedVoiceVolatileMediaStreamPort_should_publish_lifetime_completed_through_lease_port()
+    public async Task VoiceVolatileMediaStreamPort_should_publish_lifetime_completed_through_lease_port()
     {
         var leasePort = new RecordingLeasePort();
-        var port = new FailClosedVoiceVolatileMediaStreamPort(new RecordingAttachmentPort(), leasePort);
+        var port = new VoiceVolatileMediaStreamPort(
+            new RecordingAttachmentPort(),
+            leasePort,
+            [new VoicePresenceModuleRegistration(["voice_presence"], _ => throw new InvalidOperationException())],
+            new ServiceCollection().BuildServiceProvider(),
+            new RecordingDispatchPort());
         var handle = CreateLeaseHandle(activeTransportLeaseId: "transport-1");
 
         await port.CompleteTransportLifetimeAsync(handle, null, "host_transport_completed");
@@ -246,10 +256,15 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
-    public async Task FailClosedVoiceVolatileMediaStreamPort_should_prefer_completed_transport_lease_id()
+    public async Task VoiceVolatileMediaStreamPort_should_prefer_completed_transport_lease_id()
     {
         var leasePort = new RecordingLeasePort();
-        var port = new FailClosedVoiceVolatileMediaStreamPort(new RecordingAttachmentPort(), leasePort);
+        var port = new VoiceVolatileMediaStreamPort(
+            new RecordingAttachmentPort(),
+            leasePort,
+            [new VoicePresenceModuleRegistration(["voice_presence"], _ => throw new InvalidOperationException())],
+            new ServiceCollection().BuildServiceProvider(),
+            new RecordingDispatchPort());
         var handle = CreateLeaseHandle(activeTransportLeaseId: "handle-transport");
 
         await port.CompleteTransportLifetimeAsync(
@@ -267,10 +282,15 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
-    public async Task FailClosedVoiceVolatileMediaStreamPort_should_ignore_lifetime_completion_without_transport_lease_id()
+    public async Task VoiceVolatileMediaStreamPort_should_ignore_lifetime_completion_without_transport_lease_id()
     {
         var leasePort = new RecordingLeasePort();
-        var port = new FailClosedVoiceVolatileMediaStreamPort(new RecordingAttachmentPort(), leasePort);
+        var port = new VoiceVolatileMediaStreamPort(
+            new RecordingAttachmentPort(),
+            leasePort,
+            [new VoicePresenceModuleRegistration(["voice_presence"], _ => throw new InvalidOperationException())],
+            new ServiceCollection().BuildServiceProvider(),
+            new RecordingDispatchPort());
         var handle = CreateLeaseHandle();
 
         await port.CompleteTransportLifetimeAsync(
@@ -279,6 +299,56 @@ public class VoiceRealtimeSessionTests
             "host_transport_completed");
 
         leasePort.LifetimeCompletions.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task VoiceVolatileMediaStreamPort_should_relay_raw_audio_inside_volatile_path_and_dispatch_only_control_events()
+    {
+        var leasePort = new RecordingLeasePort();
+        var attachmentPort = new RecordingAttachmentPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var providerSession = new RecordingRelayProviderSession();
+        var port = new VoiceVolatileMediaStreamPort(
+            attachmentPort,
+            leasePort,
+            [CreateRelayRegistration(providerSession)],
+            new ServiceCollection().BuildServiceProvider(),
+            dispatchPort);
+        var handle = CreateLeaseHandle(activeTransportLeaseId: "transport-1");
+        var transport = new ScriptedVoiceTransport(
+            VoiceTransportFrame.Audio(new byte[] { 1, 2, 3, 4 }),
+            VoiceTransportFrame.ControlFrame(new VoiceControlFrame
+            {
+                DrainAcknowledged = new VoiceDrainAcknowledged
+                {
+                    ResponseId = 5,
+                    PlayoutSequence = 9,
+                },
+            }));
+
+        var lifetimeCompleted = await port.AttachAsync(handle, transport, CancellationToken.None);
+        await transport.FramesDrained.Task;
+        await providerSession.EmitAudioAsync(new byte[] { 9, 8, 7 }, CancellationToken.None);
+        await providerSession.EmitEventAsync(new VoiceProviderEvent
+        {
+            SpeechStarted = new VoiceSpeechStarted(),
+        }, CancellationToken.None);
+        await port.DetachAsync(handle, transport, CancellationToken.None);
+
+        lifetimeCompleted.ShouldNotBeNull();
+        lifetimeCompleted.TransportLeaseId.ShouldBe("transport-1");
+        attachmentPort.AttachedHandles.ShouldHaveSingleItem().ShouldBe(handle);
+        providerSession.AudioFrames.ShouldHaveSingleItem().ShouldBe(new byte[] { 1, 2, 3, 4 });
+        transport.SentAudio.ShouldHaveSingleItem().ShouldBe(new byte[] { 9, 8, 7 });
+
+        var signals = dispatchPort.Dispatches
+            .Select(static dispatch => dispatch.Envelope.Payload.Unpack<VoiceModuleSignal>())
+            .ToList();
+        signals.Count.ShouldBe(2);
+        signals.ShouldContain(static signal =>
+            signal.SignalCase == VoiceModuleSignal.SignalOneofCase.TransportControlFrameReceived);
+        signals.ShouldContain(static signal =>
+            signal.SignalCase == VoiceModuleSignal.SignalOneofCase.ProviderEventReceived);
     }
 
     [Fact]
@@ -477,7 +547,7 @@ public class VoiceRealtimeSessionTests
                 RootActorId = "agent-1",
                 ProjectionKind = VoicePresenceProjectionKinds.CapabilityMaterialization,
             },
-            WrapCommitted(new VoiceAudioReceived()));
+            WrapCommitted(new VoiceResponseStarted()));
 
         dispatcher.Upserts.ShouldBeEmpty();
     }
@@ -520,6 +590,10 @@ public class VoiceRealtimeSessionTests
             .ShouldBeFalse();
         File.Exists(Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence/Hosting/UnavailableVoicePresenceTransportAttachmentPort.cs"))
             .ShouldBeFalse();
+        File.Exists(Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence/Hosting/FailClosedVoiceVolatileMediaStreamPort.cs"))
+            .ShouldBeFalse();
+        File.Exists(Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence/Hosting/NoOpVoicePresenceTransportAttachmentPort.cs"))
+            .ShouldBeFalse();
     }
 
     private static ActorOwnedVoiceRealtimeSession CreateSession(
@@ -543,6 +617,27 @@ public class VoiceRealtimeSessionTests
             expiresAt ?? DateTimeOffset.UtcNow.AddMinutes(5),
             VoiceRemoteAudioSupport.LocalOnly,
             activeTransportLeaseId);
+
+    private static VoicePresenceModuleRegistration CreateRelayRegistration(
+        RecordingRelayProviderSession providerSession) =>
+        new(
+            ["voice_presence"],
+            _ => throw new InvalidOperationException(),
+            (_, handle, eventSink, audioSink, _) =>
+            {
+                providerSession.Connect(
+                    new VoiceProviderSessionKey(
+                        handle.SessionId,
+                        handle.OwnerId,
+                        handle.ActiveTransportLeaseId ?? string.Empty,
+                        0,
+                        Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                        handle.ActorId,
+                        handle.ModuleName),
+                    eventSink,
+                    audioSink);
+                return Task.FromResult<RealtimeVoiceProviderSession>(providerSession);
+            });
 
     private static VoicePresenceCapabilitySnapshot CreateCapability(
         string actorId,
@@ -646,13 +741,13 @@ public class VoiceRealtimeSessionTests
 
         public List<VoicePresenceSessionLeaseHandle> DetachedHandles { get; } = [];
 
-        public Task AttachAsync(
+        public Task<VoicePresenceSessionLeaseHandle> AttachAsync(
             VoicePresenceSessionLeaseHandle handle,
             IVoiceTransport transport,
             CancellationToken ct = default)
         {
             AttachedHandles.Add(handle);
-            return Task.CompletedTask;
+            return Task.FromResult(handle);
         }
 
         public Task DetachAsync(
@@ -769,5 +864,96 @@ public class VoiceRealtimeSessionTests
         public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct) => Task.CompletedTask;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ScriptedVoiceTransport(params VoiceTransportFrame[] frames) : IVoiceTransport
+    {
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource FramesDrained { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<byte[]> SentAudio { get; } = [];
+
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            SentAudio.Add(pcm16.ToArray());
+            return Task.CompletedTask;
+        }
+
+        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            foreach (var frame in frames)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return frame;
+            }
+
+            FramesDrained.TrySetResult();
+            await _release.Task.WaitAsync(ct);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            _release.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingRelayProviderSession : RealtimeVoiceProviderSession
+    {
+        private VoiceProviderSessionKey _sessionKey = new(string.Empty, string.Empty, string.Empty, 0);
+        private Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task>? _eventSink;
+        private Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task>? _audioSink;
+
+        public List<byte[]> AudioFrames { get; } = [];
+
+        public void Connect(
+            VoiceProviderSessionKey sessionKey,
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink)
+        {
+            _sessionKey = sessionKey;
+            _eventSink = eventSink;
+            _audioSink = audioSink;
+        }
+
+        public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            AudioFrames.Add(pcm16.ToArray());
+            return Task.CompletedTask;
+        }
+
+        public Task EmitAudioAsync(byte[] pcm16, CancellationToken ct) =>
+            _audioSink?.Invoke(
+                _sessionKey,
+                new VoiceProviderAudioFrame(pcm16, 24000, "response-1"),
+                ct) ?? Task.CompletedTask;
+
+        public Task EmitEventAsync(VoiceProviderEvent providerEvent, CancellationToken ct) =>
+            _eventSink?.Invoke(_sessionKey, providerEvent, ct) ?? Task.CompletedTask;
+
+        public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public override Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
+
+        public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

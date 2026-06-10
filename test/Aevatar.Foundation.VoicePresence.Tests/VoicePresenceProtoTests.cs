@@ -117,33 +117,22 @@ public class VoicePresenceProtoTests
     }
 
     [Fact]
-    public void VoiceModuleSignal_should_roundtrip_transport_audio_frame_received()
+    public void Voice_presence_proto_should_not_expose_raw_pcm_actor_messages()
     {
-        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
-        var audio = new VoiceTransportAudioFrameReceived
-        {
-            SessionId = "lease-1",
-            OwnerId = "host-1",
-            TransportLeaseId = "transport-1",
-            LeaseExpiresAt = expiresAt,
-            LeaseEpoch = 7,
-            Pcm16 = ByteString.CopyFrom([1, 2, 3]),
-            SampleRateHz = 24000,
-        };
-        var signal = new VoiceModuleSignal
-        {
-            ModuleName = "voice_presence",
-            TransportAudioFrameReceived = audio,
-        };
+        var messageNames = VoicePresenceReflection.Descriptor.MessageTypes
+            .Select(static x => x.Name)
+            .ToArray();
+        var providerEventFields = VoiceProviderEvent.Descriptor.Fields.InDeclarationOrder()
+            .Select(static x => x.Name)
+            .ToArray();
+        var signalFields = VoiceModuleSignal.Descriptor.Fields.InDeclarationOrder()
+            .Select(static x => x.Name)
+            .ToArray();
 
-        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
-
-        parsed.ShouldBe(signal);
-        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived);
-        parsed.TransportAudioFrameReceived.LeaseEpoch.ShouldBe(7);
-        parsed.TransportAudioFrameReceived.Pcm16.ToByteArray().ShouldBe([1, 2, 3]);
-        VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
-            .ShouldContain(nameof(VoiceTransportAudioFrameReceived));
+        messageNames.ShouldNotContain("VoiceAudioReceived");
+        messageNames.ShouldNotContain("VoiceTransportAudioFrameReceived");
+        providerEventFields.ShouldNotContain("audio_received");
+        signalFields.ShouldNotContain("transport_audio_frame_received");
     }
 
     [Fact]
@@ -176,27 +165,33 @@ public class VoicePresenceProtoTests
     }
 
     [Fact]
-    public void VoicePresenceSessionDispatch_should_wrap_transport_audio_self_signal()
+    public void VoicePresenceSessionDispatch_should_wrap_transport_control_self_signal()
     {
-        var audio = new VoiceTransportAudioFrameReceived
+        var control = new VoiceTransportControlFrameReceived
         {
             SessionId = "lease-1",
             OwnerId = "host-1",
             TransportLeaseId = "transport-1",
             LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
             LeaseEpoch = 9,
-            Pcm16 = ByteString.CopyFrom([4, 5, 6]),
-            SampleRateHz = 24000,
+            ControlFrame = new VoiceControlFrame
+            {
+                DrainAcknowledged = new VoiceDrainAcknowledged
+                {
+                    ResponseId = 3,
+                    PlayoutSequence = 4,
+                },
+            },
         };
 
-        var envelope = VoicePresenceSessionDispatch.BuildSelfEnvelope("voice-agent", "voice_presence", audio);
+        var envelope = VoicePresenceSessionDispatch.BuildSelfEnvelope("voice-agent", "voice_presence", control);
         var signal = envelope.Payload.Unpack<VoiceModuleSignal>();
 
         envelope.Route.ShouldBe(EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self));
         signal.ModuleName.ShouldBe("voice_presence");
-        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived);
-        signal.TransportAudioFrameReceived.LeaseEpoch.ShouldBe(9);
-        signal.TransportAudioFrameReceived.ShouldBe(audio);
-        signal.TransportAudioFrameReceived.ShouldNotBeSameAs(audio);
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportControlFrameReceived);
+        signal.TransportControlFrameReceived.LeaseEpoch.ShouldBe(9);
+        signal.TransportControlFrameReceived.ShouldBe(control);
+        signal.TransportControlFrameReceived.ShouldNotBeSameAs(control);
     }
 }
