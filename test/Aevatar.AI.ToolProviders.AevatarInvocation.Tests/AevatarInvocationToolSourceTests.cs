@@ -678,6 +678,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command!.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.Prompt.Should().Be("run workflow");
         harness.WorkflowDispatch.Command.ScopeId.Should().Be("scope-1");
+        harness.WorkflowDispatch.Command.CallerCredential!.BearerToken.Should().Be("access-token");
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("x-workflow", "yes");
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command.Metadata);
         ShouldCarryWorkflowLlmControlValues(harness.WorkflowDispatch.Command.LlmControl);
@@ -727,6 +728,25 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command!);
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command!.Metadata);
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenServerSetCallerCredentialIsMalformed_ShouldReturnStructuredError()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-workflow-invalid-credential", accessToken: "Bearer access-token");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalidcallercredential");
+        harness.WorkflowDispatch.Command.Should().BeNull();
     }
 
     [Fact]
@@ -914,6 +934,7 @@ public sealed class AevatarInvocationToolSourceTests
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command!.Metadata);
         ShouldCarryWorkflowLlmControlValues(harness.WorkflowDispatch.Command.LlmControl);
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
+        harness.WorkflowDispatch.Command.CallerCredential!.BearerToken.Should().Be("access-token");
     }
 
     [Fact]
@@ -1490,6 +1511,8 @@ public sealed class AevatarInvocationToolSourceTests
     private static void ShouldCarryTypedTrustedCallerValues(WorkflowChatRunRequest command)
     {
         command.ScopeId.Should().Be("scope-1");
+        command.CallerCredential.Should().NotBeNull();
+        command.CallerCredential!.BearerToken.Should().Be("access-token");
         ShouldCarryWorkflowLlmControlValues(command.LlmControl);
     }
 
@@ -1545,10 +1568,11 @@ public sealed class AevatarInvocationToolSourceTests
     private static AgentToolContextScope PushContext(
         string callId,
         string? scopeId = "scope-1",
+        string? accessToken = "access-token",
         AgentWorkflowRuntimeContext? workflowRuntime = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity("request-1", callId),
-            new AgentToolCredentials("access-token", "org-token", "sender-token"),
+            new AgentToolCredentials(accessToken, "org-token", "sender-token"),
             new AgentToolCallerContext(scopeId, "owner-1", "response-1"),
             new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
             new AgentToolSenderBindingContext("binding-1"),
