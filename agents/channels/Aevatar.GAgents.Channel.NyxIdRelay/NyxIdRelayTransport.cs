@@ -38,7 +38,11 @@ public sealed class NyxIdRelayTransport
         var isCardAction = string.Equals(normalizedContentType, CardActionContentType, StringComparison.Ordinal);
 
         var text = payload.Content?.Text?.Trim();
-        if (!isCardAction && string.IsNullOrWhiteSpace(text))
+        var platform = NormalizePlatform(payload.Platform);
+        var larkFacts = ResolveLarkRelayConversationFacts(platform, payload, isCardAction);
+        var platformMessageId = ResolvePlatformMessageId(payload, platform, larkFacts);
+        var attachments = NyxIdRelayAttachmentNormalizer.Normalize(payload, platform, platformMessageId);
+        if (!isCardAction && string.IsNullOrWhiteSpace(text) && attachments.Count == 0)
             return NyxIdRelayParseResult.IgnoredPayload(payload, "empty_text", "Relay payload does not contain text content.");
 
         CardActionSubmission? cardAction = null;
@@ -53,9 +57,6 @@ public sealed class NyxIdRelayTransport
                     "Relay card_action payload text is not a JSON object.");
             }
         }
-
-        var platform = NormalizePlatform(payload.Platform);
-        var larkFacts = ResolveLarkRelayConversationFacts(platform, payload, isCardAction);
 
         var conversationType = payload.Conversation?.Type ?? payload.Conversation?.ConversationType;
         ConversationScope scope;
@@ -101,7 +102,6 @@ public sealed class NyxIdRelayTransport
         var partition = conversationIdentity;
         var timestamp = ParseTimestamp(payload.Timestamp);
         var botId = payload.Agent?.ApiKeyId?.Trim();
-        var platformMessageId = ResolvePlatformMessageId(payload, platform, larkFacts);
         var correlationId = string.IsNullOrWhiteSpace(payload.CorrelationId)
             ? payload.MessageId.Trim()
             : payload.CorrelationId.Trim();
@@ -112,6 +112,7 @@ public sealed class NyxIdRelayTransport
         };
         if (cardAction is not null)
             content.CardAction = cardAction;
+        content.Attachments.AddRange(attachments);
 
         var activity = new ChatActivity
         {

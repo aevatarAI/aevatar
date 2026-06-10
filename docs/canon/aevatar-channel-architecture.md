@@ -28,6 +28,8 @@ target_repo: aevatarAI/aevatar
 
 **当前受支持生产契约**：post-ADR-0012 / issue `#308` 的 ChannelRuntime 已收敛到 Nyx-backed Lark relay。Lark inbound 的唯一活跃入口是 `Aevatar.GAgents.NyxidChat` 映射的 `/api/webhooks/nyxid-relay`，并由 `ConversationGAgent` 承接权威会话事实；`Aevatar.GAgents.Platform.Lark` 只保留 HTTP client、message composer、native message producer、payload redactor 等 outbound/rendering 能力，不拥有 inbound runtime state。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**，不是当前生产契约。
 
+NyxID relay ingress 的归一化边界必须把非文本消息的附件 locator 映射进 `ChatActivity.Content.Attachments`。附件只携带平台 locator（如 URL、Lark `image_key` / `file_key` 派生的 blob ref）、message id、media type、文件名和大小等引用信息；不得携带 bytes、base64 或要求 NyxID 增加新的下载/存储协议。只要 relay callback 有文本、card action 或至少一个有效 `AttachmentRef`，就应进入 `ChatActivity` 主链路。
+
 直接在这个大包里继续加 channel 会让边界进一步模糊。需要引入 **channel-agnostic 抽象层**，把业务逻辑和 channel 细节隔离，并把 ChannelRuntime 的多职责按概念拆成独立包。
 
 ## 2. 目标
@@ -488,6 +490,8 @@ public record MessageContent(
 ```
 
 **核心原则**：`MessageContent` 描述 "要表达什么"，不描述 "长什么样"。`IMessageComposer` 把它翻译成 channel-native 的具体 payload。
+
+入站方向同样遵循引用语义：`AttachmentRef` 表示平台附件 locator，不表示附件内容本体。NyxID relay 的 image/file-only callback 在文本为空时仍是有效 `MessageContent`，由 `Attachments` 承载后续业务可见的 typed 引用。
 
 **Card action typed payload rule**：workflow resume 与 LLM selection 是仓库内可控的控制语义，必须通过 `WorkflowResumeActionPayload` / `LlmSelectionActionPayload` 挂在 `ActionElement` 与 `CardActionSubmission` 上。`ActionElement.arguments` / `CardActionSubmission.Arguments` 只作为第三方或平台扩展 map，以及旧 callback JSON 的入站兼容边界；进入 `ChannelConversationTurnRunner`、`ChannelCardActionRouting` 或 LLM selection handoff 后，不得把这些字段当成权威事实源。
 

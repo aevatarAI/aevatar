@@ -199,6 +199,131 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldAcceptNormalizedAttachment_WhenTextContentIsEmpty()
+    {
+        var body = """
+            {
+              "message_id": "msg-image-1",
+              "platform": "slack",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "room-1", "type": "group" },
+              "sender": { "platform_id": "user-1", "display_name": "User One" },
+              "content": {
+                "type": "image",
+                "text": "   ",
+                "attachments": [
+                  {
+                    "content_type": "image",
+                    "url": "https://files.example.test/image-1.png",
+                    "filename": "image-1.png",
+                    "mime_type": "image/png",
+                    "size_bytes": 12345
+                  }
+                ]
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Ignored.Should().BeFalse();
+        parsed.Activity!.Type.Should().Be(ActivityType.Message);
+        parsed.Activity.Content.Text.Should().BeEmpty();
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments[0];
+        attachment.Kind.Should().Be(AttachmentKind.Image);
+        attachment.Name.Should().Be("image-1.png");
+        attachment.ContentType.Should().Be("image/png");
+        attachment.SizeBytes.Should().Be(12345);
+        attachment.ExternalUrl.Should().Be("https://files.example.test/image-1.png");
+        attachment.BlobRef.Should().BeEmpty();
+        attachment.AttachmentId.Should().StartWith("slack:msg-image-1:image:");
+    }
+
+    [Fact]
+    public void Parse_ShouldAcceptLarkRawImageKey_WhenTextContentIsEmpty()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-image-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "private" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "image", "text": "   " },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_lark_image_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "image",
+                    "content": "{\"image_key\":\"img_v3_abc123\"}"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Conversation.Scope.Should().Be(ConversationScope.Group);
+        parsed.Activity.Content.Text.Should().BeEmpty();
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments[0];
+        attachment.Kind.Should().Be(AttachmentKind.Image);
+        attachment.ContentType.Should().Be("image");
+        attachment.BlobRef.Should().Be("lark:image_key:img_v3_abc123");
+        attachment.ExternalUrl.Should().BeEmpty();
+        attachment.AttachmentId.Should().StartWith("lark:om_lark_image_1:image:");
+    }
+
+    [Fact]
+    public void Parse_ShouldAcceptLarkRawFileKey_WhenTextContentIsEmpty()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-file-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "private" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "file", "text": "" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_lark_file_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "file",
+                    "content": {
+                      "file_key": "file_v3_abc123",
+                      "file_name": "report.pdf",
+                      "mime_type": "application/pdf",
+                      "size": 4096
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments[0];
+        attachment.Kind.Should().Be(AttachmentKind.File);
+        attachment.Name.Should().Be("report.pdf");
+        attachment.ContentType.Should().Be("application/pdf");
+        attachment.SizeBytes.Should().Be(4096);
+        attachment.BlobRef.Should().Be("lark:file_key:file_v3_abc123");
+        attachment.ExternalUrl.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Parse_ShouldUseSenderIdAsDirectMessageCanonicalTail()
     {
         var body = """
