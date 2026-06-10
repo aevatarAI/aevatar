@@ -1,5 +1,6 @@
 import {
   buildNodeConfigFields,
+  formatNodeConfigFieldCopy,
   updateNodeConfigFieldParametersText,
   validateNodeConfigParametersText,
 } from './nodeConfigFields';
@@ -61,10 +62,12 @@ describe('nodeConfigFields', () => {
 
     expect(fieldSet.fields).toHaveLength(1);
     expect(fieldSet.fields[0]).toMatchObject({
-      label: 'Prompt instruction',
       name: 'prompt_prefix',
       value: 'Legacy prompt',
     });
+    expect(formatNodeConfigFieldCopy(fieldSet.fields[0].label)).toBe(
+      'Prompt instruction',
+    );
 
     const nextText = updateNodeConfigFieldParametersText({
       field: fieldSet.fields[0],

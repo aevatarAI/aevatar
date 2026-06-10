@@ -13,6 +13,7 @@ import type {
 } from '@/shared/studio/models';
 import {
   buildNodeConfigFields,
+  formatNodeConfigFieldCopy,
   updateNodeConfigFieldParametersText,
   validateNodeConfigParametersText,
   type NodeConfigField,
@@ -366,12 +367,15 @@ const NodeConfigFieldsEditor: React.FC<NodeConfigFieldsEditorProps> = ({
     <div style={formGridStyle}>
       {fields.map((field) => {
         const inputId = `studio-node-config-field-${field.name}`;
-        const ariaLabel = `Parameter ${field.label}`;
+        const label = formatNodeConfigFieldCopy(field.label);
+        const description = formatNodeConfigFieldCopy(field.description);
+        const placeholder = formatNodeConfigFieldCopy(field.placeholder);
+        const ariaLabel = `Parameter ${label}`;
 
         return (
           <div key={field.name} style={cardStackStyle}>
             <Typography.Text strong>
-              {field.label}
+              {label}
               {field.required ? ' *' : ''}
             </Typography.Text>
             {field.kind === 'select' ? (
@@ -380,10 +384,10 @@ const NodeConfigFieldsEditor: React.FC<NodeConfigFieldsEditorProps> = ({
                 aria-label={ariaLabel}
                 id={inputId}
                 options={field.options.map((option) => ({
-                  label: option.label,
+                  label: formatNodeConfigFieldCopy(option.label),
                   value: option.value,
                 }))}
-                placeholder={field.placeholder}
+                placeholder={placeholder}
                 value={field.value || undefined}
                 onChange={(value) => onChangeFieldValue(field, String(value || ''))}
               />
@@ -392,7 +396,7 @@ const NodeConfigFieldsEditor: React.FC<NodeConfigFieldsEditorProps> = ({
                 aria-label={ariaLabel}
                 autoSize={{ minRows: 3, maxRows: 8 }}
                 id={inputId}
-                placeholder={field.placeholder}
+                placeholder={placeholder}
                 value={field.value}
                 onChange={(event) =>
                   onChangeFieldValue(field, event.target.value)
@@ -402,7 +406,7 @@ const NodeConfigFieldsEditor: React.FC<NodeConfigFieldsEditorProps> = ({
               <Input
                 aria-label={ariaLabel}
                 id={inputId}
-                placeholder={field.placeholder}
+                placeholder={placeholder}
                 value={field.value}
                 onChange={(event) =>
                   onChangeFieldValue(field, event.target.value)
@@ -410,7 +414,7 @@ const NodeConfigFieldsEditor: React.FC<NodeConfigFieldsEditorProps> = ({
               />
             )}
             <Typography.Text style={fieldDescriptionStyle}>
-              {field.description}
+              {description}
             </Typography.Text>
           </div>
         );

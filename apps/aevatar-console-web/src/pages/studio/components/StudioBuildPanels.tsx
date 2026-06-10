@@ -56,6 +56,7 @@ import {
 import {
   buildNodeConfigFields,
   findNodeConfigPrimitiveDescriptor,
+  formatNodeConfigFieldCopy,
   updateNodeConfigFieldParametersText,
   validateNodeConfigParametersText,
   type NodeConfigField,
@@ -1604,7 +1605,14 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   {stepParameterConfig?.fields.length ? (
                     <div style={{ display: 'grid', gap: 10 }}>
                       {stepParameterConfig.fields.map((field) => {
-                        const parameterAriaLabel = `Parameter ${field.label}`;
+                        const label = formatNodeConfigFieldCopy(field.label);
+                        const description = formatNodeConfigFieldCopy(
+                          field.description,
+                        );
+                        const placeholder = formatNodeConfigFieldCopy(
+                          field.placeholder,
+                        );
+                        const parameterAriaLabel = `Parameter ${label}`;
                         const inputId = `workflow-step-parameter-${field.name}`;
                         return (
                           <div
@@ -1615,7 +1623,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               htmlFor={inputId}
                               style={workflowFieldLabelStyle}
                             >
-                              {field.label}
+                              {label}
                               {field.required ? ' *' : ''}
                             </label>
                             {field.kind === 'select' ? (
@@ -1624,10 +1632,10 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                                 aria-label={parameterAriaLabel}
                                 id={inputId}
                                 options={field.options.map((option) => ({
-                                  label: option.label,
+                                  label: formatNodeConfigFieldCopy(option.label),
                                   value: option.value,
                                 }))}
-                                placeholder={field.placeholder}
+                                placeholder={placeholder}
                                 value={field.value || undefined}
                                 onChange={(value) =>
                                   updateStepDraft((current) =>
@@ -1651,7 +1659,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                                 aria-label={parameterAriaLabel}
                                 autoSize={{ minRows: 3, maxRows: 8 }}
                                 id={inputId}
-                                placeholder={field.placeholder}
+                                placeholder={placeholder}
                                 value={field.value}
                                 onChange={(event) =>
                                   updateStepDraft((current) =>
@@ -1674,7 +1682,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               <Input
                                 aria-label={parameterAriaLabel}
                                 id={inputId}
-                                placeholder={field.placeholder}
+                                placeholder={placeholder}
                                 value={field.value}
                                 onChange={(event) =>
                                   updateStepDraft((current) =>
@@ -1695,7 +1703,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               />
                             )}
                             <div style={workflowInlineMetaStyle}>
-                              {field.description}
+                              {description}
                             </div>
                           </div>
                         );

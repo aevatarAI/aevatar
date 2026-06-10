@@ -1,5 +1,9 @@
 import type { WorkflowPrimitiveDescriptor } from '@/shared/models/runtime/query';
 import {
+  formatConsoleMessage,
+  type ConsoleMessageDescriptor,
+} from '@/shared/i18n/messages';
+import {
   normalizeStepParametersForType,
   parseInspectorParameters,
   readStepParameterValue,
@@ -25,17 +29,19 @@ export type {
 
 export type NodeConfigFieldKind = 'json' | 'select' | 'text';
 
+export type NodeConfigFieldCopy = ConsoleMessageDescriptor | string;
+
 export type NodeConfigFieldOption = {
-  readonly label: string;
+  readonly label: NodeConfigFieldCopy;
   readonly value: string;
 };
 
 export type NodeConfigField = {
   readonly name: string;
-  readonly label: string;
-  readonly description: string;
+  readonly label: NodeConfigFieldCopy;
+  readonly description: NodeConfigFieldCopy;
   readonly kind: NodeConfigFieldKind;
-  readonly placeholder: string;
+  readonly placeholder: NodeConfigFieldCopy;
   readonly required: boolean;
   readonly value: string;
   readonly valueType: string;
@@ -50,12 +56,12 @@ export type NodeConfigFieldSet = {
 
 type NodeConfigFieldSource = {
   readonly name: string;
-  readonly label?: string;
-  readonly description?: string;
+  readonly label?: NodeConfigFieldCopy;
+  readonly description?: NodeConfigFieldCopy;
   readonly default?: string;
   readonly enumValues?: readonly string[];
   readonly kind?: NodeConfigFieldKind;
-  readonly placeholder?: string;
+  readonly placeholder?: NodeConfigFieldCopy;
   readonly required?: boolean;
   readonly type?: string;
 };
@@ -63,53 +69,111 @@ type NodeConfigFieldSource = {
 const LLM_CALL_STEP_TYPE = 'llm_call';
 const PROMPT_PREFIX_PARAMETER = 'prompt_prefix';
 
+function message(
+  id: string,
+  defaultMessage: string,
+): ConsoleMessageDescriptor {
+  return { defaultMessage, id };
+}
+
+const PROMPT_INSTRUCTION_LABEL = message(
+  'shared.studio.nodeConfigFields.promptInstruction.label',
+  'Prompt instruction',
+);
+
+const PROMPT_INSTRUCTION_DESCRIPTION = message(
+  'shared.studio.nodeConfigFields.promptInstruction.description',
+  'Instruction added before each workflow run input reaches the LLM.',
+);
+
+const PROMPT_INSTRUCTION_PLACEHOLDER = message(
+  'shared.studio.nodeConfigFields.promptInstruction.placeholder',
+  'e.g. Translate the user input to Japanese',
+);
+
 const CONNECTOR_CALL_FIELDS: readonly NodeConfigFieldSource[] = [
   {
     name: 'connector',
-    label: 'Connector',
-    description: 'Connector name passed to the runtime.',
+    label: message(
+      'shared.studio.nodeConfigFields.connector.label',
+      'Connector',
+    ),
+    description: message(
+      'shared.studio.nodeConfigFields.connector.description',
+      'Connector name passed to the runtime.',
+    ),
     kind: 'select',
-    placeholder: 'Select connector',
+    placeholder: message(
+      'shared.studio.nodeConfigFields.connector.placeholder',
+      'Select connector',
+    ),
     type: 'string',
   },
   {
     name: 'operation',
-    label: 'Operation',
-    description: 'Optional operation name for connector implementations that expose multiple operations.',
+    label: message(
+      'shared.studio.nodeConfigFields.operation.label',
+      'Operation',
+    ),
+    description: message(
+      'shared.studio.nodeConfigFields.operation.description',
+      'Optional operation name for connector implementations that expose multiple operations.',
+    ),
     type: 'string',
   },
   {
     name: 'path',
-    label: 'Path',
-    description: 'Optional request path or connector-specific target.',
+    label: message('shared.studio.nodeConfigFields.path.label', 'Path'),
+    description: message(
+      'shared.studio.nodeConfigFields.path.description',
+      'Optional request path or connector-specific target.',
+    ),
     type: 'string',
   },
   {
     name: 'method',
-    label: 'Method',
-    description: 'HTTP method or connector-specific verb.',
+    label: message('shared.studio.nodeConfigFields.method.label', 'Method'),
+    description: message(
+      'shared.studio.nodeConfigFields.method.description',
+      'HTTP method or connector-specific verb.',
+    ),
     enumValues: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     type: 'string',
     default: 'POST',
   },
   {
     name: 'timeout_ms',
-    label: 'Timeout ms',
-    description: 'Connector timeout in milliseconds.',
+    label: message(
+      'shared.studio.nodeConfigFields.timeoutMs.label',
+      'Timeout ms',
+    ),
+    description: message(
+      'shared.studio.nodeConfigFields.timeoutMs.description',
+      'Connector timeout in milliseconds.',
+    ),
     type: 'number',
     default: '10000',
   },
   {
     name: 'retry',
-    label: 'Retry',
-    description: 'Retry count for transient connector failures.',
+    label: message('shared.studio.nodeConfigFields.retry.label', 'Retry'),
+    description: message(
+      'shared.studio.nodeConfigFields.retry.description',
+      'Retry count for transient connector failures.',
+    ),
     type: 'number',
     default: '0',
   },
   {
     name: 'on_error',
-    label: 'On error',
-    description: 'Failure behavior when the connector call cannot complete.',
+    label: message(
+      'shared.studio.nodeConfigFields.onError.label',
+      'On error',
+    ),
+    description: message(
+      'shared.studio.nodeConfigFields.onError.description',
+      'Failure behavior when the connector call cannot complete.',
+    ),
     enumValues: ['fail', 'continue'],
     type: 'string',
     default: 'fail',
@@ -119,15 +183,66 @@ const CONNECTOR_CALL_FIELDS: readonly NodeConfigFieldSource[] = [
 const LLM_CALL_FIELDS: readonly NodeConfigFieldSource[] = [
   {
     name: PROMPT_PREFIX_PARAMETER,
-    label: 'Prompt instruction',
-    description: 'Instruction added before each workflow run input reaches the LLM.',
-    placeholder: 'e.g. Translate the user input to Japanese',
+    label: PROMPT_INSTRUCTION_LABEL,
+    description: PROMPT_INSTRUCTION_DESCRIPTION,
+    placeholder: PROMPT_INSTRUCTION_PLACEHOLDER,
     type: 'string',
   },
 ];
 
+const FALLBACK_VALUE_PLACEHOLDER = message(
+  'shared.studio.nodeConfigFields.value.placeholder',
+  'Value',
+);
+
+const INFERRED_ARRAY_DESCRIPTION = message(
+  'shared.studio.nodeConfigFields.inferred.array.description',
+  'Array value edited as JSON.',
+);
+
+const INFERRED_OBJECT_DESCRIPTION = message(
+  'shared.studio.nodeConfigFields.inferred.object.description',
+  'Object value edited as JSON.',
+);
+
+const INFERRED_BOOLEAN_DESCRIPTION = message(
+  'shared.studio.nodeConfigFields.inferred.boolean.description',
+  'Boolean value.',
+);
+
+const INFERRED_NUMBER_DESCRIPTION = message(
+  'shared.studio.nodeConfigFields.inferred.number.description',
+  'Numeric value.',
+);
+
+const INFERRED_STRING_DESCRIPTION = message(
+  'shared.studio.nodeConfigFields.inferred.string.description',
+  'String value.',
+);
+
 function normalizeString(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function normalizeCopyText(value: NodeConfigFieldCopy | null | undefined): string {
+  if (!value) {
+    return '';
+  }
+
+  return typeof value === 'string'
+    ? normalizeString(value)
+    : normalizeString(value.defaultMessage);
+}
+
+function resolveFieldCopy(
+  value: NodeConfigFieldCopy | null | undefined,
+  fallback: NodeConfigFieldCopy,
+): NodeConfigFieldCopy {
+  return normalizeCopyText(value) ? value! : fallback;
+}
+
+export function formatNodeConfigFieldCopy(copy: NodeConfigFieldCopy): string {
+  return typeof copy === 'string' ? copy : formatConsoleMessage(copy);
 }
 
 function normalizeStepType(value: unknown): string {
@@ -247,24 +362,28 @@ function createField(
     name,
     label:
       isLLMPromptInstructionParameter(stepType, name)
-        ? 'Prompt instruction'
-        : normalizeString(normalizedSource.label) || formatLabel(name),
+        ? PROMPT_INSTRUCTION_LABEL
+        : resolveFieldCopy(normalizedSource.label, formatLabel(name)),
     description:
       isLLMPromptInstructionParameter(stepType, name)
-        ? 'Instruction added before each workflow run input reaches the LLM.'
-        : normalizeString(normalizedSource.description) ||
-          `Type: ${normalizeValueType(normalizedSource.type)}`,
+        ? PROMPT_INSTRUCTION_DESCRIPTION
+        : resolveFieldCopy(
+            normalizedSource.description,
+            `Type: ${normalizeValueType(normalizedSource.type)}`,
+          ),
     kind: inferFieldKind(value, {
       ...normalizedSource,
       enumValues: options.map((option) => option.value),
     }),
     placeholder:
       isLLMPromptInstructionParameter(stepType, name)
-        ? 'e.g. Translate the user input to Japanese'
-        : normalizeString(normalizedSource.placeholder) ||
-          normalizeString(normalizedSource.default) ||
-          normalizeValueType(normalizedSource.type) ||
-          'Value',
+        ? PROMPT_INSTRUCTION_PLACEHOLDER
+        : resolveFieldCopy(
+            normalizedSource.placeholder,
+            normalizeString(normalizedSource.default) ||
+              normalizeValueType(normalizedSource.type) ||
+              FALLBACK_VALUE_PLACEHOLDER,
+          ),
     required: Boolean(normalizedSource.required),
     value: formatFieldValue(value),
     valueType: normalizeValueType(normalizedSource.type),
@@ -280,7 +399,7 @@ function createInferredFieldSource(
     return {
       name,
       label: formatLabel(name),
-      description: 'Array value edited as JSON.',
+      description: INFERRED_ARRAY_DESCRIPTION,
       kind: 'json',
       type: 'array',
     };
@@ -290,7 +409,7 @@ function createInferredFieldSource(
     return {
       name,
       label: formatLabel(name),
-      description: 'Object value edited as JSON.',
+      description: INFERRED_OBJECT_DESCRIPTION,
       kind: 'json',
       type: 'object',
     };
@@ -300,7 +419,7 @@ function createInferredFieldSource(
     return {
       name,
       label: formatLabel(name),
-      description: 'Boolean value.',
+      description: INFERRED_BOOLEAN_DESCRIPTION,
       enumValues: ['true', 'false'],
       type: 'boolean',
     };
@@ -310,7 +429,7 @@ function createInferredFieldSource(
     return {
       name,
       label: formatLabel(name),
-      description: 'Numeric value.',
+      description: INFERRED_NUMBER_DESCRIPTION,
       type: 'number',
     };
   }
@@ -318,7 +437,7 @@ function createInferredFieldSource(
   return {
     name,
     label: formatLabel(name),
-    description: 'String value.',
+    description: INFERRED_STRING_DESCRIPTION,
     type: 'string',
   };
 }
@@ -362,7 +481,7 @@ function createConnectorOptions(
   connectors: readonly StudioConnectorDefinition[],
 ): NodeConfigFieldOption[] {
   return connectors
-    .map((connector) => {
+    .map((connector): NodeConfigFieldOption | null => {
       const name = normalizeString(connector.name);
       if (!name) {
         return null;
@@ -392,7 +511,9 @@ function withConnectorOptions(
           ...field,
           kind: 'select',
           options: connectorOptions,
-          placeholder: field.placeholder || 'Select connector',
+          placeholder: normalizeCopyText(field.placeholder)
+            ? field.placeholder
+            : CONNECTOR_CALL_FIELDS[0].placeholder!,
         }
       : field,
   );
