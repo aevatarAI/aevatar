@@ -72,6 +72,7 @@ message StartWorkflowEvent
   map<string, string> parameters = 3;
   string run_id = 4;
   WorkflowRunForkSeed fork_seed = 5;
+  WorkflowToolRuntimeContextPayload workflow_runtime = 6;
 }
 message BindWorkflowRunDefinitionEvent
 {
@@ -108,6 +109,8 @@ message WorkflowRunExecutionContextDelta
   bool clear_llm = 3;
   WorkflowCallerCredential caller_credential = 5;
   bool clear_caller_credential = 6;
+  WorkflowToolRuntimeContextPayload workflow_runtime = 7;
+  bool clear_workflow_runtime = 8;
 }
 message WorkflowRunLlmExecutionContextDelta
 {
@@ -280,6 +283,8 @@ message SubWorkflowInvokeRequestedEvent
   string input = 5;
   string lifecycle = 6;
   string requested_by_actor_id = 7;
+  string root_run_id = 8;
+  int32 requested_depth = 9;
 }
 message WorkflowDefinitionSnapshot
 {
@@ -336,6 +341,8 @@ message SubWorkflowDefinitionResolutionRegisteredEvent
   int32 timeout_callback_backend = 11;
   int32 timeout_ms = 12;
   int32 timeout_callback_slot_epoch = 13;
+  string root_run_id = 14;
+  int32 requested_depth = 15;
 }
 message SubWorkflowDefinitionResolutionClearedEvent
 {
@@ -365,6 +372,8 @@ message SubWorkflowInvocationRegisteredEvent
   string definition_yaml = 12;
   string scope_id = 13;
   map<string, string> inline_workflow_yamls = 14;
+  string root_run_id = 15;
+  int32 depth = 16;
 }
 message SubWorkflowInvocationHandoffAdvancedEvent
 {
@@ -482,6 +491,16 @@ message WorkflowLlmExecutionIntent
   WorkflowCallerCredential caller_credential = 12;
   string route_preference = 13;
   string sender_nyx_id_access_token = 14;
+  WorkflowToolRuntimeContextPayload workflow_runtime_context = 15;
+}
+
+message WorkflowToolRuntimeContextPayload
+{
+  string parent_actor_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string root_run_id = 4;
+  int32 depth = 5;
 }
 
 message WorkflowLlmInvocationStartedEvent
@@ -513,6 +532,17 @@ message WorkflowLlmInvocationCompletedEvent
   string reasoning_content = 7;
   string error = 8;
   WorkflowUsageMetrics usage = 9;
+  WorkflowManagedHandoffOutcome managed_handoff = 10;
+}
+
+message WorkflowManagedHandoffOutcome
+{
+  string parent_actor_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string invocation_id = 4;
+  string child_run_id = 5;
+  string stream_topic = 6;
 }
 
 message WorkflowToolCallStartedEvent
@@ -532,6 +562,7 @@ message WorkflowToolCallCompletedEvent
   bool success = 4;
   string result_json = 5;
   string error = 6;
+  WorkflowManagedHandoffOutcome managed_handoff = 7;
 }
 
 enum WorkflowLeaseConflictPolicy {

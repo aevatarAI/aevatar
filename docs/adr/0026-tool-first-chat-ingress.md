@@ -113,6 +113,14 @@ repository (no external repo changes — CLAUDE.md §"外部仓库无改动权")
 | `aevatar_start_workflow` | `workflow_id`, typed `inputs` | same | `stream` |
 | `aevatar_observe_run` | typed oneof target: `service_run`, `gagent_terminal_correlation`, `gagent_terminal_session`, or `workflow_current_state` | `{status, recent_events, partial_output}` | — |
 
+`aevatar_start_workflow` is still a top-level accepted-only ingress when
+called without workflow runtime context. When a workflow run calls it through
+`llm_call` or `tool_call`, the host stamps typed workflow runtime context on
+`AgentToolExecutionContext`; the dispatcher converts the call to a
+`SubWorkflowInvokeRequestedEvent` addressed to the parent run actor. Parent,
+root, depth, and fanout are not tool arguments and are rejected if supplied by
+the user or LLM.
+
 Payloads are typed proto, not free-form JSON. The dispatcher validates the
 proto schema before executing; a malformed call returns a structured error
 back to the LLM so it can self-correct rather than fail the turn.

@@ -216,6 +216,8 @@ roles:
 - `parent_step_id` 必须非空；缺失时直接失败，不再生成兜底 step token；
 - `WorkflowCallModule` 与 `WorkflowGAgent` 共用同一规则，避免双点实现漂移；
 - 子流程 run id 复用 invocation id，便于父子流程关联追踪。
+- 父子 run 的 root/depth/fanout 由父 `WorkflowRunGAgent` 持久态与 `SubWorkflowOrchestrator` 判定；`llm_call` / `tool_call` 只能透传 host stamped typed runtime context。
+- workflow 内调用 `aevatar_start_workflow` 时，如果工具上下文带有可信 workflow runtime context，dispatcher 必须发布 `SubWorkflowInvokeRequestedEvent` 给父 run actor，由父 actor 完成 admission、registration、start、completion 与 cleanup；公开 tool 参数不得暴露 parent/root/depth 字段。
 
 ### 从 Foundation Orchestration 迁移
 

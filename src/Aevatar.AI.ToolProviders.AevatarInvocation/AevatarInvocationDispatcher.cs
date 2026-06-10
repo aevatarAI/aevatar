@@ -12,7 +12,9 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -40,6 +42,27 @@ public sealed class AevatarInvocationDispatcher
         LLMRequestMetadataKeys.ConnectedServicesContext,
         "scope_id",
     ];
+
+    private static readonly string[] ForbiddenStartWorkflowRootFields =
+    [
+        "parent_actor_id",
+        "parent_run_id",
+        "parent_step_id",
+        "root_run_id",
+        "depth",
+        "requested_depth",
+        "workflow_runtime_context",
+        "workflow_call_context",
+    ];
+
+    private static readonly JsonFormatter ProtoJsonFormatter = new(
+        JsonFormatter.Settings.Default
+            .WithFormatDefaultValues(false)
+            .WithTypeRegistry(TypeRegistry.FromFiles(
+                AGUIEvent.Descriptor.File,
+                AnyReflection.Descriptor,
+                StructReflection.Descriptor,
+                WrappersReflection.Descriptor)));
 
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IGAgentActorRegistryQueryPort _actorRegistryQueryPort;
@@ -206,6 +229,13 @@ public sealed class AevatarInvocationDispatcher
         string argumentsJson,
         CancellationToken ct = default)
     {
+        var forbiddenField = ProtoToolArguments.RejectForbiddenRootFields(
+            argumentsJson,
+            ForbiddenStartWorkflowRootFields,
+            "trusted workflow runtime context");
+        if (forbiddenField != null)
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(forbiddenField), forbiddenField);
+
         var parsed = ProtoToolArguments.Parse<StartWorkflowToolRequest>(argumentsJson);
         if (parsed.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(parsed.Error), parsed.Error);
@@ -217,13 +247,6 @@ public sealed class AevatarInvocationDispatcher
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
-        var scope = ResolveCallerScope();
-        if (scope.Error != null)
-            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
-
-        // Refactor (iter1353/cluster-001): Old pattern: workflow dispatch stamped trusted caller/control facts into Metadata.
-        // New principle: Metadata carries only filtered payload headers; ScopeId, ToolContext, and LlmControl carry trusted facts.
-        var metadata = BuildPayloadHeaders(request.Inputs.Headers);
         var workflowYamls = request.WorkflowYamls.Count == 0
             ? null
             : request.WorkflowYamls
@@ -232,6 +255,28 @@ public sealed class AevatarInvocationDispatcher
                 .ToArray();
         var workflowName = request.WorkflowId.Trim();
         var actorId = string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim();
+        if (TryGetManagedWorkflowRuntimeContext(AgentToolRequestContext.Current, out var workflowRuntimeContext))
+        {
+            var managedScope = ResolveCallerScope(requireOwner: false);
+            if (managedScope.Error != null)
+                return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(managedScope.Error), managedScope.Error);
+
+            return await StartManagedSubWorkflowForChatRunAsync(
+                chatRunRequest,
+                request,
+                wait,
+                managedScope.Value!,
+                workflowRuntimeContext,
+                workflowName,
+                workflowYamls,
+                ct);
+        }
+
+        var scope = ResolveCallerScope();
+        if (scope.Error != null)
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
+
+        var metadata = BuildPayloadHeaders(request.Inputs.Headers);
         var source = workflowYamls is { Length: > 0 }
             ? WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId)
             : string.IsNullOrWhiteSpace(actorId)
@@ -268,6 +313,92 @@ public sealed class AevatarInvocationDispatcher
             CorrelationId = receipt.CorrelationId,
             Wait = wait,
         }, scope.Value!.ScopeId);
+    }
+
+    private async Task<ChatRunToolCompletionRequest> StartManagedSubWorkflowForChatRunAsync(
+        ChatRunToolCompletionRequest? chatRunRequest,
+        StartWorkflowToolRequest request,
+        InvocationWaitMode wait,
+        InvocationCallerScope scope,
+        AgentWorkflowRuntimeContext workflowRuntimeContext,
+        string workflowName,
+        IReadOnlyList<string>? workflowYamls,
+        CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(request.ActorId))
+        {
+            var actorIdError = Error(
+                "invalid_arguments",
+                "actor_id is not accepted when a workflow runtime context manages child workflow start.",
+                "actor_id");
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(actorIdError), actorIdError);
+        }
+
+        var parentActorId = workflowRuntimeContext.ParentActorId!.Trim();
+        var parentRunId = workflowRuntimeContext.ParentRunId!.Trim();
+        var parentStepId = workflowRuntimeContext.ParentStepId!.Trim();
+        var commandId = ResolveCommandId();
+        var invocationId = $"{parentRunId}:workflow_tool:{parentStepId}:{commandId}";
+        var managedStart = new SubWorkflowInvokeRequestedEvent
+        {
+            InvocationId = invocationId,
+            ParentRunId = parentRunId,
+            ParentStepId = parentStepId,
+            WorkflowName = workflowName,
+            Input = request.Inputs.Prompt ?? string.Empty,
+            Lifecycle = "transient",
+            RequestedByActorId = parentActorId,
+            RootRunId = string.IsNullOrWhiteSpace(workflowRuntimeContext.RootRunId)
+                ? parentRunId
+                : workflowRuntimeContext.RootRunId.Trim(),
+            RequestedDepth = Math.Max(0, workflowRuntimeContext.Depth) + 1,
+        };
+
+        if (workflowYamls is { Count: > 0 })
+        {
+            var yamlError = Error(
+                "invalid_arguments",
+                "workflow_yamls are not accepted inside a managed workflow runtime context; mount reusable workflows before starting a child run.",
+                "workflow_yamls");
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(yamlError), yamlError);
+        }
+
+        var envelope = new EventEnvelope
+        {
+            Id = commandId,
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(managedStart),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(parentActorId, TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = commandId,
+            },
+        };
+
+        try
+        {
+            await _actorDispatchPort.DispatchAsync(parentActorId, envelope, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var dispatchError = Error(
+                "dispatch_failed",
+                $"Workflow child start failed: {ex.Message}");
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(dispatchError), dispatchError);
+        }
+
+        return ToChatRunRequest(chatRunRequest, new InvocationToolResult
+        {
+            RunId = invocationId,
+            Status = "accepted",
+            StreamTopic = wait == InvocationWaitMode.Stream
+                ? AevatarInvocationStreamTopics.ForActorRun(parentActorId, invocationId)
+                : string.Empty,
+            ActorId = parentActorId,
+            CommandId = commandId,
+            CorrelationId = commandId,
+            Wait = wait,
+        }, scope.ScopeId);
     }
 
     public async Task<string> ObserveRunAsync(string argumentsJson, CancellationToken ct = default)
@@ -756,7 +887,8 @@ public sealed class AevatarInvocationDispatcher
             Prompt = payload.Prompt,
             SessionId = commandId,
             ScopeId = scope.ScopeId,
-            ToolContext = ToPayload(AgentToolRequestContext.Current),
+            ToolContext = AgentToolExecutionContextMapper.ToPayload(
+                AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty),
             LlmControl = ToLlmControlPayload(AgentToolRequestContext.Current),
         };
         AppendMetadata(request.Headers, headers);
@@ -799,60 +931,6 @@ public sealed class AevatarInvocationDispatcher
         }
     }
 
-    private static AgentToolExecutionContextPayload ToPayload(AgentToolExecutionContext? context)
-    {
-        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
-        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
-        context ??= AgentToolExecutionContext.Empty;
-        var payload = new AgentToolExecutionContextPayload
-        {
-            Request = new AgentToolRequestIdentityPayload
-            {
-                RequestId = context.Request.RequestId ?? string.Empty,
-                CallId = context.Request.CallId ?? string.Empty,
-            },
-            Credentials = new AgentToolCredentialsPayload
-            {
-                NyxIdAccessToken = context.Credentials.NyxIdAccessToken ?? string.Empty,
-                NyxIdOrgToken = context.Credentials.NyxIdOrgToken ?? string.Empty,
-                SenderNyxIdAccessToken = context.Credentials.SenderNyxIdAccessToken ?? string.Empty,
-            },
-            Caller = new AgentToolCallerContextPayload
-            {
-                ScopeId = context.Caller.ScopeId ?? string.Empty,
-                OwnerSubject = context.Caller.OwnerSubject ?? string.Empty,
-                ResponseId = context.Caller.ResponseId ?? string.Empty,
-            },
-            Channel = new AgentToolChannelContextPayload
-            {
-                Platform = context.Channel.Platform ?? string.Empty,
-                SenderId = context.Channel.SenderId ?? string.Empty,
-                RegistrationScopeId = context.Channel.RegistrationScopeId ?? string.Empty,
-                MessageId = context.Channel.MessageId ?? string.Empty,
-                PlatformMessageId = context.Channel.PlatformMessageId ?? string.Empty,
-            },
-            SenderBinding = new AgentToolSenderBindingContextPayload
-            {
-                BindingId = context.SenderBinding.BindingId ?? string.Empty,
-            },
-            Routing = new LLMRequestRoutingContextPayload
-            {
-                ModelOverride = context.Routing.ModelOverride ?? string.Empty,
-                NyxIdRoutePreference = context.Routing.NyxIdRoutePreference ?? string.Empty,
-                UserMemoryPrompt = context.Routing.UserMemoryPrompt ?? string.Empty,
-            },
-            ConnectedServices = new AgentToolConnectedServicesContextPayload
-            {
-                ContextJson = context.ConnectedServices.ContextJson ?? string.Empty,
-            },
-        };
-        if (context.Routing.MaxToolRoundsOverride.HasValue)
-            payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;
-        foreach (var (key, value) in context.ExternalMetadata)
-            payload.ExternalMetadata[key] = value;
-        return payload;
-    }
-
     private static LLMControlContextPayload ToLlmControlPayload(AgentToolExecutionContext? context)
     {
         // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
@@ -881,7 +959,16 @@ public sealed class AevatarInvocationDispatcher
         return new WorkflowLlmControl(
             context.Routing.ModelOverride,
             context.Routing.MaxToolRoundsOverride,
-            context.Routing.UserMemoryPrompt);
+            context.Routing.UserMemoryPrompt,
+            context.Routing.NyxIdRoutePreference);
+    }
+
+    private static bool TryGetManagedWorkflowRuntimeContext(
+        AgentToolExecutionContext? context,
+        out AgentWorkflowRuntimeContext workflowRuntimeContext)
+    {
+        workflowRuntimeContext = context?.WorkflowRuntime ?? AgentWorkflowRuntimeContext.Empty;
+        return workflowRuntimeContext.HasManagedParent;
     }
 
     private CallerScopeResolution ResolveCallerScope(bool requireOwner = true)
@@ -956,11 +1043,11 @@ public sealed class AevatarInvocationDispatcher
         {
             Kind = part.Kind switch
             {
-                InvocationContentPartKind.Text => WorkflowChatInputPartKind.Text,
-                InvocationContentPartKind.Image => WorkflowChatInputPartKind.Image,
-                InvocationContentPartKind.Audio => WorkflowChatInputPartKind.Audio,
-                InvocationContentPartKind.Video => WorkflowChatInputPartKind.Video,
-                _ => WorkflowChatInputPartKind.Unspecified,
+                InvocationContentPartKind.Text => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Text,
+                InvocationContentPartKind.Image => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image,
+                InvocationContentPartKind.Audio => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Audio,
+                InvocationContentPartKind.Video => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Video,
+                _ => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Unspecified,
             },
             Text = EmptyToNull(part.Text),
             DataBase64 = EmptyToNull(part.DataBase64),
