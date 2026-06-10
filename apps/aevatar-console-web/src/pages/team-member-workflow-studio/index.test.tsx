@@ -1164,6 +1164,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
       screen.getByRole("button", { name: "Delete connection" }),
     ).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Delete connection" }));
+    expect(screen.queryByRole("button", {
+      name: "edge:edge:triage:publish:linear",
+    })).toBeNull();
+    expect(screen.getByText("nodes:2")).toBeTruthy();
+    expect(screen.queryByTestId("workflow-node-inspector")).toBeNull();
+    expect(screen.getByRole("button", { name: "Delete node" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
