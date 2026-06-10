@@ -23,6 +23,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         };
         evt.Parameters["k"] = "v";
         evt.ForkSeed.Variables["step-a"] = "alpha";
+        evt.InputFileRefs.Add(BuildWorkflowFileRef("file-1"));
 
         var clone = evt.Clone();
         clone.Should().BeEquivalentTo(evt);
@@ -35,6 +36,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsed.ForkSeed.StartAtStepId.Should().Be("step-b");
         parsed.ForkSeed.Attempt.Should().Be(2);
         parsed.ForkSeed.Variables["step-a"].Should().Be("alpha");
+        parsed.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-1");
     }
 
     [Fact]
@@ -65,6 +67,106 @@ public class WorkflowAbstractionsProtoCoverageTests
     }
 
     [Fact]
+    public void WorkflowChatInputPartPayload_ShouldRoundtripTypedFileRef()
+    {
+        WorkflowChatInputPartPayload.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 7 && field.Name == "file_ref");
+
+        var part = new WorkflowChatInputPartPayload
+        {
+            Kind = WorkflowChatInputPartKind.Image,
+            MediaType = "image/png",
+            Name = "invoice.png",
+            FileRef = new WorkflowFileRef
+            {
+                FileId = "file-1",
+                ArtifactId = "artifact-1",
+                SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+                SourceMessageId = "om_1",
+                SourceResourceKey = "image_key_1",
+                FileName = "invoice.png",
+                MediaType = "image/png",
+                Sha256 = "abc",
+                CreatedAtUnixMs = 1710000000000,
+                ExpiresAtUnixMs = 1710003600000,
+            },
+        };
+
+        var parsed = WorkflowChatInputPartPayload.Parser.ParseFrom(part.ToByteArray());
+
+        parsed.FileRef.FileId.Should().Be("file-1");
+        parsed.FileRef.ArtifactId.Should().Be("artifact-1");
+        parsed.FileRef.SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
+        parsed.FileRef.SourceMessageId.Should().Be("om_1");
+        parsed.FileRef.SourceResourceKey.Should().Be("image_key_1");
+        parsed.FileRef.FileName.Should().Be("invoice.png");
+        parsed.FileRef.MediaType.Should().Be("image/png");
+        parsed.FileRef.Sha256.Should().Be("abc");
+        parsed.FileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        parsed.FileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .Should().Contain(nameof(WorkflowFileRef));
+    }
+
+    [Fact]
+    public void WorkflowChatRequestEvent_ShouldRoundtripExternalIngress()
+    {
+        WorkflowChatRequestEvent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 12 && field.Name == "external_ingress");
+
+        var request = new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "session-1",
+            ExternalIngress = new WorkflowExternalIngressContext
+            {
+                RouteKey = "invoice",
+                SourceId = "lark",
+                DeliveryId = "delivery-1",
+                ReceivedAtUnixMs = 1710000000000,
+                ContentType = "application/json",
+                PayloadFingerprint = "abc",
+                AuthScheme = "hmac-sha256",
+                PrincipalSubject = "lark",
+            },
+        };
+
+        var parsed = WorkflowChatRequestEvent.Parser.ParseFrom(request.ToByteArray());
+
+        parsed.ExternalIngress.RouteKey.Should().Be("invoice");
+        parsed.ExternalIngress.SourceId.Should().Be("lark");
+        parsed.ExternalIngress.DeliveryId.Should().Be("delivery-1");
+        parsed.ExternalIngress.ReceivedAtUnixMs.Should().Be(1710000000000);
+        parsed.ExternalIngress.ContentType.Should().Be("application/json");
+        parsed.ExternalIngress.PayloadFingerprint.Should().Be("abc");
+        parsed.ExternalIngress.AuthScheme.Should().Be("hmac-sha256");
+        parsed.ExternalIngress.PrincipalSubject.Should().Be("lark");
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .Should().Contain(nameof(WorkflowExternalIngressContext));
+    }
+
+    [Fact]
+    public void WorkflowWebhookReplayRecord_ShouldRoundtrip()
+    {
+        var record = new WorkflowWebhookReplayRecord
+        {
+            RouteKey = "invoice",
+            SourceId = "lark",
+            DeliveryId = "delivery-1",
+            PayloadFingerprint = "abc",
+            ReceivedAtUnixMs = 1710000000000,
+            CommandId = "cmd-1",
+            CorrelationId = "corr-1",
+        };
+
+        var parsed = WorkflowWebhookReplayRecord.Parser.ParseFrom(record.ToByteArray());
+
+        parsed.Should().BeEquivalentTo(record);
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .Should().Contain(nameof(WorkflowWebhookReplayRecord));
+    }
+
+    [Fact]
     public void WorkflowCompletedEvent_ShouldMergeAndCompare()
     {
         var source = new WorkflowCompletedEvent
@@ -92,6 +194,7 @@ public class WorkflowAbstractionsProtoCoverageTests
             Input = "hello",
             TargetRole = "assistant",
         };
+        request.InputFileRefs.Add(BuildWorkflowFileRef("file-step"));
         request.Parameters["temperature"] = "0.1";
         request.StepParameters.InteractionSpec = new InteractionSpec
         {
@@ -124,6 +227,7 @@ public class WorkflowAbstractionsProtoCoverageTests
 
         var parsedRequest = StepRequestEvent.Parser.ParseFrom(request.ToByteArray());
         parsedRequest.StepType.Should().Be("llm_call");
+        parsedRequest.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-step");
         parsedRequest.Parameters["temperature"].Should().Be("0.1");
         parsedRequest.StepParameters.Parameters["temperature"].Should().Be("0.1");
         parsedRequest.StepParameters.InteractionSpec.Title.Should().Be("Review");
@@ -146,8 +250,12 @@ public class WorkflowAbstractionsProtoCoverageTests
             .Should().Contain(field => field.FieldNumber == 8 && field.Name == "step_parameters");
         WorkflowStepParameters.Descriptor.Fields.InDeclarationOrder()
             .Should().Contain(field => field.FieldNumber == 6 && field.Name == "delivery_target_id");
+        WorkflowStepParameters.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 7 && field.Name == "transform_operation");
         StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
             .Should().NotContain(field => field.FieldNumber == 5);
+        StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 9 && field.Name == "input_file_refs");
 
         var request = new StepRequestEvent
         {
@@ -157,6 +265,11 @@ public class WorkflowAbstractionsProtoCoverageTests
         };
         request.StepParameters.Parameters["op"] = "trim";
         request.StepParameters.DeliveryTargetId = "agent-typed";
+        request.StepParameters.TransformOperation = new TransformOperationSpec
+        {
+            Kind = TransformOperationKind.Round,
+            Precision = 2,
+        };
         request.Parameters["target"] = "result";
         request.StepParameters.InteractionSpec = new InteractionSpec { Body = "Continue?" };
 
@@ -164,9 +277,50 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsed.StepParameters.Parameters.Should().Contain(new KeyValuePair<string, string>("op", "trim"));
         parsed.Parameters.Should().Contain(new KeyValuePair<string, string>("target", "result"));
         parsed.StepParameters.DeliveryTargetId.Should().Be("agent-typed");
+        parsed.StepParameters.TransformOperation.Kind.Should().Be(TransformOperationKind.Round);
+        parsed.StepParameters.TransformOperation.Precision.Should().Be(2);
         parsed.StepParameters.InteractionSpec.Body.Should().Be("Continue?");
         parsed.ToString().Should().Contain("stepParameters");
         ((IMessage)parsed.StepParameters).Descriptor.Name.Should().Be(nameof(WorkflowStepParameters));
+    }
+
+    [Fact]
+    public void WorkflowRunExecutionStartedEvent_ShouldRoundtripInputFileRefs()
+    {
+        WorkflowRunExecutionStartedEvent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 8 && field.Name == "input_file_refs");
+
+        var evt = new WorkflowRunExecutionStartedEvent
+        {
+            RunId = "run-1",
+            WorkflowName = "wf",
+            Input = "hello",
+        };
+        evt.InputFileRefs.Add(BuildWorkflowFileRef("file-started"));
+
+        var parsed = WorkflowRunExecutionStartedEvent.Parser.ParseFrom(evt.ToByteArray());
+
+        parsed.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-started");
+    }
+
+    [Fact]
+    public void WorkflowLlmExecutionIntent_ShouldRoundtripInputFileRefs()
+    {
+        WorkflowLlmExecutionIntent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 16 && field.Name == "input_file_refs");
+
+        var intent = new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-1",
+            StepId = "step-1",
+            SessionId = "session-1",
+            Prompt = "hello",
+        };
+        intent.InputFileRefs.Add(BuildWorkflowFileRef("file-llm"));
+
+        var parsed = WorkflowLlmExecutionIntent.Parser.ParseFrom(intent.ToByteArray());
+
+        parsed.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-llm");
     }
 
     [Fact]
@@ -430,4 +584,20 @@ public class WorkflowAbstractionsProtoCoverageTests
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SecureValueCapturedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationCompletedEvent));
     }
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = "image_key_1",
+            FileName = $"{fileId}.png",
+            MediaType = "image/png",
+            SizeBytes = 3,
+            Sha256 = $"sha-{fileId}",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+        };
 }

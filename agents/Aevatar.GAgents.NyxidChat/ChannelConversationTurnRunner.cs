@@ -586,7 +586,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         if (activity.Type != ActivityType.CardAction)
             return null;
-        if (!TryResolveLlmSelectionAction(activity.Content?.CardAction, inbound, out var action, out var value))
+        if (!TryResolveLlmSelectionAction(activity.Content?.CardAction, inbound, out var llmAction))
             return null;
 
         MessageContent reply;
@@ -627,8 +627,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     registration.ScopeId ?? string.Empty);
 
                 reply = await ExecuteLlmSelectionCardActionAsync(
-                        action,
-                        value,
+                        llmAction,
                         selectionContext,
                         query,
                         selectionService,
@@ -650,8 +649,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     }
 
     private async Task<MessageContent> ExecuteLlmSelectionCardActionAsync(
-        string action,
-        string value,
+        ResolvedLlmSelectionAction action,
         UserLlmSelectionContext selectionContext,
         UserLlmOptionsQuery query,
         IUserLlmSelectionService selectionService,
@@ -661,31 +659,37 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         try
         {
-            if (string.Equals(action, TextUserLlmOptionsRenderer.SelectServiceAction, StringComparison.Ordinal))
+            if (string.Equals(action.Action, TextUserLlmOptionsRenderer.SelectServiceAction, StringComparison.Ordinal))
             {
-                if (string.IsNullOrWhiteSpace(value))
+                if (string.IsNullOrWhiteSpace(action.Value))
                     return new MessageContent { Text = "缺少要切换的 LLM service,请重新发送 /models。" };
 
-                await selectionService.SetByServiceAsync(selectionContext, value.Trim(), modelOverride: null, ct)
+                await selectionService.SetByServiceAsync(selectionContext, action.Value.Trim(), modelOverride: null, ct)
                     .ConfigureAwait(false);
                 var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
                 var picked = updated.Current ?? updated.Available.FirstOrDefault(option =>
-                    string.Equals(option.ServiceId, value.Trim(), StringComparison.OrdinalIgnoreCase));
+                    string.Equals(option.ServiceId, action.Value.Trim(), StringComparison.OrdinalIgnoreCase));
                 return picked is null
                     ? new MessageContent { Text = "已切换 LLM service。下一条消息会用新的设置回复。" }
                     : renderer.RenderSelectionConfirm(picked, picked.DefaultModel);
             }
 
-            if (string.Equals(action, TextUserLlmOptionsRenderer.ApplyPresetAction, StringComparison.Ordinal))
+            if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ApplyPresetAction, StringComparison.Ordinal))
             {
-                if (string.IsNullOrWhiteSpace(value))
+                if (string.IsNullOrWhiteSpace(action.Value))
                     return new MessageContent { Text = "缺少要应用的 LLM preset,请重新发送 /models。" };
 
-                await selectionService.ApplyPresetAsync(selectionContext, value.Trim(), ct).ConfigureAwait(false);
+                await selectionService.ApplyPresetAsync(selectionContext, action.Value.Trim(), ct).ConfigureAwait(false);
                 var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
                 return updated.Current is null
-                    ? new MessageContent { Text = $"已应用 preset **{value.Trim()}**。下一条消息会用新的 LLM 设置回复。" }
+                    ? new MessageContent { Text = $"已应用 preset **{action.Value.Trim()}**。下一条消息会用新的 LLM 设置回复。" }
                     : renderer.RenderSelectionConfirm(updated.Current, updated.Current.DefaultModel);
+            }
+
+            if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ListPageAction, StringComparison.Ordinal))
+            {
+                var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
+                return renderer.RenderOptions(updated, action.DisplayMode, action.Page);
             }
 
             return new MessageContent { Text = "未识别的模型设置操作,请重新发送 /models。" };
@@ -750,35 +754,44 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static bool TryResolveLlmSelectionAction(
         CardActionSubmission? cardAction,
         InboundMessage inbound,
-        out string action,
-        out string value)
+        out ResolvedLlmSelectionAction action)
     {
-        action = string.Empty;
-        value = string.Empty;
+        action = ResolvedLlmSelectionAction.Empty;
         if (cardAction is null)
             return false;
 
         var payload = cardAction.LlmSelection;
         if (payload is not null && !string.IsNullOrWhiteSpace(payload.Action))
         {
-            action = payload.Action.Trim();
-            value = action switch
+            var resolvedAction = payload.Action.Trim();
+            var value = resolvedAction switch
             {
-                TextUserLlmOptionsRenderer.SelectServiceAction => payload.ServiceId?.Trim() ?? string.Empty,
-                TextUserLlmOptionsRenderer.ApplyPresetAction => payload.PresetId?.Trim() ?? string.Empty,
+                TextUserLlmOptionsRenderer.SelectServiceAction => !string.IsNullOrWhiteSpace(payload.ServiceId)
+                    ? payload.ServiceId.Trim()
+                    : ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.ServiceIdArgument),
+                TextUserLlmOptionsRenderer.ApplyPresetAction => !string.IsNullOrWhiteSpace(payload.PresetId)
+                    ? payload.PresetId.Trim()
+                    : ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.PresetIdArgument),
                 _ => string.Empty,
             };
+            action = new ResolvedLlmSelectionAction(
+                resolvedAction,
+                value,
+                payload.Page <= 0 ? 1 : payload.Page,
+                ResolveDisplayMode(payload.DisplayMode));
             return true;
         }
 
+        string actionName;
         if (!inbound.Extra.TryGetValue(TextUserLlmOptionsRenderer.LlmActionArgument, out var actionValue) ||
             string.IsNullOrWhiteSpace(actionValue))
         {
             // Deprecated inbound compatibility only. New producers must use LlmSelectionActionPayload.
-            action = cardAction.ActionId switch
+            actionName = cardAction.ActionId switch
             {
                 TextUserLlmOptionsRenderer.SelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
                 TextUserLlmOptionsRenderer.ApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
+                TextUserLlmOptionsRenderer.ListPageActionId => TextUserLlmOptionsRenderer.ListPageAction,
                 TextUserLlmOptionsRenderer.LegacySelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
                 TextUserLlmOptionsRenderer.LegacyApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
                 _ => string.Empty,
@@ -786,20 +799,27 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
         else
         {
-            action = actionValue;
+            actionName = actionValue;
         }
 
-        action = action.Trim();
-        value = action switch
+        actionName = actionName.Trim();
+        var resolvedValue = actionName switch
         {
             TextUserLlmOptionsRenderer.SelectServiceAction =>
                 ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.ServiceIdArgument),
             TextUserLlmOptionsRenderer.ApplyPresetAction =>
                 ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.PresetIdArgument),
+            TextUserLlmOptionsRenderer.ListPageAction =>
+                ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.PageArgument),
             _ => string.Empty,
         };
 
-        return !string.IsNullOrWhiteSpace(action);
+        action = new ResolvedLlmSelectionAction(
+            actionName,
+            resolvedValue,
+            ResolvePage(resolvedValue),
+            ResolveDisplayMode(ResolveCardActionValue(inbound, cardAction, "display_mode")));
+        return !string.IsNullOrWhiteSpace(actionName);
     }
 
     private static string ResolveCardActionValue(
@@ -813,7 +833,40 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return argumentValue.Trim();
         }
 
+        if (cardAction.Arguments.TryGetValue(argumentName, out var cardArgumentValue) &&
+            !string.IsNullOrWhiteSpace(cardArgumentValue))
+        {
+            return cardArgumentValue.Trim();
+        }
+
+        if (cardAction.FormFields.TryGetValue(argumentName, out var formFieldValue) &&
+            !string.IsNullOrWhiteSpace(formFieldValue))
+        {
+            return formFieldValue.Trim();
+        }
+
         return cardAction.SubmittedValue?.Trim() ?? string.Empty;
+    }
+
+    private static int ResolvePage(string? value) =>
+        int.TryParse(value?.Trim(), out var page) && page > 0 ? page : 1;
+
+    private static UserLlmSelectionDisplayMode ResolveDisplayMode(string? value) =>
+        string.Equals(value?.Trim(), "route", StringComparison.OrdinalIgnoreCase)
+            ? UserLlmSelectionDisplayMode.Route
+            : UserLlmSelectionDisplayMode.Model;
+
+    private readonly record struct ResolvedLlmSelectionAction(
+        string Action,
+        string Value,
+        int Page,
+        UserLlmSelectionDisplayMode DisplayMode)
+    {
+        public static readonly ResolvedLlmSelectionAction Empty = new(
+            string.Empty,
+            string.Empty,
+            1,
+            UserLlmSelectionDisplayMode.Model);
     }
 
     public async Task<ConversationTurnResult> RunLlmReplyAsync(

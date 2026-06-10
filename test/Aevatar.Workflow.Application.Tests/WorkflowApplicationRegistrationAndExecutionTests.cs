@@ -550,6 +550,19 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     Uri = "https://example.com/cat.png",
                     MediaType = "image/png",
                     Name = "cat",
+                    FileRef = new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef
+                    {
+                        FileId = "file-1",
+                        ArtifactId = "artifact-1",
+                        SourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource,
+                        SourceMessageId = "om_1",
+                        SourceResourceKey = "image_key_1",
+                        FileName = "cat.png",
+                        MediaType = "image/png",
+                        Sha256 = "abc",
+                        CreatedAtUnixMs = 1710000000000,
+                        ExpiresAtUnixMs = 1710003600000,
+                    },
                 },
             ],
             ScopeId: "scope-7");
@@ -569,6 +582,16 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.InputParts[1].Uri.Should().Be("https://example.com/cat.png");
         request.InputParts[1].MediaType.Should().Be("image/png");
         request.InputParts[1].Name.Should().Be("cat");
+        request.InputParts[1].FileRef.FileId.Should().Be("file-1");
+        request.InputParts[1].FileRef.ArtifactId.Should().Be("artifact-1");
+        request.InputParts[1].FileRef.SourceKind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource);
+        request.InputParts[1].FileRef.SourceMessageId.Should().Be("om_1");
+        request.InputParts[1].FileRef.SourceResourceKey.Should().Be("image_key_1");
+        request.InputParts[1].FileRef.FileName.Should().Be("cat.png");
+        request.InputParts[1].FileRef.MediaType.Should().Be("image/png");
+        request.InputParts[1].FileRef.Sha256.Should().Be("abc");
+        request.InputParts[1].FileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        request.InputParts[1].FileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
     }
 
     [Fact]

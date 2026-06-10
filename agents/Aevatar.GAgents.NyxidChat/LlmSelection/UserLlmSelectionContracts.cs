@@ -19,6 +19,12 @@ public interface IUserLlmOptionsService
     Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct);
 }
 
+public enum UserLlmSelectionDisplayMode
+{
+    Model = 0,
+    Route = 1,
+}
+
 public interface IUserLlmSelectionService
 {
     Task SetByServiceAsync(
@@ -61,7 +67,9 @@ public interface INyxIdLlmServiceCatalogClient
 
 public interface IUserLlmOptionsRenderer<TChannelMessage>
 {
-    TChannelMessage RenderOptions(UserLlmOptionsView view);
+    TChannelMessage RenderCurrent(UserLlmOptionsView view, UserLlmSelectionDisplayMode mode);
+
+    TChannelMessage RenderOptions(UserLlmOptionsView view, UserLlmSelectionDisplayMode mode, int page = 1);
 
     TChannelMessage RenderSelectionConfirm(UserLlmOption picked, string? model);
 

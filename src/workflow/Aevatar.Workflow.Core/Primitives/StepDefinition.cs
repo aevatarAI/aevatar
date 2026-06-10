@@ -26,6 +26,11 @@ public sealed class StepDefinition
     public Dictionary<string, string> Parameters { get; init; } = [];
 
     /// <summary>
+    /// Typed deterministic transform operation for bounded numeric and grouping transforms.
+    /// </summary>
+    public TransformOperationSpec? TransformOperation { get; init; }
+
+    /// <summary>
     /// Presentation contract rendered outside the workflow core boundary.
     /// </summary>
     public StepPresentation? Presentation { get; init; }

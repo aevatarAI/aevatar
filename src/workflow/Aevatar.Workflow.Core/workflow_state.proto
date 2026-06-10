@@ -294,6 +294,8 @@ message WorkflowExecutionKernelState
   string current_step_timeout_callback_id = 10;
   map<string, string> execution_ids_by_step_id = 11;
   WorkflowUsageMetricsState usage = 12;
+  repeated WorkflowFileRef input_file_refs = 13;
+  repeated WorkflowFileRef current_step_input_file_refs = 14;
 }
 
 message WorkflowUsageMetricsState

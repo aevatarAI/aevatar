@@ -212,6 +212,12 @@ message LlmSelectionActionPayload {
   string service_id = 2;
   // The target preset identifier when applying a preset.
   string preset_id = 3;
+  // The target model name when applying a model override.
+  string model = 4;
+  // The requested list page when navigating compact LLM option cards.
+  int32 page = 5;
+  // The display mode that produced the card, such as route or model.
+  string display_mode = 6;
 }
 
 // Declares one interactive card element.

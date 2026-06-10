@@ -104,6 +104,12 @@ public sealed class NyxIdRelayAttachmentPayload
     [JsonPropertyName("filename")]
     public string? Filename { get; set; }
 
+    [JsonPropertyName("file_name")]
+    public string? FileName { get; set; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
     [JsonPropertyName("mime_type")]
     public string? MimeType { get; set; }
 

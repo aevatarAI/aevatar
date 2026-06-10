@@ -113,6 +113,13 @@ public sealed class AgentBuilderTool : IAgentTool
         }
 
         var action = args.Str("action", "list_agents");
+        _logger?.LogInformation(
+            "AgentBuilder caller scope resolved: action={Action} platform={Platform} nyxUser={NyxUserId} scope={RegistrationScopeId} sender={SenderId}",
+            action,
+            caller.Platform,
+            caller.NyxUserId,
+            caller.RegistrationScopeId,
+            caller.SenderId);
         return action switch
         {
             "list_agents" => await ListAgentsAsync(_queryPort, _executionQueryPort, caller, ct),

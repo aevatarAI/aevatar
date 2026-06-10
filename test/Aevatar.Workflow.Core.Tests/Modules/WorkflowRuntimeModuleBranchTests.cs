@@ -501,6 +501,27 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldCopyStepInputFileRefsToExecutionIntent()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+        var request = new StepRequestEvent
+        {
+            StepId = "llm-files",
+            StepType = "llm_call",
+            RunId = "run-llm-files",
+            Input = "describe this",
+            TargetRole = "reviewer",
+        };
+        request.InputFileRefs.Add(BuildWorkflowFileRef("file-intent"));
+
+        await module.HandleAsync(Wrap(request), ctx, CancellationToken.None);
+
+        var intent = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+        intent.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-intent");
+    }
+
+    [Fact]
     public async Task EvaluateModule_ShouldPublishDispatchFailure_WhenRoleSendFails()
     {
         var module = new EvaluateModule();
@@ -1027,6 +1048,22 @@ public sealed class WorkflowRuntimeModuleBranchTests
             .Concat(ctx.Sent.Select(x => x.Event))
             .OfType<WorkflowLlmExecutionIntent>()
             .Single();
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = "image_key_1",
+            FileName = $"{fileId}.png",
+            MediaType = "image/png",
+            SizeBytes = 3,
+            Sha256 = $"sha-{fileId}",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+        };
 
     private static EnvelopeCallbackContext MetadataFor(
         RecordedCallback callback,

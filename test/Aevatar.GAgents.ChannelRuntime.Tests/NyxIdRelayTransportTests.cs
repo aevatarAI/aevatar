@@ -204,18 +204,18 @@ public sealed class NyxIdRelayTransportTests
         var body = """
             {
               "message_id": "msg-image-1",
-              "platform": "slack",
+              "platform": "telegram",
               "agent": { "api_key_id": "api-key-1" },
-              "conversation": { "id": "conv-1", "platform_id": "room-1", "type": "group" },
-              "sender": { "platform_id": "user-1", "display_name": "User One" },
+              "conversation": { "id": "conv-1", "platform_id": "123", "type": "private" },
+              "sender": { "platform_id": "456", "display_name": "User One" },
               "content": {
                 "type": "image",
                 "text": "   ",
                 "attachments": [
                   {
                     "content_type": "image",
-                    "url": "https://files.example.test/image-1.png",
-                    "filename": "image-1.png",
+                    "url": "telegram-file-id-1",
+                    "filename": "photo.png",
                     "mime_type": "image/png",
                     "size_bytes": 12345
                   }
@@ -231,14 +231,50 @@ public sealed class NyxIdRelayTransportTests
         parsed.Activity!.Type.Should().Be(ActivityType.Message);
         parsed.Activity.Content.Text.Should().BeEmpty();
         parsed.Activity.Content.Attachments.Should().ContainSingle();
-        var attachment = parsed.Activity.Content.Attachments[0];
+        var attachment = parsed.Activity.Content.Attachments.Single();
         attachment.Kind.Should().Be(AttachmentKind.Image);
-        attachment.Name.Should().Be("image-1.png");
+        attachment.Name.Should().Be("photo.png");
         attachment.ContentType.Should().Be("image/png");
         attachment.SizeBytes.Should().Be(12345);
-        attachment.ExternalUrl.Should().Be("https://files.example.test/image-1.png");
+        attachment.ExternalUrl.Should().BeEmpty();
         attachment.BlobRef.Should().BeEmpty();
-        attachment.AttachmentId.Should().StartWith("slack:msg-image-1:image:");
+        attachment.AttachmentId.Should().StartWith("telegram:msg-image-1:image:");
+    }
+
+    [Fact]
+    public void Parse_ShouldKeepRelayAttachmentUrl_WhenItIsExternalHttpUrl()
+    {
+        var body = """
+            {
+              "message_id": "msg-file-url-1",
+              "platform": "slack",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "C123", "type": "channel" },
+              "sender": { "platform_id": "U456", "display_name": "User One" },
+              "content": {
+                "type": "file",
+                "attachments": [
+                  {
+                    "content_type": "file",
+                    "url": "https://files.example.test/report.pdf",
+                    "file_name": "report.pdf",
+                    "mime_type": "application/pdf"
+                  }
+                ]
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().StartWith("slack:msg-file-url-1:file:");
+        attachment.Kind.Should().Be(AttachmentKind.File);
+        attachment.Name.Should().Be("report.pdf");
+        attachment.ExternalUrl.Should().Be("https://files.example.test/report.pdf");
+        attachment.BlobRef.Should().BeEmpty();
     }
 
     [Fact]
@@ -249,17 +285,22 @@ public sealed class NyxIdRelayTransportTests
               "message_id": "msg-lark-image-1",
               "platform": "lark",
               "agent": { "api_key_id": "api-key-1" },
-              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "private" },
+              "conversation": { "id": "route-uuid", "type": "private" },
               "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
-              "content": { "type": "image", "text": "   " },
+              "content": { "type": "image" },
               "raw_platform_data": {
                 "event": {
+                  "sender": {
+                    "sender_id": {
+                      "union_id": "on_user_1"
+                    }
+                  },
                   "message": {
-                    "message_id": "om_lark_image_1",
+                    "message_id": "om_image_1",
                     "chat_id": "oc_group_1",
                     "chat_type": "group",
                     "message_type": "image",
-                    "content": "{\"image_key\":\"img_v3_abc123\"}"
+                    "content": "{\"image_key\":\"img_v3_abc\",\"file_name\":\"photo.png\",\"file_size\":42}"
                   }
                 }
               }
@@ -270,14 +311,17 @@ public sealed class NyxIdRelayTransportTests
 
         parsed.Success.Should().BeTrue();
         parsed.Activity!.Conversation.Scope.Should().Be(ConversationScope.Group);
+        parsed.Activity.Conversation.CanonicalKey.Should().Be("lark:group:oc_group_1");
         parsed.Activity.Content.Text.Should().BeEmpty();
         parsed.Activity.Content.Attachments.Should().ContainSingle();
-        var attachment = parsed.Activity.Content.Attachments[0];
+        var attachment = parsed.Activity.Content.Attachments.Single();
         attachment.Kind.Should().Be(AttachmentKind.Image);
+        attachment.Name.Should().Be("photo.png");
         attachment.ContentType.Should().Be("image");
-        attachment.BlobRef.Should().Be("lark:image_key:img_v3_abc123");
+        attachment.SizeBytes.Should().Be(42);
+        attachment.BlobRef.Should().Be("lark:image_key:img_v3_abc");
         attachment.ExternalUrl.Should().BeEmpty();
-        attachment.AttachmentId.Should().StartWith("lark:om_lark_image_1:image:");
+        attachment.AttachmentId.Should().StartWith("lark:om_image_1:image:");
     }
 
     [Fact]
@@ -286,23 +330,23 @@ public sealed class NyxIdRelayTransportTests
         var body = """
             {
               "message_id": "msg-lark-file-1",
-              "platform": "lark",
+              "platform": "feishu",
               "agent": { "api_key_id": "api-key-1" },
-              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "private" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
               "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
-              "content": { "type": "file", "text": "" },
+              "content": { "type": "file", "text": "   " },
               "raw_platform_data": {
                 "event": {
                   "message": {
-                    "message_id": "om_lark_file_1",
+                    "message_id": "om_file_1",
                     "chat_id": "oc_group_1",
                     "chat_type": "group",
                     "message_type": "file",
                     "content": {
-                      "file_key": "file_v3_abc123",
+                      "file_key": "file_v3_abc",
                       "file_name": "report.pdf",
                       "mime_type": "application/pdf",
-                      "size": 4096
+                      "file_size": "2048"
                     }
                   }
                 }
@@ -313,14 +357,43 @@ public sealed class NyxIdRelayTransportTests
         var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
 
         parsed.Success.Should().BeTrue();
-        parsed.Activity!.Content.Attachments.Should().ContainSingle();
-        var attachment = parsed.Activity.Content.Attachments[0];
+        parsed.Activity!.Content.Text.Should().BeEmpty();
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().StartWith("feishu:om_file_1:file:");
         attachment.Kind.Should().Be(AttachmentKind.File);
         attachment.Name.Should().Be("report.pdf");
         attachment.ContentType.Should().Be("application/pdf");
-        attachment.SizeBytes.Should().Be(4096);
-        attachment.BlobRef.Should().Be("lark:file_key:file_v3_abc123");
+        attachment.SizeBytes.Should().Be(2048);
+        attachment.BlobRef.Should().Be("lark:file_key:file_v3_abc");
         attachment.ExternalUrl.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Parse_ShouldIgnorePayload_WhenAttachmentIdentifiersAreMissing()
+    {
+        var body = """
+            {
+              "message_id": "msg-empty-attachment",
+              "platform": "telegram",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "123", "type": "private" },
+              "sender": { "platform_id": "456", "display_name": "User One" },
+              "content": {
+                "type": "image",
+                "text": "   ",
+                "attachments": [
+                  { "content_type": "image", "filename": "photo.png" }
+                ]
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeFalse();
+        parsed.Ignored.Should().BeTrue();
+        parsed.ErrorCode.Should().Be("empty_text");
     }
 
     [Fact]
@@ -667,6 +740,34 @@ public sealed class NyxIdRelayTransportTests
         cardAction.Arguments.Should().NotContainKey("preset_id");
         cardAction.LlmSelection.Action.Should().Be("apply_preset");
         cardAction.LlmSelection.PresetId.Should().Be("work-fast");
+    }
+
+    [Fact]
+    public void Parse_ShouldMapLlmSelectionPageFields_ToTypedPayload()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-page",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"action_id\":\"llp\",\"value\":\"2\",\"llm_action\":\"list_page\",\"page\":2,\"display_mode\":\"route\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var llmSelection = parsed.Activity!.Content.CardAction.LlmSelection;
+        llmSelection.Action.Should().Be("list_page");
+        llmSelection.Page.Should().Be(2);
+        llmSelection.DisplayMode.Should().Be("route");
+        parsed.Activity.Content.CardAction.Arguments.Should().NotContainKey("page");
+        parsed.Activity.Content.CardAction.Arguments.Should().NotContainKey("display_mode");
     }
 
     [Fact]

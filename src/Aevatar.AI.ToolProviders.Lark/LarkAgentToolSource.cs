@@ -60,6 +60,8 @@ public sealed class LarkAgentToolSource : IAgentToolSource
             tools.Add(new LarkSheetsAppendRowsTool(_client));
         if (_options.EnableApprovalsList)
             tools.Add(new LarkApprovalsListTool(_client));
+        if (_options.EnableApprovalsGet)
+            tools.Add(new LarkApprovalsGetTool(_client));
         if (_options.EnableApprovalsAct)
             tools.Add(new LarkApprovalsActTool(_client));
         if (_options.EnableDocxCreate)

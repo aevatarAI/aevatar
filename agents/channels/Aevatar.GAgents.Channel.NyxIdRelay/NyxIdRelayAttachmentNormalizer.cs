@@ -39,15 +39,19 @@ internal static class NyxIdRelayAttachmentNormalizer
                            ?? NormalizeOptional(payload.Content?.ContentType)
                            ?? NormalizeOptional(payload.Content?.Type)
                            ?? "file";
-            var kind = MapKind(category, source.MimeType, source.Filename);
+            var fileName = NormalizeOptional(source.Filename)
+                           ?? NormalizeOptional(source.FileName)
+                           ?? NormalizeOptional(source.Name)
+                           ?? string.Empty;
+            var kind = MapKind(category, source.MimeType, fileName);
             attachments.Add(new AttachmentRef
             {
                 AttachmentId = BuildAttachmentId(platform, platformMessageId, ToAttachmentIdKind(kind), locator),
                 Kind = kind,
-                Name = NormalizeOptional(source.Filename) ?? string.Empty,
+                Name = fileName,
                 ContentType = NormalizeOptional(source.MimeType) ?? category,
                 SizeBytes = source.SizeBytes.GetValueOrDefault() > 0 ? source.SizeBytes.GetValueOrDefault() : 0,
-                ExternalUrl = locator,
+                ExternalUrl = IsHttpUrl(locator) ? locator : string.Empty,
             });
         }
     }
@@ -80,8 +84,10 @@ internal static class NyxIdRelayAttachmentNormalizer
             {
                 AttachmentId = BuildAttachmentId(platform, platformMessageId, "image", imageKey),
                 Kind = AttachmentKind.Image,
+                Name = ReadFirstString(content, "file_name", "name"),
                 ContentType = "image",
                 BlobRef = $"lark:image_key:{imageKey}",
+                SizeBytes = ReadFirstInt64(content, "size", "file_size"),
             });
             return;
         }
@@ -98,7 +104,7 @@ internal static class NyxIdRelayAttachmentNormalizer
                     ? contentType
                     : MapLarkFileContentType(messageType),
                 BlobRef = $"lark:file_key:{fileKey}",
-                SizeBytes = ReadInt64Property(content, "size"),
+                SizeBytes = ReadFirstInt64(content, "size", "file_size"),
             });
         }
     }
@@ -201,6 +207,10 @@ internal static class NyxIdRelayAttachmentNormalizer
         string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsHttpUrl(string value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
     private static string ReadFirstString(JsonElement element, params string[] propertyNames)
     {
         foreach (var propertyName in propertyNames)
@@ -210,6 +220,18 @@ internal static class NyxIdRelayAttachmentNormalizer
         }
 
         return string.Empty;
+    }
+
+    private static long ReadFirstInt64(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            var value = ReadInt64Property(element, propertyName);
+            if (value > 0)
+                return value;
+        }
+
+        return 0;
     }
 
     private static string ReadStringProperty(JsonElement element, string propertyName) =>

@@ -257,7 +257,10 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
             TokenUrl: entry.TokenUrl,
             ClientId: entry.ClientId,
             ClientSecret: entry.ClientSecret,
-            Scope: entry.Scope);
+            Scope: entry.Scope,
+            SecretRef: entry.SecretRef,
+            HeaderName: entry.HeaderName,
+            HeaderValuePrefix: entry.HeaderValuePrefix);
 
     private static ConnectorDefinitionEntry ToProtoConnectorDefinition(StoredConnectorDefinition def)
     {
@@ -333,6 +336,9 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
             ClientId = config.ClientId,
             ClientSecret = config.ClientSecret,
             Scope = config.Scope,
+            SecretRef = config.SecretRef,
+            HeaderName = config.HeaderName,
+            HeaderValuePrefix = config.HeaderValuePrefix,
         };
 
     private static StoredHttpConnectorConfig EmptyHttpConfig() =>
@@ -348,5 +354,5 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
             EmptyAuthConfig(), string.Empty, [], []);
 
     private static StoredConnectorAuthConfig EmptyAuthConfig() =>
-        new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
+        new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
 }

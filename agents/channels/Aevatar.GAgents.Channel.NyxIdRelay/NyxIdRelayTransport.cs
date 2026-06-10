@@ -293,7 +293,10 @@ public sealed class NyxIdRelayTransport
                 submission.Arguments,
                 "llm_action",
                 "service_id",
-                "preset_id");
+                "preset_id",
+                "model",
+                "page",
+                "display_mode");
         }
     }
 
@@ -420,6 +423,32 @@ public sealed class NyxIdRelayTransport
         else if (payload.Action == "apply_preset" && !string.IsNullOrWhiteSpace(submission.SubmittedValue))
         {
             payload.PresetId = submission.SubmittedValue.Trim();
+        }
+
+        if (submission.Arguments.TryGetValue("model", out var model) &&
+            !string.IsNullOrWhiteSpace(model))
+        {
+            payload.Model = model.Trim();
+        }
+
+        if (submission.Arguments.TryGetValue("page", out var rawPage) &&
+            int.TryParse(rawPage, out var page) &&
+            page > 0)
+        {
+            payload.Page = page;
+        }
+        else if (payload.Action == "list_page" &&
+                 !string.IsNullOrWhiteSpace(submission.SubmittedValue) &&
+                 int.TryParse(submission.SubmittedValue, out var submittedPage) &&
+                 submittedPage > 0)
+        {
+            payload.Page = submittedPage;
+        }
+
+        if (submission.Arguments.TryGetValue("display_mode", out var displayMode) &&
+            !string.IsNullOrWhiteSpace(displayMode))
+        {
+            payload.DisplayMode = displayMode.Trim();
         }
 
         return true;

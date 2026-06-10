@@ -491,7 +491,7 @@ public record MessageContent(
 
 **核心原则**：`MessageContent` 描述 "要表达什么"，不描述 "长什么样"。`IMessageComposer` 把它翻译成 channel-native 的具体 payload。
 
-入站方向同样遵循引用语义：`AttachmentRef` 表示平台附件 locator，不表示附件内容本体。NyxID relay 的 image/file-only callback 在文本为空时仍是有效 `MessageContent`，由 `Attachments` 承载后续业务可见的 typed 引用。
+**NyxID relay inbound attachment rule**：入站方向同样遵循引用语义，`AttachmentRef` 表示平台附件 locator，不表示附件内容本体。`Channel.NyxIdRelay` 在进入 channel runtime 前把 NyxID callback `content.attachments` 以及 Lark / Feishu raw `event.message.content` 中的 `image_key` / `file_key` 归一到现有 `MessageContent.Attachments` / `AttachmentRef`。非 card 入站只要有 text 或至少一个有效 attachment ref 就是有效内容；空 text 且无 attachment ref 才按 `empty_text` 忽略。attachment ref 只携带 platform locator / key / filename / MIME / size / URL 等引用事实，不下载 bytes、不塞 base64、不新增第二套 attachment abstraction，也不要求 NyxID 仓库改 schema。
 
 **Card action typed payload rule**：workflow resume 与 LLM selection 是仓库内可控的控制语义，必须通过 `WorkflowResumeActionPayload` / `LlmSelectionActionPayload` 挂在 `ActionElement` 与 `CardActionSubmission` 上。`ActionElement.arguments` / `CardActionSubmission.Arguments` 只作为第三方或平台扩展 map，以及旧 callback JSON 的入站兼容边界；进入 `ChannelConversationTurnRunner`、`ChannelCardActionRouting` 或 LLM selection handoff 后，不得把这些字段当成权威事实源。
 

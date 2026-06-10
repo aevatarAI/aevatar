@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Projection.ReadModels;
+using Aevatar.Workflow.Abstractions;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
@@ -192,6 +193,21 @@ public sealed partial class WorkflowExecutionCurrentStateDocument : IProjectionR
     {
         get => ForkSeedCompletedStepIdEntries;
         set => WorkflowExecutionReadModelCollections.ReplaceCollection(ForkSeedCompletedStepIdEntries, value);
+    }
+
+    public IList<WorkflowExecutionInputFileRefReadModel> InputFileRefs
+    {
+        get => InputFileRefEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(InputFileRefEntries, value);
+    }
+}
+
+public sealed partial class WorkflowExecutionInputFileRefReadModel
+{
+    public WorkflowFileSourceKind SourceKind
+    {
+        get => (WorkflowFileSourceKind)SourceKindValue;
+        set => SourceKindValue = (int)value;
     }
 }
 
