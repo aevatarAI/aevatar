@@ -300,7 +300,9 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
                 descriptor.SizeBytes,
                 descriptor.Sha256,
                 descriptor.CreatedAtUnixMs,
-                descriptor.ExpiresAtUnixMs);
+                descriptor.ExpiresAtUnixMs,
+                descriptor.OwnerRunId,
+                descriptor.OwnerScopeId);
 
         private static WorkflowToolExecutionResult Error(string error, string detail) =>
             WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
@@ -355,7 +357,9 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
         long SizeBytes,
         string? Sha256,
         long CreatedAtUnixMs,
-        long ExpiresAtUnixMs);
+        long ExpiresAtUnixMs,
+        string? OwnerRunId,
+        string? OwnerScopeId);
 
     private sealed record DocumentExtractError(string Error, string Detail);
 }

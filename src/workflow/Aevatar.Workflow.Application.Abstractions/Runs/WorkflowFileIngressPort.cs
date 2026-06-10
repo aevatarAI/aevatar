@@ -7,7 +7,9 @@ public sealed record WorkflowFileIngressRequest(
     string? SourceResourceKey = null,
     string? FileName = null,
     string? MediaType = null,
-    long? ExpiresAtUnixMs = null);
+    long? ExpiresAtUnixMs = null,
+    string? OwnerRunId = null,
+    string? OwnerScopeId = null);
 
 public sealed record WorkflowFileIngressResult(WorkflowFileRef FileRef);
 
@@ -28,5 +30,14 @@ public interface IWorkflowFileArtifactReadPort
 
     ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
         WorkflowFileRef fileRef,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IWorkflowFileArtifactOwnershipPort
+{
+    ValueTask BindOwnerAsync(
+        WorkflowFileRef fileRef,
+        string ownerRunId,
+        string? ownerScopeId,
         CancellationToken cancellationToken = default);
 }

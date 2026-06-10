@@ -33,6 +33,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
         services.TryAddSingleton<IWorkflowFileArtifactReadPort>(sp =>
             sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
+        services.TryAddSingleton<IWorkflowFileArtifactOwnershipPort>(sp =>
+            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowDocumentExtractToolSource>());
         services.TryAddSingleton<WorkflowRunActorPort>();
         services.TryAddSingleton<IWorkflowDefinitionProvisioningPort>(sp =>

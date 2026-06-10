@@ -70,6 +70,66 @@ public sealed class NyxIdApiClientProxyBinaryTests
     }
 
     [Fact]
+    public async Task ProxyRequestMultipartAsync_ShouldShapeMultipartProxyRequest()
+    {
+        var handler = new CapturingHandler("""{ "ok": true }""");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example/" },
+            new HttpClient(handler));
+        var fileBytes = Encoding.UTF8.GetBytes("hello lark upload");
+        await using var stream = new MemoryStream(fileBytes);
+
+        var response = await client.ProxyRequestMultipartAsync(
+            token: "access-token",
+            slug: "api-lark-bot",
+            path: "/open-apis/drive/v1/medias/upload_all",
+            method: "post",
+            formFields: new Dictionary<string, string>
+            {
+                ["file_name"] = "report.txt",
+                ["parent_type"] = "doc_file",
+                ["parent_node"] = "doccn_123",
+                ["size"] = fileBytes.Length.ToString(),
+                ["checksum"] = "sha256-value",
+                ["extra"] = """{"source":"workflow"}""",
+            },
+            fileFieldName: "file",
+            fileName: "report.txt",
+            fileContentType: "text/plain",
+            fileContent: stream,
+            extraHeaders: null,
+            ct: CancellationToken.None);
+
+        response.Should().Contain("ok");
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Post);
+        request.Uri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/api-lark-bot/open-apis/drive/v1/medias/upload_all");
+        request.Authorization.Should().Be(new AuthenticationHeaderValue("Bearer", "access-token"));
+        request.ContentType.Should().Be("multipart/form-data");
+        request.ContentTypeHeader.Should().StartWith("multipart/form-data; boundary=");
+        request.Headers.Should().ContainKey("User-Agent");
+        request.Headers["User-Agent"].Should().Equal(NyxIdApiClient.DefaultProxyUserAgent);
+
+        var body = Encoding.UTF8.GetString(request.Body);
+        body.Should().Contain("""name=file_name""");
+        body.Should().Contain("report.txt");
+        body.Should().Contain("""name=parent_type""");
+        body.Should().Contain("doc_file");
+        body.Should().Contain("""name=parent_node""");
+        body.Should().Contain("doccn_123");
+        body.Should().Contain("""name=size""");
+        body.Should().Contain(fileBytes.Length.ToString());
+        body.Should().Contain("""name=checksum""");
+        body.Should().Contain("sha256-value");
+        body.Should().Contain("""name=extra""");
+        body.Should().Contain("""{"source":"workflow"}""");
+        body.Should().Contain("""name=file; filename=report.txt""");
+        body.Should().Contain("Content-Type: text/plain");
+        body.Should().Contain("hello lark upload");
+    }
+
+    [Fact]
     public async Task ProxyGetBinaryResponseAsync_ShouldPreserveDownloadedBytesAndHeaders()
     {
         var body = new byte[] { 0, 1, 2, 255 };
@@ -190,6 +250,7 @@ public sealed class NyxIdApiClientProxyBinaryTests
                 request.RequestUri,
                 request.Headers.Authorization,
                 request.Content?.Headers.ContentType?.MediaType,
+                request.Content?.Headers.ContentType?.ToString(),
                 request.Content == null
                     ? []
                     : await request.Content.ReadAsByteArrayAsync(cancellationToken),
@@ -216,6 +277,7 @@ public sealed class NyxIdApiClientProxyBinaryTests
         Uri? Uri,
         AuthenticationHeaderValue? Authorization,
         string? ContentType,
+        string? ContentTypeHeader,
         byte[] Body,
         IReadOnlyDictionary<string, string[]> Headers);
 }

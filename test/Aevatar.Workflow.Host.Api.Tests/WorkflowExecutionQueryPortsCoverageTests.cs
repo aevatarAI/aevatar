@@ -64,6 +64,8 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                     Sha256 = "sha-file-1",
                     CreatedAtUnixMs = 1710000000000,
                     ExpiresAtUnixMs = 1710003600000,
+                    OwnerRunId = "run-owner",
+                    OwnerScopeId = "scope-owner",
                 },
             },
         });
@@ -78,6 +80,8 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         fileRef.MediaType.Should().Be("application/pdf");
         fileRef.SizeBytes.Should().Be(2048);
         fileRef.Sha256.Should().Be("sha-file-1");
+        fileRef.OwnerRunId.Should().Be("run-owner");
+        fileRef.OwnerScopeId.Should().Be("scope-owner");
         fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
         fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
         WorkflowRunFileRef.Descriptor.Fields.InDeclarationOrder()

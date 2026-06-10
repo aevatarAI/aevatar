@@ -6,7 +6,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.Lark.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Aevatar.AI.ToolProviders.Lark.Tests;
@@ -1950,6 +1953,390 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkNyxClient_DriveMediaUpload_UsesFixedMultipartProxyShape()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"file_token":"file_123"}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+        await using var content = new MemoryStream(Encoding.UTF8.GetBytes("upload bytes"));
+
+        await client.UploadDriveMediaAsync(
+            "token-123",
+            new LarkDriveMediaUploadRequest(
+                "report.txt",
+                "doc_file",
+                "doccn_123",
+                12,
+                "text/plain",
+                content,
+                "checksum-1",
+                """{"source":"workflow"}"""),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/drive/v1/medias/upload_all");
+        handler.LastRequest.Headers.Authorization!.Parameter.Should().Be("token-123");
+        handler.LastRequest.Content!.Headers.ContentType!.MediaType.Should().Be("multipart/form-data");
+        handler.LastRequest.Content.Headers.ContentType!.ToString().Should().Contain("boundary=");
+        handler.LastBody.Should().Contain("""name=file_name""");
+        handler.LastBody.Should().Contain("report.txt");
+        handler.LastBody.Should().Contain("""name=parent_type""");
+        handler.LastBody.Should().Contain("doc_file");
+        handler.LastBody.Should().Contain("""name=parent_node""");
+        handler.LastBody.Should().Contain("doccn_123");
+        handler.LastBody.Should().Contain("""name=size""");
+        handler.LastBody.Should().Contain("12");
+        handler.LastBody.Should().Contain("""name=checksum""");
+        handler.LastBody.Should().Contain("checksum-1");
+        handler.LastBody.Should().Contain("""name=extra""");
+        handler.LastBody.Should().Contain("""{"source":"workflow"}""");
+        handler.LastBody.Should().Contain("""name=file; filename=report.txt""");
+        handler.LastBody.Should().Contain("Content-Type: text/plain");
+        handler.LastBody.Should().Contain("upload bytes");
+    }
+
+    [Fact]
+    public async Task WorkflowFileSubmit_MissingBearer_ShouldFailWithoutOpeningArtifact()
+    {
+        var port = new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: 5));
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(BuildFileRef(sizeBytes: 5)),
+            bearerToken: null));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("missing_bearer");
+        port.OpenCount.Should().Be(0);
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false, "api-lark-bot")]
+    [InlineData(true, " ")]
+    public async Task WorkflowFileSubmitSource_ShouldReturnEmpty_WhenDisabledOrProviderSlugMissing(
+        bool enabled,
+        string providerSlug)
+    {
+        var source = CreateWorkflowFileSubmitSource(
+            new LarkToolOptions
+            {
+                EnableWorkflowFileSubmit = enabled,
+                ProviderSlug = providerSlug,
+            },
+            new StubLarkNyxClient(),
+            new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: 5)));
+
+        var tools = await source.GetToolsAsync();
+
+        tools.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("bad-target", "doc_file", "doccn_123", "invalid_target")]
+    [InlineData("lark_drive_media", "folder", "doccn_123", "unsupported_parent_type")]
+    [InlineData("lark_drive_media", "doc_file", " ", "missing_parent_node")]
+    public async Task WorkflowFileSubmit_InvalidTargetParentTypeOrParentNode_ShouldFailBeforeProviderCall(
+        string target,
+        string parentType,
+        string parentNode,
+        string expectedError)
+    {
+        var port = new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: 5));
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(
+                BuildFileRef(sizeBytes: 5),
+                target: target,
+                parentType: parentType,
+                parentNode: parentNode),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
+        result.ResultJson.Should().NotContain(parentType);
+        result.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        port.OpenCount.Should().Be(0);
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowFileSubmit_MissingFileRef_ShouldFailBeforeProviderCall()
+    {
+        var port = new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: 5));
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(BuildFileRef(fileId: "", artifactId: "", sizeBytes: 5)),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_file_ref");
+        port.OpenCount.Should().Be(0);
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(null, "scope-1")]
+    [InlineData("run-other", "scope-1")]
+    [InlineData("run-1", "scope-other")]
+    public async Task WorkflowFileSubmit_InvalidFileScope_ShouldFailBeforeProviderCall(
+        string? ownerRunId,
+        string? ownerScopeId)
+    {
+        var fileRef = BuildFileRef(sizeBytes: 5, ownerRunId: ownerRunId, ownerScopeId: ownerScopeId);
+        var port = new RecordingWorkflowFileArtifactReadPort(fileRef);
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(fileRef),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_file_scope");
+        port.OpenCount.Should().Be(0);
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowFileSubmit_ArtifactUnavailable_ShouldMapToArtifactUnavailable()
+    {
+        var port = new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: 5))
+        {
+            OpenException = new FileNotFoundException("missing"),
+        };
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(BuildFileRef(sizeBytes: 5)),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("artifact_unavailable");
+        port.OpenCount.Should().Be(1);
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowFileSubmit_ArtifactInvalidOperation_ShouldNotEchoStorageDetail()
+    {
+        var port = new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: 5))
+        {
+            OpenException = new InvalidOperationException("""{"body":"bad upstream","data_base64":"AAAA"}"""),
+        };
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(BuildFileRef(sizeBytes: 5)),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("artifact_unavailable");
+        document.RootElement.GetProperty("detail").GetString().Should().Be("Workflow file artifact content could not be read.");
+        result.ResultJson.Should().NotContain("bad upstream");
+        result.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        port.OpenCount.Should().Be(1);
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(20 * 1024 * 1024 + 1)]
+    public async Task WorkflowFileSubmit_InvalidOrOversizeDescriptor_ShouldFailBeforeProviderCall(long sizeBytes)
+    {
+        var port = new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: sizeBytes));
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(BuildFileRef(sizeBytes: sizeBytes)),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be(sizeBytes <= 0 ? "invalid_file_size" : "file_too_large");
+        port.OpenCount.Should().Be(0);
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowFileSubmit_ArtifactSizeMismatch_ShouldFailBeforeProviderCall()
+    {
+        var requested = BuildFileRef(sizeBytes: 5);
+        var port = new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: 6), Encoding.UTF8.GetBytes("123456"));
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(requested),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("artifact_size_mismatch");
+        port.OpenCount.Should().Be(0);
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowFileSubmit_UnsupportedMediaType_ShouldFailAfterDescriptorReadBeforeOpeningArtifact()
+    {
+        var requested = BuildFileRef(mediaType: "text/plain", sizeBytes: 5);
+        var descriptor = BuildFileRef(mediaType: "application/x-msdownload", sizeBytes: 5);
+        var port = new RecordingWorkflowFileArtifactReadPort(descriptor);
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(requested),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("unsupported_media_type");
+        result.ResultJson.Should().NotContain(descriptor.MediaType);
+        result.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        port.OpenCount.Should().Be(0);
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowFileSubmit_OwnerlessDescriptor_ShouldFailBeforeOpeningArtifact()
+    {
+        var requested = BuildFileRef(sizeBytes: 5, ownerRunId: "run-1", ownerScopeId: "scope-1");
+        var descriptor = BuildFileRef(sizeBytes: 5, ownerRunId: null, ownerScopeId: null);
+        var port = new RecordingWorkflowFileArtifactReadPort(descriptor);
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(requested),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_file_scope");
+        port.OpenCount.Should().Be(0);
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowFileSubmit_Success_ShouldReturnTypedTokenFactsOnly()
+    {
+        var fileRef = BuildFileRef(fileName: "descriptor.txt", mediaType: "text/plain", sizeBytes: 12);
+        var port = new RecordingWorkflowFileArtifactReadPort(fileRef, Encoding.UTF8.GetBytes("upload bytes"));
+        var client = new StubLarkNyxClient
+        {
+            DriveMediaUploadResponse = """{"code":0,"msg":"ok","data":{"file_token":"file_123"}}""",
+        };
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(
+                fileRef,
+                fileName: "argument.txt",
+                checksum: "checksum-1",
+                extra: """{"source":"workflow"}"""),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("provider").GetString().Should().Be("lark");
+        root.GetProperty("target").GetString().Should().Be("lark_drive_media");
+        root.GetProperty("file_token").GetString().Should().Be("file_123");
+        root.GetProperty("parent_type").GetString().Should().Be("doc_file");
+        root.GetProperty("parent_node").GetString().Should().Be("doccn_123");
+        root.GetProperty("file_name").GetString().Should().Be("argument.txt");
+        root.GetProperty("size_bytes").GetInt64().Should().Be(12);
+        result.ResultJson.Should().NotContain("upload bytes");
+        result.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        result.ResultJson.Contains("data_base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        client.LastDriveMediaUploadToken.Should().Be("token-123");
+        client.LastDriveMediaUploadRequest.Should().NotBeNull();
+        client.LastDriveMediaUploadRequest!.ParentType.Should().Be("doc_file");
+        client.LastDriveMediaUploadRequest.ParentNode.Should().Be("doccn_123");
+        client.LastDriveMediaUploadRequest.FileName.Should().Be("argument.txt");
+        client.LastDriveMediaUploadRequest.Size.Should().Be(12);
+        client.LastDriveMediaUploadRequest.ContentType.Should().Be("text/plain");
+        client.LastDriveMediaUploadRequest.Checksum.Should().Be("checksum-1");
+        client.LastDriveMediaUploadRequest.Extra.Should().Be("""{"source":"workflow"}""");
+    }
+
+    [Theory]
+    [InlineData("""{"code":999,"msg":"denied"}""", "lark_error")]
+    [InlineData("""{"error":true,"status":502,"message":"gateway","body":"bad upstream"}""", "nyx_proxy_error")]
+    public async Task WorkflowFileSubmit_ProviderFailures_ShouldFailClosedWithoutEchoingBody(
+        string providerResponse,
+        string expectedError)
+    {
+        var fileRef = BuildFileRef(sizeBytes: 12);
+        var port = new RecordingWorkflowFileArtifactReadPort(fileRef, Encoding.UTF8.GetBytes("upload bytes"));
+        var client = new StubLarkNyxClient { DriveMediaUploadResponse = providerResponse };
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(fileRef),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
+        document.RootElement.GetProperty("detail").GetString().Should().NotContain("bad upstream");
+        document.RootElement.GetProperty("detail").GetString().Should().NotContain("denied");
+        document.RootElement.GetProperty("detail").GetString().Should().NotContain("gateway");
+        document.RootElement.TryGetProperty("msg", out _).Should().BeFalse();
+        document.RootElement.GetProperty("detail").GetString()!.Contains("base64", StringComparison.OrdinalIgnoreCase)
+            .Should().BeFalse();
+        document.RootElement.TryGetProperty("file_token", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WorkflowFileSubmit_ProviderException_ShouldFailClosedWithoutEchoingMessage()
+    {
+        var fileRef = BuildFileRef(sizeBytes: 12);
+        var port = new RecordingWorkflowFileArtifactReadPort(fileRef, Encoding.UTF8.GetBytes("upload bytes"));
+        var client = new StubLarkNyxClient
+        {
+            DriveMediaUploadException = new InvalidOperationException("""{"body":"bad upstream","data_base64":"AAAA"}"""),
+        };
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(fileRef),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("provider_call_failed");
+        document.RootElement.GetProperty("detail").GetString().Should().Be("Lark media upload request failed.");
+        result.ResultJson.Should().NotContain("bad upstream");
+        result.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        document.RootElement.TryGetProperty("file_token", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public void LarkNyxClient_NormalizeChatSearchQuery_ShouldKeepOriginalWhenUnquotingFails()
     {
         var method = typeof(LarkNyxClient).GetMethod(
@@ -1982,9 +2369,12 @@ public class LarkToolsTests
         public string DocxCreateResponse { get; set; } = """{"code":0,"data":{"document":{"document_id":"doccn_default","url":"https://example.feishu.cn/docx/doccn_default"}}}""";
         public string DocxAppendResponse { get; set; } = """{"code":0,"data":{}}""";
         public string DrivePermissionResponse { get; set; } = """{"code":0,"data":{}}""";
+        public string DriveMediaUploadResponse { get; set; } = """{"code":0,"data":{"file_token":"file_default"}}""";
+        public Exception? DriveMediaUploadException { get; set; }
 
         public string? LastSendToken { get; private set; }
         public string? LastDocxCreateToken { get; private set; }
+        public string? LastDriveMediaUploadToken { get; private set; }
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
         public LarkReplyMessageRequest? LastReplyRequest { get; private set; }
         public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
@@ -2001,6 +2391,7 @@ public class LarkToolsTests
         public LarkDocxCreateRequest? LastDocxCreateRequest { get; private set; }
         public LarkDocxAppendBlocksRequest? LastDocxAppendRequest { get; private set; }
         public LarkDrivePermissionRequest? LastDrivePermissionRequest { get; private set; }
+        public LarkDriveMediaUploadRequest? LastDriveMediaUploadRequest { get; private set; }
 
         public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct)
         {
@@ -2101,6 +2492,144 @@ public class LarkToolsTests
         {
             LastDrivePermissionRequest = request;
             return Task.FromResult(DrivePermissionResponse);
+        }
+
+        public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)
+        {
+            LastDriveMediaUploadToken = token;
+            LastDriveMediaUploadRequest = request;
+            if (DriveMediaUploadException != null)
+                throw DriveMediaUploadException;
+            return Task.FromResult(DriveMediaUploadResponse);
+        }
+    }
+
+    private static async Task<IWorkflowTool> GetWorkflowFileSubmitToolAsync(
+        IWorkflowFileArtifactReadPort fileArtifacts,
+        ILarkNyxClient client)
+    {
+        var source = CreateWorkflowFileSubmitSource(
+            new LarkToolOptions { EnableWorkflowFileSubmit = true },
+            client,
+            fileArtifacts);
+        var tools = await source.GetToolsAsync();
+        return tools.Should().ContainSingle(x => x.Name == "workflow_file_submit").Subject;
+    }
+
+    private static LarkWorkflowFileSubmitToolSource CreateWorkflowFileSubmitSource(
+        LarkToolOptions options,
+        ILarkNyxClient client,
+        IWorkflowFileArtifactReadPort? fileArtifacts)
+    {
+        var services = new ServiceCollection();
+        if (fileArtifacts != null)
+            services.AddSingleton(fileArtifacts);
+        return new LarkWorkflowFileSubmitToolSource(options, client, services.BuildServiceProvider());
+    }
+
+    private static WorkflowToolExecutionRequest NewWorkflowToolRequest(string argumentsJson, string? bearerToken) =>
+        new(
+            ArgumentsJson: argumentsJson,
+            RunId: "run-1",
+            StepId: "step-1",
+            ExecutionId: "exec-1",
+            CallId: "call-1",
+            ScopeId: "scope-1",
+            CallerCredential: new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
+            {
+                BearerToken = bearerToken ?? string.Empty,
+            });
+
+    private static WorkflowFileRef BuildFileRef(
+        string fileId = "file-1",
+        string artifactId = "artifact-1",
+        string fileName = "report.txt",
+        string mediaType = "text/plain",
+        long sizeBytes = 12,
+        string? ownerRunId = "run-1",
+        string? ownerScopeId = "scope-1") =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = artifactId,
+            SourceKind = WorkflowFileSourceKind.ChatInput,
+            FileName = fileName,
+            MediaType = mediaType,
+            SizeBytes = sizeBytes,
+            Sha256 = "sha256-value",
+            CreatedAtUnixMs = 1,
+            ExpiresAtUnixMs = 2,
+            OwnerRunId = ownerRunId,
+            OwnerScopeId = ownerScopeId,
+        };
+
+    private static string BuildWorkflowFileSubmitArguments(
+        WorkflowFileRef fileRef,
+        string target = "lark_drive_media",
+        string parentType = "doc_file",
+        string parentNode = "doccn_123",
+        string? fileName = null,
+        string? checksum = null,
+        string? extra = null)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["target"] = target,
+            ["parent_type"] = parentType,
+            ["parent_node"] = parentNode,
+            ["file_ref"] = new Dictionary<string, object?>
+            {
+                ["file_id"] = fileRef.FileId,
+                ["artifact_id"] = fileRef.ArtifactId,
+                ["source_kind"] = fileRef.SourceKind.ToString(),
+                ["source_message_id"] = fileRef.SourceMessageId,
+                ["source_resource_key"] = fileRef.SourceResourceKey,
+                ["file_name"] = fileRef.FileName,
+                ["media_type"] = fileRef.MediaType,
+                ["size_bytes"] = fileRef.SizeBytes,
+                ["sha256"] = fileRef.Sha256,
+                ["created_at_unix_ms"] = fileRef.CreatedAtUnixMs,
+                ["expires_at_unix_ms"] = fileRef.ExpiresAtUnixMs,
+                ["owner_run_id"] = fileRef.OwnerRunId,
+                ["owner_scope_id"] = fileRef.OwnerScopeId,
+            },
+        };
+
+        if (fileName != null)
+            payload["file_name"] = fileName;
+        if (checksum != null)
+            payload["checksum"] = checksum;
+        if (extra != null)
+            payload["extra"] = extra;
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private sealed class RecordingWorkflowFileArtifactReadPort(
+        WorkflowFileRef descriptor,
+        byte[]? content = null) : IWorkflowFileArtifactReadPort
+    {
+        private readonly byte[] _content = content ?? Encoding.UTF8.GetBytes("upload bytes");
+
+        public Exception? OpenException { get; init; }
+        public int OpenCount { get; private set; }
+
+        public ValueTask<WorkflowFileRef> DescribeAsync(
+            WorkflowFileRef fileRef,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(descriptor);
+
+        public ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
+            WorkflowFileRef fileRef,
+            CancellationToken cancellationToken = default)
+        {
+            OpenCount++;
+            if (OpenException != null)
+                throw OpenException;
+
+            return ValueTask.FromResult(new WorkflowFileArtifactContent(
+                descriptor,
+                new MemoryStream(_content, writable: false)));
         }
     }
 

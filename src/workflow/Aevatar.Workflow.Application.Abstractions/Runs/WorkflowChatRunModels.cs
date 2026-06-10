@@ -35,6 +35,8 @@ public sealed record WorkflowFileRef
     public string? Sha256 { get; init; }
     public long CreatedAtUnixMs { get; init; }
     public long ExpiresAtUnixMs { get; init; }
+    public string? OwnerRunId { get; init; }
+    public string? OwnerScopeId { get; init; }
 }
 
 public sealed record WorkflowChatInputPart

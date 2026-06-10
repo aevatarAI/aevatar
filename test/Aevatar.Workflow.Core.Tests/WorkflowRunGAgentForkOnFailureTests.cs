@@ -89,9 +89,119 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             .BeEmpty();
     }
 
+    [Fact]
+    public async Task ChatRequest_WithInputFileRef_ShouldBindArtifactOwnerBeforeStartingWorkflow()
+    {
+        var runId = "run-1917-" + Guid.NewGuid().ToString("N");
+        var ownershipPort = new RecordingWorkflowFileArtifactOwnershipPort();
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false), ownershipPort);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            InputParts =
+            {
+                new WorkflowChatInputPartPayload
+                {
+                    Kind = WorkflowChatInputPartKind.Text,
+                    FileRef = new WorkflowFileRef
+                    {
+                        FileId = "wf-file-123",
+                        ArtifactId = "workflow-file://wf-file-123",
+                        SourceKind = WorkflowFileSourceKind.ChatInput,
+                        FileName = "invoice.txt",
+                        MediaType = "text/plain",
+                        SizeBytes = 7,
+                        Sha256 = "hash-1",
+                    },
+                },
+            },
+        }));
+
+        ownershipPort.Bindings.Should().ContainSingle().Which.Should().BeEquivalentTo(new FileOwnerBinding(
+            "wf-file-123",
+            "workflow-file://wf-file-123",
+            runId,
+            "scope-1"));
+        harness.Publisher.Published
+            .Where(x => x.Event is StepRequestEvent)
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task ChatRequest_WhenInputFileOwnerBindingFails_ShouldNotStartWorkflow()
+    {
+        var runId = "run-1917-" + Guid.NewGuid().ToString("N");
+        var ownershipPort = new RecordingWorkflowFileArtifactOwnershipPort
+        {
+            Exception = new InvalidOperationException("owner already bound"),
+        };
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false), ownershipPort);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            InputParts =
+            {
+                new WorkflowChatInputPartPayload
+                {
+                    Kind = WorkflowChatInputPartKind.Text,
+                    FileRef = new WorkflowFileRef
+                    {
+                        FileId = "wf-file-123",
+                        ArtifactId = "workflow-file://wf-file-123",
+                        SourceKind = WorkflowFileSourceKind.ChatInput,
+                        SizeBytes = 7,
+                    },
+                },
+            },
+        }));
+
+        harness.Publisher.Published
+            .Where(x => x.Event is StepRequestEvent)
+            .Should()
+            .BeEmpty();
+        harness.Publisher.Published
+            .Where(x => x.Event is WorkflowLlmInvocationCompletedEvent)
+            .Select(x => (WorkflowLlmInvocationCompletedEvent)x.Event)
+            .Should()
+            .ContainSingle()
+            .Which.Error.Should().Be("workflow_input_file_binding_failed");
+    }
+
     private static async Task<RunHarness> CreateStartedRunAsync(string workflowYaml, int attempt)
     {
         var runId = "run-1859-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, workflowYaml);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            ForkSeed = new WorkflowRunForkSeed
+            {
+                Attempt = attempt,
+            },
+        }));
+
+        var stepRequest = harness.Publisher.Published
+            .Where(x => x.Event is StepRequestEvent)
+            .Select(x => (StepRequestEvent)x.Event)
+            .Should()
+            .ContainSingle()
+            .Subject;
+
+        return harness with { StepExecutionId = stepRequest.ExecutionId };
+    }
+
+    private static async Task<RunHarness> CreateRunAsync(
+        string runId,
+        string workflowYaml,
+        RecordingWorkflowFileArtifactOwnershipPort? fileOwnershipPort = null)
+    {
         var eventStore = new RecordingEventStore();
         var committedHook = new RecordingCommittedStatePublicationHook();
         var topologyPublisher = new RecordingEventPublisher(runId);
@@ -99,7 +209,8 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             new UnsupportedActorRuntime(),
             new UnsupportedActorRuntime(),
             new EmptyEventModuleFactory(),
-            [new EmptyWorkflowModulePack()])
+            [new EmptyWorkflowModulePack()],
+            fileArtifactOwnership: fileOwnershipPort)
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkflowRunState>(eventStore),
             EventPublisher = topologyPublisher,
@@ -118,24 +229,8 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             RunId = runId,
             ScopeId = "scope-1",
         }));
-        await agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
-        {
-            Prompt = "hello",
-            ScopeId = "scope-1",
-            ForkSeed = new WorkflowRunForkSeed
-            {
-                Attempt = attempt,
-            },
-        }));
 
-        var stepRequest = topologyPublisher.Published
-            .Where(x => x.Event is StepRequestEvent)
-            .Select(x => (StepRequestEvent)x.Event)
-            .Should()
-            .ContainSingle()
-            .Subject;
-
-        return new RunHarness(agent, runId, stepRequest.ExecutionId, committedHook);
+        return new RunHarness(agent, runId, string.Empty, committedHook, topologyPublisher);
     }
 
     private static WorkflowRunForkRequestedEvent? TryUnpackForkRequest(CommittedStateEventPublished published)
@@ -195,7 +290,40 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         WorkflowRunGAgent Agent,
         string RunId,
         string StepExecutionId,
-        RecordingCommittedStatePublicationHook CommittedPublisher);
+        RecordingCommittedStatePublicationHook CommittedPublisher,
+        RecordingEventPublisher Publisher);
+
+    private sealed record FileOwnerBinding(
+        string? FileId,
+        string? ArtifactId,
+        string OwnerRunId,
+        string? OwnerScopeId);
+
+    private sealed class RecordingWorkflowFileArtifactOwnershipPort :
+        Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileArtifactOwnershipPort
+    {
+        public List<FileOwnerBinding> Bindings { get; } = [];
+
+        public Exception? Exception { get; init; }
+
+        public ValueTask BindOwnerAsync(
+            Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef fileRef,
+            string ownerRunId,
+            string? ownerScopeId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Exception != null)
+                throw Exception;
+
+            Bindings.Add(new FileOwnerBinding(
+                fileRef.FileId,
+                fileRef.ArtifactId,
+                ownerRunId,
+                ownerScopeId));
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private sealed class EmptyWorkflowModulePack : IWorkflowModulePack
     {
