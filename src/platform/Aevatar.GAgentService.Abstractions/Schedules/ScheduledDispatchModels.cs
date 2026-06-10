@@ -175,6 +175,11 @@ public interface IScheduledDispatchActorPort
         string reason,
         CancellationToken ct = default);
 
+    Task<DispatchAdmission> DispatchDeleteAsync(
+        string actorId,
+        string reason,
+        CancellationToken ct = default);
+
     Task<DispatchAdmission> DispatchRunNowAsync(
         string actorId,
         DateTimeOffset scheduledFireAt,
@@ -247,6 +252,11 @@ public interface IScheduledDispatchApplicationService
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> DisableAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchMutationReceipt> DeleteAsync(
         string scheduleId,
         string reason,
         CancellationToken ct = default);

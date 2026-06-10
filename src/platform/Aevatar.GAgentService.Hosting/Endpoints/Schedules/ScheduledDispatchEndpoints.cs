@@ -32,6 +32,11 @@ public static class ScheduledDispatchEndpoints
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
+        group.MapDelete("/schedules/{scheduleId}", Delete)
+            .WithTags("Schedules")
+            .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
         group.MapGet("/schedules", List)
             .WithTags("Schedules")
             .Produces<ScheduledDispatchListResult>(StatusCodes.Status200OK);
@@ -110,6 +115,23 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.DisableAsync(scheduleId, input?.Reason ?? string.Empty, ct);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
+        }
+        catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
+        {
+            return result;
+        }
+    }
+
+    internal static async Task<IResult> Delete(
+        string scheduleId,
+        ScheduledDispatchStateChangeHttpRequest? input,
+        [FromServices] IScheduledDispatchApplicationService schedules,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var receipt = await schedules.DeleteAsync(scheduleId, input?.Reason ?? string.Empty, ct);
             return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))

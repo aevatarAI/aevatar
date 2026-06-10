@@ -195,6 +195,30 @@ public sealed class ScheduleGAgentTests
     }
 
     [Fact]
+    public async Task HandleDeleteAsync_ShouldCancelExistingLeaseAndMarkScheduleDeleted()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand
+        {
+            Reason = "remove",
+        });
+
+        scheduler.Canceled.Should().ContainSingle();
+        scheduler.Canceled[0].Generation.Should().Be(1);
+        agent.State.Deleted.Should().BeTrue();
+        agent.State.Enabled.Should().BeFalse();
+        agent.State.NextFireAt.Should().BeNull();
+        agent.State.NextFireLease.Should().BeNull();
+        agent.State.DeletedAt.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task HandleConfigureAsync_WhenEnabledUpdatePersistsNextFire_ShouldCancelPreviousLeaseAfterNewLeaseIsDurable()
     {
         var eventStore = new TestEventStore();

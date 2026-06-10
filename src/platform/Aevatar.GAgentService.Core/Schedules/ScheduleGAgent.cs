@@ -58,6 +58,7 @@ public sealed class ScheduleGAgent : GAgentBase<ScheduledDispatchState>
             .On<ScheduledDispatchConfiguredEvent>(ApplyConfigured)
             .On<ScheduledDispatchEnabledEvent>(ApplyEnabled)
             .On<ScheduledDispatchDisabledEvent>(ApplyDisabled)
+            .On<ScheduledDispatchDeletedEvent>(ApplyDeleted)
             .On<ScheduledDispatchNextFireIntentRecordedEvent>(ApplyNextFireIntentRecorded)
             .On<ScheduledDispatchNextFireScheduledEvent>(ApplyNextFireScheduled)
             .On<ScheduledDispatchFireStartedEvent>(ApplyFireStarted)
@@ -112,6 +113,8 @@ public sealed class ScheduleGAgent : GAgentBase<ScheduledDispatchState>
         bool isCreate)
     {
         ArgumentNullException.ThrowIfNull(command);
+        if (State.Deleted)
+            throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is deleted.");
         if (isCreate && IsConfigured())
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' already exists.");
         if (!isCreate && !IsConfigured())
@@ -167,6 +170,19 @@ public sealed class ScheduleGAgent : GAgentBase<ScheduledDispatchState>
         {
             Reason = NormalizeOptional(command.Reason),
             DisabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleDeleteAsync(ScheduledDispatchDeleteCommand command)
+    {
+        EnsureConfiguredForWrite("delete");
+        var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+        await PersistDomainEventAsync(new ScheduledDispatchDeletedEvent
+        {
+            Reason = NormalizeOptional(command.Reason),
+            DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
         await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
     }
@@ -548,6 +564,7 @@ public sealed class ScheduleGAgent : GAgentBase<ScheduledDispatchState>
             : ScheduledDispatchTargetKindState.Envelope;
 
     private bool IsConfigured() =>
+        !State.Deleted &&
         !string.IsNullOrWhiteSpace(State.ScheduleId) &&
         !string.IsNullOrWhiteSpace(State.CronExpression) &&
         State.TriggerEnvelope?.Payload != null;
@@ -703,6 +720,20 @@ public sealed class ScheduleGAgent : GAgentBase<ScheduledDispatchState>
         next.PendingNextFireAt = null;
         next.PendingNextFireRequestedAt = null;
         next.UpdatedAt = evt.DisabledAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return next;
+    }
+
+    private ScheduledDispatchState ApplyDeleted(ScheduledDispatchState current, ScheduledDispatchDeletedEvent evt)
+    {
+        var next = ApplyDisabled(current, new ScheduledDispatchDisabledEvent
+        {
+            Reason = evt.Reason ?? string.Empty,
+            DisabledAt = evt.DeletedAt?.Clone(),
+        });
+        var deletedAt = evt.DeletedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        next.Deleted = true;
+        next.DeletedAt = deletedAt;
+        next.UpdatedAt = deletedAt;
         return next;
     }
 

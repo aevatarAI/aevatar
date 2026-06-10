@@ -35,6 +35,8 @@ message ScheduledDispatchState
   google.protobuf.Timestamp pending_next_fire_at = 24;
   google.protobuf.Timestamp pending_next_fire_requested_at = 25;
   ScheduledDispatchScheduleKindState schedule_kind = 26;
+  bool deleted = 27;
+  google.protobuf.Timestamp deleted_at_utc_value = 28;
 }
 
 enum ScheduledDispatchScheduleKindState
@@ -171,6 +173,17 @@ message ScheduledDispatchDisabledEvent
 {
   string reason = 1;
   google.protobuf.Timestamp disabled_at = 2;
+}
+
+message ScheduledDispatchDeleteCommand
+{
+  string reason = 1;
+}
+
+message ScheduledDispatchDeletedEvent
+{
+  string reason = 1;
+  google.protobuf.Timestamp deleted_at = 2;
 }
 
 message ScheduledDispatchNextFireIntentRecordedEvent

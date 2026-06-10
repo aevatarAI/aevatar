@@ -78,6 +78,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             ServiceId = serviceIdentity?.ServiceId ?? string.Empty,
             ServiceEndpointId = target.ServiceInvocation?.EndpointId ?? string.Empty,
             TargetActorId = state.TargetActorId ?? string.Empty,
+            Deleted = state.Deleted,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
         };
@@ -87,6 +88,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
         document.UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         document.NextFireAt = state.NextFireAt;
         document.LastFireAt = state.LastFireAt;
+        document.DeletedAt = state.DeletedAt;
         document.Headers = state.Headers
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));

@@ -80,6 +80,17 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
 
+    public async Task<ScheduledDispatchMutationReceipt> DeleteAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        var admission = await _actorPort.DispatchDeleteAsync(actorId, NormalizeOptional(reason), ct);
+        return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
+    }
+
     public Task<ScheduledDispatchDetail?> GetAsync(
         string scheduleId,
         CancellationToken ct = default)

@@ -19,7 +19,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             return null;
 
         var document = await _documentReader.GetAsync(scheduleId.Trim(), ct);
-        return document == null ? null : MapDetail(document);
+        return document is not { Deleted: false } ? null : MapDetail(document);
     }
 
     public Task<ScheduledDispatchListResult> ListAsync(
@@ -43,7 +43,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
         }, ct);
 
         return new ScheduledDispatchListResult(
-            result.Items.Select(MapSummary).ToArray(),
+            result.Items.Where(static x => !x.Deleted).Select(MapSummary).ToArray(),
             result.NextCursor,
             result.TotalCount);
     }
@@ -51,6 +51,13 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
     private static ProjectionDocumentFilter[] BuildFilters(ScheduledDispatchListQuery query)
     {
         var filters = new List<ProjectionDocumentFilter>();
+        filters.Add(new ProjectionDocumentFilter
+        {
+            FieldPath = nameof(ScheduledDispatchDocument.Deleted),
+            Operator = ProjectionDocumentFilterOperator.Eq,
+            Value = ProjectionDocumentValue.FromBool(false),
+        });
+
         if (query.TargetKind != null)
         {
             filters.Add(new ProjectionDocumentFilter
