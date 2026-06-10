@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
@@ -173,6 +174,123 @@ public sealed class ChatEndpointsInternalTests
         service.LastCommand.InputParts.Should().ContainSingle();
         service.LastCommand.InputParts![0].Kind.Should()
             .Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image);
+    }
+
+    [Fact]
+    public async Task PostChat_ShouldReturnInvalidFileInput_WhenInlineFileSizeBytesMismatchesDecodedBytes()
+    {
+        var service = new FakeCommandDispatchService();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "sizeBytes": 6
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            input,
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_FILE_INPUT");
+        service.DispatchCalls.Should().Be(0);
+        service.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostChat_ShouldReturnInvalidFileInput_WhenUnsupportedInputPartHasInvalidInlineFileSizeBytes()
+    {
+        var service = new FakeCommandDispatchService();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "prompt": "describe this",
+              "inputParts": [
+                {
+                  "type": "unsupported",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "sizeBytes": -1
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            input,
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_FILE_INPUT");
+        service.DispatchCalls.Should().Be(0);
+        service.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostChat_ShouldDispatch_WhenInlineFileSizeBytesMatchesDecodedBytes()
+    {
+        var service = new FakeCommandDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1")),
+        };
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "name": "hello.png",
+                    "sizeBytes": 5
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            input,
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.DispatchCalls.Should().Be(1);
+        service.LastCommand.Should().NotBeNull();
+        service.LastCommand!.InputParts.Should().ContainSingle()
+            .Which.DataBase64.Should().Be("aGVsbG8=");
     }
 
     [Fact]

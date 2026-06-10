@@ -41,7 +41,11 @@ internal static class ChatRunRequestNormalizer
         //   New principle: chat sources execute unchanged; hidden prompt mutation removed; explicit authoring surface (if needed) deferred to later-slice design
         ArgumentNullException.ThrowIfNull(input);
 
-        var normalizedInputParts = NormalizeInputParts(input.InputParts);
+        var normalizedInputPartsResult = NormalizeInputParts(input.InputParts);
+        if (normalizedInputPartsResult.Error != WorkflowChatRunStartError.None)
+            return ChatRunRequestNormalizationResult.Failed(normalizedInputPartsResult.Error);
+
+        var normalizedInputParts = normalizedInputPartsResult.InputParts;
         if (HasOnlyUnsupportedInputParts(input, normalizedInputParts))
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
@@ -263,15 +267,26 @@ internal static class ChatRunRequestNormalizer
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
 
-    private static IReadOnlyList<WorkflowChatInputPart>? NormalizeInputParts(IReadOnlyList<ChatInputContentPart>? inputParts)
+    private readonly record struct InputPartsNormalizationResult(
+        IReadOnlyList<WorkflowChatInputPart>? InputParts,
+        WorkflowChatRunStartError Error);
+
+    private static InputPartsNormalizationResult NormalizeInputParts(IReadOnlyList<ChatInputContentPart>? inputParts)
     {
         if (inputParts == null || inputParts.Count == 0)
-            return null;
+            return new InputPartsNormalizationResult(null, WorkflowChatRunStartError.None);
 
         var normalized = new List<WorkflowChatInputPart>(inputParts.Count);
         foreach (var part in inputParts)
         {
-            if (part == null || string.IsNullOrWhiteSpace(part.Type))
+            if (part == null)
+                continue;
+
+            var fileInputResult = NormalizeFileInput(part);
+            if (fileInputResult.Error != WorkflowChatRunStartError.None)
+                return new InputPartsNormalizationResult(null, fileInputResult.Error);
+
+            if (string.IsNullOrWhiteSpace(part.Type))
                 continue;
 
             if (!TryParseContentPartKind(part.Type, out var kind))
@@ -281,15 +296,125 @@ internal static class ChatRunRequestNormalizer
             {
                 Kind = kind,
                 Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
-                DataBase64 = string.IsNullOrWhiteSpace(part.DataBase64) ? null : part.DataBase64,
-                MediaType = string.IsNullOrWhiteSpace(part.MediaType) ? null : part.MediaType,
-                Uri = string.IsNullOrWhiteSpace(part.Uri) ? null : part.Uri,
-                Name = string.IsNullOrWhiteSpace(part.Name) ? null : part.Name,
+                DataBase64 = fileInputResult.DataBase64 ?? NormalizeContentPartValue(part.DataBase64),
+                MediaType = fileInputResult.MediaType ?? NormalizeContentPartValue(part.MediaType),
+                Uri = fileInputResult.Uri ?? NormalizeContentPartValue(part.Uri),
+                Name = fileInputResult.Name ?? NormalizeContentPartValue(part.Name),
             });
         }
 
-        return normalized.Count == 0 ? null : normalized;
+        return new InputPartsNormalizationResult(
+            normalized.Count == 0 ? null : normalized,
+            WorkflowChatRunStartError.None);
     }
+
+    private readonly record struct FileInputNormalizationResult(
+        string? DataBase64,
+        string? MediaType,
+        string? Uri,
+        string? Name,
+        WorkflowChatRunStartError Error);
+
+    private static FileInputNormalizationResult NormalizeFileInput(ChatInputContentPart part)
+    {
+        if (part.InlineFile != null && part.FileRef != null)
+            return InvalidFileInput();
+
+        if (part.InlineFile != null)
+            return NormalizeInlineFile(part.InlineFile);
+
+        if (part.FileRef != null)
+            return new FileInputNormalizationResult(
+                null,
+                NormalizeContentPartValue(part.FileRef.MediaType),
+                NormalizeContentPartValue(part.FileRef.Uri),
+                NormalizeContentPartValue(part.FileRef.Name),
+                WorkflowChatRunStartError.None);
+
+        return new FileInputNormalizationResult(null, null, null, null, WorkflowChatRunStartError.None);
+    }
+
+    private static FileInputNormalizationResult NormalizeInlineFile(ChatInputInlineFile inlineFile)
+    {
+        var dataBase64 = NormalizeOptional(inlineFile.DataBase64);
+        if (dataBase64 == null)
+            return InvalidFileInput();
+
+        if (!TryGetDecodedByteLength(dataBase64, out var decodedByteLength))
+            return InvalidFileInput();
+
+        if (inlineFile.SizeBytes.HasValue)
+        {
+            if (inlineFile.SizeBytes.Value < 0)
+                return InvalidFileInput();
+
+            if (inlineFile.SizeBytes.Value != decodedByteLength)
+                return InvalidFileInput();
+        }
+
+        return new FileInputNormalizationResult(
+            dataBase64,
+            NormalizeContentPartValue(inlineFile.MediaType),
+            null,
+            NormalizeContentPartValue(inlineFile.Name),
+            WorkflowChatRunStartError.None);
+    }
+
+    private static FileInputNormalizationResult InvalidFileInput() =>
+        new(null, null, null, null, WorkflowChatRunStartError.InvalidFileInput);
+
+    private static bool TryGetDecodedByteLength(string dataBase64, out long decodedByteLength)
+    {
+        long base64Length = 0;
+        var padding = 0;
+        var hasPadding = false;
+
+        foreach (var ch in dataBase64)
+        {
+            if (char.IsWhiteSpace(ch))
+                continue;
+
+            if (ch == '=')
+            {
+                hasPadding = true;
+                padding++;
+                base64Length++;
+                if (padding > 2)
+                {
+                    decodedByteLength = 0;
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (hasPadding || !IsBase64Character(ch))
+            {
+                decodedByteLength = 0;
+                return false;
+            }
+
+            base64Length++;
+        }
+
+        if (base64Length == 0 || base64Length % 4 != 0)
+        {
+            decodedByteLength = 0;
+            return false;
+        }
+
+        decodedByteLength = (base64Length / 4 * 3) - padding;
+        return true;
+    }
+
+    private static bool IsBase64Character(char ch) =>
+        ch is >= 'A' and <= 'Z' ||
+        ch is >= 'a' and <= 'z' ||
+        ch is >= '0' and <= '9' ||
+        ch is '+' or '/';
+
+    private static string? NormalizeContentPartValue(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 
     private static bool HasOnlyUnsupportedInputParts(
         ChatInput input,

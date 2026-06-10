@@ -656,6 +656,192 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldAcceptFileInlineFileWithMatchingSizeBytes()
+    {
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "name": "hello.png",
+                    "sizeBytes": 5
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Prompt.Should().Be("[image]");
+        result.Request.InputParts.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new WorkflowChatInputPart
+            {
+                Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image,
+                DataBase64 = "aGVsbG8=",
+                MediaType = "image/png",
+                Name = "hello.png",
+            });
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldAcceptFileInlineFileWithoutSizeBytes()
+    {
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "name": "hello.png"
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.InputParts.Should().ContainSingle()
+            .Which.DataBase64.Should().Be("aGVsbG8=");
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectFileInlineFileWithMismatchedSizeBytes()
+    {
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "sizeBytes": 6
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidFileInput);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectFileInlineFileWithNegativeSizeBytes()
+    {
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "sizeBytes": -1
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidFileInput);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectUnsupportedInputPartWithInvalidInlineFileSizeBytes()
+    {
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "prompt": "describe this",
+              "inputParts": [
+                {
+                  "type": "unsupported",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "sizeBytes": -1
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidFileInput);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectFileRefSizeBytes()
+    {
+        const string json = """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "fileRef": {
+                    "uri": "artifact://file-1",
+                    "mediaType": "image/png",
+                    "name": "hello.png",
+                    "sizeBytes": 5
+                  }
+                }
+              ]
+            }
+            """;
+
+        var act = () => JsonSerializer.Deserialize<ChatInput>(json, ChatWebSocketProtocol.JsonOptions);
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectTopLevelFileSizeBytes()
+    {
+        const string json = """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "dataBase64": "aGVsbG8=",
+                  "mediaType": "image/png",
+                  "sizeBytes": 5
+                }
+              ]
+            }
+            """;
+
+        var act = () => JsonSerializer.Deserialize<ChatInput>(json, ChatWebSocketProtocol.JsonOptions);
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldDerivePlaceholderPrompt_FromMediaOnlyInput()
     {
         var input = new ChatInput
