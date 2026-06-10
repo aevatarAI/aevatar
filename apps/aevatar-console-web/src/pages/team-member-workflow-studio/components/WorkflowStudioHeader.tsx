@@ -485,6 +485,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
     publishPending ||
     publishTone === "processing" ||
     publishTone === "error" ||
+    dirty ||
     !memberPublished ||
     !publishDisabled;
 

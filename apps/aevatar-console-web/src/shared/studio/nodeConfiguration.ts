@@ -52,6 +52,8 @@ export type StudioNodeConfigurationSchema = {
   readonly stepType: string;
 };
 
+type StudioNodeConfigurationSchemaSource = Record<string, unknown> | null | undefined;
+
 type StudioNodeConfigurationSchemaDefinition = {
   readonly fields: readonly StudioNodeConfigurationField[];
   readonly stepType: string;
@@ -1019,8 +1021,9 @@ export function getStudioNodeConfigurationSchema(
 export function readStudioNodeConfigurationValues(
   stepType: string,
   parameters: Record<string, unknown> | null | undefined,
+  schemaParameters: StudioNodeConfigurationSchemaSource = parameters,
 ): Record<string, string> {
-  const schema = getStudioNodeConfigurationSchema(stepType, parameters);
+  const schema = getStudioNodeConfigurationSchema(stepType, schemaParameters);
   return Object.fromEntries(
     schema.fields.map((field) => [
       field.name,
@@ -1035,11 +1038,13 @@ export function applyStudioNodeConfigurationValues(
   stepType: string,
   parameters: Record<string, unknown> | null | undefined,
   values: Record<string, string>,
+  schemaParameters?: StudioNodeConfigurationSchemaSource,
 ): Record<string, unknown> {
   const result = applyStudioNodeConfigurationValuesWithValidation(
     stepType,
     parameters,
     values,
+    schemaParameters,
   );
 
   if (!result.valid) {
@@ -1138,12 +1143,13 @@ export function applyStudioNodeConfigurationValuesWithValidation(
   stepType: string,
   parameters: Record<string, unknown> | null | undefined,
   values: Record<string, string>,
+  schemaParameters: StudioNodeConfigurationSchemaSource = parameters,
 ): {
   readonly errors: readonly string[];
   readonly parameters: Record<string, unknown>;
   readonly valid: boolean;
 } {
-  const schema = getStudioNodeConfigurationSchema(stepType, parameters);
+  const schema = getStudioNodeConfigurationSchema(stepType, schemaParameters);
   const nextParameters = {
     ...(parameters && typeof parameters === 'object' ? parameters : {}),
   };

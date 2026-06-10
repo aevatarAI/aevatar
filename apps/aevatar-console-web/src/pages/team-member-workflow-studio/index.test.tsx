@@ -1786,6 +1786,101 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
   });
 
+  it("keeps inferred fields visible after optional unknown node values are cleared", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha/members/member-alpha/workflow",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: {
+        ...mockWorkflowDocument,
+        steps: [
+          {
+            id: "custom_step",
+            type: "custom_node",
+            targetRole: null,
+            parameters: {
+              enabled: true,
+              title: "Draft",
+            },
+            next: null,
+            branches: {},
+          },
+        ],
+      },
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByText("nodes:1")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "node:step:custom_step" }));
+    fireEvent.click(screen.getByText("Advanced raw configuration"));
+
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "" },
+    });
+
+    expect(screen.getByLabelText("Title")).toBeTruthy();
+    expect(screen.getByLabelText("Title")).toHaveValue("");
+    expect(
+      (screen.getByLabelText("Raw node configuration") as HTMLTextAreaElement)
+        .value,
+    ).not.toContain('"title"');
+
+    fireEvent.click(screen.getByRole("button", { name: "Update node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(studioApi.serializeYaml).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                id: "custom_step",
+                parameters: expect.not.objectContaining({
+                  title: expect.anything(),
+                }),
+              }),
+            ]),
+          }),
+        }),
+      );
+    });
+  });
+
   it("blocks invalid inferred object edits before they can be applied", async () => {
     window.history.replaceState(
       {},
@@ -2330,6 +2425,68 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByTitle(/Published member workflow is serviceable/)).toBeTruthy();
     });
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
+  });
+
+  it("blocks publish when selected node configuration is invalid", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha/members/member-alpha/workflow",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "build_ready",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByText("nodes:1")).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText("Workflow title"), {
+      target: { value: "Workflow Alpha Published" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+    fireEvent.change(screen.getByLabelText("Instruction"), {
+      target: { value: "" },
+    });
+
+    expect(await screen.findByText("Instruction is required.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Publish member" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Publish member" }));
+
+    await flushAsyncWork();
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
   });
 
   it("reports rejected publish binding without introducing activation language", async () => {

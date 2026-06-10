@@ -548,6 +548,8 @@ const zhCNMessages = {
     '这个节点类型暂时没有引导字段。需要时可以使用高级原始配置。',
   'teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria':
     '原始节点配置',
+  'teamMemberWorkflowStudio.nodeDetail.rawConfigurationError':
+    '原始节点配置必须是 JSON 对象。',
   'teamMemberWorkflowStudio.nodeDetail.sectionAria': '节点详情',
   'teamMemberWorkflowStudio.nodeDetail.stepId': '步骤 ID：{stepId}',
   'teamMemberWorkflowStudio.nodeDetail.updateNode': '更新节点',

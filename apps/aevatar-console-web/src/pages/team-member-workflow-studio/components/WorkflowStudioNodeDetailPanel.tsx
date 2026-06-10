@@ -200,28 +200,71 @@ function readCurrentParameters(
   }
 }
 
+function mergeSchemaParameters(
+  current: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...current,
+    ...next,
+  };
+}
+
 function useConfigurationState(stepDraft: StudioStepInspectorDraft | null) {
   const [configurationValues, setConfigurationValues] = React.useState<
     Record<string, string>
   >({});
   const [rawConfigurationText, setRawConfigurationText] = React.useState("");
+  const [schemaParameters, setSchemaParameters] = React.useState<
+    Record<string, unknown>
+  >({});
   const [structuredError, setStructuredError] = React.useState("");
   const [rawError, setRawError] = React.useState("");
+  const schemaParametersRef = React.useRef<Record<string, unknown>>({});
+  const stepKeyRef = React.useRef("");
+
+  const rememberSchemaParameters = React.useCallback(
+    (parameters: Record<string, unknown>): Record<string, unknown> => {
+      const nextSchemaParameters = mergeSchemaParameters(
+        schemaParametersRef.current,
+        parameters,
+      );
+      schemaParametersRef.current = nextSchemaParameters;
+      setSchemaParameters(nextSchemaParameters);
+      return nextSchemaParameters;
+    },
+    [],
+  );
 
   React.useEffect(() => {
     if (!stepDraft) {
       setConfigurationValues({});
       setRawConfigurationText("");
+      schemaParametersRef.current = {};
+      stepKeyRef.current = "";
+      setSchemaParameters({});
       setRawError("");
       setStructuredError("");
       return;
     }
 
     const parameters = readDraftParameters(stepDraft);
+    const stepKey = `${stepDraft.id}\u0000${stepDraft.type}`;
+    const nextSchemaParameters =
+      stepKeyRef.current === stepKey
+        ? mergeSchemaParameters(schemaParametersRef.current, parameters)
+        : parameters;
+    schemaParametersRef.current = nextSchemaParameters;
+    stepKeyRef.current = stepKey;
     setConfigurationValues(
-      readStudioNodeConfigurationValues(stepDraft.type, parameters),
+      readStudioNodeConfigurationValues(
+        stepDraft.type,
+        parameters,
+        nextSchemaParameters,
+      ),
     );
     setRawConfigurationText(formatRawStudioNodeConfiguration(parameters));
+    setSchemaParameters(nextSchemaParameters);
     setRawError("");
     setStructuredError("");
   }, [stepDraft?.id, stepDraft?.parametersText, stepDraft?.type]);
@@ -230,9 +273,11 @@ function useConfigurationState(stepDraft: StudioStepInspectorDraft | null) {
     configurationValues,
     rawConfigurationText,
     rawError,
+    schemaParameters,
     setConfigurationValues,
     setRawConfigurationText,
     setRawError,
+    rememberSchemaParameters,
     setStructuredError,
     structuredError,
   };
@@ -256,9 +301,11 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     configurationValues,
     rawConfigurationText,
     rawError,
+    schemaParameters,
     setConfigurationValues,
     setRawConfigurationText,
     setRawError,
+    rememberSchemaParameters,
     setStructuredError,
     structuredError,
   } = useConfigurationState(stepDraft);
@@ -321,7 +368,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     "--workflow-node-inspector-text-strong": token.colorTextHeading,
   };
   const parameters = readCurrentParameters(stepDraft, rawConfigurationText);
-  const schema = getStudioNodeConfigurationSchema(stepDraft.type, parameters);
+  const schema = getStudioNodeConfigurationSchema(stepDraft.type, schemaParameters);
   const hasSemanticFields = schema.fields.length > 0;
   const nodeTypeLabel = formatStudioStepTypeLabel(stepDraft.type);
   const branchesSummary = summarizeBranches(stepDraft.branchesText);
@@ -377,6 +424,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
       stepDraft.type,
       parameters,
       nextValues,
+      schemaParameters,
     );
 
     setConfigurationValues(nextValues);
@@ -384,6 +432,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     setRawError("");
     if (result.valid) {
       setRawConfigurationText(formatRawStudioNodeConfiguration(result.parameters));
+      rememberSchemaParameters(result.parameters);
     }
   };
 
@@ -392,6 +441,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
       stepDraft.type,
       parameters,
       configurationValues,
+      schemaParameters,
     );
     const nextError = result.errors[0] ?? "";
     setStructuredError(nextError);
@@ -402,6 +452,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
 
     const nextRawText = formatRawStudioNodeConfiguration(result.parameters);
     setRawConfigurationText(nextRawText);
+    rememberSchemaParameters(result.parameters);
     onConfigurationChange(nextRawText);
   };
 
@@ -415,8 +466,13 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
       setRawError("");
       setStructuredError("");
       setRawConfigurationText(nextRawText);
+      const nextSchemaParameters = rememberSchemaParameters(nextParameters);
       setConfigurationValues(
-        readStudioNodeConfigurationValues(stepDraft.type, nextParameters),
+        readStudioNodeConfigurationValues(
+          stepDraft.type,
+          nextParameters,
+          nextSchemaParameters,
+        ),
       );
       onConfigurationChange(nextRawText);
     } catch (error) {
@@ -435,10 +491,15 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     setRawConfigurationText(value);
     try {
       const nextParameters = applyRawStudioNodeConfiguration(stepDraft.type, value);
+      const nextSchemaParameters = rememberSchemaParameters(nextParameters);
       setRawError("");
       setStructuredError("");
       setConfigurationValues(
-        readStudioNodeConfigurationValues(stepDraft.type, nextParameters),
+        readStudioNodeConfigurationValues(
+          stepDraft.type,
+          nextParameters,
+          nextSchemaParameters,
+        ),
       );
     } catch (error) {
       setRawError(

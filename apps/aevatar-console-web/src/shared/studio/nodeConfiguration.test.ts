@@ -241,6 +241,45 @@ describe('studio node configuration semantics', () => {
     });
   });
 
+  it('keeps inferred fields available from a stable schema source when values are cleared', () => {
+    const result = applyStudioNodeConfigurationValuesWithValidation(
+      'custom_step',
+      {
+        enabled: true,
+        title: 'Draft',
+      },
+      {
+        enabled: 'true',
+        title: '',
+      },
+      {
+        enabled: true,
+        title: 'Draft',
+      },
+    );
+
+    expect(result).toEqual({
+      errors: [],
+      parameters: {
+        enabled: true,
+      },
+      valid: true,
+    });
+    expect(
+      readStudioNodeConfigurationValues(
+        'custom_step',
+        result.parameters,
+        {
+          enabled: true,
+          title: 'Draft',
+        },
+      ),
+    ).toEqual({
+      enabled: 'true',
+      title: '',
+    });
+  });
+
   it('rejects invalid inferred structured JSON fields', () => {
     const result = applyStudioNodeConfigurationValuesWithValidation(
       'custom_step',

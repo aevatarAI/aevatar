@@ -1132,6 +1132,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       !workflowQuery.data ||
       !editableDocument ||
       !workflowHasSteps ||
+      Boolean(selectedStepConfigurationError) ||
       publishMutation.isPending ||
       publishBindingStillInProgress ||
       (memberIsPublished && !publishHasDraftChanges),
@@ -1141,6 +1142,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       ? "Create and link a workflow member before publishing."
       : linkedWorkflowMissing
         ? "No stable workflow draft is linked to this member yet."
+        : selectedStepConfigurationError
+          ? selectedStepConfigurationError
         : publishBindingStillInProgress
           ? "Publish was accepted and binding is still in progress. Refresh later before publishing again."
         : memberIsPublished && !publishHasDraftChanges
@@ -1450,7 +1453,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
   return {
     publishMember: () => {
-      if (workflowQuery.data && editableDocument) {
+      if (
+        workflowQuery.data &&
+        editableDocument &&
+        !selectedStepConfigurationError
+      ) {
         publishMutation.mutate({
           document: editableDocument,
           layout:
