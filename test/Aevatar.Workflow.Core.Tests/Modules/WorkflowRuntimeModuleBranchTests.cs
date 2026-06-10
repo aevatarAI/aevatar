@@ -516,6 +516,56 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldCopyTypedAgentToolScopeToIntent()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "llm-tool-scope",
+                StepType = "llm_call",
+                RunId = "run-llm-tool-scope",
+                Input = "draft",
+                StepParameters = new WorkflowStepParameters
+                {
+                    AgentToolScope = new WorkflowAgentToolScope
+                    {
+                        AllowedToolNames = { "search" },
+                    },
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var intent = DispatchedLlmIntent(ctx);
+        intent.AgentToolScope.Should().NotBeNull();
+        intent.AgentToolScope.AllowedToolNames.Should().Equal("search");
+        intent.Annotations.Should().NotContainKey("allowed_tools");
+    }
+
+    [Fact]
+    public async Task LlmCallModule_WithNoAgentToolScope_ShouldLeaveIntentUnrestricted()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "llm-unrestricted",
+                StepType = "llm_call",
+                RunId = "run-llm-unrestricted",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        DispatchedLlmIntent(ctx).AgentToolScope.Should().BeNull();
+    }
+
+    [Fact]
     public async Task EvaluateModule_ShouldPublishZeroScorePass_WhenContentHasNoNumberAndThresholdIsZero()
     {
         var module = new EvaluateModule();

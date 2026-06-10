@@ -109,7 +109,7 @@ public static class AgentToolExecutionContextMapper
         if (payload == null)
             return AgentToolExecutionContext.Empty;
 
-        return new AgentToolExecutionContext(
+        var context = new AgentToolExecutionContext(
             new AgentToolRequestIdentity(
                 AgentToolExecutionContext.Normalize(payload.Request?.RequestId),
                 AgentToolExecutionContext.Normalize(payload.Request?.CallId)),
@@ -136,6 +136,7 @@ public static class AgentToolExecutionContextMapper
             new AgentToolConnectedServicesContext(AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
             FromSkillRecoveryPayload(payload.SkillRecovery),
             StripOwnedControlKeys(payload.ExternalMetadata));
+        return context with { ToolVisibility = FromToolVisibilityPayload(payload.ToolVisibility) };
     }
 
     public static AgentToolExecutionContextPayload ToPayload(this AgentToolExecutionContext context)
@@ -189,6 +190,9 @@ public static class AgentToolExecutionContextMapper
         if (context.Routing.MaxToolRoundsOverride.HasValue)
             payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;
 
+        if (context.ToolVisibility.IsRestricted)
+            payload.ToolVisibility = ToToolVisibilityPayload(context.ToolVisibility);
+
         foreach (var pair in StripOwnedControlKeys(context.ExternalMetadata))
             payload.ExternalMetadata[pair.Key] = pair.Value;
 
@@ -234,6 +238,26 @@ public static class AgentToolExecutionContextMapper
             CommandArguments = context.CommandArguments ?? string.Empty,
             DiscoveryRequested = context.DiscoveryRequested,
         };
+
+    private static AgentToolVisibilityScope FromToolVisibilityPayload(AgentToolVisibilityScopePayload? payload)
+    {
+        if (payload == null)
+            return AgentToolVisibilityScope.Unrestricted;
+
+        return AgentToolVisibilityScope.FromAllowedToolNames(payload.AllowedToolNames);
+    }
+
+    private static AgentToolVisibilityScopePayload ToToolVisibilityPayload(AgentToolVisibilityScope scope)
+    {
+        var payload = new AgentToolVisibilityScopePayload();
+        if (scope.AllowedToolNames is null)
+            return payload;
+
+        foreach (var toolName in scope.AllowedToolNames.OrderBy(static name => name, StringComparer.OrdinalIgnoreCase))
+            payload.AllowedToolNames.Add(toolName);
+
+        return payload;
+    }
 
     public static IReadOnlyDictionary<string, string> StripOwnedControlKeys(IReadOnlyDictionary<string, string>? metadata)
     {

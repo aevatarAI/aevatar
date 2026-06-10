@@ -235,6 +235,7 @@ message WorkflowStepParameters
   aevatar.foundation.interactions.InteractionSpec interaction_spec = 4;
   aevatar.foundation.interactions.InteractionTemplateSpec interaction_template_spec = 5;
   string delivery_target_id = 6;
+  WorkflowAgentToolScope agent_tool_scope = 7;
 }
 message StepRequestEvent
 {
@@ -482,6 +483,12 @@ message WorkflowLlmExecutionIntent
   WorkflowCallerCredential caller_credential = 12;
   string route_preference = 13;
   string sender_nyx_id_access_token = 14;
+  WorkflowAgentToolScope agent_tool_scope = 15;
+}
+
+message WorkflowAgentToolScope
+{
+  repeated string allowed_tool_names = 1;
 }
 
 message WorkflowLlmInvocationStartedEvent

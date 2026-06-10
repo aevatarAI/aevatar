@@ -963,12 +963,26 @@ public sealed class ChatRuntime
             ToolContext = effectiveToolContext,
             RoutingContext = effectiveLlmControl?.ToRoutingContext(baseRequest.RoutingContext) ?? baseRequest.RoutingContext,
             LlmControl = effectiveLlmControl,
-            Tools = baseRequest.Tools,
+            Tools = FilterVisibleTools(baseRequest.Tools, effectiveToolContext.ToolVisibility),
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
             ResponseFormat = baseRequest.ResponseFormat,
         };
+    }
+
+    private static IReadOnlyList<IAgentTool>? FilterVisibleTools(
+        IReadOnlyList<IAgentTool>? tools,
+        AgentToolVisibilityScope visibility)
+    {
+        if (tools is not { Count: > 0 })
+            return null;
+
+        if (!visibility.IsRestricted)
+            return tools;
+
+        var visibleTools = tools.Where(tool => visibility.Allows(tool.Name)).ToList();
+        return visibleTools.Count > 0 ? visibleTools : null;
     }
 
     private static IReadOnlyDictionary<string, string>? MergeMetadata(

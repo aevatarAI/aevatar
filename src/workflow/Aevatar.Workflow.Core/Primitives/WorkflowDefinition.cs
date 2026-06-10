@@ -177,6 +177,8 @@ public sealed class RoleDefinition
     /// </summary>
     public string? EventRoutes { get; init; }
 
+    public WorkflowAgentToolScopeDefinition? AgentToolScope { get; init; }
+
     /// <summary>
     /// 该角色允许使用的 Connector 名称列表（中心化配置在 ~/.aevatar/connectors.json）。
     /// 当 connector_call 步骤指定本角色时，仅允许调用此列表中的 connector。
