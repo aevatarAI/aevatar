@@ -21,6 +21,23 @@ public sealed record ChatRunContentPart
     public string? MediaType { get; init; }
     public string? Uri { get; init; }
     public string? Name { get; init; }
+    public ChatRunInlineFilePart? InlineFile { get; init; }
+    public ChatRunFileRefPart? FileRef { get; init; }
+}
+
+public sealed record ChatRunInlineFilePart
+{
+    public string? DataBase64 { get; init; }
+    public string? MediaType { get; init; }
+    public string? Name { get; init; }
+    public long? SizeBytes { get; init; }
+}
+
+public sealed record ChatRunFileRefPart
+{
+    public string? Uri { get; init; }
+    public string? MediaType { get; init; }
+    public string? Name { get; init; }
 }
 
 public sealed record WorkflowResumeRequest
