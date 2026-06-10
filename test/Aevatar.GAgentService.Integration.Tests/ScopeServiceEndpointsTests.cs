@@ -2268,11 +2268,18 @@ public sealed class ScopeServiceEndpointsTests
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/invoke/chat:stream", new
-        {
-            prompt = "hello member",
-            headers = new Dictionary<string, string> { ["channel"] = "member-tests" },
-        });
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/member-a/invoke/chat:stream",
+            new
+            {
+                prompt = "hello member",
+                headers = new Dictionary<string, string> { ["channel"] = "member-tests" },
+            },
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
+
+        var response = await host.Client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
@@ -2802,18 +2809,25 @@ public sealed class ScopeServiceEndpointsTests
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/invoke/chat", new
-        {
-            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
-            payloadBase64 = "",
-        });
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/member-a/invoke/chat",
+            new
+            {
+                payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+                payloadBase64 = "",
+            },
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
+
+        var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
         response.Headers.Location.Should().NotBeNull();
-        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
+        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/services/member-a/runs/run-1");
         var receipt = await response.Content.ReadFromJsonAsync<ServiceInvocationAcceptedReceipt>();
         receipt.Should().NotBeNull();
-        receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
+        receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/services/member-a/runs/run-1");
         host.InvocationPort.LastRequest.Should().NotBeNull();
         host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
         {
