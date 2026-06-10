@@ -38,6 +38,27 @@ public static class StudioMemberBindingRunStatusNames
     public const string Unknown = "unknown";
 }
 
+public static class StudioMemberInvocationReadinessStatusNames
+{
+    public const string Ready = "ready";
+    public const string ServiceCatalogMissing = "service_catalog_missing";
+    public const string ServingSetMissing = "serving_set_missing";
+    public const string EligibleServingTargetMissing = "eligible_serving_target_missing";
+    public const string ServiceCatalogTargetMissing = "service_catalog_target_missing";
+    public const string TrafficViewTargetMissing = "traffic_view_target_missing";
+    public const string PreparedArtifactMissing = "prepared_artifact_missing";
+    public const string Unknown = "unknown";
+}
+
+public sealed record StudioMemberInvocationReadinessResponse(
+    bool CanInvoke,
+    string Status,
+    string ReasonCode,
+    string Message,
+    string? RevisionId = null,
+    string? DeploymentId = null,
+    DateTimeOffset? ObservedAtUtc = null);
+
 /// <summary>
 /// Wire-format status values returned in
 /// <see cref="StudioMemberBindingRevisionActionResponse.Status"/>. Centralizing
@@ -247,6 +268,7 @@ public sealed record StudioMemberEndpointContractResponse(
     string? SampleRequestJson,
     string DeploymentStatus,
     string RevisionId,
+    StudioMemberInvocationReadinessResponse InvocationReadiness,
     string? CurlExample = null,
     string? FetchExample = null);
 

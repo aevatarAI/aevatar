@@ -1,3 +1,4 @@
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -17,13 +18,16 @@ public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
 {
     private readonly IStudioTeamQueryPort _teamQueryPort;
     private readonly IStudioMemberQueryPort _memberQueryPort;
+    private readonly IScopeBindingReadinessQueryPort _readinessQueryPort;
 
     public StudioTeamEntryMemberResolver(
         IStudioTeamQueryPort teamQueryPort,
-        IStudioMemberQueryPort memberQueryPort)
+        IStudioMemberQueryPort memberQueryPort,
+        IScopeBindingReadinessQueryPort readinessQueryPort)
     {
         _teamQueryPort = teamQueryPort ?? throw new ArgumentNullException(nameof(teamQueryPort));
         _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
+        _readinessQueryPort = readinessQueryPort ?? throw new ArgumentNullException(nameof(readinessQueryPort));
     }
 
     public async Task<TeamEntryMemberResolution> ResolveAsync(
@@ -89,12 +93,39 @@ public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
                 $"entry member '{entryMemberId}' is not bind-ready.");
         }
 
+        var readiness = await _readinessQueryPort.GetReadinessAsync(
+            new ScopeBindingReadinessRequest(
+                ScopeId: team.ScopeId,
+                ServiceId: member.Summary.PublishedServiceId),
+            ct);
+        if (readiness.Status != ScopeBindingReadinessStatus.Ready || !readiness.InvokeReady)
+        {
+            throw Failure(
+                TeamEntryMemberErrorCodes.EntryMemberNotReady,
+                team.ScopeId,
+                team.TeamId,
+                $"entry member '{entryMemberId}' is not invocation-ready: {MapReadinessReason(readiness.Status)}.");
+        }
+
         return new TeamEntryMemberResolution(
             ScopeId: team.ScopeId,
             TeamId: team.TeamId,
             EntryMemberId: entryMemberId,
             PublishedServiceId: member.Summary.PublishedServiceId);
     }
+
+    private static string MapReadinessReason(ScopeBindingReadinessStatus status) =>
+        status switch
+        {
+            ScopeBindingReadinessStatus.PreparedArtifactMissing => "prepared_artifact_missing",
+            ScopeBindingReadinessStatus.ServiceCatalogMissing => "service_catalog_missing",
+            ScopeBindingReadinessStatus.ServingSetMissing => "serving_set_missing",
+            ScopeBindingReadinessStatus.EligibleServingTargetMissing => "eligible_serving_target_missing",
+            ScopeBindingReadinessStatus.ServiceCatalogTargetMissing => "service_catalog_target_missing",
+            ScopeBindingReadinessStatus.TrafficViewTargetMissing => "traffic_view_target_missing",
+            ScopeBindingReadinessStatus.Ready => "ready",
+            _ => "unknown",
+        };
 
     private static TeamEntryMemberResolutionException Failure(
         string code,

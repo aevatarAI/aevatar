@@ -1,3 +1,4 @@
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -18,7 +19,8 @@ public sealed class StudioTeamEntryMemberResolverTests
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(NewTeam()),
-            new MemberQueryPort(NewMember()));
+            new MemberQueryPort(NewMember()),
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
         var result = await resolver.ResolveAsync(ScopeId, TeamId);
 
@@ -33,7 +35,10 @@ public sealed class StudioTeamEntryMemberResolverTests
     {
         var teamPort = new TeamQueryPort(NewTeam());
         var memberPort = new MemberQueryPort(NewMember());
-        var resolver = new StudioTeamEntryMemberResolver(teamPort, memberPort);
+        var resolver = new StudioTeamEntryMemberResolver(
+            teamPort,
+            memberPort,
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
         var result = await resolver.ResolveAsync(ScopeId, TeamId);
 
@@ -83,7 +88,8 @@ public sealed class StudioTeamEntryMemberResolverTests
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(null),
-            new MemberQueryPort(NewMember()));
+            new MemberQueryPort(NewMember()),
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
         var act = () => resolver.ResolveAsync(ScopeId, TeamId);
 
@@ -96,7 +102,8 @@ public sealed class StudioTeamEntryMemberResolverTests
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(NewTeam(lifecycleStage: TeamLifecycleStageNames.Archived)),
-            new MemberQueryPort(NewMember()));
+            new MemberQueryPort(NewMember()),
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
         var act = () => resolver.ResolveAsync(ScopeId, TeamId);
 
@@ -109,7 +116,8 @@ public sealed class StudioTeamEntryMemberResolverTests
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(NewTeam(entryMemberId: null)),
-            new MemberQueryPort(NewMember()));
+            new MemberQueryPort(NewMember()),
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
         var act = () => resolver.ResolveAsync(ScopeId, TeamId);
 
@@ -122,7 +130,8 @@ public sealed class StudioTeamEntryMemberResolverTests
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(NewTeam()),
-            new MemberQueryPort(null));
+            new MemberQueryPort(null),
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
         var act = () => resolver.ResolveAsync(ScopeId, TeamId);
 
@@ -135,7 +144,8 @@ public sealed class StudioTeamEntryMemberResolverTests
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(NewTeam()),
-            new MemberQueryPort(NewMember(teamId: "other-team")));
+            new MemberQueryPort(NewMember(teamId: "other-team")),
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
         var act = () => resolver.ResolveAsync(ScopeId, TeamId);
 
@@ -148,7 +158,8 @@ public sealed class StudioTeamEntryMemberResolverTests
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(NewTeam()),
-            new MemberQueryPort(NewMember(lifecycleStage: MemberLifecycleStageNames.BuildReady)));
+            new MemberQueryPort(NewMember(lifecycleStage: MemberLifecycleStageNames.BuildReady)),
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
         var act = () => resolver.ResolveAsync(ScopeId, TeamId);
 
@@ -161,12 +172,43 @@ public sealed class StudioTeamEntryMemberResolverTests
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(NewTeam()),
-            new MemberQueryPort(NewMember(publishedServiceId: "")));
+            new MemberQueryPort(NewMember(publishedServiceId: "")),
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
 
         var act = () => resolver.ResolveAsync(ScopeId, TeamId);
 
         await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
             .Where(ex => ex.Code == TeamEntryMemberErrorCodes.EntryMemberNotReady);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldNotPinReadinessToLastBoundRevision()
+    {
+        var readinessPort = new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true);
+        var resolver = new StudioTeamEntryMemberResolver(
+            new TeamQueryPort(NewTeam()),
+            new MemberQueryPort(NewMember()),
+            readinessPort);
+
+        await resolver.ResolveAsync(ScopeId, TeamId);
+
+        readinessPort.LastRequest.Should().NotBeNull();
+        readinessPort.LastRequest!.ExpectedRevisionId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldThrowNotReady_WhenPreparedArtifactMissing()
+    {
+        var resolver = new StudioTeamEntryMemberResolver(
+            new TeamQueryPort(NewTeam()),
+            new MemberQueryPort(NewMember()),
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.PreparedArtifactMissing, invokeReady: false));
+
+        var act = () => resolver.ResolveAsync(ScopeId, TeamId);
+
+        await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
+            .Where(ex => ex.Code == TeamEntryMemberErrorCodes.EntryMemberNotReady
+                && ex.Message.Contains("prepared_artifact_missing", StringComparison.Ordinal));
     }
 
     private static StudioTeamSummaryResponse NewTeam(
@@ -206,6 +248,38 @@ public sealed class StudioTeamEntryMemberResolverTests
         };
 
         return new StudioMemberDetailResponse(summary, null, null);
+    }
+
+    private sealed class FixedScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    {
+        private readonly ScopeBindingReadinessStatus _status;
+        private readonly bool _invokeReady;
+
+        public FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus status, bool invokeReady)
+        {
+            _status = status;
+            _invokeReady = invokeReady;
+        }
+
+        public ScopeBindingReadinessRequest? LastRequest { get; private set; }
+
+        public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
+            ScopeBindingReadinessRequest request,
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new ScopeBindingReadinessSnapshot(
+                request.ScopeId,
+                request.ServiceId,
+                _status,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: _invokeReady,
+                RevisionId: request.ExpectedRevisionId ?? "rev-1",
+                DeploymentId: "dep-1",
+                ObservedAtUtc: DateTimeOffset.UtcNow));
+        }
     }
 
     private sealed class TeamQueryPort(StudioTeamSummaryResponse? team) : IStudioTeamQueryPort
