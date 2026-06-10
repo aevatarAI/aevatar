@@ -317,6 +317,148 @@ const enUSMessages = {
   'teams.detail.update.fromTeam': 'From team update time',
   'teams.detail.update.fromVisibleRun': 'From the latest visible run',
   'teams.detail.update.fromWorkflow': 'From workflow update time',
+  'shared.studio.nodeConfiguration.assign.target.label': 'Target variable',
+  'shared.studio.nodeConfiguration.assign.target.placeholder': 'result',
+  'shared.studio.nodeConfiguration.assign.value.label': 'Value',
+  'shared.studio.nodeConfiguration.assign.value.placeholder': '$input',
+  'shared.studio.nodeConfiguration.cache.childStep.label': 'Cached node',
+  'shared.studio.nodeConfiguration.cache.key.label': 'Cache key',
+  'shared.studio.nodeConfiguration.cache.key.placeholder': '$input',
+  'shared.studio.nodeConfiguration.cache.ttl.label': 'TTL seconds',
+  'shared.studio.nodeConfiguration.cache.ttl.placeholder': '600',
+  'shared.studio.nodeConfiguration.connectorCall.connector.label': 'Connector',
+  'shared.studio.nodeConfiguration.connectorCall.connector.placeholder':
+    'Configured connector name',
+  'shared.studio.nodeConfiguration.connectorCall.method.label': 'Method',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.delete': 'DELETE',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.get': 'GET',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.patch': 'PATCH',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.post': 'POST',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.put': 'PUT',
+  'shared.studio.nodeConfiguration.connectorCall.onError.label': 'On error',
+  'shared.studio.nodeConfiguration.connectorCall.operation.label': 'Operation',
+  'shared.studio.nodeConfiguration.connectorCall.operation.placeholder':
+    'Operation or endpoint name',
+  'shared.studio.nodeConfiguration.connectorCall.path.label': 'Path',
+  'shared.studio.nodeConfiguration.connectorCall.path.placeholder': '/v1/items',
+  'shared.studio.nodeConfiguration.connectorCall.retry.label': 'Retries',
+  'shared.studio.nodeConfiguration.connectorCall.retry.placeholder': '0',
+  'shared.studio.nodeConfiguration.connectorCall.timeout.label': 'Timeout ms',
+  'shared.studio.nodeConfiguration.connectorCall.timeout.placeholder': '10000',
+  'shared.studio.nodeConfiguration.delay.duration.label': 'Duration ms',
+  'shared.studio.nodeConfiguration.delay.duration.placeholder': '1000',
+  'shared.studio.nodeConfiguration.emit.eventType.label': 'Event type',
+  'shared.studio.nodeConfiguration.emit.eventType.placeholder':
+    'workflow.completed',
+  'shared.studio.nodeConfiguration.emit.payload.label': 'Payload',
+  'shared.studio.nodeConfiguration.emit.payload.placeholder': '$input',
+  'shared.studio.nodeConfiguration.guard.check.label': 'Check',
+  'shared.studio.nodeConfiguration.guard.check.option.contains':
+    'Contains keyword',
+  'shared.studio.nodeConfiguration.guard.check.option.jsonValid':
+    'Input is valid JSON',
+  'shared.studio.nodeConfiguration.guard.check.option.maxLength':
+    'Within max length',
+  'shared.studio.nodeConfiguration.guard.check.option.notEmpty':
+    'Input is not empty',
+  'shared.studio.nodeConfiguration.guard.check.option.regex': 'Matches regex',
+  'shared.studio.nodeConfiguration.guard.onFailure.label': 'On failure',
+  'shared.studio.nodeConfiguration.humanApproval.onReject.label': 'On rejection',
+  'shared.studio.nodeConfiguration.humanApproval.onReject.option.fail':
+    'Fail the run',
+  'shared.studio.nodeConfiguration.humanApproval.onReject.option.skip':
+    'Skip this step',
+  'shared.studio.nodeConfiguration.humanApproval.prompt.label':
+    'Approval prompt',
+  'shared.studio.nodeConfiguration.humanApproval.prompt.placeholder':
+    'Approve this step?',
+  'shared.studio.nodeConfiguration.humanInput.prompt.label': 'Input prompt',
+  'shared.studio.nodeConfiguration.humanInput.prompt.placeholder':
+    'Please provide the missing input.',
+  'shared.studio.nodeConfiguration.humanInput.variable.label':
+    'Response variable',
+  'shared.studio.nodeConfiguration.humanInput.variable.placeholder':
+    'human_response',
+  'shared.studio.nodeConfiguration.llmCall.instruction.description':
+    'Prepended to the run message before the role is called.',
+  'shared.studio.nodeConfiguration.llmCall.instruction.label': 'Instruction',
+  'shared.studio.nodeConfiguration.llmCall.instruction.placeholder':
+    'Tell the role what this step should do.',
+  'shared.studio.nodeConfiguration.option.onFailure.branch': 'Go to a branch',
+  'shared.studio.nodeConfiguration.option.onFailure.fail': 'Fail the run',
+  'shared.studio.nodeConfiguration.option.onFailure.skip': 'Skip this step',
+  'shared.studio.nodeConfiguration.retrieveFacts.query.label': 'Query',
+  'shared.studio.nodeConfiguration.retrieveFacts.query.placeholder':
+    'What facts should this step retrieve?',
+  'shared.studio.nodeConfiguration.retrieveFacts.topK.label': 'Top K',
+  'shared.studio.nodeConfiguration.retrieveFacts.topK.placeholder': '3',
+  'shared.studio.nodeConfiguration.stepType.option.assign': 'Assign',
+  'shared.studio.nodeConfiguration.stepType.option.cache': 'Cache',
+  'shared.studio.nodeConfiguration.stepType.option.checkpoint': 'Checkpoint',
+  'shared.studio.nodeConfiguration.stepType.option.conditional': 'Conditional',
+  'shared.studio.nodeConfiguration.stepType.option.connectorCall':
+    'Connector call',
+  'shared.studio.nodeConfiguration.stepType.option.delay': 'Delay',
+  'shared.studio.nodeConfiguration.stepType.option.dynamicWorkflow':
+    'Dynamic workflow',
+  'shared.studio.nodeConfiguration.stepType.option.emit': 'Emit',
+  'shared.studio.nodeConfiguration.stepType.option.evaluate': 'Evaluate',
+  'shared.studio.nodeConfiguration.stepType.option.foreach': 'For each',
+  'shared.studio.nodeConfiguration.stepType.option.guard': 'Guard',
+  'shared.studio.nodeConfiguration.stepType.option.humanApproval':
+    'Human approval',
+  'shared.studio.nodeConfiguration.stepType.option.humanInput': 'Human input',
+  'shared.studio.nodeConfiguration.stepType.option.llmCall': 'LLM call',
+  'shared.studio.nodeConfiguration.stepType.option.mapReduce': 'Map reduce',
+  'shared.studio.nodeConfiguration.stepType.option.parallel': 'Parallel',
+  'shared.studio.nodeConfiguration.stepType.option.race': 'Race',
+  'shared.studio.nodeConfiguration.stepType.option.reflect': 'Reflect',
+  'shared.studio.nodeConfiguration.stepType.option.retrieveFacts':
+    'Retrieve facts',
+  'shared.studio.nodeConfiguration.stepType.option.switch': 'Switch',
+  'shared.studio.nodeConfiguration.stepType.option.toolCall': 'Tool call',
+  'shared.studio.nodeConfiguration.stepType.option.transform': 'Transform',
+  'shared.studio.nodeConfiguration.stepType.option.vote': 'Vote',
+  'shared.studio.nodeConfiguration.stepType.option.waitSignal':
+    'Wait for signal',
+  'shared.studio.nodeConfiguration.stepType.option.while': 'While',
+  'shared.studio.nodeConfiguration.stepType.option.workflowCall':
+    'Workflow call',
+  'shared.studio.nodeConfiguration.stepType.option.workflowYamlValidate':
+    'Workflow YAML validation',
+  'shared.studio.nodeConfiguration.transform.operation.label': 'Operation',
+  'shared.studio.nodeConfiguration.transform.operation.option.count':
+    'Count lines',
+  'shared.studio.nodeConfiguration.transform.operation.option.identity':
+    'Pass through',
+  'shared.studio.nodeConfiguration.transform.operation.option.join':
+    'Join sections',
+  'shared.studio.nodeConfiguration.transform.operation.option.jsonExtract':
+    'Extract JSON',
+  'shared.studio.nodeConfiguration.transform.operation.option.lowercase':
+    'Lowercase',
+  'shared.studio.nodeConfiguration.transform.operation.option.split':
+    'Split into sections',
+  'shared.studio.nodeConfiguration.transform.operation.option.take':
+    'Take first lines',
+  'shared.studio.nodeConfiguration.transform.operation.option.takeLast':
+    'Take last lines',
+  'shared.studio.nodeConfiguration.transform.operation.option.trim':
+    'Trim whitespace',
+  'shared.studio.nodeConfiguration.transform.operation.option.uppercase':
+    'Uppercase',
+  'shared.studio.nodeConfiguration.waitSignal.signalName.label': 'Signal name',
+  'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder': 'continue',
+  'shared.studio.nodeConfiguration.waitSignal.timeout.label': 'Timeout ms',
+  'shared.studio.nodeConfiguration.waitSignal.timeout.placeholder': '60000',
+  'shared.studio.nodeConfiguration.workflowCall.lifecycle.label': 'Lifecycle',
+  'shared.studio.nodeConfiguration.workflowCall.lifecycle.option.inline':
+    'Inline call',
+  'shared.studio.nodeConfiguration.workflowCall.lifecycle.option.scope':
+    'Use scope workflow',
+  'shared.studio.nodeConfiguration.workflowCall.workflow.label': 'Workflow',
+  'shared.studio.nodeConfiguration.workflowCall.workflow.placeholder':
+    'child_workflow',
   'teams.members.actions.build': 'Build',
   'teams.members.actions.clearEntry': 'Clear entry member',
   'teams.members.actions.create': 'Create member',
@@ -383,19 +525,16 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.activation.ready': 'Ready',
   'teamMemberWorkflowStudio.header.addNode': 'Add node',
   'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
+  'teamMemberWorkflowStudio.header.deleteConnection': 'Delete connection',
   'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
   'teamMemberWorkflowStudio.header.editWorkflowName': 'Edit workflow name',
-  'teamMemberWorkflowStudio.header.executeWorkflow': 'Execute workflow',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow identity',
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow draft and node actions',
-  'teamMemberWorkflowStudio.header.optionalTestPayload': 'Optional test payload',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
-  'teamMemberWorkflowStudio.header.runInput': 'Run input',
-  'teamMemberWorkflowStudio.header.runInputPlaceholder':
-    'Optional input for this workflow run',
+  'teamMemberWorkflowStudio.header.runMessage': 'Run message',
   'teamMemberWorkflowStudio.header.runOptionsAria': 'Run options',
   'teamMemberWorkflowStudio.header.runActiveMember': 'Run active member',
   'teamMemberWorkflowStudio.header.save': 'Save',
@@ -413,18 +552,22 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
   'teamMemberWorkflowStudio.header.unsavedChanges': 'Unsaved changes',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
-  'teamMemberWorkflowStudio.header.workflowRun': 'Workflow run',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
-  'teamMemberWorkflowStudio.nodeDetail.apply': 'Apply',
-  'teamMemberWorkflowStudio.nodeDetail.input': 'Input',
-  'teamMemberWorkflowStudio.nodeDetail.inputEmpty':
-    'Input preview will appear here when workflow execution is wired.',
-  'teamMemberWorkflowStudio.nodeDetail.output': 'Output',
-  'teamMemberWorkflowStudio.nodeDetail.outputEmpty':
-    'Output remains empty until a real workflow execution result is available.',
-  'teamMemberWorkflowStudio.nodeDetail.parameters': 'Parameters',
-  'teamMemberWorkflowStudio.nodeDetail.parametersAria': 'Node parameters',
+  'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
+    'Advanced raw configuration',
+  'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
+    'Use this only when a node option is not available as a guided field.',
+  'teamMemberWorkflowStudio.nodeDetail.applyRawConfiguration': 'Apply raw JSON',
+  'teamMemberWorkflowStudio.nodeDetail.configuration': 'Configuration',
+  'teamMemberWorkflowStudio.nodeDetail.configurationDescription':
+    'Edit the fields this node uses when the draft runs.',
+  'teamMemberWorkflowStudio.nodeDetail.noSemanticFields':
+    'This node type does not have guided fields yet. Use advanced raw configuration when needed.',
+  'teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria':
+    'Raw node configuration',
   'teamMemberWorkflowStudio.nodeDetail.sectionAria': 'Node detail',
+  'teamMemberWorkflowStudio.nodeDetail.stepId': 'Step ID: {stepId}',
+  'teamMemberWorkflowStudio.nodeDetail.updateNode': 'Update node',
   'teamMemberWorkflowStudio.nodeLibrary.closeAria': 'Close node library',
   'teamMemberWorkflowStudio.nodeLibrary.emptySearch':
     'No nodes match this search.',
@@ -433,8 +576,12 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': 'Search nodes',
   'teamMemberWorkflowStudio.nodeLibrary.sectionAria': 'Node library',
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
-  'teamMemberWorkflowStudio.runOptionsPanel.inputPlaceholder':
-    'Optional input for this active member run',
+  'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
+  'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
+  'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
+    'Message to active member',
+  'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
+    'Optional message sent with this active member run',
   'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': 'Run options panel',
   'teamMemberWorkflowStudio.runOptionsPanel.title': 'Run options',
   'teamMemberWorkflowStudio.runsPanel.description':
