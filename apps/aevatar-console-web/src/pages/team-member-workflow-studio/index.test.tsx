@@ -2479,7 +2479,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
         "scope-1",
         {
-          metadata: undefined,
+          metadata: {
+            workflowId: "workflow-alpha",
+          },
           prompt: "Run Workflow Alpha",
         },
         expect.any(AbortSignal),

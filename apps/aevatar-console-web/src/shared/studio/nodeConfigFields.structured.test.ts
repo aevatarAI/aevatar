@@ -5,7 +5,7 @@ import {
   formatRawStudioNodeConfiguration,
   getStudioNodeConfigurationSchema,
   readStudioNodeConfigurationValues,
-} from './nodeConfiguration';
+} from './nodeConfigFields';
 
 describe('studio node configuration semantics', () => {
   it('presents llm_call prompt_prefix as an Instruction field while preserving runtime parameters', () => {
