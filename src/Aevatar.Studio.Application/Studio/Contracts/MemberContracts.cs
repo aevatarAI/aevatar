@@ -96,8 +96,6 @@ public sealed record StudioMemberSummaryResponse(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt)
 {
-    public StudioMemberInvocationReadinessResponse? InvocationReadiness { get; init; }
-
     /// <summary>
     /// Optional team assignment (ADR-0017). Null means the member is not
     /// currently in any team. Added as a non-positional <c>init</c> property

@@ -22,8 +22,6 @@ import type {
   StudioMemberDetail,
   StudioMemberImplementationKind,
   StudioMemberImplementationRef,
-  StudioMemberInvocationReadiness,
-  StudioMemberInvocationReadinessStatus,
   StudioMemberLifecycleStage,
   StudioMemberRoster,
   StudioMemberSummary,
@@ -1062,58 +1060,6 @@ function readStudioTeamLifecycle(
   );
 }
 
-function normalizeStudioMemberInvocationReadinessStatus(
-  value: string | number | null | undefined
-): StudioMemberInvocationReadinessStatus {
-  return normalizeEnumValue(value ?? 'unknown', 'invocationReadiness.status', {
-    '0': 'unknown',
-    '1': 'service_catalog_missing',
-    '2': 'serving_set_missing',
-    '3': 'eligible_serving_target_missing',
-    '4': 'service_catalog_target_missing',
-    '5': 'ready',
-    '6': 'traffic_view_target_missing',
-    '7': 'prepared_artifact_missing',
-    ready: 'ready',
-    service_catalog_missing: 'service_catalog_missing',
-    servicecatalogmissing: 'service_catalog_missing',
-    serving_set_missing: 'serving_set_missing',
-    servingsetmissing: 'serving_set_missing',
-    eligible_serving_target_missing: 'eligible_serving_target_missing',
-    eligibleservingtargetmissing: 'eligible_serving_target_missing',
-    service_catalog_target_missing: 'service_catalog_target_missing',
-    servicecatalogtargetmissing: 'service_catalog_target_missing',
-    traffic_view_target_missing: 'traffic_view_target_missing',
-    trafficviewtargetmissing: 'traffic_view_target_missing',
-    prepared_artifact_missing: 'prepared_artifact_missing',
-    preparedartifactmissing: 'prepared_artifact_missing',
-    unknown: 'unknown',
-  }) as StudioMemberInvocationReadinessStatus;
-}
-
-function decodeStudioMemberInvocationReadiness(
-  value: unknown
-): StudioMemberInvocationReadiness {
-  const record = expectRecord(value, 'StudioMemberInvocationReadiness');
-  const status = normalizeStudioMemberInvocationReadinessStatus(
-    readOptionalScalar(record, ['status', 'Status'])
-  );
-  return {
-    canInvoke: readBoolean(record, ['canInvoke', 'CanInvoke', 'callable', 'Callable'], 'StudioMemberInvocationReadiness.canInvoke'),
-    status,
-    reasonCode:
-      readNullableString(record, ['reasonCode', 'ReasonCode', 'reason', 'Reason'], 'StudioMemberInvocationReadiness.reasonCode') ?? status,
-    message:
-      readNullableString(record, ['message', 'Message'], 'StudioMemberInvocationReadiness.message') ?? '',
-    revisionId:
-      readNullableString(record, ['revisionId', 'RevisionId'], 'StudioMemberInvocationReadiness.revisionId') ?? null,
-    deploymentId:
-      readNullableString(record, ['deploymentId', 'DeploymentId'], 'StudioMemberInvocationReadiness.deploymentId') ?? null,
-    observedAtUtc:
-      readNullableString(record, ['observedAtUtc', 'ObservedAtUtc'], 'StudioMemberInvocationReadiness.observedAtUtc') ?? null,
-  };
-}
-
 function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
   const record = expectRecord(value, "StudioMemberSummary");
   return {
@@ -1157,13 +1103,6 @@ function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
         ["lastBoundRevisionId", "LastBoundRevisionId"],
         "StudioMemberSummary.lastBoundRevisionId"
       ) ?? null,
-    ...(record.invocationReadiness == null && record.InvocationReadiness == null
-      ? {}
-      : {
-          invocationReadiness: decodeStudioMemberInvocationReadiness(
-            record.invocationReadiness ?? record.InvocationReadiness
-          ),
-        }),
     teamId:
       readNullableString(
         record,

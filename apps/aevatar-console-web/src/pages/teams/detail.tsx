@@ -768,8 +768,9 @@ const TeamDetailPage: React.FC = () => {
           teamId: selectedTeamId,
         }),
         description: trimText(member.description),
-        canInvokeAsEntry: member.invocationReadiness?.canInvoke === true,
-        invocationReadiness: member.invocationReadiness ?? null,
+        canInvokeAsEntry:
+          normalizeStatus(member.lifecycleStage) === "bind_ready" &&
+          trimText(member.publishedServiceId).length > 0,
         editStudioHref: buildTeamStudioHref({
           memberId: member.memberId,
           mode: "edit-member",

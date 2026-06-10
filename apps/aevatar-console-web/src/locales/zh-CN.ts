@@ -265,6 +265,8 @@ const zhCNMessages = {
   'teams.detail.test.errors.entryNotFound.description':
     '当前入口成员不在这支团队的成员清单中，请重新选择入口成员。',
   'teams.detail.test.errors.entryNotFound.title': '入口成员不可见',
+  'teams.detail.test.errors.entryArtifactMissing.description':
+    '入口成员已绑定，但运行时 artifact 尚未准备好，暂时不能调用。',
   'teams.detail.test.errors.entryNotReady.description':
     '入口成员还没有完成 Build / Bind，暂时不能作为团队测试的运行入口。',
   'teams.detail.test.errors.entryNotReady.title': '入口成员尚未就绪',

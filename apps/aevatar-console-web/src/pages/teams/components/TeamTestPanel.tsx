@@ -30,12 +30,6 @@ export type TeamTestRosterRow = {
   readonly canInvokeAsEntry: boolean;
   readonly editStudioHref: string;
   readonly implementationKind: string;
-  readonly invocationReadiness?: {
-    readonly canInvoke: boolean;
-    readonly status: string;
-    readonly reasonCode: string;
-    readonly message: string;
-  } | null;
   readonly lifecycleLabel: string;
   readonly lifecycleStyle: React.CSSProperties;
   readonly memberId: string;
@@ -131,45 +125,6 @@ function formatStatusLabel(
       return intl.formatMessage({ id: "teams.detail.test.status.stopped" });
     default:
       return intl.formatMessage({ id: "teams.detail.test.status.idle" });
-  }
-}
-
-function formatReadinessMessage(
-  readiness: TeamTestRosterRow["invocationReadiness"],
-  intl: ReturnType<typeof useIntl>,
-): string {
-  switch (readiness?.reasonCode || readiness?.status) {
-    case "prepared_artifact_missing":
-      return intl.formatMessage({
-        id: "teams.detail.test.readiness.preparedArtifactMissing",
-        defaultMessage: "Bound, but the current runtime artifact is not prepared yet.",
-      });
-    case "service_catalog_missing":
-      return intl.formatMessage({
-        id: "teams.detail.test.readiness.serviceCatalogMissing",
-        defaultMessage: "The service catalog has not synced this member yet.",
-      });
-    case "serving_set_missing":
-    case "eligible_serving_target_missing":
-      return intl.formatMessage({
-        id: "teams.detail.test.readiness.servingTargetMissing",
-        defaultMessage: "No invocation-ready serving target is available yet.",
-      });
-    case "traffic_view_target_missing":
-      return intl.formatMessage({
-        id: "teams.detail.test.readiness.trafficViewTargetMissing",
-        defaultMessage: "The runtime traffic view has not observed this member yet.",
-      });
-    case "service_catalog_target_missing":
-      return intl.formatMessage({
-        id: "teams.detail.test.readiness.serviceCatalogTargetMissing",
-        defaultMessage: "The endpoint has not synced to the service catalog yet.",
-      });
-    default:
-      return readiness?.message || intl.formatMessage({
-        id: "teams.detail.test.readiness.unknown",
-        defaultMessage: "The backend has not confirmed this member is invokable yet.",
-      });
   }
 }
 
@@ -384,19 +339,14 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                   {intl.formatMessage({ id: "teams.detail.test.entry.setAndTest" })}
                 </Button>
               ) : (
-                <Space direction="vertical" size={4}>
-                  <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                    {formatReadinessMessage(row.invocationReadiness, intl)}
-                  </Typography.Text>
-                  <Button
-                    href={row.buildStudioHref}
-                    disabled={isEntryActionBusy}
-                    onClick={handleNavigate(row.buildStudioHref)}
-                    size="small"
-                  >
-                    {intl.formatMessage({ id: "teams.detail.test.entry.buildFirst" })}
-                  </Button>
-                </Space>
+                <Button
+                  href={row.buildStudioHref}
+                  disabled={isEntryActionBusy}
+                  onClick={handleNavigate(row.buildStudioHref)}
+                  size="small"
+                >
+                  {intl.formatMessage({ id: "teams.detail.test.entry.buildFirst" })}
+                </Button>
               )}
             </Space>
           </div>
@@ -495,11 +445,6 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             {intl.formatMessage({ id: "teams.detail.test.service.label" })}
           </Typography.Text>
           <CompactFactValue value={entryMember?.serviceId || "--"} />
-          {entryMember && !entryMember.canInvokeAsEntry ? (
-            <Typography.Text style={{ fontSize: 12 }} type="secondary">
-              {formatReadinessMessage(entryMember.invocationReadiness, intl)}
-            </Typography.Text>
-          ) : null}
         </div>
         <Space size={8} style={{ flex: "0 1 auto" }} wrap>
           {entryMember?.editStudioHref ? (

@@ -277,6 +277,8 @@ const enUSMessages = {
   'teams.detail.test.errors.entryNotFound.description':
     'The current entry member is not visible in this team roster. Choose the entry member again.',
   'teams.detail.test.errors.entryNotFound.title': 'Entry member unavailable',
+  'teams.detail.test.errors.entryArtifactMissing.description':
+    'The entry member is bound, but its runtime artifact is not prepared for invocation yet.',
   'teams.detail.test.errors.entryNotReady.description':
     'The entry member has not finished Build / Bind yet, so it cannot run team tests.',
   'teams.detail.test.errors.entryNotReady.title': 'Entry member is not ready',

@@ -77,9 +77,7 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             $"/api/scopes/{ScopeId}/members");
         rosterWhilePending.Should().NotBeNull();
         var pendingMember = rosterWhilePending!.Members.Should().ContainSingle().Which;
-        pendingMember.InvocationReadiness.Should().NotBeNull();
-        pendingMember.InvocationReadiness!.CanInvoke.Should().BeFalse();
-        pendingMember.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.Unknown);
+        pendingMember.PublishedServiceId.Should().BeEmpty();
 
         host.Scenario.CompleteBinding();
 
@@ -87,10 +85,14 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             $"/api/scopes/{ScopeId}/members");
         completedRoster.Should().NotBeNull();
         var completedMember = completedRoster!.Members.Should().ContainSingle().Which;
-        completedMember.InvocationReadiness.Should().NotBeNull();
-        completedMember.InvocationReadiness!.CanInvoke.Should().BeTrue();
-        completedMember.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
-        completedMember.InvocationReadiness.ReasonCode.Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
+        completedMember.PublishedServiceId.Should().Be("member-member-1");
+        completedMember.LastBoundRevisionId.Should().Be("rev-1");
+
+        var completedDetail = await host.Client.GetFromJsonAsync<StudioMemberDetailResponse>(
+            $"/api/scopes/{ScopeId}/members/{MemberId}");
+        completedDetail.Should().NotBeNull();
+        completedDetail!.Summary.PublishedServiceId.Should().Be("member-member-1");
+        completedDetail.Summary.LastBoundRevisionId.Should().Be("rev-1");
 
         var completedRun = await host.Client.GetFromJsonAsync<StudioMemberBindingRunStatusResponse>(
             $"/api/scopes/{ScopeId}/members/{MemberId}/binding-runs/{accepted.BindingRunId}");
@@ -147,7 +149,7 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             builder.Services.AddSingleton<IStudioMemberBindingRunQueryPort>(bindingRunQueryPort);
             builder.Services.AddSingleton<IStudioTeamQueryPort>(new InertTeamQueryPort());
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(new ThrowingServiceLifecycleQueryPort());
-            builder.Services.AddSingleton<IScopeBindingReadinessQueryPort>(new ReadyScopeBindingReadinessQueryPort());
+            builder.Services.AddSingleton<IScopeBindingReadinessQueryPort>(new ThrowingScopeBindingReadinessQueryPort());
             builder.Services.AddSingleton<IServiceCommandPort>(new ThrowingServiceCommandPort());
             builder.Services.AddSingleton<IStudioMemberService, StudioMemberService>();
             builder.Services.AddAuthorization();
@@ -367,22 +369,12 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             Task.FromResult<StudioTeamSummaryResponse?>(null);
     }
 
-    private sealed class ReadyScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    private sealed class ThrowingScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
     {
         public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
             ScopeBindingReadinessRequest request,
             CancellationToken ct = default) =>
-            Task.FromResult(new ScopeBindingReadinessSnapshot(
-                request.ScopeId,
-                request.ServiceId,
-                ScopeBindingReadinessStatus.Ready,
-                ServiceCatalogVisible: true,
-                ServingSetVisible: true,
-                EligibleServingTargetVisible: true,
-                InvokeReady: true,
-                RevisionId: request.ExpectedRevisionId,
-                DeploymentId: "dep-1",
-                ObservedAtUtc: DateTimeOffset.UtcNow));
+            throw new InvalidOperationException("Member list and binding views must not query invocation readiness.");
     }
 
     private sealed class ThrowingServiceLifecycleQueryPort : IServiceLifecycleQueryPort

@@ -106,8 +106,13 @@ export function describeTeamTestError(
   }
 
   if (normalized.includes("TEAM_ENTRY_MEMBER_NOT_READY")) {
+    const artifactMissing = normalized.includes("PREPARED_ARTIFACT_MISSING");
     return {
-      description: formatMessage("teams.detail.test.errors.entryNotReady.description"),
+      description: formatMessage(
+        artifactMissing
+          ? "teams.detail.test.errors.entryArtifactMissing.description"
+          : "teams.detail.test.errors.entryNotReady.description",
+      ),
       kind: "entry_not_ready",
       title: formatMessage("teams.detail.test.errors.entryNotReady.title"),
     };

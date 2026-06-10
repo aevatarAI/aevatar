@@ -65,20 +65,11 @@ public sealed class StudioMemberService : IStudioMemberService
         return await _memberCommandPort.CreateAsync(scopeId, request, ct);
     }
 
-    public async Task<StudioMemberRosterResponse> ListAsync(
+    public Task<StudioMemberRosterResponse> ListAsync(
         string scopeId,
         StudioMemberRosterPageRequest? page = null,
-        CancellationToken ct = default)
-    {
-        var roster = await _memberQueryPort.ListAsync(scopeId, page, ct);
-        var members = new List<StudioMemberSummaryResponse>(roster.Members.Count);
-        foreach (var member in roster.Members)
-        {
-            members.Add(await HydrateInvocationReadinessAsync(member, endpointId: null, ct));
-        }
-
-        return roster with { Members = members };
-    }
+        CancellationToken ct = default) =>
+        _memberQueryPort.ListAsync(scopeId, page, ct);
 
     public async Task<StudioMemberDetailResponse> GetAsync(
         string scopeId,
@@ -92,11 +83,7 @@ public sealed class StudioMemberService : IStudioMemberService
         // every member-centric endpoint.
         var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
             ?? throw new StudioMemberNotFoundException(scopeId, memberId);
-        var hydratedDetail = detail with
-        {
-            Summary = await HydrateInvocationReadinessAsync(detail.Summary, endpointId: null, ct),
-        };
-        return await HydrateCurrentBindingRunAsync(hydratedDetail, ct);
+        return await HydrateCurrentBindingRunAsync(detail, ct);
     }
 
     public async Task<StudioMemberBindingAcceptedResponse> BindAsync(
@@ -332,20 +319,6 @@ public sealed class StudioMemberService : IStudioMemberService
 
         // Re-read the member detail so callers see the post-update state.
         return await GetAsync(scopeId, memberId, ct);
-    }
-
-    private async Task<StudioMemberSummaryResponse> HydrateInvocationReadinessAsync(
-        StudioMemberSummaryResponse summary,
-        string? endpointId,
-        CancellationToken ct)
-    {
-        var readiness = await ResolveInvocationReadinessAsync(
-            summary.ScopeId,
-            summary.PublishedServiceId,
-            summary.LastBoundRevisionId,
-            endpointId,
-            ct);
-        return summary with { InvocationReadiness = readiness };
     }
 
     private async Task<StudioMemberInvocationReadinessResponse> ResolveInvocationReadinessAsync(
