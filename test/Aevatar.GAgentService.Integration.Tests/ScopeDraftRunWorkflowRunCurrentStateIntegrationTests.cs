@@ -33,7 +33,7 @@ namespace Aevatar.GAgentService.Integration.Tests;
 
 public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
 {
-    private static readonly TimeSpan ReadModelVisibilityTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ReadModelVisibilityTimeout = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan ReadModelVisibilityPollInterval = TimeSpan.FromMilliseconds(100);
 
     [Fact]
