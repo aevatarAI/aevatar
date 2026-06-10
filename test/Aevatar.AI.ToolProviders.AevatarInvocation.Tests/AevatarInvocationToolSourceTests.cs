@@ -92,18 +92,15 @@ public sealed class AevatarInvocationToolSourceTests
             .EnumerateObject()
             .Select(static item => item.Name)
             .ToArray();
-        var oneOfRequired = doc.RootElement
-            .GetProperty("oneOf")
-            .EnumerateArray()
-            .Select(static item => item.GetProperty("required")[0].GetString())
-            .ToArray();
 
         properties.Should().BeEquivalentTo(
             "service_run",
             "gagent_terminal_correlation",
             "gagent_terminal_session",
             "workflow_current_state");
-        oneOfRequired.Should().BeEquivalentTo(properties);
+        doc.RootElement.TryGetProperty("oneOf", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("anyOf", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("allOf", out _).Should().BeFalse();
     }
 
     [Theory]

@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
@@ -651,6 +653,14 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             TargetActorId = command.TargetActorId,
         };
 
+    private static NeedsLlmReplyEvent BuildStepRequest(AgentRunOwnerFallbackStepRequested command) =>
+        new()
+        {
+            RunId = command.RunId,
+            CorrelationId = command.CorrelationId,
+            TargetActorId = command.TargetActorId,
+        };
+
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleNextLlmStepAsync(AgentRunNextLlmStepRequestedEvent command)
     {
@@ -694,6 +704,33 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
 
         await DispatchLlmStepExecutorAsync(request, stepState);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleOwnerFallbackStepAsync(AgentRunOwnerFallbackStepRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+            return;
+
+        var currentStep = State.GenerationStep;
+        if (currentStep is null || currentStep.FinalNoToolsStep)
+            return;
+
+        var request = command.Request?.Clone() ?? BuildStepRequest(command);
+        ApplyTargetRefOverrides(request);
+        request.Activity = ClearRuntimeUserAccessToken(request.Activity);
+        request.LlmControl = ResolveOwnerFallbackControl(currentStep).ToPayload();
+        request.ToolContext = ResolveOwnerFallbackToolContext(currentStep).ToPayload();
+
+        var fallbackStep = BuildOwnerFallbackStepState(currentStep, command.StepIndex);
+        _logger.LogWarning(
+            "Agent run switching to bot-owner no-tools fallback: runId={RunId} correlation={CorrelationId} reason={Reason}",
+            command.RunId,
+            command.CorrelationId,
+            command.Reason);
+        await PersistStepStateAsync(fallbackStep);
+        await DispatchLlmStepExecutorAsync(request, fallbackStep);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -789,6 +826,92 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (result.AdvanceRound)
             next.Round++;
         return next;
+    }
+
+    private static AgentRunReplyStepState BuildOwnerFallbackStepState(
+        AgentRunReplyStepState current,
+        int nextStepIndex)
+    {
+        var next = current.Clone();
+        next.NextStepIndex = nextStepIndex;
+        next.FinalNoToolsStep = true;
+        next.PendingToolCalls.Clear();
+        next.AccumulatedText = string.Empty;
+        next.LastFinishReason = string.Empty;
+        next.HasStreamedTextContent = false;
+        next.LlmControl = ResolveOwnerFallbackControl(current).ToPayload();
+        next.ToolContext = ResolveOwnerFallbackToolContext(current).ToPayload();
+        next.Messages.Clear();
+        next.Messages.AddRange(current.Messages.Where(static message =>
+            !string.Equals(message.Role, "assistant", StringComparison.Ordinal) &&
+            !string.Equals(message.Role, "tool", StringComparison.Ordinal)));
+        return next;
+    }
+
+    private static LLMControlContext ResolveOwnerFallbackControl(AgentRunReplyStepState stepState)
+    {
+        var fallback = LLMControlContextMapper.FromPayload(stepState.OwnerFallbackLlmControl);
+        if (HasAnyOwnerFallbackControl(fallback))
+            return fallback with { SenderNyxIdAccessToken = null };
+
+        var current = AgentRunReplyStepMappers.LlmControlFromProto(stepState);
+        return current with { SenderNyxIdAccessToken = null };
+    }
+
+    private static AgentToolExecutionContext ResolveOwnerFallbackToolContext(AgentRunReplyStepState stepState)
+    {
+        var fallback = AgentToolExecutionContextMapper.FromPayload(stepState.OwnerFallbackToolContext);
+        if (HasAnyOwnerFallbackToolContext(fallback))
+            return ClearSenderRuntimeFacts(fallback);
+
+        return ClearSenderRuntimeFacts(AgentRunReplyStepMappers.ToolContextFromProto(stepState));
+    }
+
+    private static bool HasAnyOwnerFallbackControl(LLMControlContext control) =>
+        !string.IsNullOrWhiteSpace(control.NyxIdAccessToken) ||
+        !string.IsNullOrWhiteSpace(control.NyxIdOrgToken) ||
+        !string.IsNullOrWhiteSpace(control.ModelOverride) ||
+        !string.IsNullOrWhiteSpace(control.NyxIdRoutePreference) ||
+        control.MaxToolRoundsOverride.HasValue ||
+        !string.IsNullOrWhiteSpace(control.UserMemoryPrompt);
+
+    private static bool HasAnyOwnerFallbackToolContext(AgentToolExecutionContext context) =>
+        !string.IsNullOrWhiteSpace(context.Request.RequestId) ||
+        !string.IsNullOrWhiteSpace(context.Request.CallId) ||
+        !string.IsNullOrWhiteSpace(context.Credentials.NyxIdAccessToken) ||
+        !string.IsNullOrWhiteSpace(context.Credentials.NyxIdOrgToken) ||
+        !string.IsNullOrWhiteSpace(context.Caller.ScopeId) ||
+        !string.IsNullOrWhiteSpace(context.Caller.OwnerSubject) ||
+        !string.IsNullOrWhiteSpace(context.Caller.ResponseId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.Platform) ||
+        !string.IsNullOrWhiteSpace(context.Channel.SenderId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.RegistrationScopeId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.MessageId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.PlatformMessageId) ||
+        !string.IsNullOrWhiteSpace(context.Routing.ModelOverride) ||
+        !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
+        context.Routing.MaxToolRoundsOverride.HasValue ||
+        !string.IsNullOrWhiteSpace(context.Routing.UserMemoryPrompt) ||
+        !string.IsNullOrWhiteSpace(context.ConnectedServices.ContextJson) ||
+        context.SkillRecovery != AgentSkillRecoveryContext.Empty ||
+        context.ExternalMetadata.Count > 0;
+
+    private static AgentToolExecutionContext ClearSenderRuntimeFacts(AgentToolExecutionContext context) =>
+        context with
+        {
+            SenderBinding = AgentToolSenderBindingContext.Empty,
+            Credentials = context.Credentials with { SenderNyxIdAccessToken = null },
+        };
+
+    private static ChatActivity? ClearRuntimeUserAccessToken(ChatActivity? activity)
+    {
+        if (activity is null)
+            return null;
+
+        var copy = activity.Clone();
+        if (copy.TransportExtras is not null)
+            copy.TransportExtras.NyxUserAccessToken = string.Empty;
+        return copy;
     }
 
     // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):

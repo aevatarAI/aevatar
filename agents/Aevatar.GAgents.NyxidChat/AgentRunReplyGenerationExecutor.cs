@@ -84,6 +84,13 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 forceDisableTools: false,
                 metadataCts.Token)
                 .ConfigureAwait(false);
+            var ownerFallbackControl = ResolveInitialOwnerFallbackControl(
+                generationContext.OwnerFallbackLlmControl,
+                plan.OwnerFallbackLlmControl);
+            var ownerFallbackToolContext = ResolveInitialOwnerFallbackToolContext(
+                generationContext.OwnerFallbackToolContext,
+                plan.OwnerFallbackToolContext,
+                ownerFallbackControl);
 
             var state = new AgentRunReplyStepState
             {
@@ -101,6 +108,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 FinalNoToolsStep = plan.DisableTools,
                 LlmControl = plan.LlmControl.ToPayload(),
                 ToolContext = plan.ToolContext.ToPayload(),
+                OwnerFallbackLlmControl = ownerFallbackControl.ToPayload(),
+                OwnerFallbackToolContext = ownerFallbackToolContext.ToPayload(),
             };
             foreach (var pair in plan.Metadata)
                 state.ExternalMetadata[pair.Key] = pair.Value;
@@ -139,6 +148,17 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             var command = await BuildLlmStepContinuationAsync(workItem, ct).ConfigureAwait(false);
             await DispatchToRunActorAsync(workItem.RunActorId, command, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (TryBuildOwnerFallbackCommand(workItem, ex) is { } fallback)
+        {
+            _logger.LogWarning(
+                ex,
+                "Agent run LLM step failed before completion; retrying with bot owner LLM config and no tools: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+                workItem.RunId,
+                workItem.Request.CorrelationId,
+                workItem.StepIndex);
+            await DispatchToRunActorAsync(workItem.RunActorId, fallback, CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -380,6 +400,34 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return typedIntent ?? scopedIntent;
     }
 
+    private AgentRunOwnerFallbackStepRequested? TryBuildOwnerFallbackCommand(
+        AgentRunReplyStepExecutionRequest workItem,
+        Exception ex)
+    {
+        if (workItem.StepState.FinalNoToolsStep)
+            return null;
+        if (workItem.StepState.OwnerFallbackLlmControl is null &&
+            workItem.StepState.OwnerFallbackToolContext is null)
+        {
+            return null;
+        }
+        if (!string.IsNullOrWhiteSpace(workItem.StepState.AccumulatedText))
+            return null;
+        if (!LlmOwnerFallbackPolicy.IsRetryable(ex))
+            return null;
+
+        return new AgentRunOwnerFallbackStepRequested
+        {
+            RunId = workItem.RunId,
+            CorrelationId = workItem.Request.CorrelationId,
+            TargetActorId = workItem.Request.TargetActorId,
+            Attempt = workItem.Attempt,
+            StepIndex = workItem.StepIndex + 1,
+            Reason = ex.Message ?? string.Empty,
+            Request = workItem.Request.Clone(),
+        };
+    }
+
     private async Task DispatchStepFailureAsync(AgentRunReplyStepExecutionRequest workItem, Exception ex)
     {
         _logger.LogWarning(
@@ -425,7 +473,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             Payload = Any.Pack(command),
-            Route = command is AgentRunNextLlmStepRequestedEvent or AgentRunNextToolStepRequestedEvent
+            Route = command is AgentRunNextLlmStepRequestedEvent
+                    or AgentRunNextToolStepRequestedEvent
+                    or AgentRunOwnerFallbackStepRequested
                 ? EnvelopeRouteSemantics.CreateTopologyPublication(runActorId, TopologyAudience.Self)
                 : EnvelopeRouteSemantics.CreateDirect(PublisherActorId, runActorId),
         };
@@ -480,7 +530,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private sealed record ReplyGenerationContext(
         IReadOnlyDictionary<string, string> Metadata,
         LLMControlContext LlmControl,
-        AgentToolExecutionContext ToolContext);
+        AgentToolExecutionContext ToolContext,
+        LLMControlContext OwnerFallbackLlmControl,
+        AgentToolExecutionContext OwnerFallbackToolContext);
 
     private async Task<ReplyGenerationContext> BuildGenerationContextAsync(
         NeedsLlmReplyEvent request,
@@ -493,6 +545,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         control = await ApplyBotOwnerLlmConfigAsync(request, control, ct).ConfigureAwait(false);
         if (routedModel is not null)
             control = control with { ModelOverride = routedModel };
+
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+        var ownerFallbackControl = control with { SenderNyxIdAccessToken = null };
+        var ownerFallbackToolContext = ClearSenderBinding(toolContext);
 
         var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
         if (!string.IsNullOrWhiteSpace(userAccessToken))
@@ -507,7 +563,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return new ReplyGenerationContext(
             metadata,
             control,
-            AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+            toolContext,
+            ownerFallbackControl,
+            ownerFallbackToolContext);
     }
 
     private async Task<LLMControlContext> ApplyBotOwnerLlmConfigAsync(
@@ -594,6 +652,45 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     {
         var trimmed = value?.Trim();
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
+
+    private static AgentToolExecutionContext ClearSenderBinding(AgentToolExecutionContext context) =>
+        context with
+        {
+            SenderBinding = AgentToolSenderBindingContext.Empty,
+            Credentials = context.Credentials with { SenderNyxIdAccessToken = null },
+        };
+
+    private static LLMControlContext ResolveInitialOwnerFallbackControl(
+        LLMControlContext ownerSnapshot,
+        LLMControlContext? planFallback)
+    {
+        var candidate = planFallback ?? LLMControlContext.Empty;
+        return new LLMControlContext(
+            NormalizeOptional(ownerSnapshot.NyxIdAccessToken),
+            NormalizeOptional(ownerSnapshot.NyxIdOrgToken),
+            SenderNyxIdAccessToken: null,
+            NormalizeOptional(candidate.ModelOverride) ?? NormalizeOptional(ownerSnapshot.ModelOverride),
+            NormalizeOptional(candidate.NyxIdRoutePreference) ?? NormalizeOptional(ownerSnapshot.NyxIdRoutePreference),
+            candidate.MaxToolRoundsOverride ?? ownerSnapshot.MaxToolRoundsOverride,
+            NormalizeOptional(candidate.UserMemoryPrompt) ?? NormalizeOptional(ownerSnapshot.UserMemoryPrompt));
+    }
+
+    private static AgentToolExecutionContext ResolveInitialOwnerFallbackToolContext(
+        AgentToolExecutionContext ownerSnapshot,
+        AgentToolExecutionContext? planFallback,
+        LLMControlContext ownerControl)
+    {
+        var source = planFallback ?? ownerSnapshot;
+        source = source with
+        {
+            SenderBinding = AgentToolSenderBindingContext.Empty,
+            Credentials = new AgentToolCredentials(
+                NormalizeOptional(ownerControl.NyxIdAccessToken),
+                NormalizeOptional(ownerControl.NyxIdOrgToken),
+                SenderNyxIdAccessToken: null),
+        };
+        return ownerControl.ToToolContext(source);
     }
 
     private sealed class StreamingReplyRunState : IStreamingReplySink
