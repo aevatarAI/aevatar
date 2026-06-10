@@ -302,6 +302,35 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
+    public async Task Projector_ShouldEmitRunErrorFromCommittedLlmErrorPrefix()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "session-1",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "session-1",
+                    Content = "[[AEVATAR_LLM_ERROR]] provider exploded",
+                }),
+            CancellationToken.None);
+
+        var published = hub.Published.Should().ContainSingle().Which;
+        published.Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunError);
+        published.Event.RunError.Message.Should().Be("provider exploded");
+        published.Event.RunError.RunId.Should().Be("session-1");
+    }
+
+    [Fact]
     public async Task Projector_ShouldIgnoreInvalidContextAndUnmappedEnvelope()
     {
         var hub = new RecordingSessionEventHub();
