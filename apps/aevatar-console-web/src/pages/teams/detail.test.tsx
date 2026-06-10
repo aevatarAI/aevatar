@@ -170,6 +170,43 @@ function mockCreateServiceRevisionCatalog(overrides?: Record<string, any>) {
   };
 }
 
+function mockCreateServiceCatalog() {
+  return [
+    {
+      serviceKey: "scope-1:default",
+      tenantId: "scope-1",
+      appId: "default",
+      namespace: "default",
+      serviceId: "default",
+      displayName: "Support Runtime",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "dep-2",
+      primaryActorId: "actor-intake",
+      deploymentStatus: "Active",
+      endpoints: [],
+      policyIds: [],
+      updatedAt: "2026-04-09T09:00:00Z",
+    },
+    {
+      serviceKey: "scope-1:alpha-service",
+      tenantId: "scope-1",
+      appId: "default",
+      namespace: "default",
+      serviceId: "alpha-service",
+      displayName: "Team Alpha Runtime",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "dep-2",
+      primaryActorId: "actor-intake",
+      deploymentStatus: "Active",
+      endpoints: [],
+      policyIds: [],
+      updatedAt: "2026-04-09T09:00:00Z",
+    },
+  ];
+}
+
 function mockCreateMembersCatalog() {
   return {
     scopeId: "scope-1",
@@ -501,24 +538,7 @@ jest.mock("@/shared/api/runtimeActorsApi", () => ({
 
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
-    listServices: jest.fn(async () => [
-      {
-        serviceKey: "scope-1:default",
-        tenantId: "scope-1",
-        appId: "default",
-        namespace: "default",
-        serviceId: "default",
-        displayName: "Support Runtime",
-        defaultServingRevisionId: "rev-2",
-        activeServingRevisionId: "rev-2",
-        deploymentId: "dep-2",
-        primaryActorId: "actor-intake",
-        deploymentStatus: "Active",
-        endpoints: [],
-        policyIds: [],
-        updatedAt: "2026-04-09T09:00:00Z",
-      },
-    ]),
+    listServices: jest.fn(async () => mockCreateServiceCatalog()),
     getServiceRevisions: jest.fn(async () => mockCreateServiceRevisionCatalog()),
     listMemberRuns: jest.fn(async () => mockCreateRunsCatalog()),
     listServiceRuns: jest.fn(async () => mockCreateRunsCatalog()),
@@ -774,6 +794,10 @@ describe("TeamDetailPage", () => {
     (scopesApi.listScripts as jest.Mock).mockClear();
     (runtimeGAgentApi.listActors as jest.Mock).mockClear();
     (runtimeActorsApi.getActorGraphEnriched as jest.Mock).mockClear();
+    (scopeRuntimeApi.listServices as jest.Mock).mockReset();
+    (scopeRuntimeApi.listServices as jest.Mock).mockImplementation(
+      async () => mockCreateServiceCatalog(),
+    );
     (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockReset();
     (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockImplementation(
       async () => mockCreateServiceRevisionCatalog(),
@@ -1122,12 +1146,13 @@ describe("TeamDetailPage", () => {
     });
 
     await waitFor(() => {
-      expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+      expect(scopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
         "scope-1",
-        "member-support",
+        "default",
         expect.objectContaining({ take: 12 }),
       );
     });
+    expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
   });
 
   it("shows configuration details in the overview", async () => {
@@ -1194,7 +1219,7 @@ describe("TeamDetailPage", () => {
   });
 
   it("guides the user to test the Team when no run is visible yet", async () => {
-    (scopeRuntimeApi.listMemberRuns as jest.Mock).mockResolvedValueOnce({
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
       ...mockCreateRunsCatalog(),
       runs: [],
     });
@@ -1215,6 +1240,53 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("测试团队后会在这里显示最新运行。")).toBeTruthy();
     expect(screen.queryByText("暂无可见运行")).toBeNull();
     expect(screen.queryByText("暂无近期可见运行")).toBeNull();
+    expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
+  });
+
+  it("does not query runs for member-like service ids that are missing from the service catalog", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      entryMemberId: "member-untitled-member1",
+    });
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-untitled-member1",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Untitled Member",
+          description: "Service id points at a missing member-derived service",
+          implementationKind: "workflow",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "member-untitled-member1",
+          lastBoundRevisionId: "rev-missing",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect((await screen.findAllByText("Untitled Member")).length).toBeGreaterThan(0);
+
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
+        appId: "default",
+      });
+    });
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalledWith(
+      "scope-1",
+      "member-untitled-member1",
+    );
+    expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalledWith(
+      "scope-1",
+      "member-untitled-member1",
+      expect.anything(),
+    );
+    expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
   });
 
   it("shows the configured Team entry member without treating it as the service target", async () => {
