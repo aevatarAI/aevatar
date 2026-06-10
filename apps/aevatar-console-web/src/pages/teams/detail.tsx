@@ -502,16 +502,38 @@ const TeamDetailPage: React.FC = () => {
     ((teamMembersQuery.failureCount > 0 &&
       isProjectionSyncing404(teamMembersQuery.failureReason)) ||
       (teamMembersQuery.isError && isProjectionSyncing404(teamMembersQuery.error)));
-  const teamMemberServiceIds = React.useMemo(
-    () =>
-      (teamMembersQuery.data?.members ?? [])
+  const teamRuntimeServiceIds = React.useMemo(() => {
+    if (activeTab !== "overview") {
+      return [];
+    }
+
+    const members = teamMembersQuery.data?.members ?? [];
+    const entryMemberId = trimText(teamSummaryQuery.data?.entryMemberId);
+    if (entryMemberId) {
+      const entryMember = members.find(
+        (member) => trimText(member.memberId) === entryMemberId,
+      );
+      const entryServiceId = trimText(entryMember?.publishedServiceId);
+      return entryServiceId ? [entryServiceId] : [];
+    }
+
+    if (teamSummaryQuery.isError) {
+      return members
         .map((member) => trimText(member.publishedServiceId))
-        .filter(Boolean),
-    [teamMembersQuery.data?.members],
-  );
+        .filter(Boolean);
+    }
+
+    return [];
+  }, [
+    activeTab,
+    teamMembersQuery.data?.members,
+    teamSummaryQuery.data?.entryMemberId,
+    teamSummaryQuery.isError,
+  ]);
   const hasExplicitRuntimeFocus = Boolean(
     trimText(preferredMemberId) || trimText(preferredServiceId) || trimText(preferredRunId),
   );
+  const shouldLoadTeamRuntimeLens = hasTeamIdentity && activeTab === "overview";
   const {
     lens,
     runsQuery,
@@ -521,11 +543,11 @@ const TeamDetailPage: React.FC = () => {
     workflowsQuery,
   } = useTeamRuntimeLens(scopeId, {
     allowScopeServiceFallback: false,
-    enabled: hasTeamIdentity,
+    enabled: shouldLoadTeamRuntimeLens,
     preferredMemberId,
     preferredRunId,
     preferredServiceId,
-    teamMemberServiceIds,
+    teamMemberServiceIds: teamRuntimeServiceIds,
   });
 
   React.useEffect(() => {
@@ -1030,18 +1052,21 @@ const TeamDetailPage: React.FC = () => {
 
   const pushTeamTab = React.useCallback(
     (tab: TeamDetailTab) => {
+      const includeRuntimeContext = tab === "overview";
       setActiveTab(tab);
       history.push(
         buildTeamDetailHref({
           memberId: currentMemberId || undefined,
           scopeId,
           teamId: selectedTeamId || undefined,
-          workflowId: activeWorkflowId || undefined,
-          serviceId: runtimeServiceId,
+          workflowId: includeRuntimeContext ? activeWorkflowId || undefined : undefined,
+          serviceId: includeRuntimeContext ? runtimeServiceId : undefined,
           runId:
-            preferredRunId ||
-            lens.currentRun?.runId ||
-            undefined,
+            includeRuntimeContext
+              ? preferredRunId ||
+                lens.currentRun?.runId ||
+                undefined
+              : undefined,
           tab,
         }),
       );

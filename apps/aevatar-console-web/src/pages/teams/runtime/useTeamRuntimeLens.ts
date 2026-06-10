@@ -124,14 +124,15 @@ export function useTeamRuntimeLens(
     trimOptional(preferredMemberSummary?.publishedServiceId) ||
     teamMemberServiceIds[0] ||
     "";
-  const serviceId = preferredServiceHint
+  const matchedPreferredServiceId = preferredServiceHint
     ? services.find((service) => service.serviceId === preferredServiceHint)?.serviceId ||
-      preferredServiceHint
-    : preferredMemberId.length > 0
-      ? ""
-      : allowScopeServiceFallback
-        ? services[0]?.serviceId || ""
-        : "";
+      ""
+    : "";
+  const serviceId =
+    matchedPreferredServiceId ||
+    (!preferredServiceHint && preferredMemberId.length === 0 && allowScopeServiceFallback
+      ? services[0]?.serviceId || ""
+      : "");
   const serviceRevisionsQuery = useQuery({
     enabled: enabled && normalizedScopeId.length > 0 && serviceId.length > 0,
     queryKey: ["teams", "service-revisions", normalizedScopeId, serviceId],
@@ -142,7 +143,7 @@ export function useTeamRuntimeLens(
     enabled:
       enabled &&
       normalizedScopeId.length > 0 &&
-      (serviceId.length > 0 || preferredMemberId.length > 0),
+      serviceId.length > 0,
     queryKey: [
       "teams",
       "runs",
@@ -151,13 +152,9 @@ export function useTeamRuntimeLens(
       serviceId || null,
     ],
     queryFn: () =>
-      preferredMemberId.length > 0
-        ? scopeRuntimeApi.listMemberRuns(normalizedScopeId, preferredMemberId, {
-            take: 12,
-          })
-        : scopeRuntimeApi.listServiceRuns(normalizedScopeId, serviceId, {
-            take: 12,
-          }),
+      scopeRuntimeApi.listServiceRuns(normalizedScopeId, serviceId, {
+        take: 12,
+      }),
     retry: false,
   });
 
