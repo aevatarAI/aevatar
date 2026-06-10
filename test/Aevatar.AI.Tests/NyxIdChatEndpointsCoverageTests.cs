@@ -18,6 +18,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -1316,8 +1317,7 @@ public class NyxIdChatEndpointsCoverageTests
         projectionPort.AttachCount.Should().Be(1);
         projectionPort.DetachCount.Should().Be(1);
         projectionPort.ReleaseCount.Should().Be(1);
-        dispatchPort.Dispatches.Should().ContainSingle();
-        var envelope = dispatchPort.Dispatches.Single().Envelope;
+        var envelope = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort);
         envelope.Route?.Direct?.TargetActorId.Should().Be(actor.Id);
         envelope.Propagation?.CorrelationId.Should().Be(result.Receipt.CorrelationId);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
@@ -1370,8 +1370,7 @@ public class NyxIdChatEndpointsCoverageTests
             (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
-        dispatchPort.Dispatches.Should().ContainSingle();
-        var request = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort).Payload.Unpack<ChatRequestEvent>();
         request.Prompt.Should().Be("::Goal ship today");
         var recovery = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
@@ -1419,8 +1418,7 @@ public class NyxIdChatEndpointsCoverageTests
             (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
-        dispatchPort.Dispatches.Should().ContainSingle();
-        var request = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort).Payload.Unpack<ChatRequestEvent>();
         request.Prompt.Should().Be("::");
         var recovery = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
@@ -1478,8 +1476,7 @@ public class NyxIdChatEndpointsCoverageTests
         projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
             x.ActorId == actor.Id &&
             x.SessionId == "session-1");
-        dispatchPort.Dispatches.Should().ContainSingle();
-        var envelope = dispatchPort.Dispatches.Single().Envelope;
+        var envelope = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort);
         envelope.Propagation?.CorrelationId.Should().Be("correlation-explicit");
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
         request.SessionId.Should().Be("session-1");
@@ -1604,8 +1601,7 @@ public class NyxIdChatEndpointsCoverageTests
         projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
             x.ActorId == actor.Id &&
             x.SessionId == "session-1");
-        dispatchPort.Dispatches.Should().ContainSingle();
-        var envelope = dispatchPort.Dispatches.Single().Envelope;
+        var envelope = RequireDispatchedPayload<ToolApprovalDecisionEvent>(dispatchPort);
         envelope.Propagation?.CorrelationId.Should().Be("approval-correlation-explicit");
         var decision = envelope.Payload.Unpack<ToolApprovalDecisionEvent>();
         decision.RequestId.Should().Be("request-1");
@@ -3270,6 +3266,18 @@ public class NyxIdChatEndpointsCoverageTests
     private static string ComputeBodySha256Hex(byte[] bodyBytes) =>
         Convert.ToHexString(SHA256.HashData(bodyBytes)).ToLowerInvariant();
 
+    private static EventEnvelope RequireDispatchedPayload<TPayload>(StubActorDispatchPort dispatchPort)
+        where TPayload : IMessage, new()
+    {
+        var descriptor = new TPayload().Descriptor;
+        var matches = dispatchPort.Dispatches
+            .Where(dispatch => dispatch.Envelope.Payload?.Is(descriptor) == true)
+            .Select(dispatch => dispatch.Envelope)
+            .ToList();
+        matches.Should().ContainSingle();
+        return matches[0];
+    }
+
     private sealed record RelayInvocationDependencies(
         NyxIdRelayTransport Transport,
         NyxIdRelayAuthValidator Validator,
@@ -3362,6 +3370,17 @@ public class NyxIdChatEndpointsCoverageTests
             return Task.FromResult(actor);
         }
 
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var actorId = id ?? Guid.NewGuid().ToString("N");
+            IActor actor = agentKind.StartsWith("projection.session-scope.", StringComparison.Ordinal)
+                ? new StubProjectionScopeActor(actorId)
+                : new StubActor(actorId);
+            Actors[actorId] = actor;
+            return Task.FromResult(actor);
+        }
+
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
             DestroyCalls.Add(id);
@@ -3430,6 +3449,26 @@ public class NyxIdChatEndpointsCoverageTests
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
+    private sealed class StubProjectionScopeActor(string id) : IActor
+    {
+        public string Id { get; } = id;
+        public IAgent Agent { get; } = new StubAgent();
+        public List<EventEnvelope> HandledEnvelopes { get; } = [];
+        public bool Released { get; private set; }
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            HandledEnvelopes.Add(envelope);
+            if (envelope.Payload?.Is(ReleaseProjectionScopeCommand.Descriptor) == true)
+                Released = true;
+            return Task.CompletedTask;
+        }
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
     private sealed class StubActorDispatchPort(IActorRuntime runtime) : IActorDispatchPort
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
@@ -3446,12 +3485,19 @@ public class NyxIdChatEndpointsCoverageTests
 
     private sealed class ThrowingActorDispatchPort(Exception exception) : IActorDispatchPort
     {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            _ = actorId;
-            _ = envelope;
-            _ = ct;
-            return Task.FromException<DispatchAdmission>(exception);
+            ct.ThrowIfCancellationRequested();
+            Dispatches.Add((actorId, envelope));
+            if (envelope.Payload?.Is(ChatRequestEvent.Descriptor) == true ||
+                envelope.Payload?.Is(ToolApprovalDecisionEvent.Descriptor) == true)
+            {
+                return Task.FromException<DispatchAdmission>(exception);
+            }
+
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
