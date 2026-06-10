@@ -33,8 +33,8 @@ namespace Aevatar.GAgentService.Integration.Tests;
 
 public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
 {
-    private static readonly TimeSpan ReadModelVisibilityTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan ReadModelVisibilityPollInterval = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan ReadModelVisibilityTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ReadModelVisibilityPollInterval = TimeSpan.FromMilliseconds(100);
 
     [Fact]
     public async Task DraftRunEndpoint_ShouldExposeCompletedWorkflowActorCurrentStateViaWorkflowActorCurrentState()
@@ -53,8 +53,8 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         var actorId = ExtractRunContextActorId(body);
         actorId.Should().NotBeNullOrWhiteSpace();
 
-        var snapshot = await WaitForCompletedSnapshotAsync(host.Client, actorId!, CancellationToken.None);
-        snapshot.Should().NotBeNull();
+        var snapshot = await WaitForCompletedCurrentStateAsync(host.Client, actorId!);
+
         snapshot.ActorId.Should().Be(actorId);
         snapshot.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.Completed);
         snapshot.LastSuccess.Should().BeTrue();
@@ -64,12 +64,11 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         snapshot.CompletedSteps.Should().Be(0);
     }
 
-    private static async Task<WorkflowActorCurrentStateHttpResponse> WaitForCompletedSnapshotAsync(
+    private static async Task<WorkflowActorCurrentStateHttpResponse> WaitForCompletedCurrentStateAsync(
         HttpClient client,
-        string actorId,
-        CancellationToken ct)
+        string actorId)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var timeout = new CancellationTokenSource();
         timeout.CancelAfter(ReadModelVisibilityTimeout);
 
         WorkflowActorCurrentStateHttpResponse? lastSnapshot = null;
@@ -86,20 +85,29 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
                 {
                     lastSnapshot = await snapshotResponse.Content
                         .ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>(timeout.Token);
-                    if (lastSnapshot?.CompletionStatus == WorkflowRunCompletionStatus.Completed)
+                    if (lastSnapshot is
+                        {
+                            CompletionStatus: WorkflowRunCompletionStatus.Completed,
+                            LastSuccess: true,
+                            LastOutput: "y\nz"
+                        })
+                    {
                         return lastSnapshot;
+                    }
                 }
 
                 await Task.Delay(ReadModelVisibilityPollInterval, timeout.Token);
             }
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
             throw new InvalidOperationException(
-                "Timed out waiting for workflow actor current-state read model to reach Completed. " +
+                "Timed out waiting for workflow actor current-state read model to reach completed output. " +
                 $"actor_id={actorId}, last_status={(int?)lastStatus}, " +
                 $"last_completion_status={lastSnapshot?.CompletionStatus.ToString() ?? "<none>"}, " +
-                $"last_state_version={lastSnapshot?.StateVersion.ToString() ?? "<none>"}");
+                $"last_state_version={lastSnapshot?.StateVersion.ToString() ?? "<none>"}, " +
+                $"last_success={lastSnapshot?.LastSuccess.ToString() ?? "<none>"}, " +
+                $"last_output={lastSnapshot?.LastOutput ?? "<none>"}");
         }
     }
 

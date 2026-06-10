@@ -78,6 +78,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         {
             ModelOverride = source.ModelOverride ?? string.Empty,
             UserMemoryPrompt = source.UserMemoryPrompt ?? string.Empty,
+            SenderNyxIdAccessToken = source.SenderNyxIdAccessToken ?? string.Empty,
         };
         if (source.MaxToolRoundsOverride.HasValue)
             payload.MaxToolRoundsOverride = source.MaxToolRoundsOverride.Value;

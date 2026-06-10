@@ -1,5 +1,7 @@
 using System.Reflection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
@@ -31,6 +33,15 @@ public sealed class ProjectionActivationPlanDispatcher
         return (Task)DispatchCoreMethod
             .MakeGenericMethod(plan.LeaseType)
             .Invoke(this, [plan.StartRequest, ct])!;
+    }
+
+    public Task DispatchAsync(
+        ProjectionActivationPlan plan,
+        CommittedStatePublicationContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return DispatchAsync(plan, ct);
     }
 
     // Refactor (iter18/cluster-006):
