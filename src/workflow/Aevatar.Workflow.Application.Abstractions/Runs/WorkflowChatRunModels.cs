@@ -12,6 +12,31 @@ public enum WorkflowChatInputPartKind
     Video = 4,
 }
 
+public enum WorkflowFileSourceKind
+{
+    Unspecified = 0,
+    ChatInput = 1,
+    FormUpload = 2,
+    ConnectedServiceResource = 3,
+    ExternalResource = 4,
+    Generated = 5,
+}
+
+public sealed record WorkflowFileRef
+{
+    public string? FileId { get; init; }
+    public string? ArtifactId { get; init; }
+    public WorkflowFileSourceKind SourceKind { get; init; }
+    public string? SourceMessageId { get; init; }
+    public string? SourceResourceKey { get; init; }
+    public string? FileName { get; init; }
+    public string? MediaType { get; init; }
+    public long SizeBytes { get; init; }
+    public string? Sha256 { get; init; }
+    public long CreatedAtUnixMs { get; init; }
+    public long ExpiresAtUnixMs { get; init; }
+}
+
 public sealed record WorkflowChatInputPart
 {
     public required WorkflowChatInputPartKind Kind { get; init; }
@@ -20,6 +45,7 @@ public sealed record WorkflowChatInputPart
     public string? MediaType { get; init; }
     public string? Uri { get; init; }
     public string? Name { get; init; }
+    public WorkflowFileRef? FileRef { get; init; }
 }
 
 public sealed record WorkflowLlmControl(
@@ -30,6 +56,16 @@ public sealed record WorkflowLlmControl(
     string? SenderNyxIdAccessToken = null);
 
 public sealed record WorkflowCallerCredential(string? BearerToken = null);
+
+public sealed record WorkflowExternalIngressContext(
+    string RouteKey,
+    string SourceId,
+    string DeliveryId,
+    long ReceivedAtUnixMs,
+    string? ContentType = null,
+    string? PayloadFingerprint = null,
+    string? AuthScheme = null,
+    string? PrincipalSubject = null);
 
 public sealed record WorkflowChatRunForkSeed(
     string SourceRunId,
@@ -147,6 +183,7 @@ public sealed record WorkflowChatRunRequest(
     string? CommandIdSeed = null,
     string? CorrelationIdSeed = null,
     WorkflowChatRunForkSeed? ForkSeed = null,
+    WorkflowExternalIngressContext? ExternalIngress = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
@@ -176,6 +213,7 @@ public enum WorkflowChatRunStartError
     PromptRequired = 9,
     ProjectionUnavailable = 10,
     InvalidCallerCredential = 11,
+    InvalidFileInput = 12,
 }
 
 public enum WorkflowProjectionCompletionStatus

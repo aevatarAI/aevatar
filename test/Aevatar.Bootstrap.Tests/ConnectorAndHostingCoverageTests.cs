@@ -7,6 +7,7 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Connectors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -999,6 +1000,116 @@ public class ConnectorAndHostingCoverageTests
         factory.RequestedNames.Should().Contain("aevatar.connector.http.nyxid-main");
     }
 
+    [Fact]
+    public async Task HttpConnectorBuilder_WithSecretRefHeaderAuth_ShouldInjectHeaderFromCredentialProvider()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var factory = new RecordingHttpClientFactory(_ => new HttpClient(handler));
+        var builder = new HttpConnectorBuilder(factory, new StubCredentialProvider("secret-ref", "api-token"));
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "twitterapi",
+            Type = "http",
+            Http = new HttpConnectorConfig
+            {
+                BaseUrl = "https://api.example.com",
+                Auth = new ConnectorAuthConfig
+                {
+                    Type = "secret_ref_header",
+                    SecretRef = "secret-ref",
+                    HeaderName = "X-API-Key",
+                    HeaderValuePrefix = "Token ",
+                },
+            },
+        };
+
+        var built = builder.TryBuild(entry, NullLogger.Instance, out var connector);
+        built.Should().BeTrue();
+
+        var result = await connector!.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/query",
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        result.Success.Should().BeTrue();
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Headers.GetValues("X-API-Key").Should().ContainSingle().Which.Should().Be("Token api-token");
+    }
+
+    [Fact]
+    public async Task HttpConnectorBuilder_WithSecretRefHeaderAuth_ShouldFailClosedWhenSecretMissing()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var factory = new RecordingHttpClientFactory(_ => new HttpClient(handler));
+        var builder = new HttpConnectorBuilder(factory, new StubCredentialProvider("other-ref", "api-token"));
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "twitterapi",
+            Type = "http",
+            Http = new HttpConnectorConfig
+            {
+                BaseUrl = "https://api.example.com",
+                Auth = new ConnectorAuthConfig
+                {
+                    Type = "secret_ref_header",
+                    SecretRef = "missing-ref",
+                    HeaderName = "X-API-Key",
+                },
+            },
+        };
+
+        builder.TryBuild(entry, NullLogger.Instance, out var connector).Should().BeTrue();
+
+        var result = await connector!.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/query",
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("secret");
+        handler.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public void HttpConnectorBuilder_WithSecretRefHeaderAuth_ShouldRejectHeaderCollision()
+    {
+        var builder = new HttpConnectorBuilder(new StubCredentialProvider("secret-ref", "api-token"));
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "twitterapi",
+            Type = "http",
+            Http = new HttpConnectorConfig
+            {
+                BaseUrl = "https://api.example.com",
+                DefaultHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["X-API-Key"] = "static",
+                },
+                Auth = new ConnectorAuthConfig
+                {
+                    Type = "secret_ref_header",
+                    SecretRef = "secret-ref",
+                    HeaderName = "x-api-key",
+                },
+            },
+        };
+
+        builder.TryBuild(entry, NullLogger.Instance, out var connector).Should().BeFalse();
+        connector.Should().BeNull();
+    }
+
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responseFactory;
@@ -1061,6 +1172,17 @@ public class ConnectorAndHostingCoverageTests
             _ = cancellationToken;
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(scheme, token);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class StubCredentialProvider(string knownRef, string secret) : ICredentialProvider
+    {
+        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult(string.Equals(credentialRef, knownRef, StringComparison.Ordinal)
+                ? secret
+                : null);
         }
     }
 

@@ -22,6 +22,7 @@ owner: eanzhao
 |---|---|---|
 | `POST /api/chat` | HTTP + SSE | 发起一次 run，并持续接收运行时 envelope 投影流 |
 | `GET /api/ws/chat` | WebSocket | 与 `/api/chat` 同能力，使用 WS 封装 |
+| `POST /api/workflow-webhooks/{routeKey}` | HTTP JSON | 认证外部 webhook，并按 Host binding 启动新 run |
 | `POST /api/workflows/resume` | HTTP JSON | 恢复 `human_input/human_approval` 挂起步骤 |
 | `POST /api/workflows/signal` | HTTP JSON | 向等待信号的步骤发送 signal |
 
@@ -35,6 +36,7 @@ owner: eanzhao
 - 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - 命令主链路不额外经过 ingress queue/stream；stream 保留给 actor envelope 的投影、实时输出与读侧观察。
 - `command.ack` / `accepted=true` 对外只应被解释为“系统接受了该次交互并返回追踪句柄”，不应被解释为领域事件已提交或 ReadModel 已可见。
+- Webhook ingress 是 start-run 入口，不是 `wait_signal` continuation；外部 JSON 只在 Host/Adapter 边界解析，进入应用层后只保留 typed `WorkflowExternalIngressContext` 与 `WorkflowChatRunRequest`。
 
 ## 2. 输入模型（chat）
 
@@ -65,6 +67,43 @@ owner: eanzhao
 - 若同时传 `workflow` 与 `workflowYamls`，以 `workflowYamls` 为准。
 - `direct/auto/auto_review` 可显式传入，按注册表解析，不要求存在同名文件。
 
+### 多模态文件输入
+
+`inputParts` 支持两类文件载体：
+
+1. `inlineFile`：只用于小型 inline bytes。`inlineFile.sizeBytes` 是可选校验字段，服务端只用它和 decoded base64 长度比对；它不是客户端声明的 workflow 文件事实。Host API 会把 decoded bytes 写入 workflow file ingress store，并把 command input part 替换为 typed `WorkflowFileRef`，因此 actor-facing request 不长期携带 inline base64。
+2. `fileRef`：用于已经由外部 ingress、connected service 或后续 artifact store 产生的稳定文件引用。API 会归一化为 typed `WorkflowFileRef` 并写入 command envelope，同时保留旧的 `uri/name/mediaType` 镜像字段供现有消费者兼容。
+
+```json
+{
+  "inputParts": [
+    {
+      "type": "image",
+      "fileRef": {
+        "fileId": "file-1",
+        "artifactId": "artifact-1",
+        "sourceKind": "connected_service_resource",
+        "sourceMessageId": "om_1",
+        "sourceResourceKey": "image_key_1",
+        "fileName": "invoice.png",
+        "mediaType": "image/png",
+        "sha256": "redacted",
+        "createdAtUnixMs": 1710000000000,
+        "expiresAtUnixMs": 1710003600000
+      }
+    }
+  ]
+}
+```
+
+`fileRef` 约束：
+
+- `fileId` 或 `artifactId` 至少有一个必须存在；旧 `uri` 会被映射为 `artifactId`。
+- `sourceKind` 可省略；显式传入时必须是 `chat_input`、`form_upload`、`connected_service_resource`、`external_resource`、`generated` 或 `unspecified`。
+- 时间戳必须为非负 Unix milliseconds；同时存在 `createdAtUnixMs` 与 `expiresAtUnixMs` 时，过期时间不得早于创建时间。
+- public `fileRef` 不接受 `sizeBytes`。文件大小事实只能由 ingress/artifact descriptor 或 decoded bytes 产生，不能由客户端在 reusable file ref 上声明。
+- 当前切片完成 chat/API inline bytes 的 file ingress 暂存与 command-level `fileRef` 替换；Lark resource 下载、`document_extract`、外部文件提交和 projection readmodel 仍属于文件链路后续实现。
+
 ## 3. 自动编排能力（按 prompt 决策）
 
 框架内建了 `direct`、`auto`、`auto_review` 三个 workflow（内部能力）。
@@ -94,6 +133,21 @@ owner: eanzhao
 - 不自动执行，只输出最终 YAML（适合手动触发最终 run）。
 
 ## 4. Human Approval / Human Input 如何继续
+
+### Webhook start-run
+
+`POST /api/workflow-webhooks/{routeKey}` 用于外部系统认证后启动新的 workflow run。`routeKey` 只匹配 Host 配置里的 binding；workflow 名称、scope、delivery id 来源、prompt 映射与 HMAC header 都由 `WorkflowWebhookIngress` options 承载，不在生产代码硬编码具体 workflow。
+
+运行语义：
+
+- Host 读取 raw JSON、执行 HMAC 校验、按 binding 映射 delivery id 与 prompt，然后构造 typed `WorkflowChatRunRequest`。
+- `CommandIdSeed` 与 `CorrelationIdSeed` 使用稳定格式 `webhook:{routeKey}:{sourceId}:{deliveryId}`。
+- `WorkflowChatRequestEvent.external_ingress` 承载 typed route/source/delivery/fingerprint/auth 信息；这些稳定语义不得塞进 `Metadata`。
+- 防重放由 `IWorkflowWebhookReplayStore` 承载，生产实现必须是 durable/distributed first-writer-wins store；显式 in-memory 实现只允许本地或测试使用。
+- 启用 webhook ingress 但没有 replay store 时，Host fail closed 返回 `503 WEBHOOK_REPLAY_STORE_UNAVAILABLE`。
+- 成功响应是 `202 Accepted`，只表示命令已被接受并可追踪；不承诺 run 已提交、执行完成或 readmodel 已刷新。
+
+`POST /api/workflows/signal` 仍只用于已有 run 的 `wait_signal` continuation，必须携带已知 `actorId + runId + signalName`，不能作为新 run webhook trigger 使用。
 
 当 run 到 `human_input` 或 `human_approval`，运行时 envelope 投影流会发出 `HUMAN_INPUT_REQUEST`，包含：
 

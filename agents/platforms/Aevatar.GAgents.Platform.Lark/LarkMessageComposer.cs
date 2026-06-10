@@ -471,6 +471,12 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             map["service_id"] = payload.ServiceId;
         if (!string.IsNullOrWhiteSpace(payload.PresetId))
             map["preset_id"] = payload.PresetId;
+        if (!string.IsNullOrWhiteSpace(payload.Model))
+            map["model"] = payload.Model;
+        if (payload.Page > 0)
+            map["page"] = payload.Page;
+        if (!string.IsNullOrWhiteSpace(payload.DisplayMode))
+            map["display_mode"] = payload.DisplayMode;
     }
 
     private static object? CoerceArgumentValue(string raw)

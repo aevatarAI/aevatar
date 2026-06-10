@@ -70,7 +70,9 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.IActorDispatchPort>(),
                 sp.GetRequiredService<ILogger<ChannelWorkflowDraftRunInteractionPort>>(),
                 sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowChatRunInteractionPort>(),
-                sp.GetService<TimeProvider>()));
+                sp.GetService<TimeProvider>(),
+                sp.GetService<ILarkNyxClient>(),
+                sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileIngressPort>()));
         // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
         //   Old pattern: Mainnet Host/API composed the voice demo agent bootstrap workflow directly.
         //   New principle: NyxID chat owns the actor-targeted bootstrap command port; hosts only opt into the module.

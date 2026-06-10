@@ -73,6 +73,9 @@ public sealed class ConnectorAuthConfig
     public string ClientId { get; init; } = "";
     public string ClientSecret { get; init; } = "";
     public string Scope { get; init; } = "";
+    public string SecretRef { get; init; } = "";
+    public string HeaderName { get; init; } = "";
+    public string HeaderValuePrefix { get; init; } = "";
 }
 
 /// <summary>Telegram user-account connector settings (MTProto client).</summary>
@@ -276,6 +279,9 @@ public static partial class AevatarConnectorConfig
             ClientId = ReadString(obj, "clientId"),
             ClientSecret = ReadString(obj, "clientSecret"),
             Scope = ReadString(obj, "scope"),
+            SecretRef = ReadString(obj, "secretRef"),
+            HeaderName = ReadString(obj, "headerName"),
+            HeaderValuePrefix = ReadString(obj, "headerValuePrefix"),
         };
     }
 

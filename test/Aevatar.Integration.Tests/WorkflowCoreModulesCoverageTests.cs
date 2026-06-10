@@ -4,6 +4,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
@@ -1337,6 +1338,250 @@ public sealed class WorkflowCoreModulesCoverageTests
         output.RootElement[1].GetProperty("id").GetString().Should().Be("node-3");
         output.RootElement[1].GetProperty("properties").GetProperty("abstract").GetString().Should().Be("middle abstract");
         output.RootElement[0].TryGetProperty("createdAt", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TransformModule_ShouldApplyTypedNumericAndGroupOperations()
+    {
+        var module = new TransformModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "sum-typed",
+                StepType = "transform",
+                Input = "[0.1,0.2]",
+                StepParameters = new WorkflowStepParameters
+                {
+                    TransformOperation = new TransformOperationSpec
+                    {
+                        Kind = TransformOperationKind.Sum,
+                        Precision = 2,
+                    },
+                },
+                Parameters = { ["op"] = "unknown_op" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "divide-map",
+                StepType = "transform",
+                Input = "10,4",
+                Parameters =
+                {
+                    ["op"] = "divide",
+                    ["precision"] = "1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "group-map",
+                StepType = "transform",
+                Input = """
+                    [
+                      { "dept": "ops", "amount": "10.25" },
+                      { "dept": "sales", "amount": "7" },
+                      { "dept": "ops", "amount": "2.25" }
+                    ]
+                    """,
+                Parameters =
+                {
+                    ["op"] = "group_by",
+                    ["key"] = "dept",
+                    ["value"] = "amount",
+                    ["aggregate"] = "sum",
+                    ["precision"] = "2",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId);
+        completions["sum-typed"].Success.Should().BeTrue();
+        decimal.Parse(completions["sum-typed"].Output, CultureInfo.InvariantCulture).Should().Be(0.3m);
+        completions["divide-map"].Output.Should().Be("2.5");
+
+        using var groupOutput = JsonDocument.Parse(completions["group-map"].Output);
+        groupOutput.RootElement.GetArrayLength().Should().Be(2);
+        groupOutput.RootElement[0].GetProperty("key").GetString().Should().Be("ops");
+        groupOutput.RootElement[0].GetProperty("value").GetDecimal().Should().Be(12.50m);
+        groupOutput.RootElement[1].GetProperty("key").GetString().Should().Be("sales");
+        groupOutput.RootElement[1].GetProperty("value").GetDecimal().Should().Be(7.00m);
+    }
+
+    [Fact]
+    public async Task TransformModule_RecognizedNumericAndGroupFailures_ShouldPublishFailedCompletion()
+    {
+        var module = new TransformModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "divide-zero",
+                StepType = "transform",
+                Input = "1,0",
+                Parameters = { ["op"] = "divide" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "group-missing",
+                StepType = "transform",
+                Input = """[{ "dept": "ops", "amount": 1 }]""",
+                Parameters =
+                {
+                    ["op"] = "group_by",
+                    ["aggregate"] = "sum",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "bad-precision",
+                StepType = "transform",
+                Input = "1,2",
+                Parameters =
+                {
+                    ["op"] = "sum",
+                    ["precision"] = "not-a-number",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId);
+        completions["divide-zero"].Success.Should().BeFalse();
+        completions["divide-zero"].Error.Should().Contain("divide");
+        completions["group-missing"].Success.Should().BeFalse();
+        completions["group-missing"].Error.Should().Contain("key");
+        completions["bad-precision"].Success.Should().BeFalse();
+        completions["bad-precision"].Error.Should().Contain("precision");
+    }
+
+    [Fact]
+    public async Task TransformModule_ShouldExtractRssAndAtomItemsDeterministically()
+    {
+        var module = new TransformModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "rss",
+                StepType = "transform",
+                Input = """
+                    <rss version="2.0">
+                      <channel>
+                        <item>
+                          <guid>rss-1</guid>
+                          <title>RSS title</title>
+                          <link>https://example.com/rss-1</link>
+                          <pubDate>Wed, 10 Jun 2026 12:30:00 GMT</pubDate>
+                          <description>RSS summary</description>
+                        </item>
+                      </channel>
+                    </rss>
+                    """,
+                Parameters =
+                {
+                    ["op"] = "rss_extract_items",
+                    ["source_id"] = "rss-feed",
+                    ["source_url"] = "https://example.com/rss.xml",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "atom",
+                StepType = "transform",
+                Input = """
+                    <feed xmlns="http://www.w3.org/2005/Atom">
+                      <entry>
+                        <id>atom-1</id>
+                        <title>Atom title</title>
+                        <link href="https://example.com/atom-1" />
+                        <updated>2026-06-10T13:00:00Z</updated>
+                        <summary>Atom summary</summary>
+                      </entry>
+                    </feed>
+                    """,
+                Parameters =
+                {
+                    ["op"] = "rss_extract_items",
+                    ["source_id"] = "atom-feed",
+                    ["source_url"] = "https://example.com/atom.xml",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId);
+        completions.Values.Should().OnlyContain(x => x.Success);
+
+        using var rss = JsonDocument.Parse(completions["rss"].Output);
+        var rssItem = rss.RootElement.EnumerateArray().Should().ContainSingle().Subject;
+        rssItem.EnumerateObject().Select(x => x.Name).Should().Equal(
+            "source_id", "source_url", "id", "title", "link", "published_at", "summary");
+        rssItem.GetProperty("source_id").GetString().Should().Be("rss-feed");
+        rssItem.GetProperty("id").GetString().Should().Be("rss-1");
+        rssItem.GetProperty("published_at").GetString().Should().Be("2026-06-10T12:30:00.0000000+00:00");
+
+        using var atom = JsonDocument.Parse(completions["atom"].Output);
+        var atomItem = atom.RootElement.EnumerateArray().Should().ContainSingle().Subject;
+        atomItem.GetProperty("source_id").GetString().Should().Be("atom-feed");
+        atomItem.GetProperty("link").GetString().Should().Be("https://example.com/atom-1");
+        atomItem.GetProperty("summary").GetString().Should().Be("Atom summary");
+    }
+
+    [Fact]
+    public async Task TransformModule_RssExtractItems_ShouldRejectDtd()
+    {
+        var module = new TransformModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "rss-dtd",
+                StepType = "transform",
+                Input = """
+                    <!DOCTYPE rss [
+                      <!ENTITY xxe SYSTEM "file:///etc/passwd">
+                    ]>
+                    <rss version="2.0">
+                      <channel>
+                        <item>
+                          <title>&xxe;</title>
+                        </item>
+                      </channel>
+                    </rss>
+                    """,
+                Parameters = { ["op"] = "rss_extract_items" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().Contain("DTD");
     }
 
     [Fact]

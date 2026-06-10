@@ -1,6 +1,8 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -25,9 +27,23 @@ public static class WorkflowCapabilityHostBuilderExtensions
             ],
             ProbeAsync = static async (serviceProvider, cancellationToken) =>
             {
+                var indexProbe = serviceProvider.GetService<IProjectionIndexConsistencyProbe<WorkflowExecutionCurrentStateDocument>>();
+                if (indexProbe != null)
+                {
+                    var consistency = await indexProbe.CheckIndexConsistencyAsync(cancellationToken);
+                    return ProjectionIndexDiagnostics.ToContributorResult(consistency);
+                }
+
                 var queryService = serviceProvider.GetRequiredService<IWorkflowExecutionQueryApplicationService>();
-                _ = await queryService.ListAgentsAsync(cancellationToken);
-                return AevatarHealthContributorResult.Healthy("Workflow capability is ready.");
+                try
+                {
+                    _ = await queryService.ListAgentsAsync(cancellationToken);
+                    return AevatarHealthContributorResult.Healthy("Workflow capability is ready.");
+                }
+                catch (ProjectionIndexSchemaDriftException exception)
+                {
+                    return ProjectionIndexDiagnostics.ToUnhealthyContributorResult(exception);
+                }
             },
         });
 

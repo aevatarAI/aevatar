@@ -172,10 +172,43 @@ public class WorkflowRoleGAgent(
         };
         if (intent.HasMaxToolRounds)
             request.LlmControl.MaxToolRoundsOverride = intent.MaxToolRounds;
+        request.InputParts.Add(intent.InputFileRefs.Select(ToChatContentPart));
         CopyWorkflowIntentMetadata(intent.Headers, request.Metadata);
         CopyWorkflowIntentMetadata(intent.Annotations, request.Metadata);
         return request;
     }
+
+    private static ChatContentPart ToChatContentPart(WorkflowFileRef fileRef)
+    {
+        ArgumentNullException.ThrowIfNull(fileRef);
+        return new ChatContentPart
+        {
+            Kind = ResolveChatContentPartKind(fileRef.MediaType),
+            Uri = ResolveFileRefUri(fileRef),
+            MediaType = Normalize(fileRef.MediaType) ?? string.Empty,
+            Name = Normalize(fileRef.FileName) ?? string.Empty,
+        };
+    }
+
+    private static ChatContentPartKind ResolveChatContentPartKind(string? mediaType)
+    {
+        var normalized = Normalize(mediaType);
+        if (normalized is null)
+            return ChatContentPartKind.Unspecified;
+        if (normalized.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            return ChatContentPartKind.Image;
+        if (normalized.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
+            return ChatContentPartKind.Audio;
+        if (normalized.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
+            return ChatContentPartKind.Video;
+        return ChatContentPartKind.Unspecified;
+    }
+
+    private static string ResolveFileRefUri(WorkflowFileRef fileRef) =>
+        Normalize(fileRef.ArtifactId) ??
+        (string.IsNullOrWhiteSpace(fileRef.FileId)
+            ? string.Empty
+            : $"workflow-file://{fileRef.FileId.Trim()}");
 
     private static void CopyWorkflowIntentMetadata(
         IEnumerable<KeyValuePair<string, string>> source,

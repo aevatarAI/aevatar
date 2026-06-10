@@ -1188,6 +1188,107 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldHandleLlmSelectFormSubmission_FromFormFields()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var option = new UserLlmOption(
+            ServiceId: "svc-form",
+            ServiceSlug: "form-route",
+            DisplayName: "Form Route",
+            RouteValue: "/api/v1/proxy/s/form-route",
+            DefaultModel: "gpt-5.4",
+            AvailableModels: ["gpt-5.4"],
+            Status: "ready",
+            Source: "user",
+            Allowed: true,
+            Description: null);
+        var optionsService = new StubUserLlmOptionsService(option);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
+        var activity = BuildCardActionActivity(
+            "evt-llm-select-form-1",
+            (TextUserLlmOptionsRenderer.ServiceIdArgument, option.ServiceId));
+        activity.Content.CardAction!.ActionKind = ActionElementKind.FormSubmit;
+        activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
+        {
+            Action = TextUserLlmOptionsRenderer.SelectServiceAction,
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        selectionService.SelectedServiceId.Should().Be(option.ServiceId);
+        selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRenderRequestedLlmListPage_WhenCardPaginationClicked()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var options = Enumerable.Range(1, 7)
+            .Select(i => new UserLlmOption(
+                ServiceId: $"svc-{i}",
+                ServiceSlug: $"route-{i}",
+                DisplayName: $"Route {i}",
+                RouteValue: $"/api/v1/proxy/s/route-{i}",
+                DefaultModel: $"model-{i}",
+                AvailableModels: [$"model-{i}"],
+                Status: "ready",
+                Source: "user",
+                Allowed: true,
+                Description: null))
+            .ToArray();
+        var optionsService = new StubUserLlmOptionsService(options, current: options[0]);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+        var activity = BuildCardActionActivity("evt-llm-page-2");
+        activity.Content.CardAction!.LlmSelection = new LlmSelectionActionPayload
+        {
+            Action = TextUserLlmOptionsRenderer.ListPageAction,
+            Page = 2,
+            DisplayMode = "route",
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        selectionService.SelectedServiceId.Should().BeNull();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("**可选 route**");
+        adapter.Replies[0].ReplyText.Should().Contain("第 2/2 页");
+        adapter.Replies[0].ReplyText.Should().Contain("Route 6");
+        adapter.Replies[0].ReplyText.Should().Contain("Route 7");
+        adapter.Replies[0].ReplyText.Should().NotContain("Route 5");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldApplyTypedLlmPreset_WhenPayloadCarriesPresetId()
     {
         var subject = new ExternalSubjectRef
@@ -3584,10 +3685,30 @@ public sealed class ChannelConversationTurnRunnerTests
         public NyxIdApiClient CreateClient() => _client;
     }
 
-    private sealed class StubUserLlmOptionsService(UserLlmOption option) : IUserLlmOptionsService
+    private sealed class StubUserLlmOptionsService : IUserLlmOptionsService
     {
+        private readonly IReadOnlyList<UserLlmOption> _options;
+        private readonly UserLlmOption? _current;
+
+        public StubUserLlmOptionsService(UserLlmOption option)
+            : this([option], option)
+        {
+        }
+
+        public StubUserLlmOptionsService(
+            IReadOnlyList<UserLlmOption> options,
+            UserLlmOption? current = null)
+        {
+            _options = options;
+            _current = current;
+        }
+
         public Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct) =>
-            Task.FromResult(new UserLlmOptionsView(null, [option], null));
+            Task.FromResult(new UserLlmOptionsView(_current, _options, null)
+            {
+                CurrentRouteValue = _current?.RouteValue,
+                CurrentModel = _current?.DefaultModel,
+            });
     }
 
     private sealed class RecordingUserLlmSelectionService : IUserLlmSelectionService

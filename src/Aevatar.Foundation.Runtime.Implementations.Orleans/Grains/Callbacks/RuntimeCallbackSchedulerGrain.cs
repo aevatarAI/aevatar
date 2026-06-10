@@ -15,7 +15,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private const string ReminderNamePrefix = "runtime-callback:";
     private const string SchedulerStateName = "runtime-callback-scheduler-v2";
     private const int SchedulerSlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2;
-    private static readonly TimeSpan OneShotReminderPeriod = TimeSpan.FromDays(36500);
+    private static readonly TimeSpan OneShotReminderRetryPeriod = TimeSpan.FromMinutes(1);
 
     private readonly IPersistentState<RuntimeCallbackSchedulerState> _state;
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
@@ -27,10 +27,11 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         _state = state;
     }
 
-    public override Task OnActivateAsync(CancellationToken cancellationToken)
+    public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
-        return base.OnActivateAsync(cancellationToken);
+        await base.OnActivateAsync(cancellationToken);
+        await RecoverOverdueCallbacksAsync(cancellationToken);
     }
 
     public async Task<long> ScheduleTimeoutAsync(
@@ -143,6 +144,35 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         if (!TryParseReminderName(reminderName, out var callbackId))
             return;
 
+        await FireCallbackAsync(callbackId, DateTimeOffset.UtcNow, CancellationToken.None);
+    }
+
+    private async Task RecoverOverdueCallbacksAsync(CancellationToken ct)
+    {
+        if (_state.State.ReminderCallbacks.Count == 0)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        var callbackIds = _state.State.ReminderCallbacks
+            .Where(static x => !x.Value.Periodic)
+            .Where(static x => x.Value.NextDueAtUnixTimeMs > 0)
+            .Where(x => x.Value.NextDueAtUnixTimeMs <= now.ToUnixTimeMilliseconds())
+            .Where(static x => ShouldDeliverOverdueCallback(x.Value.OverduePolicy))
+            .Select(static x => x.Key)
+            .ToArray();
+
+        foreach (var callbackId in callbackIds)
+        {
+            ct.ThrowIfCancellationRequested();
+            await FireCallbackAsync(callbackId, now, ct);
+        }
+    }
+
+    private async Task FireCallbackAsync(
+        string callbackId,
+        DateTimeOffset observedAtUtc,
+        CancellationToken ct)
+    {
         if (!_state.State.ReminderCallbacks.TryGetValue(callbackId, out var scheduled))
         {
             await TryUnregisterReminderAsync(callbackId);
@@ -157,19 +187,20 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             checked((int)fireIndex),
             scheduled.TriggerEnvelope,
             FromProtoDeliveryMode(scheduled.DeliveryMode),
-            CancellationToken.None);
+            ct);
 
         if (!scheduled.Periodic)
         {
             _state.State.ReminderCallbacks.Remove(callbackId);
             await _state.WriteStateAsync();
-            var reminder = await this.GetReminder(reminderName);
-            if (reminder != null)
-                await this.UnregisterReminder(reminder);
+            await TryUnregisterReminderAsync(callbackId);
             return;
         }
 
         scheduled.FireIndex = fireIndex;
+        scheduled.NextDueAtUnixTimeMs = ResolveNextPeriodicDueAtUnixTimeMs(
+            scheduled,
+            observedAtUtc);
         _state.State.ReminderCallbacks[callbackId] = scheduled;
         await _state.WriteStateAsync();
     }
@@ -187,6 +218,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         //   Old pattern: Orleans durable callback state stored as hand-written C# class with Dictionary<string, ReminderScheduledCallbackState> and byte[] EnvelopeBytes.
         //   New principle: Durable runtime callback ownership is typed protobuf contract; callback ids, schedule fields, generation, fire index, delivery mode, and trigger envelope are explicit proto fields.
         var reminderName = BuildReminderName(callbackId);
+        var nextDueAt = DateTimeOffset.UtcNow.Add(dueTime);
         _state.State.ReminderCallbacks[callbackId] = new RuntimeScheduledCallback
         {
             ActorId = this.GetPrimaryKeyString(),
@@ -199,12 +231,14 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             FireIndex = 0,
             DeliveryMode = ToProtoDeliveryMode(deliveryMode),
             TriggerEnvelope = triggerEnvelope.Clone(),
+            NextDueAtUnixTimeMs = nextDueAt.ToUnixTimeMilliseconds(),
+            OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
         };
         await _state.WriteStateAsync();
 
         var period = periodic
             ? TimeSpan.FromMilliseconds(periodMs)
-            : OneShotReminderPeriod;
+            : OneShotReminderRetryPeriod;
         try
         {
             await this.RegisterOrUpdateReminder(reminderName, dueTime, period);
@@ -261,6 +295,27 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         callbackId = reminderName[ReminderNamePrefix.Length..];
         return !string.IsNullOrWhiteSpace(callbackId);
     }
+
+    private static long ResolveNextPeriodicDueAtUnixTimeMs(
+        RuntimeScheduledCallback scheduled,
+        DateTimeOffset observedAtUtc)
+    {
+        if (scheduled.PeriodMillis <= 0)
+            return observedAtUtc.ToUnixTimeMilliseconds();
+
+        var observedUnixMs = observedAtUtc.ToUnixTimeMilliseconds();
+        var nextDueAtUnixMs = scheduled.NextDueAtUnixTimeMs;
+        if (nextDueAtUnixMs <= 0)
+            nextDueAtUnixMs = observedUnixMs;
+
+        while (nextDueAtUnixMs <= observedUnixMs)
+            nextDueAtUnixMs = checked(nextDueAtUnixMs + scheduled.PeriodMillis);
+
+        return nextDueAtUnixMs;
+    }
+
+    private static bool ShouldDeliverOverdueCallback(RuntimeCallbackOverduePolicy policy) =>
+        policy is RuntimeCallbackOverduePolicy.Unspecified or RuntimeCallbackOverduePolicy.Deliver;
 
     private static RuntimeCallbackScheduleDeliveryMode ToProtoDeliveryMode(RuntimeCallbackDeliveryMode deliveryMode)
     {

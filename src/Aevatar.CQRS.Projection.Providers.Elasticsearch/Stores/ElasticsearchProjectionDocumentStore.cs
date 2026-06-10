@@ -15,6 +15,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     : IProjectionDocumentReader<TReadModel, TKey>,
       IProjectionDocumentWriter<TReadModel>,
+      IProjectionIndexConsistencyProbe<TReadModel>,
       IDisposable
     where TReadModel : class, IProjectionReadModel<TReadModel>, new()
 {
@@ -178,7 +179,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     {
         ct.ThrowIfCancellationRequested();
         ThrowIfDynamicReadModelQueriesUnsupported("get");
-        await _indexManager.EnsureIndexAsync(_indexName, _indexMetadata, ct);
+        await EnsureReadIndexConsistentAsync(ct);
 
         var keyValue = FormatKey(key);
         if (keyValue.Length == 0)
@@ -209,7 +210,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         ArgumentNullException.ThrowIfNull(query);
         ct.ThrowIfCancellationRequested();
         ThrowIfDynamicReadModelQueriesUnsupported("query");
-        await _indexManager.EnsureIndexAsync(_indexName, _indexMetadata, ct);
+        await EnsureReadIndexConsistentAsync(ct);
         var boundedTake = Math.Clamp(query.Take <= 0 ? 50 : query.Take, 1, _queryTakeMax);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_indexName}/_search")
@@ -269,6 +270,29 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             NextCursor = items.Count == boundedTake ? nextCursor : null,
             TotalCount = totalCount,
         };
+    }
+
+    public async Task<ProjectionIndexConsistencyResult> CheckIndexConsistencyAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ThrowIfDynamicReadModelQueriesUnsupported("index consistency probe");
+        return await _indexManager.CheckConsistencyAsync(_indexName, _indexMetadata, ct);
+    }
+
+    private async Task EnsureReadIndexConsistentAsync(CancellationToken ct)
+    {
+        if (!_autoCreateIndex)
+            return;
+
+        var consistency = await _indexManager.CheckConsistencyAsync(_indexName, _indexMetadata, ct);
+        if (consistency.IsConsistent || consistency.Status == ProjectionIndexConsistencyStatus.Missing)
+            return;
+
+        throw new ProjectionIndexSchemaDriftException(
+            consistency.Provider,
+            consistency.IndexAlias,
+            consistency.CurrentPhysicalIndex ?? consistency.IndexAlias,
+            consistency.ExpectedPhysicalIndex);
     }
 
     private string ResolveReadModelKey(TReadModel readModel)

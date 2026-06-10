@@ -70,6 +70,64 @@ public sealed class NyxIdApiClientProxyBinaryTests
     }
 
     [Fact]
+    public async Task ProxyGetBinaryResponseAsync_ShouldPreserveDownloadedBytesAndHeaders()
+    {
+        var body = new byte[] { 0, 1, 2, 255 };
+        var handler = new CapturingHandler(
+            body,
+            "image/png",
+            "attachment; filename=\"photo.png\"");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        var response = await client.ProxyGetBinaryResponseAsync(
+            token: "token",
+            slug: "api-lark-bot",
+            path: "open-apis/im/v1/messages/om_1/resources/img_1?type=image",
+            extraHeaders: null,
+            ct: CancellationToken.None);
+
+        response.Succeeded.Should().BeTrue();
+        response.Content.Should().Equal(body);
+        response.ContentType.Should().Be("image/png");
+        response.FileName.Should().Be("photo.png");
+        response.HttpStatus.Should().Be(200);
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Get);
+        request.Uri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_1/resources/img_1?type=image");
+        request.Headers.Should().ContainKey("User-Agent");
+        request.Headers["User-Agent"].Should().Equal(NyxIdApiClient.DefaultProxyUserAgent);
+    }
+
+    [Fact]
+    public async Task ProxyGetBinaryResponseAsync_ShouldReturnFailureWithoutBytesOnNonSuccess()
+    {
+        var handler = new CapturingHandler(
+            Encoding.UTF8.GetBytes("""{"error":"missing scope"}"""),
+            "application/json",
+            statusCode: HttpStatusCode.Forbidden);
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        var response = await client.ProxyGetBinaryResponseAsync(
+            token: "token",
+            slug: "api-lark-bot",
+            path: "open-apis/im/v1/messages/om_1/resources/file_1?type=file",
+            extraHeaders: null,
+            ct: CancellationToken.None);
+
+        response.Succeeded.Should().BeFalse();
+        response.Content.Should().BeEmpty();
+        response.ContentType.Should().Be("application/json");
+        response.Detail.Should().Contain("missing scope");
+        response.HttpStatus.Should().Be(403);
+    }
+
+    [Fact]
     public async Task ProxyRequestAsync_ShouldKeepExistingJsonProxyBehavior()
     {
         var handler = new CapturingHandler("""{ "ok": true }""");
@@ -95,10 +153,32 @@ public sealed class NyxIdApiClientProxyBinaryTests
         request.Headers["User-Agent"].Should().Equal(NyxIdApiClient.DefaultProxyUserAgent);
     }
 
-    private sealed class CapturingHandler(
-        string responseBody,
-        HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
+    private sealed class CapturingHandler : HttpMessageHandler
     {
+        private readonly byte[] _responseBody;
+        private readonly string? _contentType;
+        private readonly string? _contentDisposition;
+        private readonly HttpStatusCode _statusCode;
+
+        public CapturingHandler(
+            string responseBody,
+            HttpStatusCode statusCode = HttpStatusCode.OK)
+            : this(Encoding.UTF8.GetBytes(responseBody), "text/plain", null, statusCode)
+        {
+        }
+
+        public CapturingHandler(
+            byte[] responseBody,
+            string? contentType = null,
+            string? contentDisposition = null,
+            HttpStatusCode statusCode = HttpStatusCode.OK)
+        {
+            _responseBody = responseBody;
+            _contentType = contentType;
+            _contentDisposition = contentDisposition;
+            _statusCode = statusCode;
+        }
+
         public List<CapturedRequest> Requests { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -118,10 +198,16 @@ public sealed class NyxIdApiClientProxyBinaryTests
                     x => x.Value.ToArray(),
                     StringComparer.OrdinalIgnoreCase)));
 
-            return new HttpResponseMessage(statusCode)
+            var response = new HttpResponseMessage(_statusCode)
             {
-                Content = new StringContent(responseBody),
+                Content = new ByteArrayContent(_responseBody),
             };
+            if (!string.IsNullOrWhiteSpace(_contentType))
+                response.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(_contentType);
+            if (!string.IsNullOrWhiteSpace(_contentDisposition))
+                response.Content.Headers.ContentDisposition = ContentDispositionHeaderValue.Parse(_contentDisposition);
+
+            return response;
         }
     }
 
