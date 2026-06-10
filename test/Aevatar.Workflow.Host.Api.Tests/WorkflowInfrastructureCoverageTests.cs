@@ -502,6 +502,13 @@ public sealed class WorkflowInfrastructureCoverageTests
                 primitive.Name == "custom_assign" &&
                 primitive.Aliases.Contains("custom_assign") &&
                 primitive.RuntimeModule == nameof(CustomAssignModule));
+            var transform = document.Primitives.Single(primitive => primitive.Name == "transform");
+            transform.Description.Should().Contain("decimal-only");
+            transform.Parameters.Single(parameter => parameter.Name == "op")
+                .Enum.Should().Contain(["sum", "subtract", "multiply", "divide", "round", "min", "max", "group_by"]);
+            var aggregateParameter = transform.Parameters.Single(parameter => parameter.Name == "aggregate");
+            aggregateParameter.Default.Should().Be("sum");
+            aggregateParameter.Enum.Should().Equal("sum", "min", "max", "count");
             typeof(WorkflowPrimitiveCapability)
                 .GetProperty("ClosedWorldBlocked")
                 .Should().BeNull();

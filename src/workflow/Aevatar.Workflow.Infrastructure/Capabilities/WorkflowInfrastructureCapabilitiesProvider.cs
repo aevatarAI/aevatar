@@ -14,6 +14,26 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
     private static readonly IReadOnlyDictionary<string, PrimitiveMetadataDescriptor> PrimitiveDescriptors =
         new Dictionary<string, PrimitiveMetadataDescriptor>(StringComparer.OrdinalIgnoreCase)
         {
+            ["transform"] = new(
+                "Applies deterministic text, JSON projection, and decimal-only numeric transforms.",
+                [
+                    new PrimitiveParameterDescriptor("op", "string", false, "Transform operation.", DefaultValue: "identity", EnumValuesInput:
+                    [
+                        "identity", "count", "count_words", "take", "take_last", "join", "split", "json_extract",
+                        "distinct", "uppercase", "lowercase", "trim", "reverse_lines", "sum", "subtract", "multiply",
+                        "divide", "round", "min", "max", "group_by"
+                    ]),
+                    new PrimitiveParameterDescriptor("values", "decimal[]", false, "Decimal values for numeric operations; defaults to input."),
+                    new PrimitiveParameterDescriptor("field", "string", false, "JSON projection field or group_by decimal value path."),
+                    new PrimitiveParameterDescriptor("group_by", "string", false, "JSON path used as the group key for group_by."),
+                    new PrimitiveParameterDescriptor("aggregate", "string", false, "group_by aggregate.", DefaultValue: "sum", EnumValuesInput: ["sum", "min", "max", "count"]),
+                    new PrimitiveParameterDescriptor("digits", "int", false, "Decimal places for round.", DefaultValue: "0"),
+                    new PrimitiveParameterDescriptor("n", "int", false, "Line/item limit for text and json_extract operations.", DefaultValue: "5"),
+                    new PrimitiveParameterDescriptor("separator", "string", false, "Separator or delimiter for text split/join."),
+                    new PrimitiveParameterDescriptor("path", "string", false, "JSON path for json_extract."),
+                    new PrimitiveParameterDescriptor("sort_by", "string", false, "JSON path used for json_extract array sorting."),
+                    new PrimitiveParameterDescriptor("order", "string", false, "json_extract sort order.", DefaultValue: "asc", EnumValuesInput: ["asc", "desc"]),
+                ]),
             ["wait_signal"] = new(
                 "Suspends workflow execution until an external signal arrives.",
                 [

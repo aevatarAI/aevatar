@@ -73,8 +73,10 @@ roles:
 
 ### `transform`
 
-- 作用：对输入做确定性变换，既支持纯文本操作（如 `trim`/`uppercase`/`count_words`/`split`），也支持 `json_extract` 这类 JSON 投影。
+- 作用：对输入做确定性变换，既支持纯文本操作（如 `trim`/`uppercase`/`count_words`/`split`），也支持 `json_extract` 这类 JSON 投影，并提供 decimal-only 数值主链。
 - 常用参数：`op`、`n`、`separator`；当 `op=json_extract` 时，还可用 `path`、`field`、`sort_by`、`order`。
+- 数值参数：`op=sum|subtract|multiply|divide|round|min|max|group_by` 时，所有金额级计算都在 `transform` 内用 `decimal` 执行。标量数值操作默认从输入读取数字列表，也可用 `values`/`value`/`numbers` 传入逗号、换行或 JSON array；`round` 可用 `digits`/`scale`/`places` 指定小数位。
+- 分组聚合：`op=group_by` 要求输入为 JSON array，`group_by` 指定分组 key 的 JSON path，`field`/`value`/`value_path` 指定 decimal 值路径，`aggregate` 支持 `sum|min|max|count`，默认 `sum`。
 
 ```yaml
 steps:
@@ -95,6 +97,26 @@ steps:
       sort_by: createdAt
       order: desc
       n: "50"
+```
+
+```yaml
+steps:
+  - id: sum_invoice_lines
+    type: transform
+    parameters:
+      op: sum
+      values: "12.10, 0.20, 3.005"
+```
+
+```yaml
+steps:
+  - id: total_by_currency
+    type: transform
+    parameters:
+      op: group_by
+      group_by: currency
+      field: amount
+      aggregate: sum
 ```
 
 ### `assign`

@@ -63,6 +63,7 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
                 "lowercase" => input.ToLowerInvariant(),
                 "trim" => input.Trim(),
                 "reverse_lines" => string.Join("\n", input.Split('\n').Reverse()),
+                _ when TransformNumericOperations.TryExecute(op, input, request.Parameters, out var numericOutput) => numericOutput,
                 _ => input, // 未知操作返回原文
             };
         }
