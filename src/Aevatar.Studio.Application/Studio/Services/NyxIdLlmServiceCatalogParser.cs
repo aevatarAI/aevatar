@@ -36,13 +36,26 @@ public static class NyxIdLlmServiceCatalogParser
         string proxyServicesResponse)
     {
         ArgumentNullException.ThrowIfNull(result);
+        return MergeRouteCandidates(result, ParseProxyRouteCandidates(proxyServicesResponse));
+    }
 
-        var proxyCandidates = ParseProxyRouteCandidates(proxyServicesResponse);
-        if (proxyCandidates.Count == 0)
+    public static NyxIdLlmServicesResult MergeUserKeyRouteCandidates(
+        NyxIdLlmServicesResult result,
+        string userKeysResponse)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return MergeRouteCandidates(result, ParseUserKeyRouteCandidates(userKeysResponse));
+    }
+
+    private static NyxIdLlmServicesResult MergeRouteCandidates(
+        NyxIdLlmServicesResult result,
+        IReadOnlyList<NyxIdLlmService> candidates)
+    {
+        if (candidates.Count == 0)
             return result;
 
         var merged = result.Services.ToList();
-        foreach (var candidate in proxyCandidates)
+        foreach (var candidate in candidates)
         {
             var duplicateIndex = FindMatchingServiceIndex(merged, candidate);
             if (duplicateIndex >= 0)
@@ -66,6 +79,27 @@ public static class NyxIdLlmServiceCatalogParser
         foreach (var item in EnumerateProxyServiceEntries(document.RootElement))
         {
             var service = TryParseProxyRouteCandidate(item);
+            if (service is not null)
+                services.Add(service);
+        }
+
+        return services;
+    }
+
+    /// <summary>
+    /// Parses the NyxID unified key list (<c>GET /api/v1/keys</c>) into LLM route
+    /// candidates. A key is the per-user credential binding for a service, so an
+    /// active key is authoritative evidence the route is usable by this user -
+    /// unlike <c>/api/v1/proxy/services</c>, whose <c>connected</c> flag only
+    /// reflects the legacy connections store.
+    /// </summary>
+    public static IReadOnlyList<NyxIdLlmService> ParseUserKeyRouteCandidates(string response)
+    {
+        using var document = ParseSuccessDocument(response);
+        var services = new List<NyxIdLlmService>();
+        foreach (var item in EnumerateUserKeyEntries(document.RootElement))
+        {
+            var service = TryParseUserKeyRouteCandidate(item);
             if (service is not null)
                 services.Add(service);
         }
@@ -106,6 +140,98 @@ public static class NyxIdLlmServiceCatalogParser
             foreach (var item in array.EnumerateArray())
                 yield return item;
         }
+    }
+
+    private static IEnumerable<JsonElement> EnumerateUserKeyEntries(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in root.EnumerateArray())
+                yield return item;
+            yield break;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+            yield break;
+
+        if (TryGetProperty(root, "keys") is { ValueKind: JsonValueKind.Array } keys)
+        {
+            foreach (var item in keys.EnumerateArray())
+                yield return item;
+        }
+    }
+
+    private static NyxIdLlmService? TryParseUserKeyRouteCandidate(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var slug = ReadOptionalString(element, "catalog_service_slug", "catalogServiceSlug", "slug");
+        if (string.IsNullOrWhiteSpace(slug))
+            return null;
+
+        // Unified keys also cover ssh/node bindings; only http services can act as LLM routes.
+        var serviceType = ReadOptionalString(element, "service_type", "serviceType");
+        if (serviceType is not null && !string.Equals(serviceType.Trim(), "http", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var displayName = ReadOptionalString(element, "catalog_service_name", "catalogServiceName", "label") ?? slug;
+        if (!LooksLikeUserKeyLlmRouteCandidate(element, slug, displayName))
+            return null;
+
+        var routeValue = NormalizeProxyRouteValue(value: null, slug);
+        if (string.IsNullOrWhiteSpace(routeValue))
+            return null;
+
+        var status = ResolveUserKeyStatus(element);
+        var allowed = string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase) &&
+                      ReadAllowedOverride(element) != false;
+        return new NyxIdLlmService(
+            UserServiceId: ReadOptionalString(element, "id") ?? slug,
+            ServiceSlug: slug.Trim(),
+            DisplayName: displayName.Trim(),
+            RouteValue: routeValue,
+            DefaultModel: null,
+            Models: [],
+            Status: status,
+            Source: NyxIdLlmProviderSource.UserService,
+            Allowed: allowed,
+            Description: null);
+    }
+
+    private static bool LooksLikeUserKeyLlmRouteCandidate(JsonElement element, string slug, string displayName)
+    {
+        var signals = new[]
+        {
+            slug,
+            displayName,
+            ReadOptionalString(element, "label"),
+            ReadOptionalString(element, "catalog_service_name", "catalogServiceName"),
+            ReadOptionalString(element, "endpoint_url", "endpointUrl"),
+            ReadOptionalString(element, "openapi_spec_url", "openapiSpecUrl"),
+        };
+
+        if (signals.Any(ContainsNegativeLlmRouteSignal))
+            return false;
+
+        if (signals.Any(ContainsStrongLlmRouteSignal))
+            return true;
+
+        return signals
+            .SelectMany(EnumerateWeakLlmRouteSignals)
+            .Distinct(StringComparer.Ordinal)
+            .Count() >= 2;
+    }
+
+    private static string ResolveUserKeyStatus(JsonElement element)
+    {
+        if (ReadOptionalBool(element, "is_active", "isActive") == false)
+            return "inactive";
+
+        var status = ReadOptionalString(element, "status")?.Trim();
+        return string.IsNullOrWhiteSpace(status) || string.Equals(status, "active", StringComparison.OrdinalIgnoreCase)
+            ? ReadyStatus
+            : status;
     }
 
     private static NyxIdLlmService? TryParseProxyRouteCandidate(JsonElement element)
@@ -498,8 +624,24 @@ public static class NyxIdLlmServiceCatalogParser
         !string.IsNullOrWhiteSpace(right) &&
         string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase);
 
-    private static bool ShouldPreferService(NyxIdLlmService candidate, NyxIdLlmService existing) =>
-        ServiceSelectabilityRank(candidate) > ServiceSelectabilityRank(existing);
+    private static bool ShouldPreferService(NyxIdLlmService candidate, NyxIdLlmService existing)
+    {
+        if (IsUserServiceSource(candidate) != IsUserServiceSource(existing))
+            return IsUserServiceSource(candidate);
+
+        var candidateRank = ServiceSelectabilityRank(candidate);
+        var existingRank = ServiceSelectabilityRank(existing);
+        if (candidateRank != existingRank)
+            return candidateRank > existingRank;
+
+        return ServiceSourceRank(candidate.Source) > ServiceSourceRank(existing.Source);
+    }
+
+    private static bool IsUserServiceSource(NyxIdLlmService service) =>
+        string.Equals(
+            UserLlmCatalogNormalization.NormalizeSource(service.Source).ToWireValue(),
+            UserLlmRouteSource.UserService,
+            StringComparison.OrdinalIgnoreCase);
 
     private static int ServiceSelectabilityRank(NyxIdLlmService service)
     {
@@ -509,6 +651,18 @@ public static class NyxIdLlmServiceCatalogParser
             (true, true) => 3,
             (true, false) => 2,
             (false, true) => 1,
+            _ => 0,
+        };
+    }
+
+    private static int ServiceSourceRank(string? source)
+    {
+        var normalized = UserLlmCatalogNormalization.NormalizeSource(source).ToWireValue();
+        return normalized switch
+        {
+            UserLlmRouteSource.UserService => 3,
+            UserLlmRouteSource.ProxyService => 2,
+            UserLlmRouteSource.GatewayProvider => 1,
             _ => 0,
         };
     }

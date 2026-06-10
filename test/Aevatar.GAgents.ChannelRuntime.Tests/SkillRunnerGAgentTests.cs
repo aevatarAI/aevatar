@@ -1782,6 +1782,36 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleTriggerAsync_RemoteSkillAccessDenied_ShouldPersistAccessDeniedFailure()
+    {
+        var fetcher = new FailingRemoteSkillFetcher(
+            RemoteSkillFetchException.AccessDenied(
+                "daily-report",
+                "NyxID proxy returned 403 for Ornn skill fetch.",
+                403));
+        var provider = new StubStreamingProviderFactory("should-not-run");
+        var agent = CreateAgent(
+            "skill-runner-skill-access-denied",
+            providerFactory: provider,
+            remoteSkillFetcher: fetcher);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateSkillRefCommand("daily-report"));
+
+        var failed = await TriggerExhaustedAndReadFailureAsync(
+            _store,
+            "skill-runner-skill-access-denied",
+            agent);
+
+        failed.ErrorCode.Should().Be(SkillRunnerExecutionErrorCode.SkillAccessDenied);
+        failed.SkillName.Should().Be("daily-report");
+        failed.Error.Should().Contain("access denied");
+        failed.Error.Should().Contain("missing proxy scope or service authorization");
+        failed.Error.Should().Contain("recreate or rotate the scheduled agent key");
+        fetcher.Requests.Should().ContainSingle().Which.Should().Be(("nyx-api-key", "daily-report"));
+        provider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleTriggerAsync_WorkflowSkillWithoutDispatchService_ShouldPersistDispatchUnavailableFailure()
     {
         var fetcher = new SequencedRemoteSkillFetcher(RemoteWorkflowSkill("workflow-skill", "daily_flow"));
@@ -2625,6 +2655,20 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         {
             Requests.Add((accessToken, nameOrId));
             return Task.FromResult(_skills.Count == 0 ? null : _skills.Dequeue());
+        }
+    }
+
+    private sealed class FailingRemoteSkillFetcher(Exception exception) : IRemoteSkillFetcher
+    {
+        public List<(string AccessToken, string NameOrId)> Requests { get; } = [];
+
+        public Task<SkillDefinition?> FetchSkillAsync(
+            string accessToken,
+            string nameOrId,
+            CancellationToken ct = default)
+        {
+            Requests.Add((accessToken, nameOrId));
+            return Task.FromException<SkillDefinition?>(exception);
         }
     }
 

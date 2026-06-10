@@ -33,6 +33,8 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
                     FireIndex = 3,
                     DeliveryMode = RuntimeCallbackScheduleDeliveryMode.EnvelopeRedelivery,
                     TriggerEnvelope = CreateEnvelope("evt-1"),
+                    NextDueAtUnixTimeMs = 1_780_000_000_000,
+                    OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
                 },
             },
         };
@@ -52,6 +54,8 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         callback.DeliveryMode.Should().Be(RuntimeCallbackScheduleDeliveryMode.EnvelopeRedelivery);
         callback.TriggerEnvelope.Id.Should().Be("evt-1");
         callback.TriggerEnvelope.Payload.Unpack<StringValue>().Value.Should().Be("payload");
+        callback.NextDueAtUnixTimeMs.Should().Be(1_780_000_000_000);
+        callback.OverduePolicy.Should().Be(RuntimeCallbackOverduePolicy.Deliver);
     }
 
     [Fact]
@@ -78,6 +82,8 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             DueTimeMillis = 1000,
             DeliveryMode = RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
             TriggerEnvelope = CreateEnvelope("evt-2"),
+            NextDueAtUnixTimeMs = 1_780_000_000_000,
+            OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
         };
         await persistentState.WriteStateAsync();
         await persistentState.ReadStateAsync();
@@ -86,6 +92,8 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         proxy.ReadCount.Should().Be(1);
         persistentState.State.ReminderCallbacks.Should().ContainKey("cb-2");
         persistentState.State.ReminderCallbacks["cb-2"].TriggerEnvelope.Id.Should().Be("evt-2");
+        persistentState.State.ReminderCallbacks["cb-2"].NextDueAtUnixTimeMs.Should().Be(1_780_000_000_000);
+        persistentState.State.ReminderCallbacks["cb-2"].OverduePolicy.Should().Be(RuntimeCallbackOverduePolicy.Deliver);
     }
 
     [Fact]
@@ -364,6 +372,8 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         DueTimeMillis = 1000,
         DeliveryMode = RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
         TriggerEnvelope = CreateEnvelope("evt-1"),
+        NextDueAtUnixTimeMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
     };
 
     private class RuntimeCallbackPersistentStateProxy : DispatchProxy

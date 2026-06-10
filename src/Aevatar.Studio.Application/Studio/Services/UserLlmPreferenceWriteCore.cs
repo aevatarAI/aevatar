@@ -59,18 +59,46 @@ public static class UserLlmPreferenceWriteCore
         var directMatches = options
             .Where(option => string.Equals(option.ServiceId, normalized, StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        var directSelectable = directMatches.Where(IsSelectable).Take(2).ToArray();
-        if (directSelectable.Length == 1)
-            return directSelectable[0];
-
         var keyMatches = options
             .Where(option => IsSameOption(option, normalized))
             .ToArray();
-        var selectable = keyMatches.Where(IsSelectable).Take(2).ToArray();
-        if (selectable.Length == 1)
-            return selectable[0];
+        var relatedMatches = directMatches.Length == 0
+            ? Array.Empty<UserLlmOption>()
+            : options
+                .Where(option => directMatches.Any(direct => ShareOptionKey(option, direct)))
+                .ToArray();
+        var matches = directMatches
+            .Concat(keyMatches)
+            .Concat(relatedMatches)
+            .Distinct()
+            .ToArray();
 
-        return directMatches.FirstOrDefault() ?? (keyMatches.Length == 1 ? keyMatches[0] : null);
+        return ChoosePreferredOption(matches.Where(IsSelectable)) ??
+               ChoosePreferredOption(matches);
+    }
+
+    public static UserLlmOption? ChoosePreferredOption(IEnumerable<UserLlmOption> options)
+    {
+        var ranked = options
+            .Select(option => new
+            {
+                Option = option,
+                SelectabilityRank = OptionSelectabilityRank(option),
+                SourceRank = OptionSourceRank(option),
+            })
+            .OrderByDescending(candidate => candidate.SelectabilityRank)
+            .ThenByDescending(candidate => candidate.SourceRank)
+            .Take(2)
+            .ToArray();
+
+        return ranked.Length switch
+        {
+            0 => null,
+            1 => ranked[0].Option,
+            _ when ranked[0].SelectabilityRank != ranked[1].SelectabilityRank ||
+                   ranked[0].SourceRank != ranked[1].SourceRank => ranked[0].Option,
+            _ => null,
+        };
     }
 
     public static bool IsSelectable(UserLlmOption option) =>
@@ -104,6 +132,40 @@ public static class UserLlmPreferenceWriteCore
         string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(option.RouteValue, UserConfigLlmRoute.Normalize(requested), StringComparison.OrdinalIgnoreCase);
+
+    private static bool ShareOptionKey(UserLlmOption left, UserLlmOption right) =>
+        EqualIfPresent(left.ServiceId, right.ServiceId) ||
+        EqualIfPresent(left.ServiceSlug, right.ServiceSlug) ||
+        EqualIfPresent(left.RouteValue, right.RouteValue);
+
+    private static bool EqualIfPresent(string? left, string? right) =>
+        !string.IsNullOrWhiteSpace(left) &&
+        !string.IsNullOrWhiteSpace(right) &&
+        string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private static int OptionSelectabilityRank(UserLlmOption option)
+    {
+        var ready = string.Equals(option.Status, UserLlmRouteStatus.Ready, StringComparison.OrdinalIgnoreCase);
+        return (option.Allowed, ready) switch
+        {
+            (true, true) => 3,
+            (true, false) => 2,
+            (false, true) => 1,
+            _ => 0,
+        };
+    }
+
+    private static int OptionSourceRank(UserLlmOption option)
+    {
+        var normalized = UserLlmCatalogNormalization.NormalizeSource(option.Source).ToWireValue();
+        return normalized switch
+        {
+            UserLlmRouteSource.UserService => 3,
+            UserLlmRouteSource.ProxyService => 2,
+            UserLlmRouteSource.GatewayProvider => 1,
+            _ => 0,
+        };
+    }
 
     public static string? NormalizeOptional(string? value)
     {

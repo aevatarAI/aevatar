@@ -1,3 +1,4 @@
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 
@@ -290,6 +291,38 @@ public class WorkflowParserConfigurationTests
         step.Parameters["op"].Should().Be("trim");
         step.Parameters["input"].Should().Contain("\"original_sentence\"");
         step.Parameters["input"].Should().Contain("\"story\"");
+    }
+
+    [Fact]
+    public void Parse_WhenTransformOperationParametersProvided_ShouldLiftTypedSpecAndPreserveMap()
+    {
+        var yaml = """
+            name: transform_operation_lift
+            roles: []
+            steps:
+              - id: sum_amounts
+                type: transform
+                op: group_by
+                group_by: department
+                value_field: amount
+                aggregate: avg
+                precision: 2
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+
+        step.Parameters["op"].Should().Be("group_by");
+        step.Parameters["group_by"].Should().Be("department");
+        step.Parameters["value_field"].Should().Be("amount");
+        step.Parameters["aggregate"].Should().Be("avg");
+        step.Parameters["precision"].Should().Be("2");
+        step.TransformOperation.Should().NotBeNull();
+        step.TransformOperation!.Kind.Should().Be(TransformOperationKind.GroupBy);
+        step.TransformOperation.Key.Should().Be("department");
+        step.TransformOperation.Value.Should().Be("amount");
+        step.TransformOperation.Aggregate.Should().Be(TransformAggregateKind.Avg);
+        step.TransformOperation.Precision.Should().Be(2);
     }
 
     [Fact]

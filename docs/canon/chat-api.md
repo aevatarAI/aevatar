@@ -65,6 +65,43 @@ owner: eanzhao
 - 若同时传 `workflow` 与 `workflowYamls`，以 `workflowYamls` 为准。
 - `direct/auto/auto_review` 可显式传入，按注册表解析，不要求存在同名文件。
 
+### 多模态文件输入
+
+`inputParts` 支持两类文件载体：
+
+1. `inlineFile`：只用于小型 inline bytes。`inlineFile.sizeBytes` 是可选校验字段，服务端只用它和 decoded base64 长度比对；它不是客户端声明的 workflow 文件事实。Host API 会把 decoded bytes 写入 workflow file ingress store，并把 command input part 替换为 typed `WorkflowFileRef`，因此 actor-facing request 不长期携带 inline base64。
+2. `fileRef`：用于已经由外部 ingress、connected service 或后续 artifact store 产生的稳定文件引用。API 会归一化为 typed `WorkflowFileRef` 并写入 command envelope，同时保留旧的 `uri/name/mediaType` 镜像字段供现有消费者兼容。
+
+```json
+{
+  "inputParts": [
+    {
+      "type": "image",
+      "fileRef": {
+        "fileId": "file-1",
+        "artifactId": "artifact-1",
+        "sourceKind": "connected_service_resource",
+        "sourceMessageId": "om_1",
+        "sourceResourceKey": "image_key_1",
+        "fileName": "invoice.png",
+        "mediaType": "image/png",
+        "sha256": "redacted",
+        "createdAtUnixMs": 1710000000000,
+        "expiresAtUnixMs": 1710003600000
+      }
+    }
+  ]
+}
+```
+
+`fileRef` 约束：
+
+- `fileId` 或 `artifactId` 至少有一个必须存在；旧 `uri` 会被映射为 `artifactId`。
+- `sourceKind` 可省略；显式传入时必须是 `chat_input`、`form_upload`、`connected_service_resource`、`external_resource`、`generated` 或 `unspecified`。
+- 时间戳必须为非负 Unix milliseconds；同时存在 `createdAtUnixMs` 与 `expiresAtUnixMs` 时，过期时间不得早于创建时间。
+- public `fileRef` 不接受 `sizeBytes`。文件大小事实只能由 ingress/artifact descriptor 或 decoded bytes 产生，不能由客户端在 reusable file ref 上声明。
+- 当前切片完成 chat/API inline bytes 的 file ingress 暂存与 command-level `fileRef` 替换；Lark resource 下载、`document_extract`、外部文件提交和 projection readmodel 仍属于文件链路后续实现。
+
 ## 3. 自动编排能力（按 prompt 决策）
 
 框架内建了 `direct`、`auto`、`auto_review` 三个 workflow（内部能力）。

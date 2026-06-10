@@ -12,6 +12,11 @@ enum RuntimeCallbackScheduleDeliveryMode {
   RUNTIME_CALLBACK_SCHEDULE_DELIVERY_MODE_ENVELOPE_REDELIVERY = 2;
 }
 
+enum RuntimeCallbackOverduePolicy {
+  RUNTIME_CALLBACK_OVERDUE_POLICY_UNSPECIFIED = 0;
+  RUNTIME_CALLBACK_OVERDUE_POLICY_DELIVER = 1;
+}
+
 message RuntimeCallbackSchedulerState {
   map<string, RuntimeScheduledCallback> reminder_callbacks = 1;
 }
@@ -27,4 +32,6 @@ message RuntimeScheduledCallback {
   RuntimeCallbackScheduleDeliveryMode delivery_mode = 8;
   aevatar.EventEnvelope trigger_envelope = 9;
   int32 slot_epoch = 10;
+  int64 next_due_at_unix_time_ms = 11;
+  RuntimeCallbackOverduePolicy overdue_policy = 12;
 }

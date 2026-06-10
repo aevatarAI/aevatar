@@ -199,6 +199,199 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldAcceptTextlessRelayAttachmentContent()
+    {
+        var body = """
+            {
+              "message_id": "msg-image-1",
+              "platform": "telegram",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "123", "type": "private" },
+              "sender": { "platform_id": "456", "display_name": "User One" },
+              "content": {
+                "type": "image",
+                "attachments": [
+                  {
+                    "content_type": "image",
+                    "url": "telegram-file-id-1",
+                    "filename": "photo.png",
+                    "mime_type": "image/png",
+                    "size_bytes": 12345
+                  }
+                ]
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Text.Should().BeEmpty();
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().Be("telegram-file-id-1");
+        attachment.Kind.Should().Be(AttachmentKind.Image);
+        attachment.Name.Should().Be("photo.png");
+        attachment.ContentType.Should().Be("image/png");
+        attachment.BlobRef.Should().BeEmpty();
+        attachment.ExternalUrl.Should().BeEmpty();
+        attachment.SizeBytes.Should().Be(12345);
+    }
+
+    [Fact]
+    public void Parse_ShouldKeepRelayAttachmentUrl_WhenItIsExternalHttpUrl()
+    {
+        var body = """
+            {
+              "message_id": "msg-file-url-1",
+              "platform": "slack",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "C123", "type": "channel" },
+              "sender": { "platform_id": "U456", "display_name": "User One" },
+              "content": {
+                "type": "file",
+                "attachments": [
+                  {
+                    "content_type": "file",
+                    "url": "https://files.example.test/report.pdf",
+                    "filename": "report.pdf",
+                    "mime_type": "application/pdf"
+                  }
+                ]
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().Be("https://files.example.test/report.pdf");
+        attachment.Kind.Should().Be(AttachmentKind.File);
+        attachment.ExternalUrl.Should().Be("https://files.example.test/report.pdf");
+        attachment.BlobRef.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Parse_ShouldAcceptTextlessLarkImageKey_FromRawMessageContent()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-image-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "type": "private" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "image" },
+              "raw_platform_data": {
+                "event": {
+                  "sender": {
+                    "sender_id": {
+                      "union_id": "on_user_1"
+                    }
+                  },
+                  "message": {
+                    "message_id": "om_image_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "image",
+                    "content": "{\"image_key\":\"img_v3_abc\",\"file_name\":\"photo.png\",\"file_size\":42}"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Conversation.Scope.Should().Be(ConversationScope.Group);
+        parsed.Activity.Conversation.CanonicalKey.Should().Be("lark:group:oc_group_1");
+        parsed.Activity.Content.Text.Should().BeEmpty();
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().Be("img_v3_abc");
+        attachment.Kind.Should().Be(AttachmentKind.Image);
+        attachment.Name.Should().Be("photo.png");
+        attachment.ContentType.Should().Be("image");
+        attachment.BlobRef.Should().BeEmpty();
+        attachment.ExternalUrl.Should().BeEmpty();
+        attachment.SizeBytes.Should().Be(42);
+    }
+
+    [Fact]
+    public void Parse_ShouldAcceptTextlessLarkFileKey_FromRawMessageContentObject()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-file-1",
+              "platform": "feishu",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "file", "text": "   " },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_file_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "file",
+                    "content": {
+                      "file_key": "file_v3_abc",
+                      "file_name": "report.pdf",
+                      "mime_type": "application/pdf",
+                      "file_size": "2048"
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Text.Should().BeEmpty();
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().Be("file_v3_abc");
+        attachment.Kind.Should().Be(AttachmentKind.File);
+        attachment.Name.Should().Be("report.pdf");
+        attachment.ContentType.Should().Be("application/pdf");
+        attachment.BlobRef.Should().BeEmpty();
+        attachment.SizeBytes.Should().Be(2048);
+    }
+
+    [Fact]
+    public void Parse_ShouldIgnorePayload_WhenAttachmentIdentifiersAreMissing()
+    {
+        var body = """
+            {
+              "message_id": "msg-empty-attachment",
+              "platform": "telegram",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "123", "type": "private" },
+              "sender": { "platform_id": "456", "display_name": "User One" },
+              "content": {
+                "type": "image",
+                "text": "   ",
+                "attachments": [
+                  { "content_type": "image", "filename": "photo.png" }
+                ]
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeFalse();
+        parsed.Ignored.Should().BeTrue();
+        parsed.ErrorCode.Should().Be("empty_text");
+    }
+
+    [Fact]
     public void Parse_ShouldUseSenderIdAsDirectMessageCanonicalTail()
     {
         var body = """
@@ -542,6 +735,34 @@ public sealed class NyxIdRelayTransportTests
         cardAction.Arguments.Should().NotContainKey("preset_id");
         cardAction.LlmSelection.Action.Should().Be("apply_preset");
         cardAction.LlmSelection.PresetId.Should().Be("work-fast");
+    }
+
+    [Fact]
+    public void Parse_ShouldMapLlmSelectionPageFields_ToTypedPayload()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-page",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"action_id\":\"llp\",\"value\":\"2\",\"llm_action\":\"list_page\",\"page\":2,\"display_mode\":\"route\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var llmSelection = parsed.Activity!.Content.CardAction.LlmSelection;
+        llmSelection.Action.Should().Be("list_page");
+        llmSelection.Page.Should().Be(2);
+        llmSelection.DisplayMode.Should().Be("route");
+        parsed.Activity.Content.CardAction.Arguments.Should().NotContainKey("page");
+        parsed.Activity.Content.CardAction.Arguments.Should().NotContainKey("display_mode");
     }
 
     [Fact]

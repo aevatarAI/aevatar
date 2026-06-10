@@ -152,6 +152,7 @@ public sealed class WorkflowParser
 
         ApplyErgonomicDefaults(normalizedRawType, parameters);
         LiftRootPrimitiveParameters(canonicalType, s, parameters);
+        LiftTransformOperationParameters(canonicalType, s, parameters);
 
         return new StepDefinition
         {
@@ -159,6 +160,7 @@ public sealed class WorkflowParser
             Type = canonicalType,
             TargetRole = s.TargetRole ?? s.Role,
             Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(parameters),
+            TransformOperation = MapTransformOperation(canonicalType, parameters),
             Presentation = presentation,
             Next = s.Next,
             Children = s.Children?.Select(MapStep).ToList(),
@@ -816,6 +818,98 @@ public sealed class WorkflowParser
     private static bool ShouldLiftTimeoutMsToParameter(string canonicalType) =>
         canonicalType is "wait_signal" or "connector_call" or "secure_connector_call" or "llm_call" or "human_input" or "secure_input" or "human_approval";
 
+    private static void LiftTransformOperationParameters(
+        string canonicalType,
+        RawStep s,
+        IDictionary<string, string> parameters)
+    {
+        if (!string.Equals(canonicalType, "transform", StringComparison.Ordinal))
+            return;
+
+        AddIfMissing(parameters, "op", s.Op);
+        AddIfMissing(parameters, "precision", s.Precision);
+        AddIfMissing(parameters, "group_by", s.GroupBy);
+        AddIfMissing(parameters, "value", s.Value);
+        AddIfMissing(parameters, "value_field", s.ValueField);
+        AddIfMissing(parameters, "field", s.Field);
+        AddIfMissing(parameters, "aggregate", s.Aggregate);
+    }
+
+    private static TransformOperationSpec? MapTransformOperation(
+        string canonicalType,
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        if (!string.Equals(canonicalType, "transform", StringComparison.Ordinal))
+            return null;
+
+        var op = GetParameter(parameters, "op", "operation").Trim();
+        var kind = ParseTransformOperationKind(op);
+        if (kind == TransformOperationKind.Unspecified)
+            return null;
+
+        var spec = new TransformOperationSpec { Kind = kind };
+        if (TryGetParameter(parameters, out var precision, "precision", "scale") &&
+            !string.IsNullOrWhiteSpace(precision) &&
+            !int.TryParse(precision.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+        {
+            return null;
+        }
+
+        if (TryGetParameter(parameters, out precision, "precision", "scale") &&
+            int.TryParse(precision.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPrecision))
+        {
+            spec.Precision = parsedPrecision;
+        }
+
+        spec.Key = GetParameter(parameters, "key", "group_key", "group_by").Trim();
+        spec.Value = GetParameter(parameters, "value", "value_field", "field").Trim();
+        spec.Aggregate = ParseTransformAggregateKind(GetParameter(parameters, "aggregate", "agg").Trim());
+        return spec;
+    }
+
+    private static TransformOperationKind ParseTransformOperationKind(string? value) =>
+        NormalizeEnumToken(value) switch
+        {
+            "sum" => TransformOperationKind.Sum,
+            "subtract" => TransformOperationKind.Subtract,
+            "multiply" => TransformOperationKind.Multiply,
+            "divide" => TransformOperationKind.Divide,
+            "round" => TransformOperationKind.Round,
+            "min" => TransformOperationKind.Min,
+            "max" => TransformOperationKind.Max,
+            "groupby" => TransformOperationKind.GroupBy,
+            _ => TransformOperationKind.Unspecified,
+        };
+
+    private static TransformAggregateKind ParseTransformAggregateKind(string? value) =>
+        NormalizeEnumToken(value) switch
+        {
+            "sum" => TransformAggregateKind.Sum,
+            "count" => TransformAggregateKind.Count,
+            "avg" => TransformAggregateKind.Avg,
+            _ => TransformAggregateKind.Unspecified,
+        };
+
+    private static bool TryGetParameter(
+        IReadOnlyDictionary<string, string> parameters,
+        out string value,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (parameters.TryGetValue(key, out value!))
+                return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static string GetParameter(
+        IReadOnlyDictionary<string, string> parameters,
+        params string[] keys) =>
+        TryGetParameter(parameters, out var value, keys) ? value : string.Empty;
+
     private static void AddIfMissing(
         IDictionary<string, string> parameters,
         string key,
@@ -1062,6 +1156,13 @@ public sealed class WorkflowParser
         public string? HolderToken { get; set; }
         public object? Generation { get; set; }
         public string? HolderTokenVariable { get; set; }
+        public string? Op { get; set; }
+        public object? Precision { get; set; }
+        public string? GroupBy { get; set; }
+        public string? Value { get; set; }
+        public string? ValueField { get; set; }
+        public string? Field { get; set; }
+        public string? Aggregate { get; set; }
         public object? InteractionSpec { get; set; }
         public object? InteractionTemplateSpec { get; set; }
         public string? DeliveryTargetId { get; set; }

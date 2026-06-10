@@ -387,6 +387,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
             StepId = stepId,
         };
+        intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
             ctx,
             ctx.AgentId ?? string.Empty,

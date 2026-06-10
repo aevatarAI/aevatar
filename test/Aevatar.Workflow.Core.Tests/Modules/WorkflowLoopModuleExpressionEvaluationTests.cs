@@ -125,6 +125,55 @@ public class WorkflowLoopModuleExpressionEvaluationTests
     }
 
     [Fact]
+    public async Task DispatchStep_ShouldEvaluateTypedTransformOperationBeforeDispatch()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "group",
+                    Type = "transform",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["op"] = "group_by",
+                        ["group_by"] = "${input}",
+                        ["value_field"] = "amount",
+                        ["aggregate"] = "sum",
+                    },
+                    TransformOperation = new TransformOperationSpec
+                    {
+                        Kind = TransformOperationKind.GroupBy,
+                        Key = "${input}",
+                        Value = "amount",
+                        Aggregate = TransformAggregateKind.Sum,
+                    },
+                },
+            ],
+        };
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "run-transform-operation",
+            Input = "department",
+        }), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["group_by"].Should().Be("department");
+        request.StepParameters.TransformOperation.Kind.Should().Be(TransformOperationKind.GroupBy);
+        request.StepParameters.TransformOperation.Key.Should().Be("department");
+        request.StepParameters.TransformOperation.Value.Should().Be("amount");
+        request.StepParameters.TransformOperation.Aggregate.Should().Be(TransformAggregateKind.Sum);
+    }
+
+    [Fact]
     public async Task DispatchStep_WhenLlmCallOmitsRole_ShouldAssignImplicitAssistantTarget()
     {
         var workflow = new WorkflowDefinition

@@ -75,6 +75,9 @@ roles:
 
 - 作用：对输入做确定性变换，既支持纯文本操作（如 `trim`/`uppercase`/`count_words`/`split`），也支持 `json_extract` 这类 JSON 投影。
 - 常用参数：`op`、`n`、`separator`；当 `op=json_extract` 时，还可用 `path`、`field`、`sort_by`、`order`。
+- 金额级确定性操作：`sum`、`subtract`、`multiply`、`divide`、`round`、`min`、`max`、`group_by`。这些操作会被解析为 typed `transform_operation`，同时保留 legacy `parameters` map；识别到的数值/分组操作解析或运行失败时发布失败的 `StepCompletedEvent`，不会包装成成功文本。
+- `group_by` v1 只接受 JSON array of objects，支持单个 `key`/`group_by`、单个 `value`/`value_field`，`aggregate` 仅支持 `sum`、`count`、`avg`。这不是脚本、表达式、SQL 或 LLM 数据处理入口。
+- `rss_extract_items` 是唯一 RSS/Atom 解析 op 名称，不提供 `rss_extract` alias。输入为 RSS 2.0 或 Atom XML，输出 JSON array，每个 item 只包含 `source_id`、`source_url`、`id`、`title`、`link`、`published_at`、`summary`。
 
 ```yaml
 steps:
@@ -95,6 +98,28 @@ steps:
       sort_by: createdAt
       order: desc
       n: "50"
+```
+
+```yaml
+steps:
+  - id: sum_by_department
+    type: transform
+    parameters:
+      op: group_by
+      key: department
+      value: amount
+      aggregate: sum
+      precision: "2"
+```
+
+```yaml
+steps:
+  - id: extract_feed_items
+    type: transform
+    parameters:
+      op: rss_extract_items
+      source_id: "vendor-feed"
+      source_url: "https://example.com/feed.xml"
 ```
 
 ### `assign`
@@ -318,6 +343,7 @@ steps:
 
 - 作用：调用已注册工具（函数/工具链/MCP 工具）。
 - 常用参数：`tool`。
+- 工具输出若是 JSON object 且步骤成功，运行时会把顶层字段镜像为 `steps.<step_id>.json.<field>` 变量，供后续 `switch` / `conditional` / `while` 分支使用。
 
 ```yaml
 steps:
@@ -325,6 +351,36 @@ steps:
     type: tool_call
     parameters:
       tool: "web_search"
+```
+
+#### Lark approval status 工具
+
+`lark_approvals_get` 是只读 Lark 审批实例查询工具，输入使用 `instance_code`，可选 `locale` 与 `user_id_type`。工作流不得手工拼接 NyxID proxy path；需要等待审批时，先调用该 typed tool，再基于稳定控制字段分支。
+
+稳定控制字段：
+
+- `success`：工具调用是否得到可解析的实例结果。
+- `status`：归一化状态，常见值为 `running`、`approved`、`rejected`、`withdrawn`、`terminated`。
+- `raw_status`：Lark 原始状态值。
+- `is_terminal` / `terminal_status`：是否进入终态，以及终态名称。
+- `should_continue_waiting`：仍需等待时为 `true`。
+- `approved` / `rejected` / `withdrawn` / `terminated`：便于 workflow 直接分支的布尔字段。
+
+```yaml
+steps:
+  - id: get_instance
+    type: tool_call
+    parameters:
+      tool: lark_approvals_get
+    next: route_status
+
+  - id: route_status
+    type: switch
+    parameters:
+      on: "${steps.get_instance.json.status}"
+      branch.approved: mark_approved
+      branch.rejected: mark_rejected
+      branch._default: wait_or_fail
 ```
 
 ### `evaluate`（别名：`judge`）
@@ -466,6 +522,10 @@ steps:
       workflow: "shared_enrichment_pipeline"
       lifecycle: "singleton"
 ```
+
+#### Lark approval wait 模板
+
+`workflows/lark_approval_wait.yaml` 是可复用审批等待模板，输入为 Lark `instance_code`。它通过 `while + workflow_call + tool_call + switch + delay` 组合调用 `lark_approval_wait_poll`，默认最多轮询 60 次、每轮非终态等待 5000ms。超时预算由 `max_iterations` 与 `duration_ms` 显式表达；需要不同预算时复制模板并调整这两个参数，不新增 Lark 专用 polling runtime。
 
 ### `dynamic_workflow`
 

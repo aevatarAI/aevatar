@@ -1050,7 +1050,25 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 workflowId: normalized.WorkflowId);
         }
 
-        var skill = await fetcher.FetchSkillAsync(State.OutboundConfig?.NyxApiKey ?? string.Empty, normalized.Name, ct);
+        SkillDefinition? skill;
+        try
+        {
+            skill = await fetcher.FetchSkillAsync(State.OutboundConfig?.NyxApiKey ?? string.Empty, normalized.Name, ct);
+        }
+        catch (RemoteSkillFetchException ex) when (
+            ex.FailureKind == RemoteSkillFetchFailureKind.AccessDenied ||
+            ex.HttpStatus == 403)
+        {
+            throw new SkillRunnerExecutionException(
+                $"Scheduled skill '{normalized.Name}' access denied while fetching through NyxID proxy. " +
+                "The scheduled agent API key is missing proxy scope or service authorization for the Ornn service. " +
+                "Reconnect the Ornn service in NyxID and recreate or rotate the scheduled agent key.",
+                SkillRunnerExecutionErrorCode.SkillAccessDenied,
+                skillName: normalized.Name,
+                skillVersion: normalized.Version,
+                workflowId: normalized.WorkflowId);
+        }
+
         if (skill is null)
         {
             if (normalized.AllowInlineFallback && !string.IsNullOrWhiteSpace(State.SkillContent))

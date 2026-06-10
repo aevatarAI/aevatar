@@ -85,4 +85,34 @@ public sealed class NyxIdRelayContentPayload
 
     [JsonPropertyName("text")]
     public string? Text { get; set; }
+
+    [JsonPropertyName("attachments")]
+    public List<NyxIdRelayAttachmentPayload>? Attachments { get; set; }
+}
+
+public sealed class NyxIdRelayAttachmentPayload
+{
+    [JsonPropertyName("content_type")]
+    public string? ContentType { get; set; }
+
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+
+    [JsonPropertyName("url")]
+    public string? Url { get; set; }
+
+    [JsonPropertyName("filename")]
+    public string? Filename { get; set; }
+
+    [JsonPropertyName("file_name")]
+    public string? FileName { get; set; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("mime_type")]
+    public string? MimeType { get; set; }
+
+    [JsonPropertyName("size_bytes")]
+    public long? SizeBytes { get; set; }
 }
