@@ -1,4 +1,6 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 
 namespace Aevatar.Workflow.Integration.AI;
@@ -27,7 +29,7 @@ public sealed class AgentWorkflowToolSourceAdapter(IEnumerable<IAgentToolSource>
 
         public string Name => _tool.Name;
 
-        public async Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+        public async Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(request);
 
@@ -52,10 +54,31 @@ public sealed class AgentWorkflowToolSourceAdapter(IEnumerable<IAgentToolSource>
                 },
             };
             using var scope = AgentToolContextScope.Push(toolContext);
-            return await _tool.ExecuteAsync(request.ArgumentsJson, ct).ConfigureAwait(false);
+            var resultJson = await _tool.ExecuteAsync(request.ArgumentsJson, ct).ConfigureAwait(false);
+            var receipt = _tool.CreateSuccessReceipt(request.CallId, _tool.Name, resultJson);
+            return new WorkflowToolExecutionResult(
+                resultJson,
+                ToWorkflowManagedHandoffOutcome(receipt?.ManagedWorkflowHandoff));
         }
 
         private static string? Normalize(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+        private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(
+            ManagedWorkflowHandoffReceipt? receipt)
+        {
+            if (receipt == null || string.IsNullOrWhiteSpace(receipt.InvocationId))
+                return null;
+
+            return new WorkflowManagedHandoffOutcome
+            {
+                ParentActorId = receipt.ParentActorId ?? string.Empty,
+                ParentRunId = receipt.ParentRunId ?? string.Empty,
+                ParentStepId = receipt.ParentStepId ?? string.Empty,
+                InvocationId = receipt.InvocationId ?? string.Empty,
+                ChildRunId = receipt.ChildRunId ?? string.Empty,
+                StreamTopic = receipt.StreamTopic ?? string.Empty,
+            };
+        }
     }
 }

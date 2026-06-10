@@ -887,7 +887,8 @@ public sealed class AevatarInvocationDispatcher
             Prompt = payload.Prompt,
             SessionId = commandId,
             ScopeId = scope.ScopeId,
-            ToolContext = ToPayload(AgentToolRequestContext.Current),
+            ToolContext = AgentToolExecutionContextMapper.ToPayload(
+                AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty),
             LlmControl = ToLlmControlPayload(AgentToolRequestContext.Current),
         };
         AppendMetadata(request.Headers, headers);
@@ -928,60 +929,6 @@ public sealed class AevatarInvocationDispatcher
             if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
                 destination[key.Trim()] = value.Trim();
         }
-    }
-
-    private static AgentToolExecutionContextPayload ToPayload(AgentToolExecutionContext? context)
-    {
-        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
-        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
-        context ??= AgentToolExecutionContext.Empty;
-        var payload = new AgentToolExecutionContextPayload
-        {
-            Request = new AgentToolRequestIdentityPayload
-            {
-                RequestId = context.Request.RequestId ?? string.Empty,
-                CallId = context.Request.CallId ?? string.Empty,
-            },
-            Credentials = new AgentToolCredentialsPayload
-            {
-                NyxIdAccessToken = context.Credentials.NyxIdAccessToken ?? string.Empty,
-                NyxIdOrgToken = context.Credentials.NyxIdOrgToken ?? string.Empty,
-                SenderNyxIdAccessToken = context.Credentials.SenderNyxIdAccessToken ?? string.Empty,
-            },
-            Caller = new AgentToolCallerContextPayload
-            {
-                ScopeId = context.Caller.ScopeId ?? string.Empty,
-                OwnerSubject = context.Caller.OwnerSubject ?? string.Empty,
-                ResponseId = context.Caller.ResponseId ?? string.Empty,
-            },
-            Channel = new AgentToolChannelContextPayload
-            {
-                Platform = context.Channel.Platform ?? string.Empty,
-                SenderId = context.Channel.SenderId ?? string.Empty,
-                RegistrationScopeId = context.Channel.RegistrationScopeId ?? string.Empty,
-                MessageId = context.Channel.MessageId ?? string.Empty,
-                PlatformMessageId = context.Channel.PlatformMessageId ?? string.Empty,
-            },
-            SenderBinding = new AgentToolSenderBindingContextPayload
-            {
-                BindingId = context.SenderBinding.BindingId ?? string.Empty,
-            },
-            Routing = new LLMRequestRoutingContextPayload
-            {
-                ModelOverride = context.Routing.ModelOverride ?? string.Empty,
-                NyxIdRoutePreference = context.Routing.NyxIdRoutePreference ?? string.Empty,
-                UserMemoryPrompt = context.Routing.UserMemoryPrompt ?? string.Empty,
-            },
-            ConnectedServices = new AgentToolConnectedServicesContextPayload
-            {
-                ContextJson = context.ConnectedServices.ContextJson ?? string.Empty,
-            },
-        };
-        if (context.Routing.MaxToolRoundsOverride.HasValue)
-            payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;
-        foreach (var (key, value) in context.ExternalMetadata)
-            payload.ExternalMetadata[key] = value;
-        return payload;
     }
 
     private static LLMControlContextPayload ToLlmControlPayload(AgentToolExecutionContext? context)

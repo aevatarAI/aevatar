@@ -172,6 +172,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        if (evt.ManagedHandoff != null && !string.IsNullOrWhiteSpace(evt.ManagedHandoff.InvocationId))
+        {
+            await RemovePendingAsync(sessionId, pending, ctx, ct);
+            return;
+        }
+
         ctx.Logger.LogInformation(
             "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=completed output_len={OutputLen} output_redacted=true",
             pending.RunId,

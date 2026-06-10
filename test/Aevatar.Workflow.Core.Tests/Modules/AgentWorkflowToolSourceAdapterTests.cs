@@ -26,7 +26,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 CallerCredential: new WorkflowCallerCredential { BearerToken = "token-123" }),
             CancellationToken.None);
 
-        result.Should().Be("""{"observed":true}""");
+        result.ResultJson.Should().Be("""{"observed":true}""");
+        result.ManagedHandoff.Should().BeNull();
         agentTool.ObservedArgumentsJson.Should().Be("""{"ok":true}""");
         agentTool.ObservedAccessToken.Should().Be("token-123");
         agentTool.ObservedOrgToken.Should().Be("token-123");

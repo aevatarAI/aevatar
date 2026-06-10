@@ -79,16 +79,23 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         try
         {
-            var resultJson = await ExecuteToolAsync(tool, argumentsJson, request, callId, ctx, ct);
+            var result = await ExecuteToolAsync(tool, argumentsJson, request, callId, ctx, ct);
 
-            await ctx.PublishAsync(new WorkflowToolCallCompletedEvent
+            var completed = new WorkflowToolCallCompletedEvent
             {
                 CallId = callId,
                 Success = true,
-                ResultJson = resultJson,
+                ResultJson = result.ResultJson,
                 RunId = request.RunId,
                 StepId = request.StepId,
-            }, TopologyAudience.Self, ct);
+            };
+            if (result.ManagedHandoff != null)
+                completed.ManagedHandoff = result.ManagedHandoff.Clone();
+
+            await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
+
+            if (result.ManagedHandoff != null)
+                return;
 
             await ctx.PublishAsync(new StepCompletedEvent
             {
@@ -96,7 +103,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 RunId = request.RunId,
                 ExecutionId = request.ExecutionId,
                 Success = true,
-                Output = resultJson,
+                Output = result.ResultJson,
             }, TopologyAudience.Self, ct);
         }
         catch (Exception ex)
@@ -106,7 +113,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private static Task<string> ExecuteToolAsync(
+    private static Task<WorkflowToolExecutionResult> ExecuteToolAsync(
         IWorkflowTool tool,
         string argumentsJson,
         StepRequestEvent request,

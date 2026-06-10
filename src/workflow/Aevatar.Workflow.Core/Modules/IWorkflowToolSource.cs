@@ -6,7 +6,15 @@ public interface IWorkflowTool
 {
     string Name { get; }
 
-    Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default);
+    Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default);
+}
+
+public sealed record WorkflowToolExecutionResult(
+    string ResultJson,
+    WorkflowManagedHandoffOutcome? ManagedHandoff = null)
+{
+    public static WorkflowToolExecutionResult Success(string resultJson) =>
+        new(resultJson ?? string.Empty);
 }
 
 public sealed record WorkflowToolExecutionRequest(

@@ -532,6 +532,17 @@ message WorkflowLlmInvocationCompletedEvent
   string reasoning_content = 7;
   string error = 8;
   WorkflowUsageMetrics usage = 9;
+  WorkflowManagedHandoffOutcome managed_handoff = 10;
+}
+
+message WorkflowManagedHandoffOutcome
+{
+  string parent_actor_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string invocation_id = 4;
+  string child_run_id = 5;
+  string stream_topic = 6;
 }
 
 message WorkflowToolCallStartedEvent
@@ -551,6 +562,7 @@ message WorkflowToolCallCompletedEvent
   bool success = 4;
   string result_json = 5;
   string error = 6;
+  WorkflowManagedHandoffOutcome managed_handoff = 7;
 }
 
 enum WorkflowLeaseConflictPolicy {

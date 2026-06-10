@@ -140,6 +140,30 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_WhenToolReturnsManagedHandoff_ShouldLeaveParentStepPending()
+    {
+        var handoff = new WorkflowManagedHandoffOutcome
+        {
+            ParentActorId = "parent-actor",
+            ParentRunId = "run-1",
+            ParentStepId = "call_proxy",
+            InvocationId = "run-1:workflow_tool:call_proxy:call-1",
+            ChildRunId = "run-1:workflow_tool:call_proxy:call-1",
+        };
+        var tool = new ManagedHandoffWorkflowTool("aevatar_start_workflow", handoff);
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-1");
+
+        var completed = ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single();
+        completed.Success.Should().BeTrue();
+        completed.ManagedHandoff.Should().NotBeNull();
+        completed.ManagedHandoff.InvocationId.Should().Be(handoff.InvocationId);
+        ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldFallbackToEmptyScopeIdWhenContextScopeIdIsNull()
     {
         var tool = new CapturingWorkflowTool("nyxid_tool");
@@ -229,10 +253,10 @@ public sealed class ToolCallModuleContextTests
     {
         public string Name { get; } = name;
 
-        public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+        public Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(execute(request.ArgumentsJson));
+            return Task.FromResult(WorkflowToolExecutionResult.Success(execute(request.ArgumentsJson)));
         }
     }
 
@@ -242,11 +266,11 @@ public sealed class ToolCallModuleContextTests
 
         public int ExecuteCalls { get; private set; }
 
-        public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+        public Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             ExecuteCalls++;
-            return Task.FromResult(execute(request.ArgumentsJson));
+            return Task.FromResult(WorkflowToolExecutionResult.Success(execute(request.ArgumentsJson)));
         }
     }
 
@@ -256,11 +280,22 @@ public sealed class ToolCallModuleContextTests
 
         public WorkflowToolExecutionRequest? LastRequest { get; private set; }
 
-        public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+        public Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             LastRequest = request;
-            return Task.FromResult("""{"typed":true}""");
+            return Task.FromResult(WorkflowToolExecutionResult.Success("""{"typed":true}"""));
+        }
+    }
+
+    private sealed class ManagedHandoffWorkflowTool(string name, WorkflowManagedHandoffOutcome handoff) : IWorkflowTool
+    {
+        public string Name { get; } = name;
+
+        public Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new WorkflowToolExecutionResult("""{"status":"accepted"}""", handoff));
         }
     }
 

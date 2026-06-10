@@ -199,6 +199,16 @@ message AgentToolReceipt {
   string error_code = 12;
   string error_message = 13;
   string result_json = 14;
+  ManagedWorkflowHandoffReceipt managed_workflow_handoff = 15;
+}
+
+message ManagedWorkflowHandoffReceipt {
+  string parent_actor_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string invocation_id = 4;
+  string child_run_id = 5;
+  string stream_topic = 6;
 }
 
 message ToolResultEvent {

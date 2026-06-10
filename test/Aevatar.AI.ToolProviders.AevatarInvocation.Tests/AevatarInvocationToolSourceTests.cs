@@ -755,6 +755,77 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeGAgentForChatRun_ShouldPreserveWorkflowRuntimeInCanonicalToolContextPayload()
+    {
+        var harness = new Harness();
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "call-gagent-runtime",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "parent-actor",
+                "parent-run",
+                "parent-step",
+                "root-run",
+                2));
+        var request = BuildChatRunRequest(
+            "response-gagent",
+            "call-gagent-runtime-tool",
+            "aevatar_invoke_gagent",
+            """
+            {
+              "actor_id": "actor-1",
+              "payload": { "prompt": "run gagent" }
+            }
+            """);
+
+        var result = await dispatcher.InvokeGAgentForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty();
+        harness.ActorDispatch.Calls.Should().ContainSingle();
+        var chatRequest = harness.ActorDispatch.Calls.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.ToolContext.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
+        chatRequest.ToolContext.WorkflowRuntime.ParentRunId.Should().Be("parent-run");
+        chatRequest.ToolContext.WorkflowRuntime.ParentStepId.Should().Be("parent-step");
+        chatRequest.ToolContext.WorkflowRuntime.RootRunId.Should().Be("root-run");
+        chatRequest.ToolContext.WorkflowRuntime.Depth.Should().Be(2);
+        chatRequest.ToolContext.SkillRecovery.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenTrustedWorkflowRuntimeExists_ShouldCreateManagedHandoffReceipt()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-managed-workflow",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "parent-actor",
+                "parent-run",
+                "parent-step",
+                "root-run",
+                2));
+
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "child-flow",
+              "inputs": { "prompt": "run child" },
+              "wait": "stream"
+            }
+            """);
+        var receipt = tool.CreateSuccessReceipt("call-managed-workflow", tool.Name, output);
+
+        receipt.Should().NotBeNull();
+        receipt!.ManagedWorkflowHandoff.Should().NotBeNull();
+        receipt.ManagedWorkflowHandoff.ParentActorId.Should().Be("parent-actor");
+        receipt.ManagedWorkflowHandoff.ParentRunId.Should().Be("parent-run");
+        receipt.ManagedWorkflowHandoff.ParentStepId.Should().Be("parent-step");
+        receipt.ManagedWorkflowHandoff.InvocationId.Should().Be("parent-run:workflow_tool:parent-step:call-managed-workflow");
+        receipt.ManagedWorkflowHandoff.ChildRunId.Should().Be("parent-run:workflow_tool:parent-step:call-managed-workflow");
+    }
+
+    [Fact]
     public async Task aevatar_start_workflow_with_actor_id_dispatches_definition_actor_source()
     {
         var harness = new Harness();
