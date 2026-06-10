@@ -42,6 +42,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Text;
+using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -68,6 +70,8 @@ public sealed class WorkflowInfrastructureCoverageTests
         options.OutputDirectory.Should().Be("/tmp/workflow-reports");
         provider.GetRequiredService<IWorkflowRunReportExportPort>()
             .Should().BeOfType<FileSystemWorkflowRunReportExporter>();
+        provider.GetRequiredService<IWorkflowFileIngressPort>()
+            .Should().BeOfType<FileSystemWorkflowFileIngressPort>();
         services.Should().Contain(x =>
             x.ServiceType == typeof(WorkflowRunActorPort) &&
             x.ImplementationType == typeof(WorkflowRunActorPort));
@@ -248,8 +252,52 @@ public sealed class WorkflowInfrastructureCoverageTests
             x.ServiceType == typeof(IWorkflowRunReportExportPort) &&
             x.ImplementationType == typeof(FileSystemWorkflowRunReportExporter));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowFileIngressPort) &&
+            x.ImplementationType == typeof(FileSystemWorkflowFileIngressPort));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
+    }
+
+    [Fact]
+    public async Task FileSystemWorkflowFileIngressPort_ShouldStoreBytesAndReturnDescriptor()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-file-ingress-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = new FileSystemWorkflowFileIngressPort(
+                Options.Create(new FileSystemWorkflowFileIngressOptions
+                {
+                    RootDirectory = root,
+                    TimeToLive = TimeSpan.FromMinutes(30),
+                }));
+
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                Encoding.UTF8.GetBytes("hello"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "hello.png",
+                MediaType: "image/png"));
+
+            var descriptor = result.FileRef;
+            descriptor.FileId.Should().StartWith("wf-file-");
+            descriptor.ArtifactId.Should().Be($"workflow-file://{descriptor.FileId}");
+            descriptor.SourceKind.Should().Be(ApplicationWorkflowFileSourceKind.ChatInput);
+            descriptor.FileName.Should().Be("hello.png");
+            descriptor.MediaType.Should().Be("image/png");
+            descriptor.SizeBytes.Should().Be(5);
+            descriptor.Sha256.Should().Be("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+            descriptor.CreatedAtUnixMs.Should().BeGreaterThan(0);
+            descriptor.ExpiresAtUnixMs.Should().BeGreaterThan(descriptor.CreatedAtUnixMs);
+
+            var storedPath = Path.Combine(root, descriptor.FileId!, "content.bin");
+            File.Exists(storedPath).Should().BeTrue();
+            (await File.ReadAllTextAsync(storedPath)).Should().Be("hello");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

@@ -41,39 +41,11 @@ internal static class ChatRunRequestNormalizer
         //   New principle: chat sources execute unchanged; hidden prompt mutation removed; explicit authoring surface (if needed) deferred to later-slice design
         ArgumentNullException.ThrowIfNull(input);
 
-        var normalizedInputPartsResult = NormalizeInputParts(input.InputParts);
-        if (normalizedInputPartsResult.Error != WorkflowChatRunStartError.None)
-            return ChatRunRequestNormalizationResult.Failed(normalizedInputPartsResult.Error);
-
-        var normalizedInputParts = normalizedInputPartsResult.InputParts;
-        if (HasOnlyUnsupportedInputParts(input, normalizedInputParts))
-            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
-
-        var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, input.Headers, defaultMetadata);
-        var normalizedMetadata = normalizedContext.Metadata;
-        var sourceResult = NormalizeSource(input);
-        if (!sourceResult.Succeeded)
-            return ChatRunRequestNormalizationResult.Failed(sourceResult.Error);
-
-        var rawPrompt = ResolvePrompt(input.Prompt, normalizedInputParts);
-        if (rawPrompt.Length == 0)
-            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
-
-        var callerCredentialResult = NormalizeCallerCredential(trustedCallerCredential);
-        if (callerCredentialResult.Error != WorkflowChatRunStartError.None)
-            return ChatRunRequestNormalizationResult.Failed(callerCredentialResult.Error);
-
-        return ChatRunRequestNormalizationResult.Success(
-            new WorkflowChatRunRequest(
-                Prompt: rawPrompt,
-                Source: sourceResult.Source!,
-                SessionId: NormalizeSessionId(input.SessionId),
-                InputParts: normalizedInputParts,
-                Metadata: normalizedMetadata,
-                ScopeId: normalizedContext.ScopeId,
-                LlmControl: NormalizeLlmControl(input.LlmControl),
-                CallerCredential: callerCredentialResult.Credential,
-                Headers: normalizedContext.Headers));
+        return NormalizeWithInputParts(
+            input,
+            NormalizeInputParts(input.InputParts),
+            defaultMetadata,
+            trustedCallerCredential);
     }
 
     private readonly record struct CallerCredentialNormalizationResult(
@@ -114,6 +86,64 @@ internal static class ChatRunRequestNormalizer
             new(source, WorkflowChatRunStartError.None);
         public static SourceNormalizationResult Failed(WorkflowChatRunStartError error) =>
             new(null, error);
+    }
+
+    public static async ValueTask<ChatRunRequestNormalizationResult> NormalizeAsync(
+        ChatInput input,
+        IWorkflowFileIngressPort? fileIngressPort,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        WorkflowCallerCredential? trustedCallerCredential = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var normalizedInputParts = fileIngressPort == null
+            ? NormalizeInputParts(input.InputParts)
+            : await NormalizeInputPartsAsync(input.InputParts, fileIngressPort, cancellationToken);
+        return NormalizeWithInputParts(
+            input,
+            normalizedInputParts,
+            defaultMetadata,
+            trustedCallerCredential);
+    }
+
+    private static ChatRunRequestNormalizationResult NormalizeWithInputParts(
+        ChatInput input,
+        InputPartsNormalizationResult normalizedInputPartsResult,
+        IReadOnlyDictionary<string, string>? defaultMetadata,
+        WorkflowCallerCredential? trustedCallerCredential)
+    {
+        if (normalizedInputPartsResult.Error != WorkflowChatRunStartError.None)
+            return ChatRunRequestNormalizationResult.Failed(normalizedInputPartsResult.Error);
+
+        var normalizedInputParts = normalizedInputPartsResult.InputParts;
+        if (HasOnlyUnsupportedInputParts(input, normalizedInputParts))
+            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
+
+        var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, input.Headers, defaultMetadata);
+        var normalizedMetadata = normalizedContext.Metadata;
+        var sourceResult = NormalizeSource(input);
+        if (!sourceResult.Succeeded)
+            return ChatRunRequestNormalizationResult.Failed(sourceResult.Error);
+
+        var rawPrompt = ResolvePrompt(input.Prompt, normalizedInputParts);
+        if (rawPrompt.Length == 0)
+            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
+
+        var callerCredentialResult = NormalizeCallerCredential(trustedCallerCredential);
+        if (callerCredentialResult.Error != WorkflowChatRunStartError.None)
+            return ChatRunRequestNormalizationResult.Failed(callerCredentialResult.Error);
+
+        return ChatRunRequestNormalizationResult.Success(
+            new WorkflowChatRunRequest(
+                Prompt: rawPrompt,
+                Source: sourceResult.Source!,
+                SessionId: NormalizeSessionId(input.SessionId),
+                InputParts: normalizedInputParts,
+                Metadata: normalizedMetadata,
+                ScopeId: normalizedContext.ScopeId,
+                LlmControl: NormalizeLlmControl(input.LlmControl),
+                CallerCredential: callerCredentialResult.Credential,
+                Headers: normalizedContext.Headers));
     }
 
     private static SourceNormalizationResult NormalizeSource(ChatInput input)
@@ -271,6 +301,47 @@ internal static class ChatRunRequestNormalizer
         IReadOnlyList<WorkflowChatInputPart>? InputParts,
         WorkflowChatRunStartError Error);
 
+    private static async ValueTask<InputPartsNormalizationResult> NormalizeInputPartsAsync(
+        IReadOnlyList<ChatInputContentPart>? inputParts,
+        IWorkflowFileIngressPort fileIngressPort,
+        CancellationToken cancellationToken)
+    {
+        if (inputParts == null || inputParts.Count == 0)
+            return new InputPartsNormalizationResult(null, WorkflowChatRunStartError.None);
+
+        var ingested = new List<WorkflowChatInputPart>(inputParts.Count);
+        foreach (var part in inputParts)
+        {
+            if (part == null)
+                continue;
+
+            var fileInputResult = await NormalizeFileInputAsync(part, fileIngressPort, cancellationToken);
+            if (fileInputResult.Error != WorkflowChatRunStartError.None)
+                return new InputPartsNormalizationResult(null, fileInputResult.Error);
+
+            if (string.IsNullOrWhiteSpace(part.Type))
+                continue;
+
+            if (!TryParseContentPartKind(part.Type, out var kind))
+                continue;
+
+            ingested.Add(new WorkflowChatInputPart
+            {
+                Kind = kind,
+                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
+                DataBase64 = fileInputResult.DataBase64 ?? NormalizeContentPartValue(part.DataBase64),
+                MediaType = fileInputResult.MediaType ?? NormalizeContentPartValue(part.MediaType),
+                Uri = fileInputResult.Uri ?? NormalizeContentPartValue(part.Uri),
+                Name = fileInputResult.Name ?? NormalizeContentPartValue(part.Name),
+                FileRef = fileInputResult.FileRef,
+            });
+        }
+
+        return new InputPartsNormalizationResult(
+            ingested.Count == 0 ? null : ingested,
+            WorkflowChatRunStartError.None);
+    }
+
     private static InputPartsNormalizationResult NormalizeInputParts(IReadOnlyList<ChatInputContentPart>? inputParts)
     {
         if (inputParts == null || inputParts.Count == 0)
@@ -331,6 +402,23 @@ internal static class ChatRunRequestNormalizer
         return new FileInputNormalizationResult(null, null, null, null, null, WorkflowChatRunStartError.None);
     }
 
+    private static async ValueTask<FileInputNormalizationResult> NormalizeFileInputAsync(
+        ChatInputContentPart part,
+        IWorkflowFileIngressPort fileIngressPort,
+        CancellationToken cancellationToken)
+    {
+        if (part.InlineFile != null && part.FileRef != null)
+            return InvalidFileInput();
+
+        if (part.InlineFile != null)
+            return await NormalizeInlineFileAsync(part.InlineFile, fileIngressPort, cancellationToken);
+
+        if (part.FileRef != null)
+            return NormalizeFileRef(part.FileRef);
+
+        return new FileInputNormalizationResult(null, null, null, null, null, WorkflowChatRunStartError.None);
+    }
+
     private static FileInputNormalizationResult NormalizeInlineFile(ChatInputInlineFile inlineFile)
     {
         var dataBase64 = NormalizeOptional(inlineFile.DataBase64);
@@ -355,6 +443,44 @@ internal static class ChatRunRequestNormalizer
             null,
             NormalizeContentPartValue(inlineFile.Name),
             null,
+            WorkflowChatRunStartError.None);
+    }
+
+    private static async ValueTask<FileInputNormalizationResult> NormalizeInlineFileAsync(
+        ChatInputInlineFile inlineFile,
+        IWorkflowFileIngressPort fileIngressPort,
+        CancellationToken cancellationToken)
+    {
+        var dataBase64 = NormalizeOptional(inlineFile.DataBase64);
+        if (dataBase64 == null)
+            return InvalidFileInput();
+
+        if (!TryDecodeBase64(dataBase64, out var content))
+            return InvalidFileInput();
+
+        if (inlineFile.SizeBytes.HasValue)
+        {
+            if (inlineFile.SizeBytes.Value < 0)
+                return InvalidFileInput();
+
+            if (inlineFile.SizeBytes.Value != content.LongLength)
+                return InvalidFileInput();
+        }
+
+        var result = await fileIngressPort.IngestAsync(
+            new WorkflowFileIngressRequest(
+                content,
+                WorkflowFileSourceKind.ChatInput,
+                FileName: NormalizeContentPartValue(inlineFile.Name),
+                MediaType: NormalizeContentPartValue(inlineFile.MediaType)),
+            cancellationToken);
+
+        return new FileInputNormalizationResult(
+            null,
+            result.FileRef.MediaType,
+            result.FileRef.ArtifactId,
+            result.FileRef.FileName,
+            result.FileRef,
             WorkflowChatRunStartError.None);
     }
 
@@ -490,6 +616,24 @@ internal static class ChatRunRequestNormalizer
         ch is >= 'a' and <= 'z' ||
         ch is >= '0' and <= '9' ||
         ch is '+' or '/';
+
+    private static bool TryDecodeBase64(string dataBase64, out byte[] content)
+    {
+        content = [];
+        if (string.IsNullOrWhiteSpace(dataBase64))
+            return false;
+
+        try
+        {
+            content = Convert.FromBase64String(dataBase64);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        return content.Length > 0;
+    }
 
     private static string? NormalizeContentPartValue(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;

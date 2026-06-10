@@ -48,7 +48,8 @@ public static class WorkflowCapabilityEndpoints
         ChatInput input,
         IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
-        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null)
+        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
+        IWorkflowFileIngressPort? fileIngressPort = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var writer = new ChatSseResponseWriter(http.Response);
@@ -69,10 +70,13 @@ public static class WorkflowCapabilityEndpoints
                 return;
             }
 
-            var normalizedRequest = ChatRunRequestNormalizer.Normalize(
+            fileIngressPort ??= serviceProvider?.GetService<IWorkflowFileIngressPort>();
+            var normalizedRequest = await ChatRunRequestNormalizer.NormalizeAsync(
                 input,
+                fileIngressPort,
                 defaultMetadata,
-                trustedCallerCredential: callerCredential.Credential);
+                trustedCallerCredential: callerCredential.Credential,
+                cancellationToken: ct);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -135,12 +139,17 @@ public static class WorkflowCapabilityEndpoints
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? defaultMetadata = null)
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        IWorkflowFileIngressPort? fileIngressPort = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
 
-        var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, defaultMetadata: defaultMetadata);
+        var normalizedRequest = await ChatRunRequestNormalizer.NormalizeAsync(
+            input,
+            fileIngressPort,
+            defaultMetadata: defaultMetadata,
+            cancellationToken: ct);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -650,7 +659,8 @@ public static class WorkflowCapabilityEndpoints
         HttpContext http,
         IWorkflowChatRunInteractionPort chatRunService,
         ILoggerFactory loggerFactory,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IWorkflowFileIngressPort? fileIngressPort = null)
     {
         using var scope = ApiRequestScope.BeginWebSocket();
         if (!http.WebSockets.IsWebSocketRequest)
@@ -689,13 +699,15 @@ public static class WorkflowCapabilityEndpoints
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(http.RequestServices, logger);
+            fileIngressPort ??= http.RequestServices.GetService<IWorkflowFileIngressPort>();
             await ChatWebSocketRunCoordinator.ExecuteAsync(
                 socket,
                 command,
                 chatRunService,
                 scope,
                 ct,
-                defaultMetadata);
+                defaultMetadata,
+                fileIngressPort);
         }
         catch (OperationCanceledException)
         {

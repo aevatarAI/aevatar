@@ -69,7 +69,7 @@ owner: eanzhao
 
 `inputParts` 支持两类文件载体：
 
-1. `inlineFile`：只用于小型 inline bytes。`inlineFile.sizeBytes` 是可选校验字段，服务端只用它和 decoded base64 长度比对；它不是 workflow 文件事实，也不会写入 `fileRef`。
+1. `inlineFile`：只用于小型 inline bytes。`inlineFile.sizeBytes` 是可选校验字段，服务端只用它和 decoded base64 长度比对；它不是客户端声明的 workflow 文件事实。Host API 会把 decoded bytes 写入 workflow file ingress store，并把 command input part 替换为 typed `WorkflowFileRef`，因此 actor-facing request 不长期携带 inline base64。
 2. `fileRef`：用于已经由外部 ingress、connected service 或后续 artifact store 产生的稳定文件引用。API 会归一化为 typed `WorkflowFileRef` 并写入 command envelope，同时保留旧的 `uri/name/mediaType` 镜像字段供现有消费者兼容。
 
 ```json
@@ -99,8 +99,8 @@ owner: eanzhao
 - `fileId` 或 `artifactId` 至少有一个必须存在；旧 `uri` 会被映射为 `artifactId`。
 - `sourceKind` 可省略；显式传入时必须是 `chat_input`、`form_upload`、`connected_service_resource`、`external_resource`、`generated` 或 `unspecified`。
 - 时间戳必须为非负 Unix milliseconds；同时存在 `createdAtUnixMs` 与 `expiresAtUnixMs` 时，过期时间不得早于创建时间。
-- public `fileRef` 不接受 `sizeBytes`。文件大小事实只能由后续 ingress/artifact descriptor 或 decoded bytes 产生，不能由客户端在 reusable file ref 上声明。
-- 当前切片只建立 typed descriptor backbone；文件 bytes 暂存、Lark resource 下载、`document_extract`、外部文件提交和 projection readmodel 仍属于文件链路后续实现。
+- public `fileRef` 不接受 `sizeBytes`。文件大小事实只能由 ingress/artifact descriptor 或 decoded bytes 产生，不能由客户端在 reusable file ref 上声明。
+- 当前切片完成 chat/API inline bytes 的 file ingress 暂存与 command-level `fileRef` 替换；Lark resource 下载、`document_extract`、外部文件提交和 projection readmodel 仍属于文件链路后续实现。
 
 ## 3. 自动编排能力（按 prompt 决策）
 

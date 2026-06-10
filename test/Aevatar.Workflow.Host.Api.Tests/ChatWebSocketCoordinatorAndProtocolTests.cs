@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
+using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -205,6 +206,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     public async Task ChatCommand_ShouldDispatch_WhenInlineFileSizeBytesMatchesDecodedBytes()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
+        var ingressPort = new RecordingWorkflowFileIngressPort();
         var service = new FakeCommandInteractionService
         {
             Handler = async (_, _, onAcceptedAsync, ct) =>
@@ -242,13 +244,19 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 WebSocketMessageType.Text),
             service,
             ApiRequestScope.BeginHttp(),
-            CancellationToken.None);
+            CancellationToken.None,
+            fileIngressPort: ingressPort);
 
         socket.SentTexts.Should().ContainSingle();
         socket.SentTexts[0].Should().Contain("\"type\":\"command.ack\"");
+        ingressPort.Requests.Should().ContainSingle();
+        ingressPort.Requests[0].Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("hello"));
         service.LastRequest.Should().NotBeNull();
-        service.LastRequest!.InputParts.Should().ContainSingle()
-            .Which.DataBase64.Should().Be("aGVsbG8=");
+        var part = service.LastRequest!.InputParts.Should().ContainSingle().Which;
+        part.DataBase64.Should().BeNull();
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.ArtifactId.Should().Be("workflow-file://file-1");
+        part.FileRef.SizeBytes.Should().Be(5);
     }
 
     [Fact]
@@ -351,6 +359,31 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         {
             LastRequest = request;
             return Handler(request, emitAsync, onAcceptedAsync, ct);
+        }
+    }
+
+    private sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    {
+        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+
+        public ValueTask<WorkflowFileIngressResult> IngestAsync(
+            WorkflowFileIngressRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return ValueTask.FromResult(new WorkflowFileIngressResult(new ApplicationWorkflowFileRef
+            {
+                FileId = "file-1",
+                ArtifactId = "workflow-file://file-1",
+                SourceKind = request.SourceKind,
+                FileName = request.FileName,
+                MediaType = request.MediaType,
+                SizeBytes = request.Content.Length,
+                Sha256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+                CreatedAtUnixMs = 1710000000000,
+                ExpiresAtUnixMs = 1710003600000,
+            }));
         }
     }
 
