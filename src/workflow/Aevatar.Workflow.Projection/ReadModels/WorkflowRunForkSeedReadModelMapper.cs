@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
+using WorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
 
@@ -47,7 +48,8 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             variables,
             completedStepIds,
             lastFailedStepId,
-            state.ScopeId ?? string.Empty);
+            state.ScopeId ?? string.Empty,
+            kernelState?.InputFileRefs.Select(static fileRef => fileRef.Clone()).ToList() ?? []);
     }
 
     private static WorkflowExecutionKernelState? TryReadKernelState(WorkflowRunState state)
@@ -90,4 +92,5 @@ public sealed record WorkflowRunForkSeedProjectionSnapshot(
     IReadOnlyDictionary<string, string> Variables,
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
-    string ScopeId);
+    string ScopeId,
+    IReadOnlyList<WorkflowFileRef> InputFileRefs);
