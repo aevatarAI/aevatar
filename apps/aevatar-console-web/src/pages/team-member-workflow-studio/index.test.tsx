@@ -2485,6 +2485,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
       name: "Run active member",
     });
     await waitFor(() => {
+      expect(studioApi.getWorkflow).toHaveBeenCalledWith(
+        "member-alpha",
+        "scope-1",
+      );
+      expect(screen.getByText("nodes:1")).toBeTruthy();
+    });
+    await waitFor(() => {
       expect(runActiveMemberButton).toBeEnabled();
     });
     fireEvent.click(runActiveMemberButton);
