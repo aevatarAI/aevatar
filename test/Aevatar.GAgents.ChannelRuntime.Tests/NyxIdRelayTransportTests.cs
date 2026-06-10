@@ -383,6 +383,43 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldPromoteNestedActionIdAndValue_FromLarkButtonClick()
+    {
+        // NyxID's Lark adapter (parse_card_action_event) relays button clicks as
+        // {"tag":...,"value":<composed value object>,...}: the action identity sits
+        // nested under `value`, not at the root. The transport must promote it into
+        // the typed ActionId/SubmittedValue fields or generic buttons parse empty
+        // and the turn runner drops the click.
+        var body = """
+            {
+              "message_id": "msg-card-button-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"tag\":\"button\",\"value\":{\"action_id\":\"confirm_deploy\",\"value\":\"deploy-staging\",\"action_kind\":\"button\"},\"form_value\":null,\"open_message_id\":\"om_card_1\"}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.ActionId.Should().Be("confirm_deploy");
+        cardAction.SubmittedValue.Should().Be("deploy-staging");
+        cardAction.ActionKind.Should().Be(ActionElementKind.Button);
+        // Mirror semantics: typed fields are populated while the boundary arguments stay
+        // available for callback consumers that read the original payload.
+        cardAction.Arguments.Should().ContainKey("action_id").WhoseValue.Should().Be("confirm_deploy");
+        cardAction.Arguments.Should().ContainKey("value").WhoseValue.Should().Be("deploy-staging");
+        cardAction.Arguments.Should().NotContainKey("action_kind");
+    }
+
+    [Fact]
     public void Parse_ShouldMapLarkBoundaryTagToTypedActionKind_WhenValueDoesNotCarryActionKind()
     {
         var body = """
@@ -407,6 +444,35 @@ public sealed class NyxIdRelayTransportTests
         cardAction!.ActionKind.Should().Be(ActionElementKind.Select);
         cardAction.FormFields.Should().ContainKey("environment")
             .WhoseValue.Should().Be("prod");
+    }
+
+    [Fact]
+    public void Parse_ShouldMirrorNestedLarkButtonValueIntoTypedFields_AndKeepArguments()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-generic-button",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"tag\":\"button\",\"value\":{\"action_id\":\"confirm_deploy\",\"value\":\"staging\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.ActionKind.Should().Be(ActionElementKind.Button);
+        cardAction.ActionId.Should().Be("confirm_deploy");
+        cardAction.SubmittedValue.Should().Be("staging");
+        cardAction.Arguments.Should().Contain("action_id", "confirm_deploy");
+        cardAction.Arguments.Should().Contain("value", "staging");
     }
 
     [Fact]

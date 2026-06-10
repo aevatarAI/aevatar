@@ -265,6 +265,7 @@ public sealed class WorkflowRunGAgent
 
         var callerCredentialDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(request.CallerCredential);
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
+        _runtimeContext.ApplySenderNyxIdAccessToken(request.LlmControl?.SenderNyxIdAccessToken);
         var llmControlDelta = WorkflowRunExecutionContextStateAccess.BuildLlmControlDelta(request.LlmControl);
 
         await EnsureAgentTreeAsync();
@@ -272,7 +273,10 @@ public sealed class WorkflowRunGAgent
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
-        var executionContextDelta = MergeExecutionContextDeltas(callerCredentialDelta, llmControlDelta);
+        var executionContextDelta = MergeExecutionContextDeltas(
+            callerCredentialDelta,
+            llmControlDelta,
+            WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta());
         var executionInput = ResolveExecutionInput(request);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
@@ -282,7 +286,7 @@ public sealed class WorkflowRunGAgent
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = ResolveScopeId(request.ScopeId, State.ScopeId),
             ExecutionContextDelta = executionContextDelta,
-            Attempt = Math.Max(0, request.ResumeSeed?.Attempt ?? 0),
+            Attempt = Math.Max(0, request.ForkSeed?.Attempt ?? 0),
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -290,7 +294,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = executionInput,
             RunId = runId,
-            ResumeSeed = request.ResumeSeed,
+            ForkSeed = request.ForkSeed,
         }, TopologyAudience.Self);
     }
 
@@ -340,6 +344,7 @@ public sealed class WorkflowRunGAgent
             Input = request.Input ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
+            ExecutionContextDelta = WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta(),
             Attempt = State.ForkAttempt,
         });
 
@@ -353,8 +358,8 @@ public sealed class WorkflowRunGAgent
 
     private static string ResolveExecutionInput(WorkflowChatRequestEvent request)
     {
-        if (request.ResumeSeed != null &&
-            request.ResumeSeed.Variables.TryGetValue("input", out var seedInput))
+        if (request.ForkSeed != null &&
+            request.ForkSeed.Variables.TryGetValue("input", out var seedInput))
         {
             return seedInput ?? string.Empty;
         }
@@ -668,7 +673,7 @@ public sealed class WorkflowRunGAgent
                         ?? await CreateRoleActorAsync(role, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
 
-            await DispatchRoleInitializationAsync(actor.Id, WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(role, Id));
+            await DispatchRoleInitializationAsync(actor.Id, WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(role, Id, actor.Id));
             _childAgentIds.Add(actor.Id);
             await PersistDomainEventAsync(new WorkflowRoleActorLinkedEvent
             {
@@ -895,6 +900,10 @@ public sealed class WorkflowRunGAgent
                 merged.Llm = delta.Llm.Clone();
             if (delta.CallerCredential != null)
                 merged.CallerCredential = delta.CallerCredential.Clone();
+            if (delta.ClearWorkflowRuntime)
+                merged.ClearWorkflowRuntime = true;
+            if (delta.WorkflowRuntime != null)
+                merged.WorkflowRuntime = delta.WorkflowRuntime.Clone();
         }
 
         return merged;
@@ -911,6 +920,8 @@ public sealed class WorkflowRunGAgent
             state.Llm = null;
         if (delta.ClearCallerCredential)
             state.CallerCredential = null;
+        if (delta.ClearWorkflowRuntime)
+            state.WorkflowRuntime = null;
 
         if (delta.Llm != null)
         {
@@ -930,6 +941,18 @@ public sealed class WorkflowRunGAgent
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = parsed.IsValid ? parsed.NormalizedBearerToken ?? string.Empty : string.Empty,
+            };
+        }
+
+        if (delta.WorkflowRuntime != null)
+        {
+            state.WorkflowRuntime = new WorkflowToolRuntimeContextState
+            {
+                ParentActorId = delta.WorkflowRuntime.ParentActorId?.Trim() ?? string.Empty,
+                ParentRunId = WorkflowRunIdNormalizer.Normalize(delta.WorkflowRuntime.ParentRunId),
+                ParentStepId = delta.WorkflowRuntime.ParentStepId?.Trim() ?? string.Empty,
+                RootRunId = WorkflowRunIdNormalizer.Normalize(delta.WorkflowRuntime.RootRunId),
+                Depth = Math.Max(0, delta.WorkflowRuntime.Depth),
             };
         }
     }

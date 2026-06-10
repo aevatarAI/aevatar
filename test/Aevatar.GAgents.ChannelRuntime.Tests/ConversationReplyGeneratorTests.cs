@@ -445,7 +445,6 @@ public sealed class ConversationReplyGeneratorTests
                 new SingleToolSource(new FixedResultTool("aevatar_invoke_team", """{"ok":true}""")),
                 new SingleToolSource(new FixedResultTool("aevatar_start_workflow", """{"run_id":"run-1"}""")),
                 new SingleToolSource(new FixedResultTool("aevatar_observe_run", """{"status":"running"}""")),
-                new SingleToolSource(new FixedResultTool("aevatar_query_readmodel", """{"items":[]}""")),
             ]);
 
         var reply = await generator.GenerateReplyAsync(
@@ -477,7 +476,6 @@ public sealed class ConversationReplyGeneratorTests
             "aevatar_invoke_team",
             "aevatar_start_workflow",
             "aevatar_observe_run",
-            "aevatar_query_readmodel",
         ]);
         request.Tools!.Select(static tool => tool.Name).Should().NotContain("aevatar_invoke_workflow");
     }
@@ -1035,6 +1033,96 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_RetriesWithOwnerPrefsAndNoToolsWhenToolSchemaIsRejected()
+    {
+        var providerFactory = new RecordingProviderFactory
+        {
+            FailureBeforeSuccess = new InvalidOperationException(
+                "Invalid schema for function 'aevatar_observe_run': schema must have type 'object' and not have 'oneOf' at the top level (HTTP 400)."),
+        };
+        var prefsStore = new ScopedStubPreferencesStore
+        {
+            ByBinding =
+            {
+                ["bnd_sender"] = new NyxIdUserLlmPreferences(
+                    "sender-model",
+                    "/api/v1/proxy/s/sender",
+                    MaxToolRounds: 7),
+            },
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new SingleToolSource(new FixedResultTool("aevatar_observe_run", """{"status":"running"}"""))],
+            preferencesStore: prefsStore);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-schema-fallback",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(),
+            Control("owner-model", "/api/v1/proxy/s/owner", 5, "owner-token", "sender-token"),
+            ToolContext("bnd_sender"),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        providerFactory.Requests.Should().HaveCount(2);
+        providerFactory.Requests[0].Tools.Should().NotBeNull();
+        providerFactory.Requests[0].ToolContext!.Routing.ModelOverride.Should().Be("sender-model");
+        providerFactory.Requests[0].ToolContext!.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+
+        providerFactory.Requests[1].Tools.Should().BeNull();
+        var ownerToolContext = providerFactory.Requests[1].ToolContext!;
+        ownerToolContext.Routing.ModelOverride.Should().Be("owner-model");
+        ownerToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        ownerToolContext.Credentials.NyxIdAccessToken.Should().Be("owner-token");
+        ownerToolContext.SenderBinding.BindingId.Should().BeNull();
+        ownerToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_RetriesWithOwnerNoToolsWhenBoundSenderHasNoLlmPrefs()
+    {
+        var providerFactory = new RecordingProviderFactory
+        {
+            FailureBeforeSuccess = new InvalidOperationException(
+                "Invalid schema for function 'aevatar_observe_run': schema must have type 'object' and not have 'oneOf' at the top level (HTTP 400)."),
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new SingleToolSource(new FixedResultTool("aevatar_observe_run", """{"status":"running"}"""))]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-schema-fallback-no-prefs",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(),
+            Control("owner-model", "/api/v1/proxy/s/owner", 5, "owner-token"),
+            ToolContext("bnd_sender"),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        providerFactory.Requests.Should().HaveCount(2);
+        providerFactory.Requests[0].Tools.Should().NotBeNull();
+        providerFactory.Requests[0].ToolContext!.SenderBinding.BindingId.Should().Be("bnd_sender");
+        providerFactory.Requests[0].ToolContext!.Routing.ModelOverride.Should().Be("owner-model");
+
+        providerFactory.Requests[1].Tools.Should().BeNull();
+        var ownerToolContext = providerFactory.Requests[1].ToolContext!;
+        ownerToolContext.Routing.ModelOverride.Should().Be("owner-model");
+        ownerToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        ownerToolContext.Credentials.NyxIdAccessToken.Should().Be("owner-token");
+        ownerToolContext.SenderBinding.BindingId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_UsesOwnerPrefsImmediatelyWhenSenderRouteHasNoToken()
     {
         var providerFactory = new RecordingProviderFactory();
@@ -1242,6 +1330,8 @@ public sealed class ConversationReplyGeneratorTests
 
         public int FailuresBeforeSuccess { get; init; }
 
+        public Exception? FailureBeforeSuccess { get; init; }
+
         public ILLMProvider GetProvider(string name) => this;
 
         public ILLMProvider GetDefault() => this;
@@ -1255,6 +1345,8 @@ public sealed class ConversationReplyGeneratorTests
             Requests.Add(request);
             if (Requests.Count <= FailuresBeforeSuccess)
                 throw new InvalidOperationException("simulated sender route failure");
+            if (FailureBeforeSuccess is not null && Requests.Count == 1)
+                throw FailureBeforeSuccess;
 
             yield return new LLMStreamChunk
             {

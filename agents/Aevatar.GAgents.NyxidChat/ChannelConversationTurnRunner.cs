@@ -16,6 +16,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -77,6 +78,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly ChannelPlatformReplyService? _replyService;
     private readonly ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? _workflowResumeService;
     private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
+    private readonly ChannelWorkflowDraftRunAdmission? _workflowDraftRunAdmission;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
 
     public ChannelConversationTurnRunner(
@@ -98,7 +100,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IUserConfigQueryPort? userConfigQueryPort = null,
         ChannelPlatformReplyService? replyService = null,
         ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
-        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -118,6 +121,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _replyService = replyService;
         _workflowResumeService = workflowResumeService;
         _remoteToolApprovalPort = remoteToolApprovalPort;
+        _workflowDraftRunAdmission = workflowDraftRunAdmission;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -148,6 +152,20 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
             return workflowResumeResult;
 
+        var inboundEvent = ToInboundEvent(activity, registration, inbound);
+
+        if (activity.Type != ActivityType.CardAction &&
+            await TryHandleWorkflowDraftRunAsync(
+                activity,
+                inbound,
+                registration,
+                inboundEvent,
+                runtimeContext,
+                ct).ConfigureAwait(false) is { } workflowDraftRunResult)
+        {
+            return workflowDraftRunResult;
+        }
+
         if (activity.Type != ActivityType.CardAction &&
             await TryHandleSlashCommandAsync(activity, inbound, registration, runtimeContext, ct) is { } slashResult)
             return slashResult;
@@ -163,8 +181,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         if (await TryHandleNyxIdApprovalCardActionAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false) is { } approvalResult)
             return approvalResult;
-
-        var inboundEvent = ToInboundEvent(activity, registration, inbound);
 
         if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, typingReactionTask, ct) is { } agentBuilderResult)
             return agentBuilderResult;
@@ -183,6 +199,28 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                             activity,
                             registration,
                             formSubmitInboundEvent,
+                            runtimeContext,
+                            senderBinding,
+                            ct)
+                        .ConfigureAwait(false));
+            }
+
+            // Generic reply_with_interaction buttons mirror the form_submit path: the
+            // click is the user's answer to the LLM's own card, so it continues the
+            // conversation as an LLM turn. Typed payloads (workflow resume, LLM
+            // selection, agent builder) were already consumed by their routers above.
+            if (TryBuildGenericButtonClickLlmText(activity.Content?.CardAction, out var buttonClickText))
+            {
+                var buttonInbound = WithText(inbound, buttonClickText);
+                var buttonInboundEvent = ToInboundEvent(
+                    activity,
+                    registration,
+                    buttonInbound);
+                return ConversationTurnResult.LlmReplyRequested(
+                    await BuildLlmReplyRequestAsync(
+                            activity,
+                            registration,
+                            buttonInboundEvent,
                             runtimeContext,
                             senderBinding,
                             ct)
@@ -1428,33 +1466,71 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ArgumentNullException.ThrowIfNull(activity);
 
         var nyxAgentApiKeyId = NormalizeOptional(activity.TransportExtras?.NyxAgentApiKeyId);
-        if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId) &&
-            _registrationQueryByNyxIdentityPort is not null)
+        var canonicalScopeId = NormalizeOptional(activity.TransportExtras?.NyxRegistrationScopeId);
+        if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId))
         {
-            var byNyxIdentity = await _registrationQueryByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync(
+            if (_registrationQueryByNyxIdentityPort is null)
+                return null;
+
+            var registrations = await _registrationQueryByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync(
                 nyxAgentApiKeyId,
                 ct);
+            var byNyxIdentity = ResolveRegistrationByNyxIdentityCandidates(registrations, canonicalScopeId);
+
             if (byNyxIdentity is not null)
                 return byNyxIdentity;
 
-            if (IsNyxRelayActivity(activity, nyxAgentApiKeyId))
-            {
-                var byBoundedScan = await ResolveRegistrationByNyxIdentityScanAsync(nyxAgentApiKeyId, ct);
-                if (byBoundedScan is not null)
-                    return byBoundedScan;
-            }
+            if (registrations.Count > 0)
+                return null;
         }
 
-        return await ResolveRegistrationAsync(activity.Bot?.Value, ct);
+        var byBotId = await ResolveRegistrationAsync(activity.Bot?.Value, ct);
+        return byBotId is not null && IsBotIdFallbackRegistrationAllowed(byBotId, canonicalScopeId, nyxAgentApiKeyId)
+            ? byBotId
+            : null;
     }
 
-    private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationByNyxIdentityScanAsync(
-        string nyxAgentApiKeyId,
-        CancellationToken ct)
+    private static ChannelBotRegistrationEntry? ResolveRegistrationByNyxIdentityCandidates(
+        IReadOnlyList<ChannelBotRegistrationEntry> registrations,
+        string? canonicalScopeId)
     {
-        var registrations = await _registrationQueryPort.QueryAllAsync(ct);
+        if (registrations.Count == 0)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(canonicalScopeId))
+        {
+            return registrations.FirstOrDefault(entry =>
+                string.Equals(NormalizeOptional(entry.ScopeId), canonicalScopeId, StringComparison.Ordinal));
+        }
+
+        var distinctScopeIds = registrations
+            .Select(entry => NormalizeOptional(entry.ScopeId))
+            .Where(static scopeId => scopeId is not null)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (distinctScopeIds.Length != 1)
+            return null;
+
+        var resolvedScopeId = distinctScopeIds[0];
         return registrations.FirstOrDefault(entry =>
-            string.Equals(NormalizeOptional(entry.NyxAgentApiKeyId), nyxAgentApiKeyId, StringComparison.Ordinal));
+            string.Equals(NormalizeOptional(entry.ScopeId), resolvedScopeId, StringComparison.Ordinal));
+    }
+
+    private static bool IsBotIdFallbackRegistrationAllowed(
+        ChannelBotRegistrationEntry registration,
+        string? canonicalScopeId,
+        string? nyxAgentApiKeyId)
+    {
+        if (string.IsNullOrWhiteSpace(canonicalScopeId))
+            return true;
+
+        if (!string.Equals(NormalizeOptional(registration.ScopeId), canonicalScopeId, StringComparison.Ordinal))
+            return false;
+
+        var registrationApiKeyId = NormalizeOptional(registration.NyxAgentApiKeyId);
+        return registrationApiKeyId is null ||
+               string.Equals(registrationApiKeyId, nyxAgentApiKeyId, StringComparison.Ordinal);
     }
 
     private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationForReplyAsync(
@@ -1540,6 +1616,43 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             authPrincipal: "bot");
     }
 
+    private async Task<ConversationTurnResult?> TryHandleWorkflowDraftRunAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ChannelInboundEvent inboundEvent,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        var admission = _workflowDraftRunAdmission;
+        if (admission is null)
+            return null;
+
+        var result = await admission.TryAdmitAsync(
+                activity,
+                registration,
+                inboundEvent,
+                runtimeContext,
+                ct)
+            .ConfigureAwait(false);
+        if (!result.Matched)
+            return null;
+
+        if (result.Request is not null)
+            return ConversationTurnResult.WorkflowDraftRunRequested(result.Request);
+
+        var rejection = result.Rejection ?? new MessageContent { Text = "暂不能运行 workflow,请稍后重试。" };
+        return await SendReplyAsync(
+                rejection,
+                string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id,
+                activity.Conversation,
+                inbound,
+                registration,
+                runtimeContext,
+                ct)
+            .ConfigureAwait(false);
+    }
+
     private async Task<IReadOnlyDictionary<string, string>> BuildReplyMetadataAsync(
         ChannelInboundEvent inboundEvent,
         ChatActivity? activity,
@@ -1560,7 +1673,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // (e.g. cross-tenant Lark 99992364) can still notify the user via the bot they just
         // successfully messaged. See issue #423 §C and ChannelMetadataKeys.InboundChannelBotProxySlug.
         if (!string.IsNullOrWhiteSpace(inboundEvent.NyxProviderSlug))
+        {
             metadata[ChannelMetadataKeys.InboundChannelBotProxySlug] = inboundEvent.NyxProviderSlug;
+            // The inbound bot is also the default OUTBOUND delivery provider for a chat-triggered
+            // scheduled task: the scheduled run replies via the same Lark bot that received the
+            // message, so scheduled_agent_creator can resolve a provider without manual Studio/Web
+            // config (was failing with lark_outbound_provider_slug_unavailable). A distinct outbound
+            // provider remains expressible explicitly via agent_delivery_targets.
+            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = inboundEvent.NyxProviderSlug;
+        }
 
         var platformMessageId = NormalizeOptional(activity?.TransportExtras?.NyxPlatformMessageId);
         if (!string.IsNullOrWhiteSpace(platformMessageId))
@@ -1698,6 +1819,28 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return true;
     }
 
+    private static bool TryBuildGenericButtonClickLlmText(CardActionSubmission? cardAction, out string text)
+    {
+        text = string.Empty;
+        if (cardAction is null ||
+            cardAction.ActionKind != ActionElementKind.Button ||
+            string.IsNullOrWhiteSpace(cardAction.ActionId))
+        {
+            return false;
+        }
+
+        // Typed payloads belong to their dedicated routers; reaching this point with one
+        // attached means that router declined, and promoting it to a generic LLM turn
+        // would bypass the typed contract.
+        if (cardAction.WorkflowResume is not null || cardAction.LlmSelection is not null)
+            return false;
+
+        text = string.IsNullOrWhiteSpace(cardAction.SubmittedValue)
+            ? $"[card_action] {cardAction.ActionId}"
+            : $"[card_action] {cardAction.ActionId}: {cardAction.SubmittedValue}";
+        return true;
+    }
+
     private static InboundMessage WithText(InboundMessage inbound, string text) =>
         new()
         {
@@ -1779,8 +1922,29 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
         }
 
-        foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
+        var replyMetadata = await BuildReplyMetadataAsync(inboundEvent, activity, ct);
+        foreach (var pair in replyMetadata)
             request.Metadata[pair.Key] = pair.Value;
+
+        // Thread the bot's registration scope + channel identity into the deferred LLM-reply tool
+        // context, mirroring the direct-reply BuildAgentBuilderToolContext. Without this, a plain
+        // (non-`::`) automation turn leaves Caller.ScopeId empty, so scope-scoped tools such as
+        // scheduled_agent_creator fail with "scope_id_unavailable". ToToolContext only overlays
+        // credentials/routing downstream, so these typed fields survive to tool execution.
+        request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+        {
+            Caller = new AgentToolCallerContext(
+                inboundEvent.RegistrationScopeId,
+                null,
+                inboundEvent.MessageId),
+            Channel = new AgentToolChannelContext(
+                inboundEvent.Platform,
+                inboundEvent.SenderId,
+                inboundEvent.RegistrationScopeId,
+                inboundEvent.MessageId,
+                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId)),
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
+        }).ToPayload();
 
         if (TryBuildSkillRecoveryContext(inboundEvent.Text, inboundEvent.Platform, out var skillRecovery))
         {
@@ -2086,14 +2250,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ? "lark"
             : platform;
     }
-
-    private static bool IsNyxRelayActivity(ChatActivity activity, string nyxAgentApiKeyId) =>
-        activity.OutboundDelivery is
-        {
-            ReplyMessageId.Length: > 0,
-            CorrelationId.Length: > 0,
-        } &&
-        string.Equals(NormalizeOptional(activity.Bot?.Value), nyxAgentApiKeyId, StringComparison.Ordinal);
 
     // Lark reaction emoji_type for "hands typing on keyboard" — added immediately on inbound
     // so the user sees the bot is working before the LLM reply lands. After a reply succeeds,

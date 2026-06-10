@@ -453,6 +453,10 @@ steps:
   - `workflow_call` 调用会生成统一格式的 invocation id：`<parent_run_id>:workflow_call:<parent_step_id|step>:<guidN>`；
   - 该规则由共享工厂统一生成，模块层与 actor 编排层保持一致；
   - 子流程 `child_run_id` 复用 invocation id，便于跨事件链路关联与回放定位。
+- Actor-owned admission：
+  - root run id、depth 与 active fanout 是父 run actor 持久态事实，不由工具调用参数提供；
+  - `SubWorkflowOrchestrator` 在注册或创建子 actor 前先执行 depth/fanout admission，拒绝结果以当前步骤失败事件返回；
+  - workflow 内的 `llm_call` / `tool_call` 若触发 `aevatar_start_workflow`，只能通过 host stamped typed runtime context 转成父 run actor 的 managed child start。
 
 ```yaml
 steps:

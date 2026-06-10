@@ -18,7 +18,6 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
         "aevatar_invoke_team",
         "aevatar_start_workflow",
         "aevatar_observe_run",
-        "aevatar_query_readmodel",
     ];
 
     private readonly IToolSetRegistry _toolSetRegistry;
@@ -145,7 +144,6 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
             typeof(InvokeTeamToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
-            typeof(QueryReadModelToolSource),
         };
 
         foreach (var source in sources)
@@ -293,8 +291,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
         source is InvokeGAgentToolSource or
             InvokeTeamToolSource or
             StartWorkflowToolSource or
-            ObserveRunToolSource or
-            QueryReadModelToolSource;
+            ObserveRunToolSource;
 
     private static HealthProbeOutcome? VerifyCompletionObservationTools(
         IReadOnlyDictionary<string, IAgentTool> discovered)
@@ -311,11 +308,6 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
             return Failure(
                 "completion_observe_tool_not_read_only",
                 "aevatar_observe_run must remain a read-only readmodel observation tool.");
-
-        if (discovered["aevatar_query_readmodel"] is not IAevatarInvocationTool queryReadmodel || !queryReadmodel.IsReadOnly)
-            return Failure(
-                "completion_query_tool_not_read_only",
-                "aevatar_query_readmodel must remain a read-only readmodel query tool.");
 
         return null;
     }

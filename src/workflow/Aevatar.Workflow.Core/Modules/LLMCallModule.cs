@@ -172,6 +172,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        if (evt.ManagedHandoff != null && !string.IsNullOrWhiteSpace(evt.ManagedHandoff.InvocationId))
+        {
+            await RemovePendingAsync(sessionId, pending, ctx, ct);
+            return;
+        }
+
         ctx.Logger.LogInformation(
             "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=completed output_len={OutputLen} output_redacted=true",
             pending.RunId,
@@ -381,6 +387,19 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
             StepId = stepId,
         };
+        var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
+            ctx,
+            ctx.AgentId ?? string.Empty,
+            request.RunId ?? string.Empty,
+            stepId);
+        intent.WorkflowRuntimeContext = new WorkflowToolRuntimeContextPayload
+        {
+            ParentActorId = runtimeContext.ParentActorId,
+            ParentRunId = runtimeContext.ParentRunId,
+            ParentStepId = runtimeContext.ParentStepId,
+            RootRunId = runtimeContext.RootRunId,
+            Depth = runtimeContext.Depth,
+        };
         if (WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm))
         {
             intent.Model = Normalize(llm.ModelOverride) ?? string.Empty;
@@ -392,6 +411,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         intent.CallerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var callerCredential)
             ? callerCredential
             : new WorkflowCallerCredential();
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyParametersToChatRequest(request, intent, timeoutMs);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);

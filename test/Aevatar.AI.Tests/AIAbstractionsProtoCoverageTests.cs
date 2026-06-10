@@ -103,10 +103,19 @@ public sealed class AIAbstractionsProtoCoverageTests
             ErrorCode = "",
             ErrorMessage = "",
             ResultJson = """{"guid":"skill-1","version":"1.0","skillHash":"hash-1"}""",
+            ManagedWorkflowHandoff = new ManagedWorkflowHandoffReceipt
+            {
+                ParentActorId = "parent-actor",
+                ParentRunId = "parent-run",
+                ParentStepId = "parent-step",
+                InvocationId = "invoke-1",
+                ChildRunId = "child-run-1",
+            },
         };
         var receiptRoundTrip = RoundTrip(receipt, AgentToolReceipt.Parser);
         receiptRoundTrip.SubjectId.Should().Be("skill-1");
         receiptRoundTrip.SubjectHash.Should().Be("hash-1");
+        receiptRoundTrip.ManagedWorkflowHandoff.InvocationId.Should().Be("invoke-1");
 
         var request = RoundTrip(new ChatRequestEvent
         {
@@ -462,7 +471,8 @@ public sealed class AIAbstractionsProtoCoverageTests
                 (11, "approval_request_id"),
                 (12, "error_code"),
                 (13, "error_message"),
-                (14, "result_json"));
+                (14, "result_json"),
+                (15, "managed_workflow_handoff"));
 
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)

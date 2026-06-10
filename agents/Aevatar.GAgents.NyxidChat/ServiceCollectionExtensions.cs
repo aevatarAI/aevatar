@@ -19,6 +19,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
+using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.Configuration;
@@ -38,6 +39,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
+        RuntimeHelpers.RunClassConstructor(typeof(ChannelWorkflowDraftRunGAgent).TypeHandle);
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(NyxIdChatGAgent).Assembly));
 
         services.AddCqrsCore();
@@ -53,6 +55,21 @@ public static class ServiceCollectionExtensions
 
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>());
+        services.TryAddSingleton<ChannelSlashCommandRegistry>();
+        services.TryAddSingleton<ChannelWorkflowDraftRunIntentParser>();
+        services.TryAddSingleton<ChannelWorkflowDraftRunAdmission>(sp =>
+            new ChannelWorkflowDraftRunAdmission(
+                sp.GetRequiredService<ChannelWorkflowDraftRunIntentParser>(),
+                sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>()));
+        services.TryAddSingleton<WorkflowDraftRunReplyRenderer>();
+        services.TryAddSingleton<IChannelWorkflowDraftRunInteractionPort>(sp =>
+            new ChannelWorkflowDraftRunInteractionPort(
+                sp.GetRequiredService<Aevatar.Foundation.Abstractions.IActorRuntime>(),
+                sp.GetRequiredService<Aevatar.Foundation.Abstractions.IActorDispatchPort>(),
+                sp.GetRequiredService<ILogger<ChannelWorkflowDraftRunInteractionPort>>(),
+                sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowChatRunInteractionPort>(),
+                sp.GetService<TimeProvider>()));
         // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
         //   Old pattern: Mainnet Host/API composed the voice demo agent bootstrap workflow directly.
         //   New principle: NyxID chat owns the actor-targeted bootstrap command port; hosts only opt into the module.
@@ -144,6 +161,18 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateApprovalResolver);
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateChatObservationLifecycle);
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateApprovalObservationLifecycle);
+        services.TryAddSingleton<
+            ICommandObservationScopeLeasePreparation<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(
+            sp => new NyxIdChatObservationScopeLeasePreparation<NyxIdChatCommand>(
+                sp.GetRequiredService<IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease>>(),
+                sp.GetRequiredService<IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease>>(),
+                static command => command.SessionId));
+        services.TryAddSingleton<
+            ICommandObservationScopeLeasePreparation<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(
+            sp => new NyxIdChatObservationScopeLeasePreparation<NyxIdApprovalCommand>(
+                sp.GetRequiredService<IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease>>(),
+                sp.GetRequiredService<IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease>>(),
+                static command => command.SessionId));
         services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdChatCommand>, NyxIdChatCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdApprovalCommand>, NyxIdApprovalCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<NyxIdChatCommandTarget>, ActorCommandTargetDispatcher<NyxIdChatCommandTarget>>();
@@ -164,7 +193,8 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ICommandDurableCompletionResolver<NyxIdChatAcceptedReceipt, NyxIdChatCompletionStatus>>(),
                 sp.GetService<ILogger<DefaultCommandInteractionService<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, AGUIEvent, NyxIdChatCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(),
-                sp.GetRequiredService<ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>>()));
+                sp.GetRequiredService<ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>>(),
+                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>()));
         services.TryAddSingleton<IRealtimeSession<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(sp =>
             sp.GetRequiredService<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>());
         services.TryAddSingleton<ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(sp =>
@@ -176,7 +206,8 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ICommandDurableCompletionResolver<NyxIdChatAcceptedReceipt, NyxIdChatCompletionStatus>>(),
                 sp.GetService<ILogger<DefaultCommandInteractionService<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, AGUIEvent, NyxIdChatCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(),
-                sp.GetRequiredService<ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>>()));
+                sp.GetRequiredService<ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>>(),
+                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>()));
         services.TryAddSingleton<IRealtimeSession<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(sp =>
             sp.GetRequiredService<ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>());
     }

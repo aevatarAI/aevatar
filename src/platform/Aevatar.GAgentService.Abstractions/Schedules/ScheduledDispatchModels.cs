@@ -26,7 +26,32 @@ public sealed record ScheduledServiceInvocationTargetDescriptor(
     string EndpointId,
     Google.Protobuf.WellKnownTypes.Any Payload,
     string? RevisionId = null,
-    ServiceInvocationCaller? Caller = null);
+    ServiceInvocationCaller? Caller = null,
+    ScheduledServiceInvocationAuth? Auth = null);
+
+public sealed record ScheduledServiceInvocationNyxIdSubjectRef(
+    string Platform,
+    string Tenant,
+    string ExternalUserId);
+
+public sealed record ScheduledServiceInvocationNyxIdCredentialSource(
+    ScheduledServiceInvocationNyxIdSubjectRef Subject,
+    string Scope);
+
+public sealed record ScheduledServiceInvocationAuth(
+    ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null);
+
+public sealed record ScheduledServiceInvocationCredentialExchangeResult(
+    bool Succeeded,
+    string? AccessToken = null,
+    string? Error = null)
+{
+    public static ScheduledServiceInvocationCredentialExchangeResult Success(string accessToken) =>
+        new(true, accessToken, null);
+
+    public static ScheduledServiceInvocationCredentialExchangeResult Failure(string error) =>
+        new(false, null, error);
+}
 
 public sealed record ScheduledDispatchConfiguration(
     string ScheduleId,
@@ -192,10 +217,22 @@ public sealed record ScheduledServiceInvocationDispatchReceipt(
     string TargetActorId,
     string CorrelationId);
 
+public sealed record ScheduledServiceInvocationDispatchRequest(
+    ServiceInvocationRequest Request,
+    ScheduledServiceInvocationAuth? Auth = null,
+    IReadOnlyDictionary<string, string>? Headers = null);
+
 public interface IScheduledServiceInvocationDispatchPort
 {
     Task<ScheduledServiceInvocationDispatchReceipt> DispatchAsync(
-        ServiceInvocationRequest request,
+        ScheduledServiceInvocationDispatchRequest dispatch,
+        CancellationToken ct = default);
+}
+
+public interface IScheduledServiceInvocationCredentialExchangePort
+{
+    Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
+        ScheduledServiceInvocationNyxIdCredentialSource source,
         CancellationToken ct = default);
 }
 

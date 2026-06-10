@@ -37,7 +37,7 @@ public class WorkflowRoleGAgent(
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
     private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -78,7 +78,7 @@ public class WorkflowRoleGAgent(
         try
         {
             var replayRecord = await ExecuteWorkflowIntentStreamingChatAsync(intent, chatRequest, streamCt);
-            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+            var completed = new WorkflowLlmInvocationCompletedEvent
             {
                 RunId = intent.RunId ?? string.Empty,
                 StepId = intent.StepId ?? string.Empty,
@@ -88,7 +88,11 @@ public class WorkflowRoleGAgent(
                 Content = replayRecord.Content,
                 ReasoningContent = replayRecord.ReasoningContent,
                 Usage = ToWorkflowUsageMetrics(replayRecord.Usage, replayRecord.Model),
-            }, TopologyAudience.Parent);
+            };
+            var managedHandoff = ToWorkflowManagedHandoffOutcome(replayRecord.ToolReceipts);
+            if (managedHandoff != null)
+                completed.ManagedHandoff = managedHandoff;
+            await PublishAsync(completed, TopologyAudience.Parent);
             await PersistRoleChatSessionCompletionAsync(
                 chatRequest,
                 replayRecord.Content,
@@ -131,7 +135,15 @@ public class WorkflowRoleGAgent(
 
     private static ChatRequestEvent BuildChatRequestFromWorkflowIntent(WorkflowLlmExecutionIntent intent)
     {
-        var toolContext = WorkflowCallerCredentialToolContextMapper.FromCredential(intent.CallerCredential);
+        var workflowRuntimeContext = new AgentWorkflowRuntimeContext(
+            Normalize(intent.WorkflowRuntimeContext?.ParentActorId),
+            Normalize(intent.WorkflowRuntimeContext?.ParentRunId),
+            Normalize(intent.WorkflowRuntimeContext?.ParentStepId),
+            Normalize(intent.WorkflowRuntimeContext?.RootRunId),
+            Math.Max(0, intent.WorkflowRuntimeContext?.Depth ?? 0));
+        var toolContext = WorkflowCallerCredentialToolContextMapper.FromCredential(
+            intent.CallerCredential,
+            workflowRuntimeContext);
         if (!string.IsNullOrWhiteSpace(intent.RoutePreference))
         {
             toolContext = toolContext with
@@ -155,6 +167,7 @@ public class WorkflowRoleGAgent(
                 ModelOverride = intent.Model ?? string.Empty,
                 NyxIdRoutePreference = toolContext.Routing.NyxIdRoutePreference ?? string.Empty,
                 UserMemoryPrompt = intent.UserMemoryPrompt ?? string.Empty,
+                SenderNyxIdAccessToken = intent.SenderNyxIdAccessToken ?? string.Empty,
             },
         };
         if (intent.HasMaxToolRounds)
@@ -193,6 +206,7 @@ public class WorkflowRoleGAgent(
         var fullContent = new StringBuilder();
         var fullReasoning = new StringBuilder();
         var toolCalls = new WorkflowToolCallAccumulator();
+        var toolReceipts = new List<AgentToolReceipt>();
         var contentParts = new List<ContentPart>();
         TokenUsage? usage = null;
 
@@ -232,12 +246,16 @@ public class WorkflowRoleGAgent(
 
             if (chunk.DeltaToolCall != null)
                 toolCalls.TrackDelta(chunk.DeltaToolCall);
+
+            if (chunk.ToolReceipt != null)
+                toolReceipts.Add(chunk.ToolReceipt.Clone());
         }
 
         return new WorkflowIntentReplayRecord(
             fullContent.ToString(),
             fullReasoning.ToString(),
             toolCalls.BuildToolCalls(),
+            toolReceipts,
             contentParts,
             Usage: usage,
             Model: EffectiveConfig.Model ?? string.Empty,
@@ -261,14 +279,38 @@ public class WorkflowRoleGAgent(
     private static string SanitizeWorkflowFailureMessage(string? message) =>
         string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
 
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private sealed record WorkflowIntentReplayRecord(
         string Content,
         string ReasoningContent,
         IReadOnlyList<ToolCall> ToolCalls,
+        IReadOnlyList<AgentToolReceipt> ToolReceipts,
         IReadOnlyList<ContentPart> ContentParts,
         TokenUsage? Usage,
         string? Model,
         bool ContentEmitted);
+
+    private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(
+        IReadOnlyList<AgentToolReceipt> toolReceipts)
+    {
+        var handoff = toolReceipts
+            .Select(static receipt => receipt.ManagedWorkflowHandoff)
+            .LastOrDefault(static receipt => receipt != null && !string.IsNullOrWhiteSpace(receipt.InvocationId));
+        if (handoff == null)
+            return null;
+
+        return new WorkflowManagedHandoffOutcome
+        {
+            ParentActorId = handoff.ParentActorId ?? string.Empty,
+            ParentRunId = handoff.ParentRunId ?? string.Empty,
+            ParentStepId = handoff.ParentStepId ?? string.Empty,
+            InvocationId = handoff.InvocationId ?? string.Empty,
+            ChildRunId = handoff.ChildRunId ?? string.Empty,
+            StreamTopic = handoff.StreamTopic ?? string.Empty,
+        };
+    }
 
     private static WorkflowUsageMetrics? ToWorkflowUsageMetrics(TokenUsage? usage, string? model) =>
         usage == null

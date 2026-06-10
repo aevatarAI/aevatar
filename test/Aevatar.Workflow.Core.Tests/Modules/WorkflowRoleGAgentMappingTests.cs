@@ -34,6 +34,14 @@ public sealed class WorkflowRoleGAgentMappingTests
             {
                 BearerToken = " raw-token ",
             },
+            WorkflowRuntimeContext = new WorkflowToolRuntimeContextPayload
+            {
+                ParentActorId = "parent-actor",
+                ParentRunId = "parent-run",
+                ParentStepId = "reply",
+                RootRunId = "root-run",
+                Depth = 2,
+            },
         });
 
         provider.LastRequest.Should().NotBeNull();
@@ -44,6 +52,12 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("raw-token");
         provider.LastRequest.ToolContext.Credentials.NyxIdOrgToken.Should().Be("raw-token");
         provider.LastRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
+        provider.LastRequest.ToolContext.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
+        provider.LastRequest.ToolContext.WorkflowRuntime.ParentRunId.Should().Be("parent-run");
+        provider.LastRequest.ToolContext.WorkflowRuntime.ParentStepId.Should().Be("reply");
+        provider.LastRequest.ToolContext.WorkflowRuntime.RootRunId.Should().Be("root-run");
+        provider.LastRequest.ToolContext.WorkflowRuntime.Depth.Should().Be(2);
+        provider.LastRequest.ToolContext.WorkflowRuntime.HasManagedParent.Should().BeTrue();
         (provider.LastRequest.Metadata ?? new Dictionary<string, string>(StringComparer.Ordinal))
             .Should()
             .BeEmpty();
@@ -52,9 +66,54 @@ public sealed class WorkflowRoleGAgentMappingTests
             .ContainSingle(x => x.Success);
     }
 
+    [Fact]
+    public async Task WorkflowRoleGAgent_WhenToolReceiptCarriesManagedHandoff_ShouldPublishHandoffCompletion()
+    {
+        var provider = new RecordingLlmProvider
+        {
+            ToolReceipt = new AgentToolReceipt
+            {
+                CallId = "tool-call-1",
+                ToolName = "aevatar_start_workflow",
+                Status = AgentToolReceiptStatus.Success,
+                ManagedWorkflowHandoff = new ManagedWorkflowHandoffReceipt
+                {
+                    ParentActorId = "parent-actor",
+                    ParentRunId = "parent-run",
+                    ParentStepId = "reply",
+                    InvocationId = "parent-run:workflow_tool:reply:tool-call-1",
+                    ChildRunId = "parent-run:workflow_tool:reply:tool-call-1",
+                },
+            },
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = new WorkflowRoleGAgent(provider)
+        {
+            EventPublisher = publisher,
+        };
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "parent-run",
+            StepId = "reply",
+            SessionId = "session-1",
+            Prompt = "start child",
+        });
+
+        var completed = publisher.Published
+            .OfType<WorkflowLlmInvocationCompletedEvent>()
+            .Single(x => x.ManagedHandoff != null && !string.IsNullOrWhiteSpace(x.ManagedHandoff.InvocationId));
+        completed.Success.Should().BeTrue();
+        completed.ManagedHandoff.Should().NotBeNull();
+        completed.ManagedHandoff.InvocationId.Should().Be("parent-run:workflow_tool:reply:tool-call-1");
+        completed.ManagedHandoff.ParentStepId.Should().Be("reply");
+    }
+
     private sealed class RecordingLlmProvider : ILLMProviderFactory, ILLMProvider
     {
         public LLMRequest? LastRequest { get; private set; }
+
+        public AgentToolReceipt? ToolReceipt { get; init; }
 
         public string Name => "recording";
 
@@ -79,6 +138,14 @@ public sealed class WorkflowRoleGAgentMappingTests
             {
                 DeltaContent = "ok",
             };
+            if (ToolReceipt != null)
+            {
+                yield return new LLMStreamChunk
+                {
+                    ToolReceipt = ToolReceipt,
+                };
+            }
+
             yield return new LLMStreamChunk
             {
                 IsLast = true,

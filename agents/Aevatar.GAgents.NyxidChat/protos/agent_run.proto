@@ -131,6 +131,8 @@ message AgentRunReplyStepState {
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 20;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 21;
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 22;
+  aevatar.ai.LLMControlContextPayload owner_fallback_llm_control = 23;
+  aevatar.ai.AgentToolExecutionContextPayload owner_fallback_tool_context = 24;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
@@ -153,6 +155,11 @@ message AgentRunToolStepResult {
   repeated AgentRunChatMessage result_messages = 1;
   bool advance_round = 2;
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 3;
+  // Interactive reply intent captured while the tool step executed (for example
+  // reply_with_interaction). Tools run during the tool step, not the LLM step,
+  // so the executor surfaces the captured intent here for the run actor to
+  // merge into AgentRunReplyStepState.outbound_intent.
+  aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 4;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
@@ -286,6 +293,20 @@ message AgentRunReplyGenerationFailed {
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 8;
 }
 
+// Transient self-message used when a sender-owned LLM/tool-enabled attempt is
+// rejected before it produces a useful reply. The actor converts it into a
+// persisted AgentRunReplyStepStateUpdatedEvent that clears sender binding and
+// disables tools, then continues through the normal LLM-step chain.
+message AgentRunOwnerFallbackStepRequested {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int32 step_index = 5;
+  string reason = 6;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 7;
+}
+
 // Transient timeout signal emitted by the callback scheduler. It carries only
 // stable identifiers so runtime-only credentials are never written into the
 // scheduler backend.
@@ -341,6 +362,102 @@ message AgentRunCleanupCompletedEvent {
   string run_id = 1;
   string correlation_id = 2;
   int64 completed_at_unix_ms = 3;
+}
+
+enum ChannelWorkflowDraftRunStatus {
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_UNSPECIFIED = 0;
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_STARTED = 1;
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_REPLY_HANDED_OFF = 2;
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_FAILED = 3;
+}
+
+message ChannelWorkflowDraftRunGAgentState {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  ChannelWorkflowDraftRunStatus status = 4;
+  int64 started_at_unix_ms = 5;
+  int64 completed_at_unix_ms = 6;
+  string error_code = 7;
+  string error_summary = 8;
+  string accumulated_text = 9;
+}
+
+message ChannelWorkflowDraftRunStartRequested {
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent request = 1;
+  string run_id = 2;
+}
+
+message ChannelWorkflowDraftRunStartedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 started_at_unix_ms = 4;
+}
+
+message ChannelWorkflowDraftRunFrame {
+  oneof frame {
+    ChannelWorkflowDraftRunTextMessageContentFrame text_message_content = 1;
+    ChannelWorkflowDraftRunFinishedFrame run_finished = 2;
+    ChannelWorkflowDraftRunErrorFrame run_error = 3;
+    ChannelWorkflowDraftRunStoppedFrame run_stopped = 4;
+  }
+}
+
+message ChannelWorkflowDraftRunTextMessageContentFrame {
+  string delta = 1;
+}
+
+message ChannelWorkflowDraftRunFinishedFrame {
+  string result_output = 1;
+}
+
+message ChannelWorkflowDraftRunErrorFrame {
+  string message = 1;
+  string code = 2;
+}
+
+message ChannelWorkflowDraftRunStoppedFrame {
+  string reason = 1;
+}
+
+message ChannelWorkflowDraftRunFrameObserved {
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent request = 1;
+  ChannelWorkflowDraftRunFrame frame = 2;
+  int64 observed_at_unix_ms = 3;
+}
+
+message ChannelWorkflowDraftRunInteractionCompleted {
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent request = 1;
+  bool succeeded = 2;
+  bool completed = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int64 completed_at_unix_ms = 6;
+}
+
+message ChannelWorkflowDraftRunFrameRenderedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string accumulated_text = 4;
+  int64 rendered_at_unix_ms = 5;
+}
+
+message ChannelWorkflowDraftRunReplyHandedOffEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 handed_off_at_unix_ms = 4;
+}
+
+message ChannelWorkflowDraftRunFailedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int64 failed_at_unix_ms = 6;
 }
 
 message NyxIdChatConversationCreationCompensationRequested {

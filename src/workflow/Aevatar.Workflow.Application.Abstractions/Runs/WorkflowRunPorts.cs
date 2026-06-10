@@ -80,17 +80,18 @@ public sealed record WorkflowRunBindingQuery(
     IReadOnlyList<string> DefinitionActorIds,
     int Take = 50);
 
-public sealed record WorkflowRunResumeSeedView(
-    string RunId,
+public sealed record WorkflowRunForkSeedView(
+    string SourceRunId,
     string Status,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
     IReadOnlyDictionary<string, string> Variables,
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
-    string FinalError)
+    string FinalError,
+    string ScopeId = "")
 {
-    public WorkflowRunResumeSeedView()
+    public WorkflowRunForkSeedView()
         : this(
             string.Empty,
             string.Empty,
@@ -98,6 +99,7 @@ public sealed record WorkflowRunResumeSeedView(
             new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal),
             [],
+            string.Empty,
             string.Empty,
             string.Empty)
     {
@@ -127,9 +129,9 @@ public interface IWorkflowRunBindingReader
         CancellationToken ct = default);
 }
 
-public interface IWorkflowRunSeedQueryPort
+public interface IWorkflowRunForkSeedQueryPort
 {
-    Task<WorkflowRunResumeSeedView?> GetResumeSeedAsync(
+    Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
         string runId,
         CancellationToken ct = default);
 }

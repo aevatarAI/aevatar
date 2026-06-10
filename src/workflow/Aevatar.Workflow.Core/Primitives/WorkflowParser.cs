@@ -174,9 +174,12 @@ public sealed class WorkflowParser
         RawStep step,
         IDictionary<string, object?>? rawParameters)
     {
+        var isNotifyStep = string.Equals(canonicalStepType, "notify", StringComparison.Ordinal);
         var interactionSpec = MapInteractionSpec(ResolveInteractionSpecSource(step, rawParameters));
-        var interactionTemplateSpec = MapInteractionTemplateSpec(ResolveInteractionTemplateSpecSource(step, rawParameters));
-        var deliveryTargetId = string.Equals(canonicalStepType, "notify", StringComparison.Ordinal)
+        var interactionTemplateSpec = isNotifyStep
+            ? MapInteractionTemplateSpec(ResolveInteractionTemplateSpecSource(step, rawParameters))
+            : null;
+        var deliveryTargetId = isNotifyStep
             ? ResolveDeliveryTargetId(step, rawParameters)
             : null;
         var presentation = new StepPresentation

@@ -13,21 +13,35 @@ public sealed record AgentToolExecutionContext(
     AgentToolSenderBindingContext SenderBinding,
     LLMRequestRoutingContext Routing,
     AgentToolConnectedServicesContext ConnectedServices,
+    AgentWorkflowRuntimeContext WorkflowRuntime,
     AgentSkillRecoveryContext SkillRecovery,
     string? DeliveryTargetId,
     IReadOnlyDictionary<string, string> ExternalMetadata)
 {
-    public static AgentToolExecutionContext Empty { get; } = new(
-        AgentToolRequestIdentity.Empty,
-        AgentToolCredentials.Empty,
-        AgentToolCallerContext.Empty,
-        AgentToolChannelContext.Empty,
-        AgentToolSenderBindingContext.Empty,
-        LLMRequestRoutingContext.Empty,
-        AgentToolConnectedServicesContext.Empty,
-        AgentSkillRecoveryContext.Empty,
-        null,
-        new Dictionary<string, string>(StringComparer.Ordinal));
+    public AgentToolExecutionContext(
+        AgentToolRequestIdentity Request,
+        AgentToolCredentials Credentials,
+        AgentToolCallerContext Caller,
+        AgentToolChannelContext Channel,
+        AgentToolSenderBindingContext SenderBinding,
+        LLMRequestRoutingContext Routing,
+        AgentToolConnectedServicesContext ConnectedServices,
+        AgentSkillRecoveryContext SkillRecovery,
+        IReadOnlyDictionary<string, string> ExternalMetadata)
+        : this(
+            Request,
+            Credentials,
+            Caller,
+            Channel,
+            SenderBinding,
+            Routing,
+            ConnectedServices,
+            AgentWorkflowRuntimeContext.Empty,
+            SkillRecovery,
+            null,
+            ExternalMetadata)
+    {
+    }
 
     public AgentToolExecutionContext(
         AgentToolRequestIdentity request,
@@ -38,6 +52,7 @@ public sealed record AgentToolExecutionContext(
         LLMRequestRoutingContext routing,
         AgentToolConnectedServicesContext connectedServices,
         AgentSkillRecoveryContext skillRecovery,
+        string? deliveryTargetId,
         IReadOnlyDictionary<string, string> externalMetadata)
         : this(
             request,
@@ -47,11 +62,25 @@ public sealed record AgentToolExecutionContext(
             senderBinding,
             routing,
             connectedServices,
+            AgentWorkflowRuntimeContext.Empty,
             skillRecovery,
-            null,
+            deliveryTargetId,
             externalMetadata)
     {
     }
+
+    public static AgentToolExecutionContext Empty { get; } = new(
+        AgentToolRequestIdentity.Empty,
+        AgentToolCredentials.Empty,
+        AgentToolCallerContext.Empty,
+        AgentToolChannelContext.Empty,
+        AgentToolSenderBindingContext.Empty,
+        LLMRequestRoutingContext.Empty,
+        AgentToolConnectedServicesContext.Empty,
+        AgentWorkflowRuntimeContext.Empty,
+        AgentSkillRecoveryContext.Empty,
+        null,
+        new Dictionary<string, string>(StringComparer.Ordinal));
 
     public AgentToolExecutionContext WithCallId(string? callId) =>
         this with { Request = Request with { CallId = Normalize(callId) } };
@@ -96,6 +125,21 @@ public sealed record AgentToolSenderBindingContext(string? BindingId)
 public sealed record AgentToolConnectedServicesContext(string? ContextJson)
 {
     public static AgentToolConnectedServicesContext Empty { get; } = new((string?)null);
+}
+
+public sealed record AgentWorkflowRuntimeContext(
+    string? ParentActorId,
+    string? ParentRunId,
+    string? ParentStepId,
+    string? RootRunId,
+    int Depth)
+{
+    public static AgentWorkflowRuntimeContext Empty { get; } = new(null, null, null, null, 0);
+
+    public bool HasManagedParent =>
+        !string.IsNullOrWhiteSpace(ParentActorId) &&
+        !string.IsNullOrWhiteSpace(ParentRunId) &&
+        !string.IsNullOrWhiteSpace(ParentStepId);
 }
 
 public sealed record AgentSkillRecoveryContext(

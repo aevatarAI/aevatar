@@ -237,6 +237,25 @@ public sealed class NyxIdRelayTransport
         submission.ActionKind = ResolveActionKind(root, submission.Arguments);
         submission.Arguments.Remove("action_kind");
 
+        // Lark relays button clicks with the composed value object nested under `value`
+        // (`{"tag":"button","value":{"action_id":...,"value":...},...}`), so the typed
+        // identity fields arrive flattened into Arguments rather than at the root. Mirror
+        // them into the typed fields without removing the boundary arguments: workflow
+        // resume and other typed callback consumers still rely on the original payload.
+        if (string.IsNullOrEmpty(submission.ActionId) &&
+            submission.Arguments.TryGetValue("action_id", out var nestedActionId) &&
+            !string.IsNullOrWhiteSpace(nestedActionId))
+        {
+            submission.ActionId = nestedActionId.Trim();
+        }
+
+        if (string.IsNullOrEmpty(submission.SubmittedValue) &&
+            submission.Arguments.TryGetValue("value", out var nestedValue) &&
+            !string.IsNullOrWhiteSpace(nestedValue))
+        {
+            submission.SubmittedValue = nestedValue;
+        }
+
         MapKnownPayloads(submission);
 
         if (string.IsNullOrEmpty(submission.ActionId) &&

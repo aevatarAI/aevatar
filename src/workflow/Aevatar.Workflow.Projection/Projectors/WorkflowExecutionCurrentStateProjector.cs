@@ -10,7 +10,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
         WorkflowRunState,
         WorkflowExecutionCurrentStateDocument>
 {
-    private readonly WorkflowRunResumeSeedReadModelMapper _resumeSeedMapper = new();
+    private readonly WorkflowRunForkSeedReadModelMapper _forkSeedMapper = new();
 
     public WorkflowExecutionCurrentStateProjector(
         IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> writeDispatcher,
@@ -33,7 +33,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
 
         var stateEvent = input.StateEvent;
         var state = input.State;
-        var seedSnapshot = _resumeSeedMapper.ToProjectionSnapshot(state);
+        var seedSnapshot = _forkSeedMapper.ToProjectionSnapshot(state);
 
         // Refactor (iter97/cluster-591): Old/New
         //   Old: every current-state projector hand-rolled committed-state unpack, timestamp resolution, and upsert.
@@ -47,6 +47,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
             RunId = string.IsNullOrWhiteSpace(state.RunId) ? context.RootActorId : state.RunId,
             WorkflowName = state.WorkflowName ?? string.Empty,
             Status = state.Status ?? string.Empty,
+            ScopeId = state.ScopeId ?? string.Empty,
             Compiled = state.Compiled,
             CompilationError = state.CompilationError ?? string.Empty,
             Input = state.Input ?? string.Empty,
@@ -62,12 +63,12 @@ public sealed class WorkflowExecutionCurrentStateProjector
                 x => x.Key,
                 x => x.Value,
                 StringComparer.Ordinal),
-            ResumeSeedVariables = seedSnapshot.Variables.ToDictionary(
+            ForkSeedVariables = seedSnapshot.Variables.ToDictionary(
                 x => x.Key,
                 x => x.Value,
                 StringComparer.Ordinal),
-            ResumeSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
-            ResumeSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
+            ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
+            ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
         };
     }
 

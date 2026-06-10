@@ -267,6 +267,27 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             Payload = descriptor.Payload.Clone(),
             RevisionId = descriptor.RevisionId ?? string.Empty,
             Caller = descriptor.Caller?.Clone(),
+            Auth = CreateAuthState(descriptor.Auth),
+        };
+    }
+
+    private static ScheduledServiceInvocationAuthState? CreateAuthState(ScheduledServiceInvocationAuth? auth)
+    {
+        if (auth?.SenderNyxId == null)
+            return null;
+
+        return new ScheduledServiceInvocationAuthState
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                {
+                    Platform = auth.SenderNyxId.Subject.Platform,
+                    Tenant = auth.SenderNyxId.Subject.Tenant,
+                    ExternalUserId = auth.SenderNyxId.Subject.ExternalUserId,
+                },
+                Scope = auth.SenderNyxId.Scope,
+            },
         };
     }
 }

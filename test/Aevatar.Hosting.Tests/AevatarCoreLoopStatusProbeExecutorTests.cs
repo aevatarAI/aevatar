@@ -28,7 +28,7 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
         var outcome = await executor.ProbeAsync(CoreLoopDescriptor(), CancellationToken.None);
 
         outcome.Status.Should().Be(HealthOutcomeStatus.Ok);
-        outcome.Detail.Should().Be("core_loop_tools_5");
+        outcome.Detail.Should().Be("core_loop_tools_4");
     }
 
     [Fact]
@@ -76,28 +76,10 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
         outcome.ErrorMessage.Should().Contain("aevatar_observe_run");
     }
 
-    [Fact]
-    public async Task ProbeAsync_ShouldReportDown_WhenQueryReadModelToolIsNotReadOnly()
-    {
-        using var provider = BuildProvider(
-            includeInvokeTeamSource: true,
-            queryReadModelReadOnly: false);
-        var executor = provider.GetRequiredService<AevatarCoreLoopStatusProbeExecutor>();
-
-        var outcome = await executor.ProbeAsync(
-            CoreLoopDescriptor(requireWorkspaceSources: false),
-            CancellationToken.None);
-
-        outcome.Status.Should().Be(HealthOutcomeStatus.Down);
-        outcome.Detail.Should().Be("completion_query_tool_not_read_only");
-        outcome.ErrorMessage.Should().Contain("aevatar_query_readmodel");
-    }
-
     private static ServiceProvider BuildProvider(
         bool includeInvokeTeamSource,
         bool breakInvokeTeamDiscovery = false,
-        bool observeRunReadOnly = true,
-        bool queryReadModelReadOnly = true)
+        bool observeRunReadOnly = true)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -121,7 +103,6 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
 
         services.AddSingleton<StartWorkflowToolSource>();
         services.AddSingleton<ObserveRunToolSource>();
-        services.AddSingleton<QueryReadModelToolSource>();
         services.AddToolSetRegistry(options =>
         {
             var sources = new List<Func<IServiceProvider, IAgentToolSource>>
@@ -136,9 +117,6 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
             if (!observeRunReadOnly)
                 sources.Add(_ => new FixedToolSource(new FixedInvocationTool("aevatar_observe_run", false)));
             sources.Add(sp => sp.GetRequiredService<ObserveRunToolSource>());
-            if (!queryReadModelReadOnly)
-                sources.Add(_ => new FixedToolSource(new FixedInvocationTool("aevatar_query_readmodel", false)));
-            sources.Add(sp => sp.GetRequiredService<QueryReadModelToolSource>());
             options.AddToolSet(ToolSetNames.WorkspaceDefault, sources);
         });
 

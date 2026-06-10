@@ -602,10 +602,10 @@ public static class ScopeWorkflowEndpoints
             return null;
 
         return new WorkflowLlmControl(
-            model,
-            maxToolRounds,
-            userMemoryPrompt,
-            routePreference);
+            ModelOverride: model,
+            MaxToolRoundsOverride: maxToolRounds,
+            UserMemoryPrompt: userMemoryPrompt,
+            RoutePreference: routePreference);
     }
 
     internal static async Task<LLMControlContext?> BuildScopedLlmControlAsync(

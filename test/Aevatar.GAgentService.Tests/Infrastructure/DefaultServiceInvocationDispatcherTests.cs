@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -121,7 +122,88 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowPort.RunActor.Envelopes.Should().BeEmpty();
         dispatchPort.Calls.Should().ContainSingle();
         dispatchPort.Calls[0].actorId.Should().Be("workflow-run");
-        dispatchPort.Calls[0].envelope.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("hello");
+        dispatchPort.Calls[0].envelope.Payload.Unpack<WorkflowChatRequestEvent>().Prompt.Should().Be("hello");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldMapChatLlmControlToWorkflowChatRequest()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-llm-control",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                LlmControl = new LLMControlContextPayload
+                {
+                    ModelOverride = "sonnet",
+                    UserMemoryPrompt = "memory",
+                    SenderNyxIdAccessToken = "sender-token",
+                },
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.LlmControl.ModelOverride.Should().Be("sonnet");
+        workflowRequest.LlmControl.UserMemoryPrompt.Should().Be("memory");
+        workflowRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldMapConnectorAuthorizationToWorkflowCallerCredential()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-auth",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer connector-token",
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().Be("connector-token");
     }
 
     [Fact]

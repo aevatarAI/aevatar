@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -52,19 +54,6 @@ public sealed class ObserveRunToolSource : IAgentToolSource
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<IAgentTool>>([new ObserveRunTool(_dispatcher)]);
-}
-
-public sealed class QueryReadModelToolSource : IAgentToolSource
-{
-    private readonly AevatarInvocationDispatcher _dispatcher;
-
-    public QueryReadModelToolSource(AevatarInvocationDispatcher dispatcher)
-    {
-        _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
-    }
-
-    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<IAgentTool>>([new QueryReadModelTool(_dispatcher)]);
 }
 
 internal sealed class InvokeGAgentTool : IAevatarInvocationTool
@@ -126,6 +115,75 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.StartWorkflowAsync(argumentsJson, ct);
+
+    public string SideEffectKind => "workflow.managed-child-start";
+
+    public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson)
+    {
+        var workflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime ?? AgentWorkflowRuntimeContext.Empty;
+        if (!workflowRuntime.HasManagedParent)
+            return null;
+
+        var invocation = ParseInvocationToolResult(resultJson);
+        if (invocation == null || !IsAcceptedManagedWorkflowStart(invocation))
+            return null;
+
+        return new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            SideEffectKind = SideEffectKind,
+            ResultJson = resultJson ?? string.Empty,
+            ManagedWorkflowHandoff = new ManagedWorkflowHandoffReceipt
+            {
+                ParentActorId = workflowRuntime.ParentActorId?.Trim() ?? string.Empty,
+                ParentRunId = workflowRuntime.ParentRunId?.Trim() ?? string.Empty,
+                ParentStepId = workflowRuntime.ParentStepId?.Trim() ?? string.Empty,
+                InvocationId = invocation.RunId,
+                ChildRunId = invocation.RunId,
+                StreamTopic = invocation.StreamTopic,
+            },
+        };
+    }
+
+    private static ManagedWorkflowStartResult? ParseInvocationToolResult(string resultJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.TryGetProperty("error", out _))
+                return null;
+
+            return new ManagedWorkflowStartResult(
+                ReadString(root, "run_id"),
+                ReadString(root, "status"),
+                ReadString(root, "actor_id"),
+                ReadString(root, "stream_topic"));
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string ReadString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+
+    private static bool IsAcceptedManagedWorkflowStart(ManagedWorkflowStartResult invocation) =>
+        !string.IsNullOrWhiteSpace(invocation.RunId) &&
+        !string.IsNullOrWhiteSpace(invocation.ActorId) &&
+        string.Equals(invocation.Status, "accepted", StringComparison.Ordinal);
+
+    private sealed record ManagedWorkflowStartResult(
+        string RunId,
+        string Status,
+        string ActorId,
+        string StreamTopic);
 }
 
 internal sealed class ObserveRunTool : IAevatarInvocationTool
@@ -140,7 +198,7 @@ internal sealed class ObserveRunTool : IAevatarInvocationTool
     public string Name => "aevatar_observe_run";
 
     public string Description =>
-        "Observe a previously accepted Aevatar run by run_id through existing run and projection read models.";
+        "Observe a previously accepted Aevatar run through one explicitly selected readmodel target.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.ObserveRun;
 
@@ -148,26 +206,4 @@ internal sealed class ObserveRunTool : IAevatarInvocationTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.ObserveRunAsync(argumentsJson, ct);
-}
-
-internal sealed class QueryReadModelTool : IAevatarInvocationTool
-{
-    private readonly AevatarInvocationDispatcher _dispatcher;
-
-    public QueryReadModelTool(AevatarInvocationDispatcher dispatcher)
-    {
-        _dispatcher = dispatcher;
-    }
-
-    public string Name => "aevatar_query_readmodel";
-
-    public string Description =>
-        "Read one of the closed-set Aevatar current-state read models by name and typed query.";
-
-    public string ParametersSchema => AevatarInvocationToolSchemas.QueryReadModel;
-
-    public bool IsReadOnly => true;
-
-    public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-        _dispatcher.QueryReadModelAsync(argumentsJson, ct);
 }

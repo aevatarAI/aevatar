@@ -22,7 +22,8 @@ internal static class WorkflowScheduleConfigurationMapper
                     BuildWorkflowServiceIdentity(configuration),
                     "chat",
                     Any.Pack(BuildWorkflowChatRequest(configuration)),
-                    configuration.RevisionId)),
+                    configuration.RevisionId,
+                    Auth: BuildWorkflowServiceInvocationAuth(configuration))),
             configuration.CronExpression,
             configuration.Timezone,
             configuration.Enabled,
@@ -54,6 +55,26 @@ internal static class WorkflowScheduleConfigurationMapper
             request.Metadata[key] = value;
 
         return request;
+    }
+
+    private static ScheduledServiceInvocationAuth? BuildWorkflowServiceInvocationAuth(
+        WorkflowScheduleConfiguration configuration)
+    {
+        if (configuration.Auth == null)
+            return null;
+        if (configuration.Auth.SenderNyxId == null)
+            throw new ArgumentException("Sender NyxID credential source is required.", nameof(configuration.Auth));
+
+        var senderNyxId = configuration.Auth.SenderNyxId;
+        if (senderNyxId.Subject == null)
+            throw new ArgumentException("Sender NyxID subject is required.", nameof(configuration.Auth));
+
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef(
+                NormalizeRequired(senderNyxId.Subject.Platform, nameof(senderNyxId.Subject.Platform)),
+                NormalizeOptional(senderNyxId.Subject.Tenant, string.Empty),
+                NormalizeRequired(senderNyxId.Subject.ExternalUserId, nameof(senderNyxId.Subject.ExternalUserId))),
+            NormalizeRequired(senderNyxId.Scope, nameof(senderNyxId.Scope))));
     }
 
     private static IReadOnlyDictionary<string, string> BuildWorkflowScheduleHeaders(

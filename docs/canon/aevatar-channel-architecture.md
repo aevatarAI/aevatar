@@ -850,6 +850,14 @@ ConversationGAgent.HandleTurnCompletedAsync(cmd: ConversationTurnCompleted):
 
 **为什么不退回到"一个 actor 拿全部职责"的方案**：AGENTS.md "Actor 即业务实体 / 单线程 actor 不做热点共享服务"。group conversation 天然是共享会话，让同一 grain 既扛串行顺序又扛 LLM 执行就是热点共享服务。拆成 "权威 grain（轻） + run-scoped runner（重）" 是在遵守 actor 边界的前提下让重负载水平扩展。
 
+### 5.6.2 Nyx relay workflow draft-run lifecycle
+
+Nyx relay 中明确的 workflow-run 文本意图不走普通 LLM / tool selection，也不复用 accepted-only `aevatar_start_workflow` 结果作为用户可见完成态。`ChannelConversationTurnRunner` 只负责确定性 admission：解析窄语法、读取 scope 内 workflow 定义、确认 runtime-only Nyx 用户凭据存在，然后产出强类型 `NeedsWorkflowDraftRunEvent`。不匹配或不满足准入条件时，runner 只能返回普通回复或继续既有路径，不能偷偷降级成工具选择。
+
+`ConversationGAgent` 是 draft-run channel reply lifecycle 的权威拥有者。它把 `NeedsWorkflowDraftRunEvent` 写入 `pending_workflow_draft_run_requests` 时只保留可持久化字段：conversation、workflow source、prompt、headers、run id 等；reply token 与 Nyx user access token 只能留在 dispatch copy 中，通过 accepted-only `IChannelWorkflowDraftRunInteractionPort` 投递给 NyxidChat runtime。actor 重新激活后，如果只剩 scrubbed pending state，就必须诚实失败并清理 pending，而不是用 query fallback 或 event replay 临时重建 token。
+
+NyxidChat 的 draft-run interaction port 不在 `ConversationGAgent` turn 内执行 workflow；它创建/定位 run-scoped `ChannelWorkflowDraftRunGAgent` 并投递 `ChannelWorkflowDraftRunStartRequested` 后返回 accepted。`ChannelWorkflowDraftRunGAgent` 作为单次 draft-run owner 只持久化 start fact，然后把现有 `IWorkflowChatRunInteractionPort` 交给非 actor bridge pump；该 bridge 只把 workflow frames / terminal facts 回投为 `ChannelWorkflowDraftRunFrameObserved` / `ChannelWorkflowDraftRunInteractionCompleted` continuation。run actor 在自己的 continuation handler 中做 stale check、渲染 frame，并把结果转成已有 channel streaming carriers：增量帧回投 `LlmReplyStreamChunkEvent`，终态帧回投 `LlmReplyReadyEvent`。这些事件都发回同一个 `ConversationGAgent` actor，由它继续执行去重、流式合并、最终回复发送、history append 与 pending cleanup；workflow runtime 不直接操作 channel outbound，也不新增第二条 relay 回复链路。
+
 ### 5.7 Middleware Pipeline（窄范围）
 
 ```csharp

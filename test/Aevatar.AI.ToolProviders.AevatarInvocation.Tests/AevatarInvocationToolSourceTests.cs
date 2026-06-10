@@ -11,6 +11,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.AGUI.Contracts;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -23,7 +24,7 @@ namespace Aevatar.AI.ToolProviders.AevatarInvocation.Tests;
 public sealed class AevatarInvocationToolSourceTests
 {
     [Fact]
-    public async Task AddAevatarInvocationTools_ShouldRegisterFiveTaggedToolSources()
+    public async Task AddAevatarInvocationTools_ShouldRegisterFourTaggedToolSources()
     {
         var services = new ServiceCollection();
         var harness = new Harness();
@@ -39,7 +40,6 @@ public sealed class AevatarInvocationToolSourceTests
         sources.OfType<InvokeTeamToolSource>().Should().ContainSingle();
         sources.OfType<StartWorkflowToolSource>().Should().ContainSingle();
         sources.OfType<ObserveRunToolSource>().Should().ContainSingle();
-        sources.OfType<QueryReadModelToolSource>().Should().ContainSingle();
 
         var tools = new List<IAgentTool>();
         foreach (var source in sources)
@@ -49,8 +49,7 @@ public sealed class AevatarInvocationToolSourceTests
             "aevatar_invoke_gagent",
             "aevatar_invoke_team",
             "aevatar_start_workflow",
-            "aevatar_observe_run",
-            "aevatar_query_readmodel");
+            "aevatar_observe_run");
         tools.All(static tool => tool is IAevatarInvocationTool invocationTool &&
                                  invocationTool.ToolSetTag == AevatarInvocationToolTags.ToolSet)
             .Should()
@@ -84,24 +83,25 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task QueryReadModelSchema_ShouldExposeClosedReadModelSet()
+    public async Task ObserveRunSchema_ShouldRequireTypedTarget()
     {
-        var tool = await DiscoverSingleAsync(new QueryReadModelToolSource(new Harness().CreateDispatcher()));
+        var tool = await DiscoverSingleAsync(new ObserveRunToolSource(new Harness().CreateDispatcher()));
         using var doc = JsonDocument.Parse(tool.ParametersSchema);
 
-        var values = doc.RootElement
+        var properties = doc.RootElement
             .GetProperty("properties")
-            .GetProperty("readmodel_name")
-            .GetProperty("enum")
-            .EnumerateArray()
-            .Select(static item => item.GetString())
+            .EnumerateObject()
+            .Select(static item => item.Name)
             .ToArray();
 
-        values.Should().BeEquivalentTo(
-            "service_run_current_state",
-            "gagent_run_terminal",
-            "workflow_actor_current_state",
-            "workflow_actor_timeline");
+        properties.Should().BeEquivalentTo(
+            "service_run",
+            "gagent_terminal_correlation",
+            "gagent_terminal_session",
+            "workflow_current_state");
+        doc.RootElement.TryGetProperty("oneOf", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("anyOf", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("allOf", out _).Should().BeFalse();
     }
 
     [Theory]
@@ -109,7 +109,6 @@ public sealed class AevatarInvocationToolSourceTests
     [InlineData("aevatar_invoke_team", """{"team_id":"team"}""")]
     [InlineData("aevatar_start_workflow", """{"workflow_id":"wf"}""")]
     [InlineData("aevatar_observe_run", "{}")]
-    [InlineData("aevatar_query_readmodel", """{"readmodel_name":"service_run_current_state"}""")]
     public async Task Tools_ShouldReturnStructuredValidationError(string toolName, string argumentsJson)
     {
         var harness = new Harness();
@@ -756,6 +755,77 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeGAgentForChatRun_ShouldPreserveWorkflowRuntimeInCanonicalToolContextPayload()
+    {
+        var harness = new Harness();
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "call-gagent-runtime",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "parent-actor",
+                "parent-run",
+                "parent-step",
+                "root-run",
+                2));
+        var request = BuildChatRunRequest(
+            "response-gagent",
+            "call-gagent-runtime-tool",
+            "aevatar_invoke_gagent",
+            """
+            {
+              "actor_id": "actor-1",
+              "payload": { "prompt": "run gagent" }
+            }
+            """);
+
+        var result = await dispatcher.InvokeGAgentForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty();
+        harness.ActorDispatch.Calls.Should().ContainSingle();
+        var chatRequest = harness.ActorDispatch.Calls.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.ToolContext.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
+        chatRequest.ToolContext.WorkflowRuntime.ParentRunId.Should().Be("parent-run");
+        chatRequest.ToolContext.WorkflowRuntime.ParentStepId.Should().Be("parent-step");
+        chatRequest.ToolContext.WorkflowRuntime.RootRunId.Should().Be("root-run");
+        chatRequest.ToolContext.WorkflowRuntime.Depth.Should().Be(2);
+        chatRequest.ToolContext.SkillRecovery.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenTrustedWorkflowRuntimeExists_ShouldCreateManagedHandoffReceipt()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-managed-workflow",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "parent-actor",
+                "parent-run",
+                "parent-step",
+                "root-run",
+                2));
+
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "child-flow",
+              "inputs": { "prompt": "run child" },
+              "wait": "stream"
+            }
+            """);
+        var receipt = tool.CreateSuccessReceipt("call-managed-workflow", tool.Name, output);
+
+        receipt.Should().NotBeNull();
+        receipt!.ManagedWorkflowHandoff.Should().NotBeNull();
+        receipt.ManagedWorkflowHandoff.ParentActorId.Should().Be("parent-actor");
+        receipt.ManagedWorkflowHandoff.ParentRunId.Should().Be("parent-run");
+        receipt.ManagedWorkflowHandoff.ParentStepId.Should().Be("parent-step");
+        receipt.ManagedWorkflowHandoff.InvocationId.Should().Be("parent-run:workflow_tool:parent-step:call-managed-workflow");
+        receipt.ManagedWorkflowHandoff.ChildRunId.Should().Be("parent-run:workflow_tool:parent-step:call-managed-workflow");
+    }
+
+    [Fact]
     public async Task aevatar_start_workflow_with_actor_id_dispatches_definition_actor_source()
     {
         var harness = new Harness();
@@ -911,8 +981,129 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCode(output).Should().Be("workflownotfound");
     }
 
+    [Theory]
+    [InlineData("parent_actor_id")]
+    [InlineData("parent_run_id")]
+    [InlineData("parent_step_id")]
+    [InlineData("root_run_id")]
+    [InlineData("depth")]
+    [InlineData("requested_depth")]
+    [InlineData("workflow_runtime_context")]
+    [InlineData("workflow_call_context")]
+    public async Task StartWorkflow_ShouldRejectPublicWorkflowRuntimeFields(string forbiddenField)
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-workflow-forged");
+        var output = await tool.ExecuteAsync($$"""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "{{forbiddenField}}": "forged"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        output.Should().Contain(forbiddenField);
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ActorDispatch.Calls.Should().BeEmpty();
+    }
+
     [Fact]
-    public async Task ObserveRun_ShouldReadExistingTerminalSnapshot()
+    public async Task StartWorkflow_WhenTrustedWorkflowRuntimeExists_ShouldDispatchManagedChildStartToParentActor()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-managed-workflow",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "parent-actor",
+                "parent-run",
+                "parent-step",
+                "root-run",
+                2));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "child-flow",
+              "inputs": { "prompt": "run child" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ActorDispatch.Calls.Should().ContainSingle();
+        var call = harness.ActorDispatch.Calls.Single();
+        call.ActorId.Should().Be("parent-actor");
+        call.Envelope.Route.PublisherActorId.Should().Be("parent-actor");
+        call.Envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        call.Envelope.Propagation.CorrelationId.Should().Be("call-managed-workflow");
+
+        var requested = call.Envelope.Payload.Unpack<SubWorkflowInvokeRequestedEvent>();
+        requested.InvocationId.Should().Be("parent-run:workflow_tool:parent-step:call-managed-workflow");
+        requested.ParentRunId.Should().Be("parent-run");
+        requested.ParentStepId.Should().Be("parent-step");
+        requested.WorkflowName.Should().Be("child-flow");
+        requested.Input.Should().Be("run child");
+        requested.RequestedByActorId.Should().Be("parent-actor");
+        requested.RootRunId.Should().Be("root-run");
+        requested.RequestedDepth.Should().Be(3);
+
+        var result = Read(output);
+        result.GetProperty("run_id").GetString().Should().Be(requested.InvocationId);
+        result.GetProperty("actor_id").GetString().Should().Be("parent-actor");
+        result.GetProperty("status").GetString().Should().Be("accepted");
+        result.GetProperty("stream_topic").GetString()
+            .Should()
+            .Be("aevatar://actors/parent-actor/runs/parent-run%3Aworkflow_tool%3Aparent-step%3Acall-managed-workflow");
+    }
+
+    [Theory]
+    [InlineData(
+        """
+        {
+          "workflow_id": "child-flow",
+          "actor_id": "definition-actor",
+          "inputs": { "prompt": "run child" }
+        }
+        """,
+        "actor_id")]
+    [InlineData(
+        """
+        {
+          "workflow_id": "child-flow",
+          "workflow_yamls": ["name: child_flow\nsteps: []"],
+          "inputs": { "prompt": "run child" }
+        }
+        """,
+        "workflow_yamls")]
+    public async Task StartWorkflow_WhenTrustedWorkflowRuntimeExists_ShouldRejectTopLevelStartOptions(
+        string argumentsJson,
+        string field)
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-managed-workflow-invalid",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "parent-actor",
+                "parent-run",
+                "parent-step",
+                "root-run",
+                1));
+        var output = await tool.ExecuteAsync(argumentsJson);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        output.Should().Contain(field);
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ActorDispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ObserveRun_ShouldReadTerminalCorrelationTargetOnly()
     {
         var harness = new Harness();
         harness.TerminalQuery.ByCorrelationId = new GAgentRunTerminalSnapshot(
@@ -931,14 +1122,19 @@ public sealed class AevatarInvocationToolSourceTests
         using var _ = PushContext(callId: "call-observe");
         var output = await tool.ExecuteAsync("""
             {
-              "run_id": "run-1",
-              "actor_id": "actor-1"
+              "gagent_terminal_correlation": {
+                "actor_id": "actor-1",
+                "correlation_id": "run-1"
+              }
             }
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.TerminalQuery.LastActorId.Should().Be("actor-1");
         harness.TerminalQuery.LastCorrelationId.Should().Be("run-1");
+        harness.TerminalQuery.LastSessionId.Should().BeNull();
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
         var result = Read(output);
         result.GetProperty("run_id").GetString().Should().Be("run-1");
         result.GetProperty("status").GetString().Should().Be(nameof(GAgentRunTerminalStatus.RunFinished));
@@ -946,10 +1142,10 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task ObserveRun_WhenCallerScopeIsUnavailable_ShouldFastFail()
+    public async Task ObserveRun_ShouldReadTerminalSessionTargetOnly()
     {
         var harness = new Harness();
-        harness.TerminalQuery.ByCorrelationId = new GAgentRunTerminalSnapshot(
+        harness.TerminalQuery.BySessionId = new GAgentRunTerminalSnapshot(
             "actor-1",
             "session-1",
             "run-1",
@@ -962,73 +1158,302 @@ public sealed class AevatarInvocationToolSourceTests
             DateTimeOffset.UtcNow);
         var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
 
-        using var _ = PushContext(callId: "call-observe-no-scope", scopeId: null);
+        using var _ = PushContext(callId: "call-observe-session");
         var output = await tool.ExecuteAsync("""
             {
-              "run_id": "run-1",
-              "actor_id": "actor-1"
-            }
-            """);
-
-        ErrorCode(output).Should().Be("caller_scope_unavailable");
-        harness.TerminalQuery.LastActorId.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ObserveRun_WhenNoReadModelMatches_ShouldReturnStructuredError()
-    {
-        var harness = new Harness();
-        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
-
-        using var _ = PushContext(callId: "call-observe-missing");
-        var output = await tool.ExecuteAsync("""{"run_id":"missing","actor_id":"actor-1"}""");
-
-        ErrorCode(output).Should().Be("run_not_found");
-    }
-
-    [Fact]
-    public async Task QueryReadModel_ShouldUseClosedServiceRunReaderWithCallerScope()
-    {
-        var harness = new Harness();
-        harness.ServiceRunQuery.ListResult =
-        [
-            BuildServiceRun("scope-1", "service-1", "run-1", "command-1"),
-        ];
-        var tool = await harness.DiscoverToolAsync("aevatar_query_readmodel");
-
-        using var _ = PushContext(callId: "call-query");
-        var output = await tool.ExecuteAsync("""
-            {
-              "readmodel_name": "service_run_current_state",
-              "query": {
-                "service_id": "service-1",
-                "take": 10
+              "gagent_terminal_session": {
+                "actor_id": "actor-1",
+                "session_id": "session-1"
               }
             }
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.ServiceRunQuery.LastQuery.Should().Be(new ServiceRunQuery("scope-1", "service-1", 10));
+        harness.TerminalQuery.LastActorId.Should().Be("actor-1");
+        harness.TerminalQuery.LastCorrelationId.Should().BeNull();
+        harness.TerminalQuery.LastSessionId.Should().Be("session-1");
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
         var result = Read(output);
-        result.GetProperty("readmodel_name").GetString().Should().Be("service_run_current_state");
-        result.GetProperty("count").GetInt32().Should().Be(1);
+        result.GetProperty("run_id").GetString().Should().Be("session-1");
+        result.GetProperty("status").GetString().Should().Be(nameof(GAgentRunTerminalStatus.RunFinished));
     }
 
     [Fact]
-    public async Task QueryReadModel_WhenNameIsNotRegistered_ShouldReturnStructuredError()
+    public async Task ObserveRun_ServiceRun_WhenReadModelIsMissing_ShouldReturnNotFoundWithoutFallback()
     {
         var harness = new Harness();
-        var tool = await harness.DiscoverToolAsync("aevatar_query_readmodel");
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
 
-        using var _ = PushContext(callId: "call-query-missing");
+        using var _ = PushContext(callId: "call-observe-service-run-missing");
         var output = await tool.ExecuteAsync("""
             {
-              "readmodel_name": "arbitrary_collection",
-              "query": { "id": "1" }
+              "service_run": {
+                "service_id": "service-1",
+                "run_id": "missing-run"
+              }
             }
             """);
 
-        ErrorCode(output).Should().Be("readmodel_not_registered");
+        ErrorCode(output).Should().Be("service_run_not_found");
+        harness.ServiceRunQuery.LastScopeId.Should().Be("scope-1");
+        harness.ServiceRunQuery.LastServiceId.Should().Be("service-1");
+        harness.ServiceRunQuery.LastRunId.Should().Be("missing-run");
+        harness.ServiceRunQuery.LastCommandId.Should().BeNull();
+        harness.ServiceRunQuery.LastQuery.Should().BeNull();
+        harness.TerminalQuery.LastActorId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ObserveRun_GAgentTerminalCorrelation_WhenReadModelIsMissing_ShouldReturnNotFoundWithoutFallback()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-terminal-correlation-missing");
+        var output = await tool.ExecuteAsync("""
+            {
+              "gagent_terminal_correlation": {
+                "actor_id": "actor-1",
+                "correlation_id": "missing-correlation"
+              }
+            }
+            """);
+
+        ErrorCode(output).Should().Be("gagent_terminal_not_found");
+        harness.TerminalQuery.LastActorId.Should().Be("actor-1");
+        harness.TerminalQuery.LastCorrelationId.Should().Be("missing-correlation");
+        harness.TerminalQuery.LastSessionId.Should().BeNull();
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ObserveRun_GAgentTerminalSession_WhenReadModelIsMissing_ShouldReturnNotFoundWithoutFallback()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-terminal-session-missing");
+        var output = await tool.ExecuteAsync("""
+            {
+              "gagent_terminal_session": {
+                "actor_id": "actor-1",
+                "session_id": "missing-session"
+              }
+            }
+            """);
+
+        ErrorCode(output).Should().Be("gagent_terminal_not_found");
+        harness.TerminalQuery.LastActorId.Should().Be("actor-1");
+        harness.TerminalQuery.LastCorrelationId.Should().BeNull();
+        harness.TerminalQuery.LastSessionId.Should().Be("missing-session");
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ObserveRun_ShouldReadServiceRunTargetWithCallerScopeOnly()
+    {
+        var harness = new Harness();
+        harness.ServiceRunQuery.ByRunId = BuildServiceRun("scope-1", "service-1", "run-1", "command-1");
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-service-run");
+        var output = await tool.ExecuteAsync("""
+            {
+              "service_run": {
+                "service_id": "service-1",
+                "run_id": "run-1"
+              }
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.ServiceRunQuery.LastScopeId.Should().Be("scope-1");
+        harness.ServiceRunQuery.LastServiceId.Should().Be("service-1");
+        harness.ServiceRunQuery.LastRunId.Should().Be("run-1");
+        harness.ServiceRunQuery.LastCommandId.Should().BeNull();
+        harness.TerminalQuery.LastActorId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+        var result = Read(output);
+        result.GetProperty("run_id").GetString().Should().Be("run-1");
+        result.GetProperty("command_id").GetString().Should().Be("command-1");
+    }
+
+    [Fact]
+    public async Task ObserveRun_ServiceRun_WhenCallerScopeIsUnavailable_ShouldFastFail()
+    {
+        var harness = new Harness();
+        harness.ServiceRunQuery.ByRunId = BuildServiceRun("scope-1", "service-1", "run-1", "command-1");
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-no-scope", scopeId: null);
+        var output = await tool.ExecuteAsync("""
+            {
+              "service_run": {
+                "service_id": "service-1",
+                "run_id": "run-1"
+              }
+            }
+            """);
+
+        ErrorCode(output).Should().Be("caller_scope_unavailable");
+        harness.ServiceRunQuery.LastScopeId.Should().BeNull();
+        harness.TerminalQuery.LastActorId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ObserveRun_ShouldReadWorkflowCurrentStateTargetOnly()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Snapshot = new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor",
+            WorkflowName = "wf-main",
+            LastCommandId = "workflow-command",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 9,
+            LastOutput = "done",
+            LastUpdatedAt = DateTimeOffset.UtcNow,
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-workflow");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_current_state": {
+                "actor_id": "workflow-actor",
+                "command_id": "workflow-command"
+              }
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().Be("workflow-actor");
+        harness.TerminalQuery.LastActorId.Should().BeNull();
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+        var result = Read(output);
+        result.GetProperty("run_id").GetString().Should().Be("workflow-command");
+        result.GetProperty("actor_id").GetString().Should().Be("workflow-actor");
+        result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.Completed));
+    }
+
+    [Fact]
+    public async Task ObserveRun_WorkflowCurrentState_WhenCommandIdIsOmitted_ShouldReturnSnapshotCommandId()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Snapshot = new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor",
+            LastCommandId = "snapshot-command",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-workflow-current");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_current_state": {
+                "actor_id": "workflow-actor"
+              }
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().Be("workflow-actor");
+        harness.TerminalQuery.LastActorId.Should().BeNull();
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+        Read(output).GetProperty("run_id").GetString().Should().Be("snapshot-command");
+    }
+
+    [Fact]
+    public async Task ObserveRun_WorkflowCurrentState_WhenCommandIdDiffers_ShouldNotFallback()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Snapshot = new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor",
+            LastCommandId = "newer-command",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-workflow-stale");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_current_state": {
+                "actor_id": "workflow-actor",
+                "command_id": "expected-command"
+              }
+            }
+            """);
+
+        ErrorCode(output).Should().Be("workflow_current_state_not_found");
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().Be("workflow-actor");
+        harness.TerminalQuery.LastActorId.Should().BeNull();
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ObserveRun_WhenTargetIsMissing_ShouldReturnStructuredError()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-missing-target");
+        var output = await tool.ExecuteAsync("{}");
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+    }
+
+    [Theory]
+    [InlineData(
+        """
+        {
+          "service_run": {
+            "run_id": "run-1"
+          }
+        }
+        """)]
+    [InlineData(
+        """
+        {
+          "gagent_terminal_correlation": {
+            "correlation_id": "correlation-1"
+          }
+        }
+        """)]
+    [InlineData(
+        """
+        {
+          "gagent_terminal_session": {
+            "actor_id": "actor-1"
+          }
+        }
+        """)]
+    [InlineData(
+        """
+        {
+          "workflow_current_state": {
+            "command_id": "command-1"
+          }
+        }
+        """)]
+    public async Task ObserveRun_WhenNestedRequiredFieldIsMissing_ShouldReturnStructuredErrorWithoutFallback(
+        string argumentsJson)
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-nested-missing");
+        var output = await tool.ExecuteAsync(argumentsJson);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        harness.ServiceRunQuery.LastRunId.Should().BeNull();
+        harness.TerminalQuery.LastActorId.Should().BeNull();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
     }
 
     private static bool HasStrictObjectSchema(string schema)
@@ -1114,9 +1539,13 @@ public sealed class AevatarInvocationToolSourceTests
         llmControl!.ModelOverride.Should().Be("model-1");
         llmControl.MaxToolRoundsOverride.Should().Be(4);
         llmControl.UserMemoryPrompt.Should().Be("memory");
+        llmControl.RoutePreference.Should().Be("route-1");
     }
 
-    private static AgentToolContextScope PushContext(string callId, string? scopeId = "scope-1") =>
+    private static AgentToolContextScope PushContext(
+        string callId,
+        string? scopeId = "scope-1",
+        AgentWorkflowRuntimeContext? workflowRuntime = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity("request-1", callId),
             new AgentToolCredentials("access-token", "org-token", "sender-token"),
@@ -1125,7 +1554,9 @@ public sealed class AevatarInvocationToolSourceTests
             new AgentToolSenderBindingContext("binding-1"),
             new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
+            workflowRuntime ?? AgentWorkflowRuntimeContext.Empty,
             AgentSkillRecoveryContext.Empty,
+            null,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external"] = "value",
@@ -1224,7 +1655,6 @@ public sealed class AevatarInvocationToolSourceTests
                 "aevatar_invoke_team" => new InvokeTeamToolSource(CreateDispatcher()),
                 "aevatar_start_workflow" => new StartWorkflowToolSource(CreateDispatcher()),
                 "aevatar_observe_run" => new ObserveRunToolSource(CreateDispatcher()),
-                "aevatar_query_readmodel" => new QueryReadModelToolSource(CreateDispatcher()),
                 _ => throw new ArgumentOutOfRangeException(nameof(toolName), toolName, null),
             };
             var tools = await source.DiscoverToolsAsync();
@@ -1359,6 +1789,7 @@ public sealed class AevatarInvocationToolSourceTests
         public string? LastScopeId { get; private set; }
         public string? LastServiceId { get; private set; }
         public string? LastRunId { get; private set; }
+        public string? LastCommandId { get; private set; }
         public IReadOnlyList<ServiceRunSnapshot> ListResult { get; set; } = [];
         public ServiceRunSnapshot? ByRunId { get; set; }
         public ServiceRunSnapshot? ByCommandId { get; set; }
@@ -1387,8 +1818,13 @@ public sealed class AevatarInvocationToolSourceTests
             string scopeId,
             string serviceId,
             string commandId,
-            CancellationToken ct = default) =>
-            Task.FromResult(ByCommandId);
+            CancellationToken ct = default)
+        {
+            LastScopeId = scopeId;
+            LastServiceId = serviceId;
+            LastCommandId = commandId;
+            return Task.FromResult(ByCommandId);
+        }
     }
 
     private sealed class RecordingTerminalQueryPort : IGAgentRunTerminalQueryPort
@@ -1425,6 +1861,7 @@ public sealed class AevatarInvocationToolSourceTests
         public bool WorkflowActorCurrentStateQueryEnabled => true;
         public WorkflowActorSnapshot? Snapshot { get; set; }
         public IReadOnlyList<WorkflowRunTimelineExportItem> Timeline { get; set; } = [];
+        public string? LastCurrentStateActorId { get; private set; }
 
         public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<WorkflowAgentSummary>>([]);
@@ -1440,8 +1877,11 @@ public sealed class AevatarInvocationToolSourceTests
         public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
             Task.FromResult(new WorkflowCapabilitiesDocument());
 
-        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult(Snapshot);
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
+        {
+            LastCurrentStateActorId = actorId;
+            return Task.FromResult(Snapshot);
+        }
 
         public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default) =>
             Task.FromResult<WorkflowRunReport?>(null);

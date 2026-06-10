@@ -252,6 +252,7 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
     public required Any Payload { get; init; }
     public string? RevisionId { get; init; }
     public ServiceInvocationCaller? Caller { get; init; }
+    public ScheduledServiceInvocationAuthHttpRequest? Auth { get; init; }
 
     public ScheduledDispatchTargetDescriptor ToTarget() =>
         new(
@@ -261,7 +262,71 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
                 EndpointId,
                 Payload,
                 RevisionId,
-                Caller));
+                Caller,
+                Auth?.ToAuth()));
+}
+
+public sealed record ScheduledServiceInvocationAuthHttpRequest
+{
+    public ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest? SenderNyxId { get; init; }
+
+    public ScheduledServiceInvocationAuth ToAuth()
+    {
+        if (SenderNyxId == null)
+            throw new ArgumentException("Sender NyxID credential source is required.", nameof(SenderNyxId));
+
+        return new ScheduledServiceInvocationAuth(SenderNyxId.ToSource());
+    }
+}
+
+public sealed record ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+{
+    public required ScheduledServiceInvocationNyxIdSubjectRefHttpRequest Subject { get; init; }
+    public required string Scope { get; init; }
+
+    public ScheduledServiceInvocationNyxIdCredentialSource ToSource() =>
+        new(NormalizeSubject(Subject), NormalizeRequired(Scope, nameof(Scope)));
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRefHttpRequest? subject)
+    {
+        if (subject == null)
+            throw new ArgumentException("Subject is required.", nameof(Subject));
+
+        return subject.ToSubject();
+    }
+
+    private static string NormalizeRequired(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} is required.", name);
+
+        return value.Trim();
+    }
+}
+
+public sealed record ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
+{
+    public required string Platform { get; init; }
+    public string? Tenant { get; init; }
+    public required string ExternalUserId { get; init; }
+
+    public ScheduledServiceInvocationNyxIdSubjectRef ToSubject() =>
+        new(
+            NormalizeRequired(Platform, nameof(Platform)).ToLowerInvariant(),
+            NormalizeOptional(Tenant),
+            NormalizeRequired(ExternalUserId, nameof(ExternalUserId)));
+
+    private static string NormalizeRequired(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} is required.", name);
+
+        return value.Trim();
+    }
+
+    private static string NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }
 
 public sealed record ScheduledDispatchPreviewHttpRequest

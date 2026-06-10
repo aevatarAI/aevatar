@@ -59,7 +59,7 @@ public static class ProjectionMaterializationRuntimeRegistration
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
                 sp.GetService<ILoggerFactory>(),
-                streams: sp.GetService<IStreamProvider>()),
+                sp.GetService<IStreamForwardingRegistry>()),
                 sp.GetService<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<TRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<

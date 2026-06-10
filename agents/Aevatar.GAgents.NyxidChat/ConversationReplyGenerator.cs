@@ -1,4 +1,3 @@
-using System.Net.Http;
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -159,11 +158,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             throw;
         }
-        catch (Exception ex) when (replyPlan.OwnerFallback is not null && IsRetryableSenderRouteFailure(ex))
+        catch (Exception ex) when (replyPlan.OwnerFallback is not null && LlmOwnerFallbackPolicy.IsRetryable(ex))
         {
             _logger.LogWarning(
                 ex,
-                "Sender LLM route failed; retrying with bot owner LLM config. activity={ActivityId}",
+                "Sender LLM request failed; retrying with bot owner LLM config and no tools. activity={ActivityId}",
                 activity.Id);
 
             var fallbackTools = await BuildTurnToolsAsync(disableTools: true, ct);
@@ -222,40 +221,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             effectiveToolContext,
             initialMessages,
             ResolveMaxToolRounds(replyPlan.PrimaryControl),
-            disableTools);
-    }
-
-    /// <summary>
-    /// Decide whether falling back from sender credentials to owner credentials is worth
-    /// the retry. Programmer errors (Argument*, NullReference, InvalidCast) are not transient
-    /// and would only fail the same way with the owner token while burying the original cause
-    /// behind a second failure. We retry only on infra-shaped failures: network, timeout, JSON
-    /// parsing of upstream errors, and the InvalidOperationException NyxID emits when an
-    /// access token is rejected.
-    /// </summary>
-    private static bool IsRetryableSenderRouteFailure(Exception ex) =>
-        ex is HttpRequestException
-            or TimeoutException
-            or System.Text.Json.JsonException
-            or TaskCanceledException
-            or System.IO.IOException
-        || ex is InvalidOperationException invalid && IsKnownNyxIdRouteFailure(invalid.Message);
-
-    private static bool IsKnownNyxIdRouteFailure(string? message)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-            return false;
-        var lowered = message.ToLowerInvariant();
-        return lowered.Contains("nyxid", StringComparison.Ordinal)
-               || lowered.Contains("binding", StringComparison.Ordinal)
-               || lowered.Contains("scope", StringComparison.Ordinal)
-               || lowered.Contains("token", StringComparison.Ordinal)
-               || lowered.Contains("401", StringComparison.Ordinal)
-               || lowered.Contains("403", StringComparison.Ordinal)
-               || lowered.Contains("not found", StringComparison.Ordinal)
-               || lowered.Contains("revoked", StringComparison.Ordinal)
-               || lowered.Contains("route", StringComparison.Ordinal)
-               || lowered.Contains("proxy", StringComparison.Ordinal);
+            disableTools,
+            replyPlan.OwnerFallbackControl,
+            replyPlan.OwnerFallbackToolContext);
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -560,39 +528,40 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         // sender-owned attempt fails, we retry once with this owner snapshot.
         var senderBindingId = toolContext?.SenderBinding.BindingId?.Trim();
         var disableTools = IsChannelTurn(effective) && string.IsNullOrWhiteSpace(senderBindingId);
-        if (_preferencesStore is not null && !string.IsNullOrWhiteSpace(senderBindingId))
+        if (!string.IsNullOrWhiteSpace(senderBindingId))
         {
             var ownerSnapshot = CreateOwnerFallbackSnapshot(effective);
             ownerFallbackControl = effectiveControl with { SenderNyxIdAccessToken = null };
             ownerFallbackToolContext = ClearSenderBinding(effectiveToolContext);
-            var preferenceResult = await ApplyPreferencesAsync(senderBindingId, effectiveControl, ct);
-            effectiveControl = preferenceResult.Control;
-            var applied = preferenceResult.Application;
-            if (applied.RouteApplied)
+            ownerFallback = ownerSnapshot;
+
+            if (_preferencesStore is not null)
             {
-                if (!string.IsNullOrWhiteSpace(llmControl?.SenderNyxIdAccessToken))
+                var preferenceResult = await ApplyPreferencesAsync(senderBindingId, effectiveControl, ct);
+                effectiveControl = preferenceResult.Control;
+                var applied = preferenceResult.Application;
+                if (applied.RouteApplied)
                 {
-                    var trimmedToken = llmControl.SenderNyxIdAccessToken.Trim();
-                    effectiveControl = effectiveControl with
+                    if (!string.IsNullOrWhiteSpace(llmControl?.SenderNyxIdAccessToken))
                     {
-                        NyxIdAccessToken = trimmedToken,
-                        NyxIdOrgToken = trimmedToken,
-                        SenderNyxIdAccessToken = trimmedToken,
-                    };
-                    ownerFallback = ownerSnapshot;
+                        var trimmedToken = llmControl.SenderNyxIdAccessToken.Trim();
+                        effectiveControl = effectiveControl with
+                        {
+                            NyxIdAccessToken = trimmedToken,
+                            NyxIdOrgToken = trimmedToken,
+                            SenderNyxIdAccessToken = trimmedToken,
+                        };
+                    }
+                    else
+                    {
+                        effective = ownerSnapshot;
+                        effectiveControl = ownerFallbackControl;
+                        effectiveToolContext = ownerFallbackToolContext;
+                        ownerFallback = null;
+                        ownerFallbackControl = null;
+                        ownerFallbackToolContext = null;
+                    }
                 }
-                else
-                {
-                    effective = ownerSnapshot;
-                    effectiveControl = ownerFallbackControl;
-                    effectiveToolContext = ownerFallbackToolContext;
-                    ownerFallbackControl = null;
-                    ownerFallbackToolContext = null;
-                }
-            }
-            else if (applied.AnyApplied)
-            {
-                ownerFallback = ownerSnapshot;
             }
         }
 

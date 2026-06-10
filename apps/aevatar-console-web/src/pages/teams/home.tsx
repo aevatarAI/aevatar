@@ -1,7 +1,9 @@
 import {
   AppstoreOutlined,
   BarsOutlined,
+  EditOutlined,
   PlusOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
@@ -18,7 +20,10 @@ import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
-import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
+import {
+  buildTeamDetailHref,
+  buildTeamStudioHref,
+} from "@/shared/navigation/teamRoutes";
 import { studioApi } from "@/shared/studio/api";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
@@ -68,6 +73,8 @@ type TeamRosterPreview = {
   readonly attentionDetail: string;
   readonly detailHref: string;
   readonly latestRun: ScopeServiceRunSummary | null;
+  readonly membersHref: string;
+  readonly memberQuickAction: TeamMemberQuickAction;
   readonly memberPreviewLabel: string;
   readonly memberPreviewTooltip?: string;
   readonly serviceLabel: string;
@@ -76,6 +83,18 @@ type TeamRosterPreview = {
   readonly teamId: string;
   readonly title: string;
   readonly updatedAt: string | null;
+};
+
+type TeamMemberQuickActionKind =
+  | "create-member"
+  | "edit-entry-member"
+  | "edit-member"
+  | "manage-members";
+
+type TeamMemberQuickAction = {
+  readonly href: string;
+  readonly kind: TeamMemberQuickActionKind;
+  readonly label: string;
 };
 
 function trimOptional(value: string | null | undefined): string {
@@ -564,6 +583,57 @@ function buildTeamRosterPreview(input: {
     )[0];
   const memberCount =
     input.team.memberCount > 0 ? input.team.memberCount : input.members.length;
+  const teamHomeHref = buildScopeHref("/teams", { scopeId: input.scopeId });
+  const entryMemberId = trimOptional(input.team.entryMemberId);
+  const preferredEditMemberId =
+    entryMemberId ||
+    (memberCount === 1 && input.members.length === 1
+      ? trimOptional(input.members[0]?.memberId)
+      : "");
+  const memberQuickAction: TeamMemberQuickAction = entryMemberId
+    ? {
+        href: buildTeamStudioHref({
+          memberId: entryMemberId,
+          mode: "edit-member",
+          returnTo: teamHomeHref,
+          scopeId: input.scopeId,
+          teamId: input.team.teamId,
+        }),
+        kind: "edit-entry-member",
+        label: t("teams.home.actions.editEntryMember", "Edit entry member"),
+      }
+    : preferredEditMemberId
+      ? {
+          href: buildTeamStudioHref({
+            memberId: preferredEditMemberId,
+            mode: "edit-member",
+            returnTo: teamHomeHref,
+            scopeId: input.scopeId,
+            teamId: input.team.teamId,
+          }),
+          kind: "edit-member",
+          label: t("teams.home.actions.editMember", "Edit member"),
+        }
+      : memberCount === 0
+        ? {
+            href: buildTeamStudioHref({
+              mode: "create-member",
+              returnTo: teamHomeHref,
+              scopeId: input.scopeId,
+              teamId: input.team.teamId,
+            }),
+            kind: "create-member",
+            label: t("teams.home.actions.createMember", "Create member"),
+          }
+        : {
+            href: buildTeamDetailHref({
+              scopeId: input.scopeId,
+              tab: "members",
+              teamId: input.team.teamId,
+            }),
+            kind: "manage-members",
+            label: t("teams.home.actions.manageMembers", "Manage members"),
+          };
   const firstMemberLabel = pickMeaningfulLabel(
     sortedMembers[0]?.displayName,
     sortedMembers[0]?.memberId,
@@ -599,6 +669,11 @@ function buildTeamRosterPreview(input: {
     serviceId: primaryMemberPreview?.serviceId || undefined,
     teamId: input.team.teamId,
   });
+  const membersHref = buildTeamDetailHref({
+    scopeId: input.scopeId,
+    tab: "members",
+    teamId: input.team.teamId,
+  });
 
   let attention: TeamOperationalAttention =
     mostImportantMemberPreview?.attention ?? "draft";
@@ -615,6 +690,8 @@ function buildTeamRosterPreview(input: {
     attentionDetail,
     detailHref,
     latestRun,
+    membersHref,
+    memberQuickAction,
     memberPreviewLabel,
     memberPreviewTooltip,
     serviceLabel:
@@ -632,6 +709,93 @@ function buildTeamRosterPreview(input: {
       null,
   };
 }
+
+function renderMemberQuickActionIcon(
+  kind: TeamMemberQuickActionKind,
+): React.ReactNode {
+  switch (kind) {
+    case "create-member":
+      return <PlusOutlined />;
+    case "manage-members":
+      return <BarsOutlined />;
+    case "edit-entry-member":
+    case "edit-member":
+    default:
+      return <EditOutlined />;
+  }
+}
+
+const TeamRosterActionGroup: React.FC<{
+  readonly large?: boolean;
+  readonly preview: TeamRosterPreview;
+}> = ({ large = false, preview }) => {
+  const buttonSize = large ? "large" : "middle";
+  const { token } = theme.useToken();
+  const showViewMembersAction =
+    preview.memberQuickAction.href !== preview.membersHref;
+  const buttonStyle: React.CSSProperties = {
+    borderRadius: 999,
+    fontWeight: 600,
+    paddingInline: large ? 12 : 10,
+  };
+  const renderSeparator = () => (
+    <span
+      aria-hidden="true"
+      style={{
+        alignSelf: "center",
+        background: token.colorBorderSecondary,
+        display: "inline-block",
+        height: large ? 18 : 16,
+        width: 1,
+      }}
+    />
+  );
+
+  return (
+    <Space
+      separator={renderSeparator()}
+      size={large ? 4 : 2}
+      style={{
+        background: token.colorFillQuaternary,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 999,
+        padding: large ? 4 : 3,
+        width: "fit-content",
+      }}
+      wrap
+    >
+      <Button
+        icon={renderMemberQuickActionIcon(preview.memberQuickAction.kind)}
+        onClick={() => history.push(preview.memberQuickAction.href)}
+        size={buttonSize}
+        style={buttonStyle}
+        type="text"
+      >
+        {preview.memberQuickAction.label}
+      </Button>
+      <Button
+        icon={<TeamOutlined />}
+        onClick={() => history.push(preview.detailHref)}
+        size={buttonSize}
+        style={buttonStyle}
+        type="text"
+      >
+        {t("teams.home.actions.viewTeam", "View team")}
+      </Button>
+      {showViewMembersAction ? (
+        <Button
+          icon={<BarsOutlined />}
+          onClick={() => history.push(preview.membersHref)}
+          size={buttonSize}
+          style={buttonStyle}
+          type="text"
+        >
+          {t("teams.home.actions.viewMembers", "View members")}
+        </Button>
+      ) : null}
+    </Space>
+  );
+};
 
 const TeamRosterCard: React.FC<{
   readonly preview: TeamRosterPreview;
@@ -747,14 +911,7 @@ const TeamRosterCard: React.FC<{
         />
       </div>
 
-      <Space wrap>
-        <Button
-          onClick={() => history.push(preview.detailHref)}
-          size="large"
-          type="primary"
-        >
-          {t("pages.teams.home.copy.37", "View team")}</Button>
-      </Space>
+      <TeamRosterActionGroup large preview={preview} />
     </article>
   );
 };
@@ -833,10 +990,9 @@ const TeamRosterRow: React.FC<{
           </Typography.Text>
         </div>
 
-        <Space className="teams-home-roster-row-actions" wrap>
-          <Button onClick={() => history.push(preview.detailHref)} type="primary">
-            {t("pages.teams.home.copy.38", "View team")}</Button>
-        </Space>
+        <div className="teams-home-roster-row-actions">
+          <TeamRosterActionGroup preview={preview} />
+        </div>
       </div>
 
       <div

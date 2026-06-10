@@ -1580,6 +1580,22 @@ describe("TeamDetailPage", () => {
     );
   });
 
+  it("opens Studio create-member mode from the Team members tab action", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "创建成员" }));
+
+    expect(window.location.pathname).toBe("/studio");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("teamId")).toBe("t-alpha");
+    expect(params.get("tab")).toBe("studio");
+    expect(params.get("intent")).toBe("create-member");
+    expect(params.get("returnTo")).toBe("/teams/scope-1/t-alpha?tab=members");
+  });
+
   it("opens Studio create-member mode from an empty Team roster", async () => {
     (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-1",

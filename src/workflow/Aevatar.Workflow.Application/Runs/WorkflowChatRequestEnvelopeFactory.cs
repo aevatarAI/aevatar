@@ -30,8 +30,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         if (command.LlmControl != null)
             chatRequest.LlmControl = ToProto(command.LlmControl);
         chatRequest.CallerCredential = ToProto(command.CallerCredential);
-        if (command.ResumeSeed != null)
-            chatRequest.ResumeSeed = ToProto(command.ResumeSeed);
+        if (command.ForkSeed != null)
+            chatRequest.ForkSeed = ToProto(command.ForkSeed);
 
         var envelope = new EventEnvelope
         {
@@ -81,6 +81,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             ModelOverride = source.ModelOverride ?? string.Empty,
             UserMemoryPrompt = source.UserMemoryPrompt ?? string.Empty,
             RoutePreference = source.RoutePreference ?? string.Empty,
+            SenderNyxIdAccessToken = source.SenderNyxIdAccessToken ?? string.Empty,
         };
         if (source.MaxToolRoundsOverride.HasValue)
             payload.MaxToolRoundsOverride = source.MaxToolRoundsOverride.Value;
@@ -100,34 +101,17 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         };
     }
 
-    private static Aevatar.Workflow.Abstractions.WorkflowRunResumeSeed ToProto(
-        WorkflowChatRunResumeSeed source)
+    private static Aevatar.Workflow.Abstractions.WorkflowRunForkSeed ToProto(
+        WorkflowChatRunForkSeed source)
     {
-        var payload = new Aevatar.Workflow.Abstractions.WorkflowRunResumeSeed
+        var payload = new Aevatar.Workflow.Abstractions.WorkflowRunForkSeed
         {
-            SourceRunId = source.SourceRunId ?? string.Empty,
-            StartAtStepId = source.StartAtStepId ?? string.Empty,
-            Attempt = source.Attempt,
+            SourceRunId = Normalize(source.SourceRunId),
+            StartAtStepId = Normalize(source.StartAtStepId),
+            Attempt = Math.Max(0, source.Attempt),
         };
         AppendVariables(payload.Variables, source.Variables);
         return payload;
-    }
-
-    private static void AppendVariables(
-        Google.Protobuf.Collections.MapField<string, string> destination,
-        IReadOnlyDictionary<string, string>? source)
-    {
-        if (source == null || source.Count == 0)
-            return;
-
-        foreach (var (key, value) in source)
-        {
-            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
-            if (normalizedKey.Length == 0)
-                continue;
-
-            destination[normalizedKey] = value ?? string.Empty;
-        }
     }
 
     private static void AppendMetadata(
@@ -150,6 +134,23 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         }
     }
 
+    private static void AppendVariables(
+        Google.Protobuf.Collections.MapField<string, string> destination,
+        IReadOnlyDictionary<string, string>? source)
+    {
+        if (source == null || source.Count == 0)
+            return;
+
+        foreach (var (key, value) in source)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            if (normalizedKey.Length == 0)
+                continue;
+
+            destination[normalizedKey] = value ?? string.Empty;
+        }
+    }
+
     private static bool IsReservedMetadataKey(string key) =>
         IsScopeMetadataKey(key) ||
         string.Equals(key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal);
@@ -158,4 +159,6 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         string.Equals(key, "scope_id", StringComparison.Ordinal) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.Ordinal);
 
+    private static string Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }

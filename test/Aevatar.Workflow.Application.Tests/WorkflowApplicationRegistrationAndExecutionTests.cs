@@ -8,6 +8,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -192,10 +193,14 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(IWorkflowChatRunInteractionPort) &&
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowForkRunService) &&
-            x.ImplementationType == typeof(WorkflowForkRunService));
+            x.ServiceType == typeof(ICommandTargetResolver<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowForkRunCommandTargetResolver));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(Func<IWorkflowForkRunService>));
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowForkRunCommandDispatchService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandTargetEnvelopeFactory<WorkflowForkRunCommand, WorkflowForkRunCommandTarget>) &&
+            x.ImplementationType == typeof(WorkflowForkRunCommandEnvelopeFactory));
         services.Should().Contain(x =>
             x.ServiceType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
@@ -214,6 +219,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(IWorkflowRunForkSeedQueryPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>));
     }
 
     [Fact]
@@ -389,7 +399,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldCarryResumeSeed()
+    public void EnvelopeFactory_ShouldCarryForkSeed()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -398,7 +408,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "resume-input",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
-            ResumeSeed: new WorkflowChatRunResumeSeed(
+            ForkSeed: new WorkflowChatRunForkSeed(
                 "source-run",
                 "step-b",
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -415,10 +425,44 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
 
         request.Prompt.Should().Be("resume-input");
-        request.ResumeSeed.SourceRunId.Should().Be("source-run");
-        request.ResumeSeed.StartAtStepId.Should().Be("step-b");
-        request.ResumeSeed.Variables.Should().Contain("input", "seed-input");
-        request.ResumeSeed.Variables.Should().Contain("step-a", "alpha");
+        request.ForkSeed.SourceRunId.Should().Be("source-run");
+        request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.Variables.Should().Contain("input", "seed-input");
+        request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldCarryForkSeedOnRequestLevel()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "resume-input",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ForkSeed: new WorkflowChatRunForkSeed(
+                "source-run",
+                "step-b",
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["input"] = "seed-input",
+                    ["step-a"] = "alpha",
+                },
+                Attempt: 2));
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+
+        request.ForkSeed.SourceRunId.Should().Be("source-run");
+        request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.Attempt.Should().Be(2);
+        request.ForkSeed.Variables.Should().Contain("input", "seed-input");
+        request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
     }
 
     [Fact]
@@ -550,4 +594,5 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             new Dictionary<string, string>()));
         whiteSpaceSession.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-3");
     }
+
 }

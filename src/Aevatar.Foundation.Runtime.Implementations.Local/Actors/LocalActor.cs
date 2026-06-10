@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Deduplication;
@@ -9,12 +10,17 @@ namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 
 public sealed class LocalActor : IActor
 {
-    private readonly SemaphoreSlim _mailbox = new(1, 1);
+    private readonly Channel<MailboxWorkItem> _mailbox = Channel.CreateUnbounded<MailboxWorkItem>(new UnboundedChannelOptions
+    {
+        SingleReader = true,
+        SingleWriter = false,
+    });
     private readonly HashSet<string> _childrenIds = [];
     private readonly IStreamProvider _streams;
     private readonly ILogger _logger;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private readonly IEventDeduplicator? _deduplicator;
+    private Task? _mailboxPump;
     private IAsyncDisposable? _selfSubscription;
     private string? _parentId;
 
@@ -41,6 +47,7 @@ public sealed class LocalActor : IActor
 
     public async Task ActivateAsync(CancellationToken ct = default)
     {
+        _mailboxPump = ProcessMailboxAsync();
         // Subscribe to self stream (handle Self events and Up events from children).
         var selfStream = _streams.GetStream(Id);
         _selfSubscription = await selfStream.SubscribeAsync<EventEnvelope>(async envelope =>
@@ -107,12 +114,38 @@ public sealed class LocalActor : IActor
     public async Task DeactivateAsync(CancellationToken ct = default)
     {
         if (_selfSubscription != null) { await _selfSubscription.DisposeAsync(); _selfSubscription = null; }
+        _mailbox.Writer.TryComplete();
+        if (_mailboxPump != null)
+            await _mailboxPump.WaitAsync(ct);
         await Agent.DeactivateAsync(ct);
         TriggerDeactivationHook();
     }
 
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
         EnqueueAsync(envelope, propagateFailure: true);
+
+    internal void AcceptDispatchedEnvelope(EventEnvelope envelope) =>
+        ObserveDispatchedEnvelopeAsync(EnqueueAsync(envelope));
+
+    private void ObserveDispatchedEnvelopeAsync(Task dispatchTask)
+    {
+        if (dispatchTask.IsCompletedSuccessfully)
+            return;
+
+        _ = dispatchTask.ContinueWith(
+            static (task, state) =>
+            {
+                var actor = (LocalActor)state!;
+                actor._logger.LogError(
+                    task.Exception,
+                    "LocalActor {Id} failed to accept dispatched envelope",
+                    actor.Id);
+            },
+            this,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
 
     public Task<string?> GetParentIdAsync() => Task.FromResult(_parentId);
     public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
@@ -138,44 +171,66 @@ public sealed class LocalActor : IActor
 
     // ─── Mailbox ───
 
-    private async Task EnqueueAsync(EventEnvelope envelope, bool propagateFailure = false)
+    private Task EnqueueAsync(EventEnvelope envelope, bool propagateFailure = false)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_mailbox.Writer.TryWrite(new MailboxWorkItem(envelope, propagateFailure, completion)))
+            throw new InvalidOperationException($"LocalActor {Id} mailbox is closed.");
+
+        return completion.Task;
+    }
+
+    private async Task ProcessMailboxAsync()
+    {
+        await foreach (var item in _mailbox.Reader.ReadAllAsync())
+            await ProcessMailboxItemAsync(item);
+    }
+
+    private async Task ProcessMailboxItemAsync(MailboxWorkItem item)
     {
         EventHandleScope scope = default;
         var scopeCreated = false;
-        await _mailbox.WaitAsync();
         try
         {
             if (_deduplicator != null &&
-                RuntimeEnvelopeDeduplication.TryBuildDedupKey(Id, envelope, out var dedupKey) &&
+                RuntimeEnvelopeDeduplication.TryBuildDedupKey(Id, item.Envelope, out var dedupKey) &&
                 !await _deduplicator.TryRecordAsync(dedupKey))
             {
                 _logger.LogDebug(
                     "LocalActor {Id} dropped duplicate envelope {EnvelopeId} with dedup key {DedupKey}",
                     Id,
-                    envelope.Id,
+                    item.Envelope.Id,
                     dedupKey);
+                item.Completion.SetResult();
                 return;
             }
 
-            scope = EventHandleScope.Begin(_logger, Id, envelope, Agent.GetType().FullName ?? Agent.GetType().Name);
+            scope = EventHandleScope.Begin(_logger, Id, item.Envelope, Agent.GetType().FullName ?? Agent.GetType().Name);
             scopeCreated = true;
-            await Agent.HandleEventAsync(envelope);
+            await Agent.HandleEventAsync(item.Envelope);
+            item.Completion.SetResult();
         }
         catch (Exception ex)
         {
             if (scopeCreated)
                 scope.MarkError(ex);
             _logger.LogError(ex, "LocalActor {Id} failed to handle event", Id);
-            if (propagateFailure)
-                throw;
+            if (item.PropagateFailure)
+                item.Completion.SetException(ex);
+            else
+                item.Completion.SetResult();
         }
         finally
         {
             if (scopeCreated)
                 scope.Dispose();
-            _mailbox.Release();
         }
     }
+
+    private sealed record MailboxWorkItem(
+        EventEnvelope Envelope,
+        bool PropagateFailure,
+        TaskCompletionSource Completion);
 
     private void TriggerDeactivationHook()
     {

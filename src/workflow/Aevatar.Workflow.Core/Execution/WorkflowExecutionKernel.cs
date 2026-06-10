@@ -122,27 +122,30 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.Usage = new WorkflowUsageMetricsState();
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
-        var resumeSeed = evt.ResumeSeed;
-        var hasResumeSeedStart = resumeSeed != null && !string.IsNullOrWhiteSpace(resumeSeed.StartAtStepId);
-        if (hasResumeSeedStart)
+        if (evt.WorkflowRuntime != null)
         {
-            foreach (var (key, value) in resumeSeed!.Variables)
-                state.Variables[key] = value ?? string.Empty;
+            await _stateHost.UpdateExecutionContextAsync(
+                WorkflowRunExecutionContextStateAccess.BuildWorkflowRuntimeDelta(evt.WorkflowRuntime),
+                ct);
         }
 
+        var forkSeed = evt.ForkSeed;
+        var hasForkSeedStart = forkSeed != null && !string.IsNullOrWhiteSpace(forkSeed.StartAtStepId);
+        if (hasForkSeedStart)
+            MergeStartParametersIntoVariables(state.Variables, forkSeed!.Variables);
         state.Variables["input"] = evt.Input ?? string.Empty;
         MirrorRunUsageVariables(state);
         MergeStartParametersIntoVariables(state.Variables, evt.Parameters);
         await SaveStateAsync(state, ctx, ct);
 
-        var entry = hasResumeSeedStart
-            ? _workflow.Steps.FirstOrDefault(s => string.Equals(s.Id, resumeSeed!.StartAtStepId, StringComparison.Ordinal))
+        var entry = hasForkSeedStart
+            ? _workflow.GetStep(forkSeed!.StartAtStepId)
             : _workflow.Steps.FirstOrDefault();
         if (entry == null)
         {
             await CleanupRunAsync(state, ctx, ct);
-            var error = hasResumeSeedStart
-                ? $"resume start step '{resumeSeed!.StartAtStepId}' not found in workflow"
+            var error = hasForkSeedStart
+                ? $"fork seed start step '{forkSeed!.StartAtStepId}' was not found"
                 : "无步骤";
             await PublishWorkflowCompletedAsync(
                 ctx,
@@ -157,10 +160,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             return;
         }
 
-        var startInput = hasResumeSeedStart && resumeSeed!.Variables.TryGetValue("input", out var seedInput)
-            ? seedInput
+        var startInput = hasForkSeedStart && forkSeed!.Variables.TryGetValue("input", out var seedInput)
+            ? seedInput ?? string.Empty
             : evt.Input ?? string.Empty;
-        await DispatchStepAsync(entry, startInput ?? string.Empty, state, ctx, ct);
+        await DispatchStepAsync(entry, startInput, state, ctx, ct);
     }
 
     private async Task HandleTimeoutFiredAsync(

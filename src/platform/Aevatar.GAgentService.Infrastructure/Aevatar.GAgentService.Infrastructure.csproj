@@ -15,6 +15,9 @@
     <ProjectReference Include="..\..\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\agents\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />

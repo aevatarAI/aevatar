@@ -261,8 +261,29 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 Identity = invocation.Identity.Clone(),
                 Payload = invocation.Payload.Clone(),
                 Caller = invocation.Caller?.Clone(),
+                Auth = NormalizeServiceInvocationAuth(invocation.Auth),
             },
         };
+    }
+
+    private static ScheduledServiceInvocationAuth? NormalizeServiceInvocationAuth(
+        ScheduledServiceInvocationAuth? auth)
+    {
+        if (auth == null)
+            return null;
+        if (auth.SenderNyxId == null)
+            throw new ArgumentException("Service invocation sender NyxID credential source is required.", nameof(auth));
+
+        var source = auth.SenderNyxId;
+        if (source.Subject == null)
+            throw new ArgumentException("Service invocation sender NyxID subject is required.", nameof(auth));
+
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef(
+                NormalizeRequired(source.Subject.Platform, nameof(source.Subject.Platform)),
+                NormalizeOptional(source.Subject.Tenant),
+                NormalizeRequired(source.Subject.ExternalUserId, nameof(source.Subject.ExternalUserId))),
+            NormalizeRequired(source.Scope, nameof(source.Scope))));
     }
 
     private static void ValidateSchedule(ScheduledDispatchConfiguration configuration)

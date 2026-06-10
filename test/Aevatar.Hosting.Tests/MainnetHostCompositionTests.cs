@@ -169,7 +169,6 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is InvokeTeamToolSource);
         workspace.Sources.Should().Contain(source => source is StartWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source is ObserveRunToolSource);
-        workspace.Sources.Should().Contain(source => source is QueryReadModelToolSource);
         workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
         workspace.Sources.Should().Contain(source => source is ChannelInteractiveReplyToolSource);
         workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);
@@ -188,7 +187,6 @@ public sealed class MainnetHostCompositionTests
             .Equal(workspace.Sources.Select(static source => source.GetType()));
         larkSelfNotify.Sources.Should().Contain(source => source is LarkAgentToolSource);
         larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
-        larkSelfNotify.Sources.Should().Contain(source => source is QueryReadModelToolSource);
 
         var nyxIdConnectedServices = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.NyxIdConnectedServices });
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
