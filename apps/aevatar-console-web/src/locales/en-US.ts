@@ -329,6 +329,11 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.cache.key.placeholder': '$input',
   'shared.studio.nodeConfiguration.cache.ttl.label': 'TTL seconds',
   'shared.studio.nodeConfiguration.cache.ttl.placeholder': '600',
+  'shared.studio.nodeConfiguration.checkpoint.name.label': 'Checkpoint name',
+  'shared.studio.nodeConfiguration.checkpoint.name.placeholder': 'before_publish',
+  'shared.studio.nodeConfiguration.conditional.condition.label': 'Condition',
+  'shared.studio.nodeConfiguration.conditional.condition.placeholder':
+    'eq($input, "ok")',
   'shared.studio.nodeConfiguration.connectorCall.connector.label': 'Connector',
   'shared.studio.nodeConfiguration.connectorCall.connector.placeholder':
     'Configured connector name',
@@ -350,11 +355,34 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.connectorCall.timeout.placeholder': '10000',
   'shared.studio.nodeConfiguration.delay.duration.label': 'Duration ms',
   'shared.studio.nodeConfiguration.delay.duration.placeholder': '1000',
+  'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.description':
+    'Optional input passed into the generated workflow after YAML extraction.',
+  'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.label':
+    'Original input',
+  'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.placeholder':
+    '$input',
   'shared.studio.nodeConfiguration.emit.eventType.label': 'Event type',
   'shared.studio.nodeConfiguration.emit.eventType.placeholder':
     'workflow.completed',
   'shared.studio.nodeConfiguration.emit.payload.label': 'Payload',
   'shared.studio.nodeConfiguration.emit.payload.placeholder': '$input',
+  'shared.studio.nodeConfiguration.evaluate.criteria.label': 'Criteria',
+  'shared.studio.nodeConfiguration.evaluate.criteria.placeholder':
+    'correctness and clarity',
+  'shared.studio.nodeConfiguration.evaluate.onBelow.label':
+    'Below threshold branch',
+  'shared.studio.nodeConfiguration.evaluate.onBelow.placeholder': 'rewrite',
+  'shared.studio.nodeConfiguration.evaluate.scale.label': 'Scale',
+  'shared.studio.nodeConfiguration.evaluate.scale.placeholder': '1-5',
+  'shared.studio.nodeConfiguration.evaluate.threshold.label': 'Threshold',
+  'shared.studio.nodeConfiguration.evaluate.threshold.placeholder': '4',
+  'shared.studio.nodeConfiguration.foreach.delimiter.label': 'Delimiter',
+  'shared.studio.nodeConfiguration.foreach.delimiter.placeholder': '\\n---\\n',
+  'shared.studio.nodeConfiguration.foreach.subStepType.label': 'Item step',
+  'shared.studio.nodeConfiguration.foreach.subTargetRole.label':
+    'Item target role',
+  'shared.studio.nodeConfiguration.foreach.subTargetRole.placeholder':
+    'assistant',
   'shared.studio.nodeConfiguration.guard.check.label': 'Check',
   'shared.studio.nodeConfiguration.guard.check.option.contains':
     'Contains keyword',
@@ -387,9 +415,42 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.llmCall.instruction.label': 'Instruction',
   'shared.studio.nodeConfiguration.llmCall.instruction.placeholder':
     'Tell the role what this step should do.',
+  'shared.studio.nodeConfiguration.mapReduce.delimiter.label': 'Delimiter',
+  'shared.studio.nodeConfiguration.mapReduce.delimiter.placeholder': '\\n---\\n',
+  'shared.studio.nodeConfiguration.mapReduce.mapStepType.label': 'Map step',
+  'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.label':
+    'Map target role',
+  'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.placeholder':
+    'mapper',
+  'shared.studio.nodeConfiguration.mapReduce.reducePromptPrefix.label':
+    'Reduce instruction',
+  'shared.studio.nodeConfiguration.mapReduce.reducePromptPrefix.placeholder':
+    'Merge these chunk summaries:',
+  'shared.studio.nodeConfiguration.mapReduce.reduceStepType.label':
+    'Reduce step',
+  'shared.studio.nodeConfiguration.mapReduce.reduceTargetRole.label':
+    'Reduce target role',
+  'shared.studio.nodeConfiguration.mapReduce.reduceTargetRole.placeholder':
+    'reducer',
   'shared.studio.nodeConfiguration.option.onFailure.branch': 'Go to a branch',
   'shared.studio.nodeConfiguration.option.onFailure.fail': 'Fail the run',
   'shared.studio.nodeConfiguration.option.onFailure.skip': 'Skip this step',
+  'shared.studio.nodeConfiguration.parallel.count.label': 'Parallel count',
+  'shared.studio.nodeConfiguration.parallel.count.placeholder': '3',
+  'shared.studio.nodeConfiguration.parallel.voteStepType.label': 'Vote step',
+  'shared.studio.nodeConfiguration.parallel.workers.label': 'Workers',
+  'shared.studio.nodeConfiguration.parallel.workers.placeholder':
+    'agent_a,agent_b,agent_c',
+  'shared.studio.nodeConfiguration.race.count.label': 'Winner count',
+  'shared.studio.nodeConfiguration.race.count.placeholder': '2',
+  'shared.studio.nodeConfiguration.race.workers.label': 'Workers',
+  'shared.studio.nodeConfiguration.race.workers.placeholder':
+    'fast_model,cheap_model',
+  'shared.studio.nodeConfiguration.reflect.criteria.label': 'Criteria',
+  'shared.studio.nodeConfiguration.reflect.criteria.placeholder':
+    'accuracy and conciseness',
+  'shared.studio.nodeConfiguration.reflect.maxRounds.label': 'Max rounds',
+  'shared.studio.nodeConfiguration.reflect.maxRounds.placeholder': '3',
   'shared.studio.nodeConfiguration.retrieveFacts.query.label': 'Query',
   'shared.studio.nodeConfiguration.retrieveFacts.query.placeholder':
     'What facts should this step retrieve?',
@@ -429,6 +490,12 @@ const enUSMessages = {
     'Workflow call',
   'shared.studio.nodeConfiguration.stepType.option.workflowYamlValidate':
     'Workflow YAML validation',
+  'shared.studio.nodeConfiguration.switch.on.description':
+    'Value matched against branch keys such as bug, feature, or _default.',
+  'shared.studio.nodeConfiguration.switch.on.label': 'Switch on',
+  'shared.studio.nodeConfiguration.switch.on.placeholder': '$input',
+  'shared.studio.nodeConfiguration.toolCall.tool.label': 'Tool',
+  'shared.studio.nodeConfiguration.toolCall.tool.placeholder': 'web_search',
   'shared.studio.nodeConfiguration.transform.operation.label': 'Operation',
   'shared.studio.nodeConfiguration.transform.operation.option.count':
     'Count lines',
@@ -454,6 +521,12 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder': 'continue',
   'shared.studio.nodeConfiguration.waitSignal.timeout.label': 'Timeout ms',
   'shared.studio.nodeConfiguration.waitSignal.timeout.placeholder': '60000',
+  'shared.studio.nodeConfiguration.while.condition.label': 'Condition',
+  'shared.studio.nodeConfiguration.while.condition.placeholder':
+    'lt(iteration, 5)',
+  'shared.studio.nodeConfiguration.while.maxIterations.label': 'Max iterations',
+  'shared.studio.nodeConfiguration.while.maxIterations.placeholder': '5',
+  'shared.studio.nodeConfiguration.while.step.label': 'Loop step',
   'shared.studio.nodeConfiguration.workflowCall.lifecycle.label': 'Lifecycle',
   'shared.studio.nodeConfiguration.workflowCall.lifecycle.option.inline':
     'Inline call',

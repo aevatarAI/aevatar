@@ -17,6 +17,7 @@ export {
   applyStudioNodeConfigurationValuesWithValidation,
   formatRawStudioNodeConfiguration,
   getStudioNodeConfigurationSchema,
+  hasStudioNodeConfigurationSchema,
   readStudioNodeConfigurationValues,
 } from './nodeConfigFieldSchemas';
 export type {

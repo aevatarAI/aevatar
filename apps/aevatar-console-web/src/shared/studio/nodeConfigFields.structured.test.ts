@@ -2,12 +2,128 @@ import {
   applyRawStudioNodeConfiguration,
   applyStudioNodeConfigurationValues,
   applyStudioNodeConfigurationValuesWithValidation,
+  formatNodeConfigFieldCopy,
   formatRawStudioNodeConfiguration,
   getStudioNodeConfigurationSchema,
+  hasStudioNodeConfigurationSchema,
   readStudioNodeConfigurationValues,
 } from './nodeConfigFields';
+import { STUDIO_GRAPH_CATEGORIES } from './graph';
 
 describe('studio node configuration semantics', () => {
+  it('keeps every supported authoring step explicitly covered by the structured editor', () => {
+    const supportedStepTypes = STUDIO_GRAPH_CATEGORIES.flatMap(
+      (category) => category.items,
+    );
+    const intentionallyEmptySchemaStepTypes = new Set([
+      'vote',
+      'workflow_yaml_validate',
+    ]);
+
+    expect(
+      supportedStepTypes.filter(
+        (stepType) => !hasStudioNodeConfigurationSchema(stepType),
+      ),
+    ).toEqual([]);
+
+    for (const stepType of supportedStepTypes) {
+      const schema = getStudioNodeConfigurationSchema(stepType);
+      if (intentionallyEmptySchemaStepTypes.has(stepType)) {
+        expect(schema.fields).toEqual([]);
+      } else {
+        expect(schema.fields.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('keeps structured field copy valid for runtime formatting', () => {
+    const supportedStepTypes = STUDIO_GRAPH_CATEGORIES.flatMap(
+      (category) => category.items,
+    );
+
+    expect(() => {
+      for (const stepType of supportedStepTypes) {
+        const schema = getStudioNodeConfigurationSchema(stepType);
+        for (const field of schema.fields) {
+          formatNodeConfigFieldCopy(field.label);
+          if (field.description) {
+            formatNodeConfigFieldCopy(field.description);
+          }
+          if (field.placeholder) {
+            formatNodeConfigFieldCopy(field.placeholder);
+          }
+          for (const option of field.options ?? []) {
+            formatNodeConfigFieldCopy(option.label);
+          }
+        }
+      }
+    }).not.toThrow();
+  });
+
+  it('edits advanced control and composition node fields through canonical parameters', () => {
+    expect(
+      applyStudioNodeConfigurationValues(
+        'conditional',
+        { condition: 'urgent' },
+        { condition: 'approved' },
+      ),
+    ).toEqual({ condition: 'approved' });
+
+    expect(
+      applyStudioNodeConfigurationValues(
+        'while',
+        {
+          condition: '${lt(iteration, 5)}',
+          max_iterations: '5',
+          step: 'llm_call',
+        },
+        {
+          condition: '${lt(iteration, 3)}',
+          maxIterations: '3',
+          step: 'transform',
+        },
+      ),
+    ).toEqual({
+      condition: '${lt(iteration, 3)}',
+      max_iterations: '3',
+      step: 'transform',
+    });
+
+    expect(
+      applyStudioNodeConfigurationValues(
+        'map_reduce',
+        {
+          delimiter: '\\n---\\n',
+          map_step_type: 'llm_call',
+          reduce_step_type: 'llm_call',
+        },
+        {
+          delimiter: '\\n###\\n',
+          mapStepType: 'transform',
+          mapTargetRole: 'mapper',
+          reducePromptPrefix: 'Merge:',
+          reduceStepType: 'llm_call',
+          reduceTargetRole: 'reducer',
+        },
+      ),
+    ).toEqual({
+      delimiter: '\\n###\\n',
+      map_step_type: 'transform',
+      map_target_role: 'mapper',
+      reduce_prompt_prefix: 'Merge:',
+      reduce_step_type: 'llm_call',
+      reduce_target_role: 'reducer',
+    });
+  });
+
+  it('keeps no-parameter steps intentionally empty while preserving raw JSON editing', () => {
+    expect(getStudioNodeConfigurationSchema('vote').fields).toEqual([]);
+    expect(getStudioNodeConfigurationSchema('workflow_yaml_validate').fields).toEqual([]);
+    expect(applyRawStudioNodeConfiguration('vote', '{ "k": "2" }')).toEqual({
+      k: '2',
+    });
+  });
+
   it('presents llm_call prompt_prefix as an Instruction field while preserving runtime parameters', () => {
     const schema = getStudioNodeConfigurationSchema('llm_call');
     const values = readStudioNodeConfigurationValues('llm_call', {
