@@ -36,9 +36,24 @@ public static partial class ServiceEndpoints
         app.MapScopeWorkflowCapabilityEndpoints();
         app.MapScopeScriptCapabilityEndpoints();
         app.MapScopeGAgentCapabilityEndpoints();
+        app.MapScheduledDispatchEndpoints();
+        return app;
+    }
+
+    public static IEndpointRouteBuilder MapScheduledDispatchEndpoints(this IEndpointRouteBuilder app)
+    {
+        if (HasRoute(app, "/api/schedules"))
+            return app;
+
         ScheduledDispatchEndpoints.Map(app.MapGroup("/api"));
         return app;
     }
+
+    private static bool HasRoute(IEndpointRouteBuilder app, string routePattern) =>
+        app.DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Any(x => string.Equals(x.RoutePattern.RawText, routePattern, StringComparison.Ordinal));
 
     private static async Task<IResult> HandleCreateServiceAsync(
         HttpContext http,

@@ -21,6 +21,7 @@ using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Workflows;
+using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.Capabilities;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
@@ -113,21 +114,30 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void MapWorkflowCapabilityEndpoints_WhenScheduleDependenciesAreMissing_ShouldSkipScheduleRoutes()
+    public void AddAevatarPlatform_ShouldMapUnifiedScheduleRoutesWithoutWorkflowScheduleRoutes()
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddLogging();
-        builder.Services.AddWorkflowCapability(new ConfigurationBuilder().Build());
+
+        builder.AddAevatarPlatform(options =>
+        {
+            options.EnableAIFeatures = false;
+            options.EnableScriptingCapability = false;
+        });
         var app = builder.Build();
 
-        app.MapWorkflowCapabilityEndpoints();
+        app.MapAevatarCapabilities();
 
-        ((IEndpointRouteBuilder)app).DataSources
+        var routes = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
             .OfType<RouteEndpoint>()
             .Select(x => x.RoutePattern.RawText)
-            .Should()
-            .NotContain(route => route != null && route.Contains("workflow-schedules", StringComparison.Ordinal));
+            .ToArray();
+
+        routes.Should().Contain("/api/schedules");
+        routes.Should().Contain("/api/schedules/{scheduleId}");
+        routes.Should().NotContain(route =>
+            route != null && route.Contains("workflow-schedules", StringComparison.Ordinal));
     }
 
     [Fact]

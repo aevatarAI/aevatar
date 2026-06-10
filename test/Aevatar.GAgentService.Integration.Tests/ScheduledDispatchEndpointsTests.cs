@@ -140,6 +140,7 @@ public sealed class ScheduledDispatchEndpointsTests
         chatRequest.Prompt.Should().Be("run workflow");
         chatRequest.SessionId.Should().Be("session-1");
         configuration.Target.ServiceInvocation.RevisionId.Should().Be("rev-1");
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         configuration.Enabled.Should().BeFalse();
     }
 

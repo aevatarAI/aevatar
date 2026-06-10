@@ -1,6 +1,8 @@
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgentService.Hosting.DependencyInjection;
+using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Hosting;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Workflow.Extensions.Maker;
@@ -90,7 +92,12 @@ public static class AevatarPlatformHostBuilderExtensions
                     return AevatarHealthContributorResult.Healthy("Workflow graph read model is reachable.");
                 },
             });
+            builder.Services.AddScheduledDispatchCapability(builder.Configuration);
             builder.AddWorkflowCapabilityBundle();
+            builder.AddAevatarCapability(
+                "workflow-schedules",
+                static (_, _) => { },
+                static app => app.MapScheduledDispatchEndpoints());
         }
 
         if (options.EnableScriptingCapability)
