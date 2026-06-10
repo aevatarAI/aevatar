@@ -3600,6 +3600,68 @@ describe("StudioPage", () => {
     expect(studioApi.getMember).toHaveBeenCalledWith("scope-1", "workspace-demo");
   });
 
+  it("resolves workflow member display names to stable draft ids before loading drafts", async () => {
+    mockStudioMembers = [
+      {
+        ...mockStudioMembers[0],
+        memberId: "untitled-member",
+        displayName: "Untitled member",
+        publishedServiceId: "",
+        lastBoundRevisionId: null,
+      },
+    ];
+    mockWorkflowSummaries = [
+      {
+        ...mockWorkflowSummaries[0],
+        workflowId: "untitled-member",
+        name: "Untitled member",
+        fileName: "untitled-member.yaml",
+        filePath: "scope://scope-1/untitled-member.yaml",
+      },
+    ];
+    mockWorkflowFile = {
+      ...mockWorkflowFile,
+      workflowId: "untitled-member",
+      name: "Untitled member",
+      fileName: "untitled-member.yaml",
+      filePath: "scope://scope-1/untitled-member.yaml",
+      yaml: "name: Untitled member\nsteps: []\n",
+      document: {
+        ...mockParsedDocument,
+        name: "Untitled member",
+      },
+    };
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValue(mockWorkflowSummaries);
+    (studioApi.getWorkflow as jest.Mock).mockImplementation(
+      async (workflowId: string) => {
+        if (workflowId !== "untitled-member") {
+          throw new Error(`Unexpected workflow id: ${workflowId}`);
+        }
+
+        return mockWorkflowFile;
+      }
+    );
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&member=member%3Auntitled-member&step=bind&tab=bindings"
+    );
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(studioApi.getWorkflow).toHaveBeenCalledWith(
+        "untitled-member",
+        "scope-1"
+      );
+      expect(studioApi.getWorkflow).not.toHaveBeenCalledWith(
+        "Untitled member",
+        "scope-1"
+      );
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBe("member:untitled-member");
+      expect(searchParams.get("focus")).toBe("workflow:untitled-member");
+    });
+  });
+
   it("canonicalizes a legacy service member link to the real backend member identity", async () => {
     renderStudioPage(
       "/studio?scopeId=scope-1&memberId=default&step=invoke&tab=invoke"
