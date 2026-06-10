@@ -1,9 +1,3 @@
-// ─────────────────────────────────────────────────────────────
-// UseSkillTool — 统一技能调用工具
-// LLM 通过此工具调用任何技能（本地或远程）
-// 学习 Claude Code SkillTool 模式：单一入口 + 懒加载
-// ─────────────────────────────────────────────────────────────
-
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -14,12 +8,13 @@ using Aevatar.GAgentService.Abstractions.Ports;
 namespace Aevatar.AI.ToolProviders.Skills;
 
 /// <summary>
-/// 统一技能调用工具。替代散装的 skill_xxx 工具和 ornn_use_skill 工具。
-/// LLM 调用 use_skill(skill="名称") → 返回技能指令内容。
+/// Unified skill loading tool for local and remote skills.
 /// </summary>
 // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
-//   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
-//   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
+//   Old pattern: SkillRegistry mixed local and remote registrations and cached remote skills
+//   in process memory for five minutes, breaking read/write separation and user-token isolation.
+//   New principle: use a local-only LocalSkillCatalog; every remote use_skill call fetches
+//   through IRemoteSkillFetcher with the current token and does not cache process facts.
 public sealed class UseSkillTool : IAgentTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
@@ -95,12 +90,14 @@ public sealed class UseSkillTool : IAgentTool
                 status: "error",
                 text: BuildErrorWithAvailableSkills("Error: skill name is required."));
 
-        // ─── 查找技能 ───
+        // Resolve the requested skill.
         SkillDefinition? skill = null;
 
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
-        //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
-        //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
+        //   Old pattern: SkillRegistry mixed local and remote registrations and cached remote skills
+        //   in process memory for five minutes, breaking read/write separation and user-token isolation.
+        //   New principle: use a local-only LocalSkillCatalog; every remote use_skill call fetches
+        //   through IRemoteSkillFetcher with the current token and does not cache process facts.
         if (_localCatalog.TryGet(skillName, out skill) && skill != null)
             return await BuildLoadResultAsync(
                 skillName: skill.Name,
@@ -117,7 +114,20 @@ public sealed class UseSkillTool : IAgentTool
             var token = AgentToolRequestContext.NyxIdAccessToken;
             if (!string.IsNullOrWhiteSpace(token))
             {
-                skill = await _remoteFetcher.FetchSkillAsync(token, skillName, ct);
+                try
+                {
+                    skill = await _remoteFetcher.FetchSkillAsync(token, skillName, ct);
+                }
+                catch (RemoteSkillFetchException ex)
+                {
+                    return BuildLoadResult(
+                        skillName: skillName,
+                        loaded: false,
+                        error: ex.Message,
+                        status: ex.FailureKind == RemoteSkillFetchFailureKind.AccessDenied ? "access_denied" : "error",
+                        text: BuildErrorWithAvailableSkills($"Error loading skill '{skillName}': {ex.Message}"));
+                }
+
                 if (skill != null)
                 {
                     return await BuildLoadResultAsync(
@@ -352,13 +362,13 @@ public sealed class UseSkillTool : IAgentTool
             sb.AppendLine();
         }
 
-        // 替换参数占位符
+        // Replace argument placeholders.
         var instructions = skill.Instructions;
         if (!string.IsNullOrEmpty(args))
         {
             instructions = instructions.Replace("$ARGUMENTS", args);
 
-            // 支持位置参数 $0, $1, ...
+            // Support positional arguments $0, $1, ...
             var argParts = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             for (var i = 0; i < argParts.Length && i < 10; i++)
                 instructions = instructions.Replace($"${i}", argParts[i]);
@@ -434,7 +444,7 @@ public sealed class UseSkillTool : IAgentTool
             }
         }
 
-        // 附带关联文件
+        // Attach associated files.
         if (skill.AssociatedFiles is { Count: > 0 })
         {
             sb.AppendLine();

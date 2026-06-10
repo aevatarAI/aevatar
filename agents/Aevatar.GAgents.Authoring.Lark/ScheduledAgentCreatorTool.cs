@@ -157,9 +157,9 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         if (!plan.Success)
             return plan.ErrorJson ?? """{"error":"validation_error"}""";
 
-        var key = await _apiKeyIssuer.IssueAsync(token, plan.ServiceSlugs!, agentId, ct);
+        var key = await _apiKeyIssuer.IssueAsync(token, plan.ServiceSlugs!, agentId, plan.Request!.Reference.Name, ct);
         if (!key.Success)
-            return JsonSerializer.Serialize(new { error = key.Error ?? "api_key_issue_failed" });
+            return key.ToErrorJson();
 
         var mapped = _mapper.Map(plan.Request!, key);
         if (!mapped.Success)

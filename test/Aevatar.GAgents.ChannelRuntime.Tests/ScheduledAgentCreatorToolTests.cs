@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -432,8 +433,81 @@ public sealed class ScheduledAgentCreatorToolTests
             var createRequest = harness.Handler.Requests.Single(request => request.Method == HttpMethod.Post);
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+            createBody.RootElement.GetProperty("scopes").GetString().Should().Be("read write proxy");
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
+
+            var preflight = harness.Handler.Requests.Should().ContainSingle(request =>
+                    request.Method == HttpMethod.Get &&
+                    request.Path == "/api/v1/proxy/s/ornn-api/api/v1/skills/daily-report/json")
+                .Subject;
+            preflight.Authorization.Should().NotBeNull();
+            preflight.Authorization!.Scheme.Should().Be("Bearer");
+            preflight.Authorization.Parameter.Should().Be("full-secret-key");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenMintedKeyPreflightForbidden_ShouldReturnActionableErrorAndRevokeKey()
+    {
+        var handler = CreateSuccessHandler();
+        handler.Add(
+            HttpMethod.Get,
+            "/api/v1/proxy/s/ornn-api/api/v1/skills/daily-report/json",
+            """{"error":"forbidden","message":"API key does not have access to this service"}""",
+            HttpStatusCode.Forbidden);
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("scheduled_skill_preflight_access_denied");
+            document.RootElement.GetProperty("http_status").GetInt32().Should().Be(403);
+            document.RootElement.GetProperty("service_slug").GetString().Should().Be("ornn-api");
+            document.RootElement.GetProperty("skill_ref").GetString().Should().Be("daily-report");
+            document.RootElement.GetProperty("detail").GetString().Should().Contain("missing proxy scope or service authorization");
+            document.RootElement.GetProperty("hint").GetString().Should().Contain("recreate the scheduled agent");
+
+            handler.Requests.Should().Contain(request =>
+                request.Method == HttpMethod.Delete &&
+                request.Path == "/api/v1/api-keys/key-created");
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenMintedKeyPreflightNotFound_ShouldReturnNotFoundAndRevokeKey()
+    {
+        var handler = CreateSuccessHandler();
+        handler.Add(
+            HttpMethod.Get,
+            "/api/v1/proxy/s/ornn-api/api/v1/skills/daily-report/json",
+            """{"error":"missing"}""",
+            HttpStatusCode.NotFound);
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("scheduled_skill_preflight_skill_not_found");
+            document.RootElement.GetProperty("http_status").GetInt32().Should().Be(404);
+            document.RootElement.GetProperty("hint").GetString().Should().Contain("Check skill_ref");
+            handler.Requests.Should().Contain(request =>
+                request.Method == HttpMethod.Delete &&
+                request.Path == "/api/v1/api-keys/key-created");
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
         });
     }
 
@@ -551,6 +625,14 @@ public sealed class ScheduledAgentCreatorToolTests
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", createApiKeyResponse);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/ornn-api/api/v1/skills/daily-report/json", """
+            {
+              "data": {
+                "name": "daily-report",
+                "files": { "SKILL.md": "Run daily report." }
+              }
+            }
+            """);
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-created", """{"ok":true}""");
         return handler;
     }
@@ -638,13 +720,13 @@ public sealed class ScheduledAgentCreatorToolTests
 
     private sealed class RoutingJsonHandler : HttpMessageHandler
     {
-        private readonly Dictionary<string, string> _responses = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, (string Json, HttpStatusCode Status)> _responses = new(StringComparer.OrdinalIgnoreCase);
 
         public List<RecordedRequest> Requests { get; } = [];
 
-        public void Add(HttpMethod method, string path, string json)
+        public void Add(HttpMethod method, string path, string json, HttpStatusCode status = HttpStatusCode.OK)
         {
-            _responses[$"{method.Method}:{path}"] = json;
+            _responses[$"{method.Method}:{path}"] = (json, status);
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -653,12 +735,12 @@ public sealed class ScheduledAgentCreatorToolTests
             var body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            Requests.Add(new RecordedRequest(request.Method, path, body));
+            Requests.Add(new RecordedRequest(request.Method, path, body, request.Headers.Authorization));
 
-            return _responses.TryGetValue($"{request.Method.Method}:{path}", out var json)
-                ? new HttpResponseMessage(HttpStatusCode.OK)
+            return _responses.TryGetValue($"{request.Method.Method}:{path}", out var response)
+                ? new HttpResponseMessage(response.Status)
                 {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json"),
+                    Content = new StringContent(response.Json, Encoding.UTF8, "application/json"),
                 }
                 : new HttpResponseMessage(HttpStatusCode.NotFound)
                 {
@@ -667,5 +749,9 @@ public sealed class ScheduledAgentCreatorToolTests
         }
     }
 
-    private sealed record RecordedRequest(HttpMethod Method, string Path, string? Body);
+    private sealed record RecordedRequest(
+        HttpMethod Method,
+        string Path,
+        string? Body,
+        AuthenticationHeaderValue? Authorization);
 }
