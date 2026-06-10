@@ -987,6 +987,9 @@ public class VoiceRealtimeSessionTests
             return Task.CompletedTask;
         }
 
+        public override Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct) =>
+            Task.CompletedTask;
+
         public Task EmitAudioAsync(byte[] pcm16, CancellationToken ct) =>
             _audioSink?.Invoke(
                 _sessionKey,

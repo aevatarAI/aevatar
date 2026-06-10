@@ -217,6 +217,20 @@ message VoiceRemoteControlInputReceived {
   VoiceControlFrame control_frame = 2;
 }
 
+message VoiceInputImage {
+  string media_type = 1;
+  bytes data = 2;
+}
+
+message VoiceInputImageReceived {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  VoiceInputImage input_image = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
+}
+
 message VoiceTransportAttachRequested {
   string session_id = 1;
   string owner_id = 2;
@@ -308,6 +322,7 @@ message VoiceModuleSignal {
     VoiceTransportRelayStopped transport_relay_stopped = 13;
     VoiceProviderEventReceived provider_event_received = 14;
     VoiceTransportLifetimeCompleted transport_lifetime_completed = 16;
+    VoiceInputImageReceived input_image_received = 17;
   }
 }
 

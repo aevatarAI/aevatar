@@ -175,6 +175,14 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
                 throw new InvalidOperationException(await BuildHttpFailureMessageAsync("stream", response, ct));
         }
 
+        public override Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct)
+        {
+            _ = inputImage;
+            _ = ct;
+            throw new NotSupportedException(
+                "MiniCPM-o demo protocol does not support provider-side image input.");
+        }
+
         public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
         {
             _ = callId;

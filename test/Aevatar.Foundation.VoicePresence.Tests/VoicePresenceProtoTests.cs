@@ -165,6 +165,40 @@ public class VoicePresenceProtoTests
     }
 
     [Fact]
+    public void VoiceModuleSignal_should_roundtrip_input_image_received()
+    {
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        var image = new VoiceInputImageReceived
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseExpiresAt = expiresAt,
+            LeaseEpoch = 10,
+            InputImage = new VoiceInputImage
+            {
+                MediaType = "image/png",
+                Data = ByteString.CopyFrom([1, 2, 3]),
+            },
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            InputImageReceived = image,
+        };
+
+        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
+
+        parsed.ShouldBe(signal);
+        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.InputImageReceived);
+        parsed.InputImageReceived.InputImage.Data.ToByteArray().ShouldBe([1, 2, 3]);
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
+            .ShouldContain(nameof(VoiceInputImage));
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
+            .ShouldContain(nameof(VoiceInputImageReceived));
+    }
+
+    [Fact]
     public void VoicePresenceSessionDispatch_should_wrap_transport_control_self_signal()
     {
         var control = new VoiceTransportControlFrameReceived
@@ -193,5 +227,32 @@ public class VoicePresenceProtoTests
         signal.TransportControlFrameReceived.LeaseEpoch.ShouldBe(9);
         signal.TransportControlFrameReceived.ShouldBe(control);
         signal.TransportControlFrameReceived.ShouldNotBeSameAs(control);
+    }
+
+    [Fact]
+    public void VoicePresenceSessionDispatch_should_wrap_input_image_direct_signal()
+    {
+        var image = new VoiceInputImageReceived
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            LeaseEpoch = 11,
+            InputImage = new VoiceInputImage
+            {
+                MediaType = "image/jpeg",
+                Data = ByteString.CopyFrom([4, 5, 6]),
+            },
+        };
+
+        var envelope = VoicePresenceSessionDispatch.BuildDirectEnvelope("voice-agent", "voice_presence", image);
+        var signal = envelope.Payload.Unpack<VoiceModuleSignal>();
+
+        envelope.Route.ShouldBe(EnvelopeRouteSemantics.CreateDirect(VoicePresenceSessionDispatch.HostPublisherId, "voice-agent"));
+        signal.ModuleName.ShouldBe("voice_presence");
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.InputImageReceived);
+        signal.InputImageReceived.ShouldBe(image);
+        signal.InputImageReceived.ShouldNotBeSameAs(image);
     }
 }

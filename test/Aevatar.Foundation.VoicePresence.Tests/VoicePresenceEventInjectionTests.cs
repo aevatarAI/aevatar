@@ -368,6 +368,7 @@ public class VoicePresenceEventInjectionTests
         private sealed class RecordingProviderSession(RecordingVoiceProvider provider) : RealtimeVoiceProviderSession
         {
             public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) => Task.CompletedTask;
+            public override Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct) => Task.CompletedTask;
             public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) => Task.CompletedTask;
             public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
             {
