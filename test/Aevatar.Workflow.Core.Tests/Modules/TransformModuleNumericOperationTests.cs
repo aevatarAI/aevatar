@@ -9,6 +9,8 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Globalization;
+using System.Text.Json;
 
 namespace Aevatar.Workflow.Core.Tests.Modules;
 
@@ -32,7 +34,8 @@ public sealed class TransformModuleNumericOperationTests
         });
 
         completed.Success.Should().BeTrue();
-        completed.Output.Should().Be(expectedOutput);
+        decimal.Parse(completed.Output, CultureInfo.InvariantCulture).Should().Be(
+            decimal.Parse(expectedOutput, CultureInfo.InvariantCulture));
     }
 
     [Fact]
@@ -44,7 +47,7 @@ public sealed class TransformModuleNumericOperationTests
             ["values"] = """["1.10","2.20",3.30]""",
         });
 
-        completed.Output.Should().Be("6.6");
+        decimal.Parse(completed.Output, CultureInfo.InvariantCulture).Should().Be(6.6m);
     }
 
     [Fact]
@@ -77,15 +80,16 @@ public sealed class TransformModuleNumericOperationTests
             ["group_by"] = "currency",
             ["field"] = "amount",
             ["aggregate"] = "sum",
+            ["precision"] = "2",
         });
 
-        completed.Output.Should().Be(
-            """
-            {
-              "EUR": "2.05",
-              "USD": "4.3"
-            }
-            """);
+        completed.Success.Should().BeTrue();
+        using var output = JsonDocument.Parse(completed.Output);
+        output.RootElement.GetArrayLength().Should().Be(2);
+        output.RootElement[0].GetProperty("key").GetString().Should().Be("EUR");
+        output.RootElement[0].GetProperty("value").GetDecimal().Should().Be(2.05m);
+        output.RootElement[1].GetProperty("key").GetString().Should().Be("USD");
+        output.RootElement[1].GetProperty("value").GetDecimal().Should().Be(4.30m);
     }
 
     [Fact]
@@ -96,9 +100,10 @@ public sealed class TransformModuleNumericOperationTests
             ["op"] = "divide",
         });
 
-        completed.Success.Should().BeTrue();
-        completed.Output.Should().StartWith("Transform 错误: ");
-        completed.Output.Should().Contain("divide cannot use zero");
+        completed.Success.Should().BeFalse();
+        completed.Output.Should().BeEmpty();
+        completed.Error.Should().NotBeNullOrWhiteSpace();
+        completed.Error.Should().Contain("divide cannot divide by zero");
     }
 
     [Fact]

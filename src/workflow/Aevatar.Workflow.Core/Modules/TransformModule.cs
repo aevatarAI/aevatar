@@ -53,27 +53,7 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
             transformOperation = ResolveTransformOperation(request);
             if (transformOperation is not null)
             {
-<<<<<<< HEAD
-                "identity" => input,
-                "count" => CountLines(input).ToString(),
-                "count_words" => input.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length.ToString(),
-                "take" => TakeLines(input, n),
-                "take_last" => TakeLastLines(input, n),
-                "join" => string.Join(separator, SplitSections(input)),
-                "split" => string.Join(
-                    "\n---\n",
-                    WorkflowParameterValueParser.SplitInputByDelimiterOrJsonArray(input, separator)),
-                "json_extract" => JsonExtract(input, request.Parameters, n),
-                "distinct" => string.Join("\n", input.Split('\n').Distinct()),
-                "uppercase" => input.ToUpperInvariant(),
-                "lowercase" => input.ToLowerInvariant(),
-                "trim" => input.Trim(),
-                "reverse_lines" => string.Join("\n", input.Split('\n').Reverse()),
-                _ when TransformNumericOperations.TryExecute(op, input, request.Parameters, out var numericOutput) => numericOutput,
-                _ => input, // 未知操作返回原文
-            };
-=======
-                output = ExecuteTransformOperation(input, transformOperation);
+                output = ExecuteTransformOperation(input, request.Parameters, transformOperation);
             }
             else
             {
@@ -98,7 +78,6 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
                     _ => input, // Unknown operations keep the legacy identity fallback.
                 };
             }
->>>>>>> origin/crnd/integrate-1877
         }
         catch (Exception ex)
         {
@@ -157,7 +136,7 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
                 WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "aggregate", "agg")),
         };
 
-        var precision = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "precision", "scale").Trim();
+        var precision = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "precision", "scale", "digits", "places").Trim();
         if (!string.IsNullOrWhiteSpace(precision))
         {
             if (!int.TryParse(precision, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPrecision))
@@ -200,29 +179,37 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
             ? string.Empty
             : value.Trim().Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
 
-    private static string ExecuteTransformOperation(string input, TransformOperationSpec spec)
+    private static string ExecuteTransformOperation(
+        string input,
+        IReadOnlyDictionary<string, string> parameters,
+        TransformOperationSpec spec)
     {
         if (spec.HasPrecision && spec.Precision < 0)
             throw new InvalidOperationException("transform precision must be zero or greater.");
 
         return spec.Kind switch
         {
-            TransformOperationKind.Sum => FormatDecimal(ApplyPrecision(ReadNumericValues(input, spec).Sum(), spec)),
-            TransformOperationKind.Subtract => FormatDecimal(ApplyPrecision(Subtract(ReadNumericValues(input, spec)), spec)),
-            TransformOperationKind.Multiply => FormatDecimal(ApplyPrecision(Multiply(ReadNumericValues(input, spec)), spec)),
-            TransformOperationKind.Divide => FormatDecimal(ApplyPrecision(Divide(ReadNumericValues(input, spec)), spec)),
-            TransformOperationKind.Round => FormatDecimal(ApplyPrecision(Round(ReadNumericValues(input, spec), spec), spec)),
-            TransformOperationKind.Min => FormatDecimal(ReadNumericValues(input, spec).Min()),
-            TransformOperationKind.Max => FormatDecimal(ReadNumericValues(input, spec).Max()),
+            TransformOperationKind.Sum => FormatDecimal(ApplyPrecision(ReadNumericValues(input, parameters, spec).Sum(), spec)),
+            TransformOperationKind.Subtract => FormatDecimal(ApplyPrecision(Subtract(ReadNumericValues(input, parameters, spec)), spec)),
+            TransformOperationKind.Multiply => FormatDecimal(ApplyPrecision(Multiply(ReadNumericValues(input, parameters, spec)), spec)),
+            TransformOperationKind.Divide => FormatDecimal(ApplyPrecision(Divide(ReadNumericValues(input, parameters, spec)), spec)),
+            TransformOperationKind.Round => FormatDecimal(ApplyPrecision(Round(ReadNumericValues(input, parameters, spec), spec), spec)),
+            TransformOperationKind.Min => FormatDecimal(ReadNumericValues(input, parameters, spec).Min()),
+            TransformOperationKind.Max => FormatDecimal(ReadNumericValues(input, parameters, spec).Max()),
             TransformOperationKind.GroupBy => GroupBy(input, spec),
             _ => input,
         };
     }
 
-    private static IReadOnlyList<decimal> ReadNumericValues(string input, TransformOperationSpec spec)
+    private static IReadOnlyList<decimal> ReadNumericValues(
+        string input,
+        IReadOnlyDictionary<string, string> parameters,
+        TransformOperationSpec spec)
     {
-        var values = TryReadJsonNumericValues(input, spec.Value)
-            ?? ReadDelimitedNumericValues(input);
+        var explicitValues = WorkflowParameterValueParser.GetString(parameters, string.Empty, "values", "numbers");
+        var numericInput = string.IsNullOrWhiteSpace(explicitValues) ? input : explicitValues;
+        var values = TryReadJsonNumericValues(numericInput, spec.Value)
+            ?? ReadDelimitedNumericValues(numericInput);
 
         if (values.Count == 0)
             throw new InvalidOperationException("transform numeric input did not contain any numbers.");

@@ -75,14 +75,10 @@ roles:
 
 - 作用：对输入做确定性变换，既支持纯文本操作（如 `trim`/`uppercase`/`count_words`/`split`），也支持 `json_extract` 这类 JSON 投影，并提供 decimal-only 数值主链。
 - 常用参数：`op`、`n`、`separator`；当 `op=json_extract` 时，还可用 `path`、`field`、`sort_by`、`order`。
-<<<<<<< HEAD
-- 数值参数：`op=sum|subtract|multiply|divide|round|min|max|group_by` 时，所有金额级计算都在 `transform` 内用 `decimal` 执行。标量数值操作默认从输入读取数字列表，也可用 `values`/`value`/`numbers` 传入逗号、换行或 JSON array；`round` 可用 `digits`/`scale`/`places` 指定小数位。
-- 分组聚合：`op=group_by` 要求输入为 JSON array，`group_by` 指定分组 key 的 JSON path，`field`/`value`/`value_path` 指定 decimal 值路径，`aggregate` 支持 `sum|min|max|count`，默认 `sum`。
-=======
 - 金额级确定性操作：`sum`、`subtract`、`multiply`、`divide`、`round`、`min`、`max`、`group_by`。这些操作会被解析为 typed `transform_operation`，同时保留 legacy `parameters` map；识别到的数值/分组操作解析或运行失败时发布失败的 `StepCompletedEvent`，不会包装成成功文本。
-- `group_by` v1 只接受 JSON array of objects，支持单个 `key`/`group_by`、单个 `value`/`value_field`，`aggregate` 仅支持 `sum`、`count`、`avg`。这不是脚本、表达式、SQL 或 LLM 数据处理入口。
+- 标量数值操作默认从输入读取数字列表，也可用 `values`/`numbers` 传入逗号、换行或 JSON array；`round` 可用 `precision`/`digits`/`scale`/`places` 指定小数位。
+- `group_by` v1 只接受 JSON array of objects，支持单个 `key`/`group_by`、单个 `value`/`value_field`/`field`，`aggregate` 仅支持 `sum`、`count`、`avg`。这不是脚本、表达式、SQL 或 LLM 数据处理入口。
 - `rss_extract_items` 是唯一 RSS/Atom 解析 op 名称，不提供 `rss_extract` alias。输入为 RSS 2.0 或 Atom XML，输出 JSON array，每个 item 只包含 `source_id`、`source_url`、`id`、`title`、`link`、`published_at`、`summary`。
->>>>>>> origin/crnd/integrate-1877
 
 ```yaml
 steps:
@@ -107,7 +103,6 @@ steps:
 
 ```yaml
 steps:
-<<<<<<< HEAD
   - id: sum_invoice_lines
     type: transform
     parameters:
@@ -124,7 +119,11 @@ steps:
       group_by: currency
       field: amount
       aggregate: sum
-=======
+      precision: "2"
+```
+
+```yaml
+steps:
   - id: sum_by_department
     type: transform
     parameters:
@@ -143,7 +142,6 @@ steps:
       op: rss_extract_items
       source_id: "vendor-feed"
       source_url: "https://example.com/feed.xml"
->>>>>>> origin/crnd/integrate-1877
 ```
 
 ### `assign`
