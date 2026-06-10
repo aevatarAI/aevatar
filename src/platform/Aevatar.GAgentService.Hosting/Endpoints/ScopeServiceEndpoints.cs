@@ -709,7 +709,7 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 request,
                 null,
-                BuildScopeServiceRunBasePath(memberResolution.ScopeId, memberResolution.PublishedServiceId, memberResolution.MemberId),
+                null,
                 invocationPort,
                 catalogReader,
                 revisionCatalogReader,

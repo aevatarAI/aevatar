@@ -2824,10 +2824,10 @@ public sealed class ScopeServiceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
         response.Headers.Location.Should().NotBeNull();
-        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
+        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/services/member-a/runs/run-1");
         var receipt = await response.Content.ReadFromJsonAsync<ServiceInvocationAcceptedReceipt>();
         receipt.Should().NotBeNull();
-        receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
+        receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/services/member-a/runs/run-1");
         host.InvocationPort.LastRequest.Should().NotBeNull();
         host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
         {
