@@ -124,6 +124,7 @@ internal static class WorkflowWebhookIngressEndpoints
                     statusCode: statusCode);
             }
 
+            await CompleteAdmissionAsync(admission, replayStore, logger);
             CapabilityTraceContext.ApplyCorrelationHeader(http.Response, dispatch.Receipt.CorrelationId);
             var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt.ActorId);
             return Results.Accepted(
@@ -150,6 +151,21 @@ internal static class WorkflowWebhookIngressEndpoints
             return Results.Json(
                 new { code = "WEBHOOK_DISPATCH_FAILED", message = "Workflow webhook dispatch failed." },
                 statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    private static async Task CompleteAdmissionAsync(
+        WorkflowWebhookReplayAdmissionRequest admission,
+        IWorkflowWebhookReplayStore replayStore,
+        ILogger logger)
+    {
+        try
+        {
+            await replayStore.CompleteAsync(admission, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Workflow webhook replay admission completion failed.");
         }
     }
 

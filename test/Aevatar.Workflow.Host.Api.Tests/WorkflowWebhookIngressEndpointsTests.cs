@@ -208,6 +208,40 @@ public sealed class WorkflowWebhookIngressEndpointsTests
     }
 
     [Fact]
+    public async Task HandleAsync_ShouldReturnAcceptedCompletedDuplicateWithoutDispatch()
+    {
+        var dispatch = new RecordingWorkflowDispatch();
+        var replay = new RecordingReplayStore
+        {
+            Result = new WorkflowWebhookReplayAdmission(
+                WorkflowWebhookReplayAdmissionStatus.DuplicateCompleted,
+                ExistingCommandId: "cmd-existing",
+                ExistingCorrelationId: "corr-existing"),
+        };
+        var http = CreateHttpContext(replay);
+        var body = Encoding.UTF8.GetBytes("""{"id":"delivery-1","text":"invoice ready"}""");
+        http.Request.Body = new MemoryStream(body);
+        Sign(http, "secret", body);
+
+        var result = await WorkflowWebhookIngressEndpoints.HandleAsync(
+            http,
+            "invoice",
+            new WorkflowWebhookIngressRequestBuilder(Options.Create(CreateOptions())),
+            dispatch,
+            Options.Create(CreateOptions()),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var responseBody = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        responseBody.Should().Contain("DuplicateCompleted");
+        responseBody.Should().Contain("cmd-existing");
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleAsync_ShouldReleaseReplayAdmission_WhenDispatchFails()
     {
         var dispatch = new RecordingWorkflowDispatch
@@ -263,6 +297,33 @@ public sealed class WorkflowWebhookIngressEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         replay.Released.Should().BeEmpty();
+        replay.Completed.Should().ContainSingle();
+        replay.Completed[0].DeliveryId.Should().Be("delivery-1");
+    }
+
+    [Fact]
+    public async Task InMemoryWorkflowWebhookReplayStore_ShouldReturnCompletedDuplicateAfterCompletion()
+    {
+        var store = new InMemoryWorkflowWebhookReplayStore();
+        var request = new WorkflowWebhookReplayAdmissionRequest(
+            "invoice",
+            "lark",
+            "delivery-1",
+            "fingerprint-1",
+            DateTimeOffset.UnixEpoch,
+            "cmd-1",
+            "corr-1");
+
+        var first = await store.AdmitAsync(request);
+        await store.CompleteAsync(request);
+        var duplicate = await store.AdmitAsync(request with { CommandId = "cmd-2", CorrelationId = "corr-2" });
+        var conflict = await store.AdmitAsync(request with { PayloadFingerprint = "fingerprint-2" });
+
+        first.Status.Should().Be(WorkflowWebhookReplayAdmissionStatus.Admitted);
+        duplicate.Status.Should().Be(WorkflowWebhookReplayAdmissionStatus.DuplicateCompleted);
+        duplicate.ExistingCommandId.Should().Be("cmd-1");
+        duplicate.ExistingCorrelationId.Should().Be("corr-1");
+        conflict.Status.Should().Be(WorkflowWebhookReplayAdmissionStatus.PayloadConflict);
     }
 
     private static WorkflowWebhookIngressOptions CreateOptions()
@@ -336,6 +397,8 @@ public sealed class WorkflowWebhookIngressEndpointsTests
     {
         public List<WorkflowWebhookReplayAdmissionRequest> Requests { get; } = [];
 
+        public List<WorkflowWebhookReplayAdmissionRequest> Completed { get; } = [];
+
         public List<WorkflowWebhookReplayAdmissionRequest> Released { get; } = [];
 
         public WorkflowWebhookReplayAdmission Result { get; set; } =
@@ -347,6 +410,14 @@ public sealed class WorkflowWebhookIngressEndpointsTests
         {
             Requests.Add(request);
             return ValueTask.FromResult(Result);
+        }
+
+        public ValueTask CompleteAsync(
+            WorkflowWebhookReplayAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Completed.Add(request);
+            return ValueTask.CompletedTask;
         }
 
         public ValueTask ReleaseAsync(
