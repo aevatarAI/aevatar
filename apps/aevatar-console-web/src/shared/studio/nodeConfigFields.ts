@@ -345,12 +345,20 @@ function createField(
     return null;
   }
 
+  const isPromptInstruction = isLLMPromptInstructionParameter(stepType, name);
+  const fieldSource = isPromptInstruction
+    ? {
+        ...normalizedSource,
+        kind: 'text' as const,
+        type: 'string',
+      }
+    : normalizedSource;
   const rawValue = readStepParameterValue(parameters, stepType, name);
   const fallbackDefault = shouldUseParameterDefault(stepType, name)
-    ? normalizedSource.default
+    ? fieldSource.default
     : '';
   const value = rawValue ?? fallbackDefault ?? '';
-  const options = (normalizedSource.enumValues ?? [])
+  const options = (fieldSource.enumValues ?? [])
     .map((entry) => normalizeString(entry))
     .filter(Boolean)
     .map((entry) => ({
@@ -361,32 +369,32 @@ function createField(
   return {
     name,
     label:
-      isLLMPromptInstructionParameter(stepType, name)
+      isPromptInstruction
         ? PROMPT_INSTRUCTION_LABEL
-        : resolveFieldCopy(normalizedSource.label, formatLabel(name)),
+        : resolveFieldCopy(fieldSource.label, formatLabel(name)),
     description:
-      isLLMPromptInstructionParameter(stepType, name)
+      isPromptInstruction
         ? PROMPT_INSTRUCTION_DESCRIPTION
         : resolveFieldCopy(
-            normalizedSource.description,
-            `Type: ${normalizeValueType(normalizedSource.type)}`,
+            fieldSource.description,
+            `Type: ${normalizeValueType(fieldSource.type)}`,
           ),
     kind: inferFieldKind(value, {
-      ...normalizedSource,
+      ...fieldSource,
       enumValues: options.map((option) => option.value),
     }),
     placeholder:
-      isLLMPromptInstructionParameter(stepType, name)
+      isPromptInstruction
         ? PROMPT_INSTRUCTION_PLACEHOLDER
         : resolveFieldCopy(
-            normalizedSource.placeholder,
-            normalizeString(normalizedSource.default) ||
-              normalizeValueType(normalizedSource.type) ||
+            fieldSource.placeholder,
+            normalizeString(fieldSource.default) ||
+              normalizeValueType(fieldSource.type) ||
               FALLBACK_VALUE_PLACEHOLDER,
           ),
-    required: Boolean(normalizedSource.required),
+    required: Boolean(fieldSource.required),
     value: formatFieldValue(value),
-    valueType: normalizeValueType(normalizedSource.type),
+    valueType: normalizeValueType(fieldSource.type),
     options,
   };
 }

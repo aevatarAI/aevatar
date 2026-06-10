@@ -81,6 +81,48 @@ describe('nodeConfigFields', () => {
     });
   });
 
+  it('keeps llm prompt descriptors text-editable even when runtime metadata reports json', () => {
+    const fieldSet = buildNodeConfigFields({
+      nodeType: 'llm_call',
+      parametersText: JSON.stringify({}),
+      primitiveDescriptor: {
+        aliases: [],
+        category: 'ai',
+        description: 'Call an LLM.',
+        exampleWorkflows: [],
+        name: 'llm_call',
+        parameters: [
+          {
+            default: '{}',
+            description: 'Prompt override',
+            enumValues: [],
+            name: 'prompt',
+            required: false,
+            type: 'json',
+          },
+        ],
+      },
+    });
+
+    expect(fieldSet.fields[0]).toMatchObject({
+      kind: 'text',
+      name: 'prompt_prefix',
+      value: '',
+      valueType: 'string',
+    });
+
+    const nextText = updateNodeConfigFieldParametersText({
+      field: fieldSet.fields[0],
+      nodeType: 'llm_call',
+      parametersText: JSON.stringify({}),
+      rawValue: 'Summarize the customer request in one sentence.',
+    });
+
+    expect(JSON.parse(nextText)).toEqual({
+      prompt_prefix: 'Summarize the customer request in one sentence.',
+    });
+  });
+
   it('infers unknown-node fields and edits object or array values through JSON fallback', () => {
     const fieldSet = buildNodeConfigFields({
       nodeType: 'custom_step',
