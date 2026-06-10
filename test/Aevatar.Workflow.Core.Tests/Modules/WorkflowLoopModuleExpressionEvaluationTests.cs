@@ -83,6 +83,48 @@ public class WorkflowLoopModuleExpressionEvaluationTests
     }
 
     [Fact]
+    public async Task DispatchStep_ShouldPreserveEscapedExpressionOpenInParameters()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "tool",
+                    Type = "tool_call",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["code"] = """
+                            const user = `$${event.user_id}`;
+                            echo "$${HOME}"
+                            """,
+                        ["mixed"] = "literal=$${input}; evaluated=${input}",
+                    },
+                },
+            ],
+        };
+
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "run-escaped",
+            Input = "hello",
+        }), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["code"].Should().Contain("const user = `${event.user_id}`;");
+        request.Parameters["code"].Should().Contain("echo \"${HOME}\"");
+        request.Parameters["mixed"].Should().Be("literal=${input}; evaluated=hello");
+    }
+
+    [Fact]
     public async Task DispatchStep_WhenLlmCallOmitsRole_ShouldAssignImplicitAssistantTarget()
     {
         var workflow = new WorkflowDefinition
