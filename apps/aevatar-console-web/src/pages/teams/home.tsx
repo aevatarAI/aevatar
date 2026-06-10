@@ -1148,22 +1148,43 @@ const TeamsHomePage: React.FC = () => {
     () => groupMembersByTeamId(studioMembers),
     [studioMembers],
   );
-  const runtimeTrackableMembers = React.useMemo(
-    () =>
-      studioMembers.filter(
-        (member) =>
-          Boolean(trimOptional(member.publishedServiceId)) ||
-          Boolean(trimOptional(member.lastBoundRevisionId)),
-      ),
-    [studioMembers],
-  );
+  const runtimeTrackableEntryMembers = React.useMemo(() => {
+    const membersById = new Map(
+      studioMembers
+        .map((member) => [trimOptional(member.memberId), member] as const)
+        .filter(([memberId]) => memberId.length > 0),
+    );
+    const seenMemberIds = new Set<string>();
+    const result: StudioMemberSummary[] = [];
+
+    studioTeams.forEach((team) => {
+      const entryMemberId = trimOptional(team.entryMemberId);
+      if (!entryMemberId || seenMemberIds.has(entryMemberId)) {
+        return;
+      }
+
+      const member = membersById.get(entryMemberId);
+      if (
+        !member ||
+        (!trimOptional(member.publishedServiceId) &&
+          !trimOptional(member.lastBoundRevisionId))
+      ) {
+        return;
+      }
+
+      seenMemberIds.add(entryMemberId);
+      result.push(member);
+    });
+
+    return result;
+  }, [studioMembers, studioTeams]);
   const memberRunQueries = useQueries({
-    queries: runtimeTrackableMembers.map((member) => ({
+    queries: runtimeTrackableEntryMembers.map((member) => ({
       enabled: canLoadRoster && membersQuery.isSuccess,
       queryKey: ["teams", "member-runs", queryScopeId, member.memberId],
       queryFn: () =>
         scopeRuntimeApi.listMemberRuns(queryScopeId, member.memberId, {
-          take: 12,
+          take: 1,
         }),
       retry: false,
     })),
@@ -1171,12 +1192,12 @@ const TeamsHomePage: React.FC = () => {
   const runsByMemberId = React.useMemo(
     () =>
       Object.fromEntries(
-        runtimeTrackableMembers.map((member, index) => [
+        runtimeTrackableEntryMembers.map((member, index) => [
           trimOptional(member.memberId),
           memberRunQueries[index]?.data?.runs ?? [],
         ]),
       ) as Record<string, readonly ScopeServiceRunSummary[]>,
-    [memberRunQueries, runtimeTrackableMembers],
+    [memberRunQueries, runtimeTrackableEntryMembers],
   );
   const teamPreviews = React.useMemo(
     () =>

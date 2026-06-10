@@ -33,6 +33,7 @@ const defaultTeams = [
     displayName: "客服团队",
     description: "负责处理用户问题",
     lifecycleStage: "active",
+    entryMemberId: "member-alpha",
     memberCount: 1,
     createdAt: "2026-05-01T09:00:00Z",
     updatedAt: "2026-05-01T10:02:00Z",
@@ -159,7 +160,7 @@ describe("TeamsHomePage", () => {
   it("renders the team homepage around real Team roster with member runtime hints", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("button", { name: "调试工作流" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "调试入口工作流" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看成员" })).toBeTruthy();
     expect(screen.getByText("阿凡达/团队")).toBeTruthy();
@@ -188,7 +189,7 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("button", { name: "Debug workflow" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Debug entry workflow" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "View team" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "View members" })).toBeTruthy();
     expect(screen.getByText("My AI teams")).toBeTruthy();
@@ -203,7 +204,7 @@ describe("TeamsHomePage", () => {
   it("keeps team card actions focused on member work and team detail", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    await screen.findByRole("button", { name: "调试工作流" });
+    await screen.findByRole("button", { name: "调试入口工作流" });
     expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看成员" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
@@ -260,7 +261,7 @@ describe("TeamsHomePage", () => {
     ).toBeNull();
   });
 
-  it("loads every bound member run summary without showing a synthetic sync warning", async () => {
+  it("loads only the configured entry member run summary for the homepage signal", async () => {
     const members = Array.from({ length: 13 }, (_, index) => ({
       ...defaultMembers[0],
       memberId: `member-${index + 1}`,
@@ -268,6 +269,18 @@ describe("TeamsHomePage", () => {
       publishedServiceId: `service-${index + 1}`,
       teamId: "t-support",
     }));
+    const entryMemberId = "member-7";
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        {
+          ...defaultTeams[0],
+          entryMemberId,
+          memberCount: members.length,
+        },
+      ],
+      nextPageToken: null,
+    });
     (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-a",
       members,
@@ -280,8 +293,13 @@ describe("TeamsHomePage", () => {
       await screen.findByText("成员已绑定服务。下一步：进入团队详情后测试团队，生成第一条可见运行。"),
     ).toBeTruthy();
     await waitFor(() => {
-      expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledTimes(13);
+      expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledTimes(1);
     });
+    expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+      "scope-a",
+      entryMemberId,
+      { take: 1 },
+    );
     expect(screen.queryByText("部分 Team 的运行状态仍在同步")).toBeNull();
     expect(screen.queryByText("状态同步中")).toBeNull();
     expect(
@@ -370,6 +388,24 @@ describe("TeamsHomePage", () => {
       "title",
       "t-long",
     );
+  });
+
+  it("does not query member runs for a Team without an entry member", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        {
+          ...defaultTeams[0],
+          entryMemberId: null,
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
+    expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
   });
 
   it("keeps long Team titles compact while preserving the full title in a tooltip", async () => {
@@ -470,7 +506,7 @@ describe("TeamsHomePage", () => {
   it("opens the workflow member debugger from the primary action", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    fireEvent.click(await screen.findByRole("button", { name: "调试工作流" }));
+    fireEvent.click(await screen.findByRole("button", { name: "调试入口工作流" }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe(
@@ -698,7 +734,8 @@ describe("TeamsHomePage", () => {
     expect(await screen.findByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 3, name: "joker" })).toBeTruthy();
     expect(screen.getByText("ID：t-joker")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "调试工作流" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "调试入口工作流" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "调试工作流" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "查看团队" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "查看成员" })).toHaveLength(2);
   });
