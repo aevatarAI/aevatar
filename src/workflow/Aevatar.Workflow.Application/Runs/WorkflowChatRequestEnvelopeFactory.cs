@@ -32,6 +32,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         chatRequest.CallerCredential = ToProto(command.CallerCredential);
         if (command.ForkSeed != null)
             chatRequest.ForkSeed = ToProto(command.ForkSeed);
+        if (command.ExternalIngress != null)
+            chatRequest.ExternalIngress = ToProto(command.ExternalIngress);
 
         var envelope = new EventEnvelope
         {
@@ -145,6 +147,24 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         };
         AppendVariables(payload.Variables, source.Variables);
         return payload;
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowExternalIngressContext ToProto(
+        Application.Abstractions.Runs.WorkflowExternalIngressContext source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new Aevatar.Workflow.Abstractions.WorkflowExternalIngressContext
+        {
+            RouteKey = Normalize(source.RouteKey),
+            SourceId = Normalize(source.SourceId),
+            DeliveryId = Normalize(source.DeliveryId),
+            ReceivedAtUnixMs = Math.Max(0, source.ReceivedAtUnixMs),
+            ContentType = Normalize(source.ContentType),
+            PayloadFingerprint = Normalize(source.PayloadFingerprint),
+            AuthScheme = Normalize(source.AuthScheme),
+            PrincipalSubject = Normalize(source.PrincipalSubject),
+        };
     }
 
     private static void AppendMetadata(

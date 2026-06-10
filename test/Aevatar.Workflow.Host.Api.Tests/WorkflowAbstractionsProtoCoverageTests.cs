@@ -109,6 +109,64 @@ public class WorkflowAbstractionsProtoCoverageTests
     }
 
     [Fact]
+    public void WorkflowChatRequestEvent_ShouldRoundtripExternalIngress()
+    {
+        WorkflowChatRequestEvent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 12 && field.Name == "external_ingress");
+
+        var request = new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "session-1",
+            ExternalIngress = new WorkflowExternalIngressContext
+            {
+                RouteKey = "invoice",
+                SourceId = "lark",
+                DeliveryId = "delivery-1",
+                ReceivedAtUnixMs = 1710000000000,
+                ContentType = "application/json",
+                PayloadFingerprint = "abc",
+                AuthScheme = "hmac-sha256",
+                PrincipalSubject = "lark",
+            },
+        };
+
+        var parsed = WorkflowChatRequestEvent.Parser.ParseFrom(request.ToByteArray());
+
+        parsed.ExternalIngress.RouteKey.Should().Be("invoice");
+        parsed.ExternalIngress.SourceId.Should().Be("lark");
+        parsed.ExternalIngress.DeliveryId.Should().Be("delivery-1");
+        parsed.ExternalIngress.ReceivedAtUnixMs.Should().Be(1710000000000);
+        parsed.ExternalIngress.ContentType.Should().Be("application/json");
+        parsed.ExternalIngress.PayloadFingerprint.Should().Be("abc");
+        parsed.ExternalIngress.AuthScheme.Should().Be("hmac-sha256");
+        parsed.ExternalIngress.PrincipalSubject.Should().Be("lark");
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .Should().Contain(nameof(WorkflowExternalIngressContext));
+    }
+
+    [Fact]
+    public void WorkflowWebhookReplayRecord_ShouldRoundtrip()
+    {
+        var record = new WorkflowWebhookReplayRecord
+        {
+            RouteKey = "invoice",
+            SourceId = "lark",
+            DeliveryId = "delivery-1",
+            PayloadFingerprint = "abc",
+            ReceivedAtUnixMs = 1710000000000,
+            CommandId = "cmd-1",
+            CorrelationId = "corr-1",
+        };
+
+        var parsed = WorkflowWebhookReplayRecord.Parser.ParseFrom(record.ToByteArray());
+
+        parsed.Should().BeEquivalentTo(record);
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .Should().Contain(nameof(WorkflowWebhookReplayRecord));
+    }
+
+    [Fact]
     public void WorkflowCompletedEvent_ShouldMergeAndCompare()
     {
         var source = new WorkflowCompletedEvent

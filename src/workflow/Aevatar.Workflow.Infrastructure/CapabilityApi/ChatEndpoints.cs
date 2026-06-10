@@ -29,6 +29,7 @@ public static class WorkflowCapabilityEndpoints
         ChatQueryEndpoints.Map(group);
         group.MapPost("/workflow/runs/fork", HandleForkRun)
             .WithName("ForkWorkflowRun");
+        WorkflowWebhookIngressEndpoints.Map(group);
         if (HasWorkflowScheduleDependencies(app.ServiceProvider))
             WorkflowScheduleEndpoints.Map(group);
 
