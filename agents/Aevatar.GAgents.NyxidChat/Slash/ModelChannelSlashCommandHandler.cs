@@ -5,6 +5,7 @@ using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -46,8 +47,8 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
 
     public ChannelSlashCommandUsage Usage => new(
         Name,
-        "list | use <service-number|service-name> [model-name] | preset <preset-id> | reset",
-        "查看和切换当前 NyxID 绑定用户的 LLM service/model 偏好");
+        "[list [page]] | use <service-number|service-name> [model-name] | preset <preset-id> | reset",
+        "查看和切换当前 NyxID 绑定用户的 LLM route/model 偏好");
 
     public async Task<MessageContent?> HandleAsync(ChannelSlashCommandContext context, CancellationToken ct)
     {
@@ -64,12 +65,18 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         }
 
         var (sub, arg) = ParseSubcommand(context.ArgumentText);
+        var mode = ResolveDisplayMode(context.CommandName);
         try
         {
             return sub switch
             {
-                "" or "list" => _renderer.RenderOptions(
-                    await _optionsService.GetOptionsAsync(BuildQuery(context, bindingId), ct).ConfigureAwait(false)),
+                "" => _renderer.RenderCurrent(
+                    await _optionsService.GetOptionsAsync(BuildQuery(context, bindingId), ct).ConfigureAwait(false),
+                    mode),
+                "list" => _renderer.RenderOptions(
+                    await _optionsService.GetOptionsAsync(BuildQuery(context, bindingId), ct).ConfigureAwait(false),
+                    mode,
+                    ParsePage(arg)),
                 "use" => await HandleUseAsync(context, bindingId, arg, ct).ConfigureAwait(false),
                 "preset" => await HandlePresetAsync(context, bindingId, arg, ct).ConfigureAwait(false),
                 "reset" => await HandleResetAsync(context, bindingId, ct).ConfigureAwait(false),
@@ -411,11 +418,8 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
                 option.ServiceSlug.Contains(requested, StringComparison.OrdinalIgnoreCase) ||
                 option.DisplayName.Contains(requested, StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        var selectable = fuzzy.Where(IsSelectable).Take(2).ToArray();
-        if (selectable.Length == 1)
-            return selectable[0];
-
-        return fuzzy.Length == 1 ? fuzzy[0] : null;
+        return UserLlmPreferenceWriteCore.ChoosePreferredOption(fuzzy.Where(IsSelectable)) ??
+               (fuzzy.Length == 1 ? fuzzy[0] : null);
     }
 
     private static UserLlmOption? FindExactOption(string requested, IReadOnlyList<UserLlmOption> available)
@@ -427,11 +431,8 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
                 string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
-        var selectable = matches.Where(IsSelectable).Take(2).ToArray();
-        if (selectable.Length == 1)
-            return selectable[0];
-
-        return matches.FirstOrDefault();
+        return UserLlmPreferenceWriteCore.ChoosePreferredOption(matches.Where(IsSelectable)) ??
+               UserLlmPreferenceWriteCore.ChoosePreferredOption(matches);
     }
 
     private static bool IsSelectable(UserLlmOption option) =>
@@ -446,27 +447,42 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         option = null;
         model = null;
 
-        foreach (var candidate in available
-                     .SelectMany(service => ServiceTokens(service).Select(token => (Service: service, Token: token)))
-                     .OrderByDescending(candidate => candidate.Token.Length))
+        var matches = available
+            .SelectMany(service => ServiceTokens(service).Select(token => (Service: service, Token: token)))
+            .Where(candidate =>
+                candidate.Token.Length < requested.Length &&
+                requested.StartsWith(candidate.Token, StringComparison.OrdinalIgnoreCase) &&
+                char.IsWhiteSpace(requested[candidate.Token.Length]))
+            .GroupBy(candidate => candidate.Service)
+            .Select(group => group.OrderByDescending(candidate => candidate.Token.Length).First())
+            .ToArray();
+
+        var preferred = UserLlmPreferenceWriteCore.ChoosePreferredOption(matches
+                            .Select(candidate => candidate.Service)
+                            .Where(IsSelectable)) ??
+                        (matches.Length == 1
+                            ? matches[0].Service
+                            : null);
+        if (preferred is null)
+            return false;
+
+        var token = matches
+            .Where(candidate => ReferenceEquals(candidate.Service, preferred) || candidate.Service == preferred)
+            .Select(candidate => candidate.Token)
+            .OrderByDescending(candidate => candidate.Length)
+            .FirstOrDefault();
+        if (token is null)
+            return false;
+
+        var modelToken = requested[token.Length..].Trim();
+        if (string.IsNullOrWhiteSpace(modelToken))
         {
-            if (candidate.Token.Length >= requested.Length)
-                continue;
-            if (!requested.StartsWith(candidate.Token, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (!char.IsWhiteSpace(requested[candidate.Token.Length]))
-                continue;
-
-            var modelToken = requested[candidate.Token.Length..].Trim();
-            if (string.IsNullOrWhiteSpace(modelToken))
-                continue;
-
-            option = candidate.Service;
-            model = modelToken;
-            return true;
+            return false;
         }
 
-        return false;
+        option = preferred;
+        model = modelToken;
+        return true;
     }
 
     private static IEnumerable<string> ServiceTokens(UserLlmOption option)
@@ -511,11 +527,30 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         return (sub, arg);
     }
 
+    private static int ParsePage(string argument)
+    {
+        if (string.IsNullOrWhiteSpace(argument))
+            return 1;
+
+        var firstToken = argument.Split(
+            WhitespaceSeparators,
+            2,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0];
+        return int.TryParse(firstToken, out var page) && page > 0 ? page : 1;
+    }
+
+    private static UserLlmSelectionDisplayMode ResolveDisplayMode(string? commandName) =>
+        string.Equals(commandName?.Trim(), "route", StringComparison.OrdinalIgnoreCase)
+            ? UserLlmSelectionDisplayMode.Route
+            : UserLlmSelectionDisplayMode.Model;
+
     private static MessageContent UsageHint() => new()
     {
         Text = string.Join('\n',
             "未识别的子命令。可用:",
-            "- `/model`、`/models` 或 `/route`:查看当前可用 LLM service/route",
+            "- `/route`:查看当前 route",
+            "- `/model`:查看当前 model",
+            "- `/route list` 或 `/model list`:查看所有可配置选项",
             "- `/route use <编号|service-name> [model-name]`:切换 service,可同时指定 model",
             "- `/model use <model-name>`:只覆盖当前 route 下的 model",
             "- `/model preset <preset-id>`:使用 setup preset",

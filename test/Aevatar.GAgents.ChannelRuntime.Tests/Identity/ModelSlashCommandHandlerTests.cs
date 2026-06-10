@@ -47,9 +47,10 @@ public sealed class ModelSlashCommandHandlerTests
     private static ChannelSlashCommandContext Context(
         string subAndArgs = "",
         string? bindingValue = "bnd_sender",
-        string registrationScopeId = "owner-scope") => new()
+        string registrationScopeId = "owner-scope",
+        string commandName = "model") => new()
     {
-        CommandName = "model",
+        CommandName = commandName,
         ArgumentText = subAndArgs,
         Subject = new ExternalSubjectRef
         {
@@ -76,6 +77,47 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
+    public async Task EmptyModel_RendersCurrentModelOnly()
+    {
+        var queryPort = new StubUserConfigQueryPort
+        {
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.5", route: ChronoLlm.RouteValue) },
+        };
+        var handler = CreateHandler(queryPort: queryPort);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("**当前 model**");
+        reply.Text.Should().Contain("Model: gpt-5.5");
+        reply.Text.Should().Contain("Route: chrono-llm shared");
+        reply.Text.Should().Contain("`/model list`");
+        reply.Text.Should().NotContain("OpenAI (work)");
+        reply.Text.Should().NotContain("第 1/1 页");
+    }
+
+    [Fact]
+    public async Task EmptyRoute_RendersCurrentRouteOnly()
+    {
+        var queryPort = new StubUserConfigQueryPort
+        {
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.5", route: ChronoLlm.RouteValue) },
+        };
+        var handler = CreateHandler(queryPort: queryPort);
+
+        var reply = await handler.HandleAsync(Context(commandName: "route"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("**当前 route**");
+        reply.Text.Should().Contain("Route: chrono-llm shared");
+        reply.Text.Should().Contain(ChronoLlm.RouteValue);
+        reply.Text.Should().Contain("当前 model: gpt-5.5");
+        reply.Text.Should().Contain("`/route list`");
+        reply.Text.Should().NotContain("OpenAI (work)");
+        reply.Text.Should().NotContain("第 1/1 页");
+    }
+
+    [Fact]
     public async Task List_RendersAvailableServices()
     {
         var queryPort = new StubUserConfigQueryPort
@@ -90,7 +132,47 @@ public sealed class ModelSlashCommandHandlerTests
         reply!.Text.Should().Contain("chrono-llm shared");
         reply.Text.Should().Contain("OpenAI (work)");
         reply.Text.Should().Contain("/route use");
-        reply.Text.Should().Contain("✓");
+        reply.Text.Should().Contain("(当前)");
+        reply.Text.Should().Contain("default model: gpt-5.4");
+        reply.Text.Should().NotContain("chrono-llm shared / gpt-5.4");
+        reply.Actions.Should().Contain(action => action.Kind == ActionElementKind.Select);
+        reply.Actions.Should().Contain(action => action.Kind == ActionElementKind.FormSubmit);
+    }
+
+    [Fact]
+    public async Task List_PaginatesAvailableServices()
+    {
+        var services = Enumerable.Range(1, 7)
+            .Select(i => ChronoLlm with
+            {
+                UserServiceId = $"svc-{i}",
+                ServiceSlug = $"route-{i}",
+                DisplayName = $"Route {i}",
+                RouteValue = $"/api/v1/proxy/s/route-{i}",
+            })
+            .ToArray();
+        var catalog = new StubCatalogClient { Services = services };
+        var handler = CreateHandler(catalog);
+
+        var pageOne = await handler.HandleAsync(Context(subAndArgs: "list"), default);
+        var pageTwo = await handler.HandleAsync(Context(subAndArgs: "list 2", commandName: "route"), default);
+
+        pageOne.Should().NotBeNull();
+        pageOne!.Text.Should().Contain("第 1/2 页");
+        pageOne.Text.Should().Contain("Route 1");
+        pageOne.Text.Should().Contain("Route 5");
+        pageOne.Text.Should().NotContain("Route 6");
+        pageOne.Actions.Should().Contain(action =>
+            action.LlmSelection != null &&
+            action.LlmSelection.Action == TextUserLlmOptionsRenderer.ListPageAction &&
+            action.LlmSelection.Page == 2);
+
+        pageTwo.Should().NotBeNull();
+        pageTwo!.Text.Should().Contain("第 2/2 页");
+        pageTwo.Text.Should().Contain("Route 6");
+        pageTwo.Text.Should().Contain("Route 7");
+        pageTwo.Text.Should().Contain("`/route list 1`");
+        pageTwo.Text.Should().NotContain("Route 5");
     }
 
     [Fact]
@@ -278,6 +360,39 @@ public sealed class ModelSlashCommandHandlerTests
         var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
         saved.Config.PreferredLlmRoute.Should().Be(selectableProxy.RouteValue);
         saved.Config.DefaultModel.Should().Be(selectableProxy.DefaultModel);
+    }
+
+    [Fact]
+    public async Task Use_ServiceNameAndModel_PrefersUserKeyCandidateOverLegacyCatalogCandidate()
+    {
+        var legacyCatalog = ChronoLlm with
+        {
+            UserServiceId = "svc-chrono",
+            DisplayName = "Chrono LLM",
+            Status = "not_connected",
+            Source = NyxIdLlmProviderSource.ProxyService,
+            Allowed = false,
+        };
+        var userKey = ChronoLlm with
+        {
+            UserServiceId = "key-chrono",
+            DisplayName = "Chrono LLM",
+            Source = NyxIdLlmProviderSource.UserService,
+            Allowed = true,
+            Status = "ready",
+        };
+        var catalog = new StubCatalogClient { Services = [legacyCatalog, userKey] };
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(catalog, commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use chrono-llm gpt-5.5"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("Chrono LLM");
+        reply.Text.Should().Contain("gpt-5.5");
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(userKey.RouteValue);
+        saved.Config.DefaultModel.Should().Be("gpt-5.5");
     }
 
     [Fact]

@@ -244,6 +244,12 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
                 arguments["service_id"] = llmSelection.ServiceId;
             if (!string.IsNullOrWhiteSpace(llmSelection.PresetId))
                 arguments["preset_id"] = llmSelection.PresetId;
+            if (!string.IsNullOrWhiteSpace(llmSelection.Model))
+                arguments["model"] = llmSelection.Model;
+            if (llmSelection.Page > 0)
+                arguments["page"] = llmSelection.Page.ToString(CultureInfo.InvariantCulture);
+            if (!string.IsNullOrWhiteSpace(llmSelection.DisplayMode))
+                arguments["display_mode"] = llmSelection.DisplayMode;
         }
 
         return arguments;

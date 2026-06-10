@@ -545,6 +545,34 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldMapLlmSelectionPageFields_ToTypedPayload()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-page",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"action_id\":\"llp\",\"value\":\"2\",\"llm_action\":\"list_page\",\"page\":2,\"display_mode\":\"route\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var llmSelection = parsed.Activity!.Content.CardAction.LlmSelection;
+        llmSelection.Action.Should().Be("list_page");
+        llmSelection.Page.Should().Be(2);
+        llmSelection.DisplayMode.Should().Be("route");
+        parsed.Activity.Content.CardAction.Arguments.Should().NotContainKey("page");
+        parsed.Activity.Content.CardAction.Arguments.Should().NotContainKey("display_mode");
+    }
+
+    [Fact]
     public void Parse_ShouldMapKnownWorkflowCallbackFields_ToTypedPayload()
     {
         var body = """

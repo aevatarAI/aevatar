@@ -231,12 +231,12 @@ public sealed class ScheduledAgentCreatorToolTests
     [Theory]
     [InlineData("""{"error":true,"message":"service lookup denied"}""", "service_resolution_failed")]
     [InlineData("not-json", "service_resolution_invalid_json")]
-    public async Task ExecuteAsync_WhenUserServicesResponseInvalid_ShouldFailClosedWithoutKeyCreation(
+    public async Task ExecuteAsync_WhenServiceKeyListResponseInvalid_ShouldFailClosedWithoutKeyCreation(
         string servicesResponseJson,
         string expectedError)
     {
         var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", servicesResponseJson);
+        handler.Add(HttpMethod.Get, "/api/v1/keys", servicesResponseJson);
         var harness = CreateHarness(handler: handler);
 
         await WithToolContext(async () =>
@@ -260,7 +260,7 @@ public sealed class ScheduledAgentCreatorToolTests
     public async Task ExecuteAsync_WhenRequiredServiceMissing_ShouldFailClosedWithoutBroadKey()
     {
         var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """{"user_services":[{"id":"svc-lark","slug":"api-lark-bot"}]}""");
+        handler.Add(HttpMethod.Get, "/api/v1/keys", """{"keys":[{"id":"svc-lark","slug":"api-lark-bot"}]}""");
         var harness = CreateHarness(handler: handler);
 
         await WithToolContext(async () =>
@@ -278,9 +278,9 @@ public sealed class ScheduledAgentCreatorToolTests
     public async Task ExecuteAsync_WhenRequiredServiceAmbiguous_ShouldFailClosedWithoutKeyCreation()
     {
         var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+        handler.Add(HttpMethod.Get, "/api/v1/keys", """
             {
-              "user_services": [
+              "keys": [
                 {"id":"svc-ornn-1","slug":"ornn-api"},
                 {"id":"svc-ornn-2","slug":"ornn-api"},
                 {"id":"svc-lark","slug":"api-lark-bot"}
@@ -541,9 +541,9 @@ public sealed class ScheduledAgentCreatorToolTests
     private static RoutingJsonHandler CreateSuccessHandler(string createApiKeyResponse = """{"id":"key-created","full_key":"full-secret-key"}""")
     {
         var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+        handler.Add(HttpMethod.Get, "/api/v1/keys", """
             {
-              "user_services": [
+              "keys": [
                 {"id":"svc-ornn","slug":"ornn-api"},
                 {"id":"svc-lark","slug":"api-lark-bot"},
                 {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}

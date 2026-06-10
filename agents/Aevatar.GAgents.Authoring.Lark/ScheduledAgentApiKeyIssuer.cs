@@ -37,7 +37,7 @@ internal sealed class ScheduledAgentApiKeyIssuer
             return ScheduledAgentApiKeyIssueResult.Failed("missing_required_service_slugs");
 
         var client = _nyxClientFactory.CreateClient();
-        var servicesJson = await client.ListUserServicesAsync(token, ct);
+        var servicesJson = await client.ListServicesAsync(token, ct);
         var resolution = ResolveServiceIds(servicesJson, slugs);
         if (resolution.Error is not null)
             return ScheduledAgentApiKeyIssueResult.Failed(resolution.Error);

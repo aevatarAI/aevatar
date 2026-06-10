@@ -99,7 +99,7 @@ public sealed class NyxIdApiClient : IDisposable
     // ─── AI Services (unified /keys) ───
 
     public Task<string> ListServicesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/keys", ct);
+        GetAsync(token, NyxIdLlmCatalogRoutes.UserKeysPath, ct);
 
     public Task<string> GetServiceAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", ct);
@@ -315,14 +315,6 @@ public sealed class NyxIdApiClient : IDisposable
 
     public Task<string> UpdateServiceAsync(string token, string id, string body, CancellationToken ct) =>
         PutAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", body, ct);
-
-    // ─── User Services (for route command) ───
-
-    public Task<string> ListUserServicesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/user-services", ct);
-
-    public Task<string> UpdateUserServiceAsync(string token, string id, string body, CancellationToken ct) =>
-        PutAsync(token, $"/api/v1/user-services/{Uri.EscapeDataString(id)}", body, ct);
 
     // ─── Proxy (additions) ───
 
