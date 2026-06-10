@@ -97,6 +97,7 @@ message StartWorkflowEvent
   string run_id = 4;
   WorkflowRunForkSeed fork_seed = 5;
   WorkflowToolRuntimeContextPayload workflow_runtime = 6;
+  repeated WorkflowFileRef input_file_refs = 7;
 }
 message BindWorkflowRunDefinitionEvent
 {
@@ -124,6 +125,7 @@ message WorkflowRunExecutionStartedEvent
   string scope_id = 5;
   WorkflowRunExecutionContextDelta execution_context_delta = 6;
   int32 attempt = 7;
+  repeated WorkflowFileRef input_file_refs = 8;
 }
 message WorkflowRunExecutionContextDelta
 {
@@ -301,6 +303,7 @@ message StepRequestEvent
   string run_id = 6;
   string execution_id = 7;
   WorkflowStepParameters step_parameters = 8;
+  repeated WorkflowFileRef input_file_refs = 9;
 }
 message WorkflowUsageMetrics {
   int32 prompt_tokens = 1;
@@ -544,6 +547,7 @@ message WorkflowLlmExecutionIntent
   string route_preference = 13;
   string sender_nyx_id_access_token = 14;
   WorkflowToolRuntimeContextPayload workflow_runtime_context = 15;
+  repeated WorkflowFileRef input_file_refs = 16;
 }
 
 message WorkflowToolRuntimeContextPayload

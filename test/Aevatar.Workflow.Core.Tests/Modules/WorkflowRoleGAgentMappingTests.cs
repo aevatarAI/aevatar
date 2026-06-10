@@ -109,6 +109,39 @@ public sealed class WorkflowRoleGAgentMappingTests
         completed.ManagedHandoff.ParentStepId.Should().Be("reply");
     }
 
+    [Fact]
+    public async Task WorkflowRoleGAgent_ShouldMapWorkflowFileRefsToChatUriPartsWithoutBase64()
+    {
+        var provider = new RecordingLlmProvider();
+        var publisher = new RecordingEventPublisher();
+        var agent = new WorkflowRoleGAgent(provider)
+        {
+            EventPublisher = publisher,
+        };
+        var intent = new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-files",
+            StepId = "reply",
+            SessionId = "session-files",
+            Prompt = "describe this",
+        };
+        intent.InputFileRefs.Add(BuildWorkflowFileRef("file-role"));
+
+        await agent.HandleWorkflowLlmExecutionIntent(intent);
+
+        provider.LastRequest.Should().NotBeNull();
+        var user = provider.LastRequest!.Messages.Should().ContainSingle().Subject;
+        user.ContentParts.Should().NotBeNull();
+        user.ContentParts!.Should().HaveCount(2);
+        user.ContentParts[0].Kind.Should().Be(ContentPartKind.Text);
+        user.ContentParts[0].Text.Should().Be("describe this");
+        user.ContentParts[1].Kind.Should().Be(ContentPartKind.Image);
+        user.ContentParts[1].Uri.Should().Be("workflow-file://file-role");
+        user.ContentParts[1].MediaType.Should().Be("image/png");
+        user.ContentParts[1].Name.Should().Be("file-role.png");
+        user.ContentParts[1].DataBase64.Should().BeNull();
+    }
+
     private sealed class RecordingLlmProvider : ILLMProviderFactory, ILLMProvider
     {
         public LLMRequest? LastRequest { get; private set; }
@@ -186,4 +219,20 @@ public sealed class WorkflowRoleGAgentMappingTests
             return PublishAsync(evt, TopologyAudience.Children, ct, sourceEnvelope, options);
         }
     }
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = "image_key_1",
+            FileName = $"{fileId}.png",
+            MediaType = "image/png",
+            SizeBytes = 3,
+            Sha256 = $"sha-{fileId}",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+        };
 }

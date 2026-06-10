@@ -267,6 +267,7 @@ public sealed class WorkflowRunGAgent
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
         _runtimeContext.ApplySenderNyxIdAccessToken(request.LlmControl?.SenderNyxIdAccessToken);
         var llmControlDelta = WorkflowRunExecutionContextStateAccess.BuildLlmControlDelta(request.LlmControl);
+        var inputFileRefs = ExtractInputFileRefs(request.InputParts);
 
         await EnsureAgentTreeAsync();
 
@@ -287,15 +288,18 @@ public sealed class WorkflowRunGAgent
             ScopeId = ResolveScopeId(request.ScopeId, State.ScopeId),
             ExecutionContextDelta = executionContextDelta,
             Attempt = Math.Max(0, request.ForkSeed?.Attempt ?? 0),
+            InputFileRefs = { inputFileRefs.Select(static fileRef => fileRef.Clone()) },
         });
 
-        await PublishAsync(new StartWorkflowEvent
+        var start = new StartWorkflowEvent
         {
             WorkflowName = _compiledWorkflow.Name,
             Input = executionInput,
             RunId = runId,
             ForkSeed = request.ForkSeed,
-        }, TopologyAudience.Self);
+        };
+        start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
+        await PublishAsync(start, TopologyAudience.Self);
     }
 
     [EventHandler]
@@ -366,6 +370,17 @@ public sealed class WorkflowRunGAgent
 
         return request.Prompt ?? string.Empty;
     }
+
+    private static IReadOnlyList<WorkflowFileRef> ExtractInputFileRefs(
+        IEnumerable<WorkflowChatInputPartPayload> inputParts) =>
+        inputParts
+            .Where(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))
+            .Select(static part => part.FileRef.Clone())
+            .ToArray();
+
+    private static bool HasFileRefIdentity(WorkflowFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleSubWorkflowInvokeRequested(SubWorkflowInvokeRequestedEvent request)

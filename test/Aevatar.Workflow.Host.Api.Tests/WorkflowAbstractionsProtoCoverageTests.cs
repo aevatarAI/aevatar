@@ -23,6 +23,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         };
         evt.Parameters["k"] = "v";
         evt.ForkSeed.Variables["step-a"] = "alpha";
+        evt.InputFileRefs.Add(BuildWorkflowFileRef("file-1"));
 
         var clone = evt.Clone();
         clone.Should().BeEquivalentTo(evt);
@@ -35,6 +36,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsed.ForkSeed.StartAtStepId.Should().Be("step-b");
         parsed.ForkSeed.Attempt.Should().Be(2);
         parsed.ForkSeed.Variables["step-a"].Should().Be("alpha");
+        parsed.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-1");
     }
 
     [Fact]
@@ -134,6 +136,7 @@ public class WorkflowAbstractionsProtoCoverageTests
             Input = "hello",
             TargetRole = "assistant",
         };
+        request.InputFileRefs.Add(BuildWorkflowFileRef("file-step"));
         request.Parameters["temperature"] = "0.1";
         request.StepParameters.InteractionSpec = new InteractionSpec
         {
@@ -166,6 +169,7 @@ public class WorkflowAbstractionsProtoCoverageTests
 
         var parsedRequest = StepRequestEvent.Parser.ParseFrom(request.ToByteArray());
         parsedRequest.StepType.Should().Be("llm_call");
+        parsedRequest.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-step");
         parsedRequest.Parameters["temperature"].Should().Be("0.1");
         parsedRequest.StepParameters.Parameters["temperature"].Should().Be("0.1");
         parsedRequest.StepParameters.InteractionSpec.Title.Should().Be("Review");
@@ -192,6 +196,8 @@ public class WorkflowAbstractionsProtoCoverageTests
             .Should().Contain(field => field.FieldNumber == 7 && field.Name == "transform_operation");
         StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
             .Should().NotContain(field => field.FieldNumber == 5);
+        StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 9 && field.Name == "input_file_refs");
 
         var request = new StepRequestEvent
         {
@@ -218,6 +224,45 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsed.StepParameters.InteractionSpec.Body.Should().Be("Continue?");
         parsed.ToString().Should().Contain("stepParameters");
         ((IMessage)parsed.StepParameters).Descriptor.Name.Should().Be(nameof(WorkflowStepParameters));
+    }
+
+    [Fact]
+    public void WorkflowRunExecutionStartedEvent_ShouldRoundtripInputFileRefs()
+    {
+        WorkflowRunExecutionStartedEvent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 8 && field.Name == "input_file_refs");
+
+        var evt = new WorkflowRunExecutionStartedEvent
+        {
+            RunId = "run-1",
+            WorkflowName = "wf",
+            Input = "hello",
+        };
+        evt.InputFileRefs.Add(BuildWorkflowFileRef("file-started"));
+
+        var parsed = WorkflowRunExecutionStartedEvent.Parser.ParseFrom(evt.ToByteArray());
+
+        parsed.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-started");
+    }
+
+    [Fact]
+    public void WorkflowLlmExecutionIntent_ShouldRoundtripInputFileRefs()
+    {
+        WorkflowLlmExecutionIntent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 16 && field.Name == "input_file_refs");
+
+        var intent = new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-1",
+            StepId = "step-1",
+            SessionId = "session-1",
+            Prompt = "hello",
+        };
+        intent.InputFileRefs.Add(BuildWorkflowFileRef("file-llm"));
+
+        var parsed = WorkflowLlmExecutionIntent.Parser.ParseFrom(intent.ToByteArray());
+
+        parsed.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-llm");
     }
 
     [Fact]
@@ -481,4 +526,20 @@ public class WorkflowAbstractionsProtoCoverageTests
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SecureValueCapturedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationCompletedEvent));
     }
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = "image_key_1",
+            FileName = $"{fileId}.png",
+            MediaType = "image/png",
+            SizeBytes = 3,
+            Sha256 = $"sha-{fileId}",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+        };
 }
