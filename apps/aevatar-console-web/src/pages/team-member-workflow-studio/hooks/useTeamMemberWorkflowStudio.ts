@@ -143,6 +143,7 @@ type TeamMemberWorkflowStudioState = {
   readonly selectedStepConfigurationError: string;
   readonly selectedTab: "editor" | "runs";
   readonly setSelectedTab: (tab: "editor" | "runs") => void;
+  readonly setSelectedStepConfigurationError: (error: string) => void;
   readonly updateSelectedStepConfiguration: (parametersText: string) => void;
   readonly selectCanvas: () => void;
   readonly selectEdge: (edgeId: string) => void;
@@ -1098,12 +1099,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             route.teamId &&
             editableDocument &&
             dirty &&
+            !selectedStepConfigurationError &&
             !createWorkflowMemberMutation.isPending,
         )
       : Boolean(
           workflowQuery.data &&
             editableDocument &&
             dirty &&
+            !selectedStepConfigurationError &&
             !linkedWorkflowMissing &&
             !saveMutation.isPending,
         );
@@ -1536,6 +1539,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedTab("editor");
       setSelectedEdgeId("");
       setSelectedNodeId("");
+      setSelectedStepConfigurationError("");
       setRunOptionsOpen(true);
     },
     save: () => {
@@ -1572,20 +1576,24 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     selectCanvas: () => {
       setSelectedEdgeId("");
       setSelectedNodeId("");
+      setSelectedStepConfigurationError("");
       setRunOptionsOpen(false);
     },
     selectEdge: (edgeId: string) => {
       setSelectedEdgeId(edgeId);
       setSelectedNodeId("");
+      setSelectedStepConfigurationError("");
       setRunOptionsOpen(false);
     },
     selectNode: (nodeId: string) => {
       setSelectedEdgeId("");
       setSelectedNodeId(nodeId);
+      setSelectedStepConfigurationError("");
       setRunOptionsOpen(false);
     },
     setExecutionRunMessage,
     setSelectedTab,
+    setSelectedStepConfigurationError,
     setWorkflowTitle,
     teamName,
     updateSelectedStepConfiguration,
