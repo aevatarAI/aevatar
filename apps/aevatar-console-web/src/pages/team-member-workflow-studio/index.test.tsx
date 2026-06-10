@@ -280,6 +280,19 @@ async function flushAsyncWork() {
   }
 }
 
+function createPointerDragEvent(
+  type: "pointerdown" | "pointermove" | "pointerup",
+  clientX: number,
+): Event {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX,
+  });
+  Object.defineProperty(event, "pointerId", { value: 7 });
+  return event;
+}
+
 describe("TeamMemberWorkflowStudioPage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -1055,6 +1068,81 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(inspector).toHaveStyle({ width: "360px" });
     expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
+  });
+
+  it("resizes the node inspector with pointer drag and restores page resize styles", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha/members/member-alpha/workflow",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockBranchingWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByText("nodes:2")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+    const inspector = screen.getByLabelText("Node inspector");
+    const resizeHandle = screen.getByLabelText("Resize node inspector");
+    const setPointerCapture = jest.fn();
+    const releasePointerCapture = jest.fn();
+    resizeHandle.setPointerCapture = setPointerCapture;
+    resizeHandle.releasePointerCapture = releasePointerCapture;
+    resizeHandle.hasPointerCapture = jest.fn(() => true);
+    document.body.style.cursor = "default";
+    document.body.style.userSelect = "text";
+
+    fireEvent(resizeHandle, createPointerDragEvent("pointerdown", 480));
+
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
+    expect(document.body.style.cursor).toBe("ew-resize");
+    expect(document.body.style.userSelect).toBe("none");
+
+    fireEvent(resizeHandle, createPointerDragEvent("pointermove", 240));
+
+    expect(inspector).toHaveStyle({ width: "500px" });
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "500");
+
+    fireEvent(resizeHandle, createPointerDragEvent("pointerup", 240));
+
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(document.body.style.cursor).toBe("default");
+    expect(document.body.style.userSelect).toBe("text");
   });
 
   it("shows a node detail error for invalid parameter JSON", async () => {

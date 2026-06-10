@@ -1,5 +1,14 @@
 import { CloseOutlined } from "@ant-design/icons";
-import { Alert, Button, Collapse, Input, Select, Space, Typography } from "antd";
+import {
+  Alert,
+  Button,
+  Collapse,
+  Input,
+  Select,
+  Space,
+  Typography,
+  theme,
+} from "antd";
 import React from "react";
 import {
   applyStudioNodeConfigurationValues,
@@ -24,9 +33,10 @@ const DEFAULT_PANEL_WIDTH = 420;
 const MIN_PANEL_WIDTH = 360;
 const MAX_PANEL_WIDTH = 500;
 
-const INSPECTOR_CSS = `
+function buildInspectorCss(screenMd: number): string {
+  return `
 .workflow-studio-node-inspector {
-  color: #111827;
+  color: var(--workflow-node-inspector-text);
 }
 
 .workflow-studio-node-inspector__resize {
@@ -37,44 +47,44 @@ const INSPECTOR_CSS = `
   cursor: ew-resize;
   display: flex;
   justify-content: center;
-  left: -8px;
+  left: calc(var(--workflow-node-inspector-resize-hit-width) / -2);
   padding: 0;
   position: absolute;
   top: 0;
-  width: 16px;
+  width: var(--workflow-node-inspector-resize-hit-width);
 }
 
 .workflow-studio-node-inspector__resize::after {
-  background: #d1d5db;
-  border-radius: 999px;
+  background: var(--workflow-node-inspector-resize);
+  border-radius: var(--workflow-node-inspector-pill-radius);
   content: "";
-  height: 52px;
-  width: 3px;
+  height: var(--workflow-node-inspector-resize-grip-height);
+  width: var(--workflow-node-inspector-resize-grip-width);
 }
 
 .workflow-studio-node-inspector__resize:hover::after,
 .workflow-studio-node-inspector__resize:focus-visible::after {
-  background: #4f46e5;
+  background: var(--workflow-node-inspector-resize-active);
 }
 
 .workflow-studio-node-inspector__body::-webkit-scrollbar {
-  width: 10px;
+  width: var(--workflow-node-inspector-scrollbar-width);
 }
 
 .workflow-studio-node-inspector__body::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border: 3px solid #ffffff;
-  border-radius: 999px;
+  background: var(--workflow-node-inspector-scroll-thumb);
+  border: 3px solid var(--workflow-node-inspector-surface);
+  border-radius: var(--workflow-node-inspector-pill-radius);
 }
 
-@media (max-width: 720px) {
+@media (max-width: ${screenMd}px) {
   .workflow-studio-node-inspector {
     border-left: 0 !important;
-    border-radius: 16px 16px 0 0 !important;
-    border-top: 1px solid #e5e7eb !important;
+    border-radius: var(--workflow-node-inspector-mobile-radius) var(--workflow-node-inspector-mobile-radius) 0 0 !important;
+    border-top: 1px solid var(--workflow-node-inspector-border) !important;
     bottom: 0 !important;
     left: 0 !important;
-    max-height: 74vh !important;
+    max-height: calc(100vh - var(--workflow-node-inspector-mobile-offset)) !important;
     max-width: none !important;
     right: 0 !important;
     top: auto !important;
@@ -86,11 +96,22 @@ const INSPECTOR_CSS = `
   }
 }
 `;
+}
 
 const fieldStackStyle: React.CSSProperties = {
   display: "grid",
-  gap: 6,
+  gap: "var(--workflow-node-inspector-field-gap)",
 };
+
+type InspectorCssVariables = React.CSSProperties & Record<`--${string}`, string>;
+
+function toPx(value: number | string): string {
+  return typeof value === "number" ? `${value}px` : value;
+}
+
+function doubledPx(value: number | string): string {
+  return typeof value === "number" ? `${value * 2}px` : `calc(${value} * 2)`;
+}
 
 function clampPanelWidth(width: number): number {
   return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width));
@@ -135,8 +156,8 @@ function InspectorField({
     <div style={{ minWidth: 0 }}>
       <dt
         style={{
-          color: "#6b7280",
-          fontSize: 12,
+          color: "var(--workflow-node-inspector-muted)",
+          fontSize: "var(--workflow-node-inspector-caption-size)",
           fontWeight: 600,
           lineHeight: 1.4,
         }}
@@ -145,9 +166,9 @@ function InspectorField({
       </dt>
       <dd
         style={{
-          color: "#111827",
+          color: "var(--workflow-node-inspector-text)",
           lineHeight: 1.5,
-          margin: "4px 0 0",
+          margin: "var(--workflow-node-inspector-field-gap) 0 0",
           overflowWrap: "anywhere",
         }}
       >
@@ -199,6 +220,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
   onConfigurationChange,
   stepDraft,
 }) => {
+  const { token } = theme.useToken();
   const [panelWidth, setPanelWidth] = React.useState(DEFAULT_PANEL_WIDTH);
   const [resizing, setResizing] = React.useState(false);
   const resizeStartRef = React.useRef<{
@@ -232,6 +254,39 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     return null;
   }
 
+  const overlayInset = token.padding;
+  const inspectorCss = buildInspectorCss(token.screenMD);
+  const inspectorVariables: InspectorCssVariables = {
+    "--workflow-node-inspector-border": token.colorBorderSecondary,
+    "--workflow-node-inspector-border-strong": token.colorBorder,
+    "--workflow-node-inspector-caption-size": toPx(token.fontSizeSM),
+    "--workflow-node-inspector-field-gap": toPx(token.paddingXXS),
+    "--workflow-node-inspector-header-gap": toPx(token.paddingSM),
+    "--workflow-node-inspector-mobile-offset": token.sizeXXL
+      ? toPx(token.sizeXXL)
+      : token.controlHeightLG
+        ? doubledPx(token.controlHeightLG)
+        : doubledPx(token.paddingXL),
+    "--workflow-node-inspector-mobile-radius": toPx(token.borderRadiusLG),
+    "--workflow-node-inspector-muted": token.colorTextSecondary,
+    "--workflow-node-inspector-panel-radius": toPx(token.borderRadiusLG),
+    "--workflow-node-inspector-pill-radius": toPx(token.borderRadiusSM),
+    "--workflow-node-inspector-resize": token.colorBorder,
+    "--workflow-node-inspector-resize-active": token.colorPrimary,
+    "--workflow-node-inspector-resize-grip-height": token.controlHeightLG
+      ? toPx(token.controlHeightLG)
+      : doubledPx(token.paddingLG),
+    "--workflow-node-inspector-resize-grip-width": toPx(token.lineWidthBold),
+    "--workflow-node-inspector-resize-hit-width": toPx(token.controlHeightXS),
+    "--workflow-node-inspector-scroll-thumb": token.colorTextQuaternary,
+    "--workflow-node-inspector-scrollbar-width": toPx(token.controlHeightXS),
+    "--workflow-node-inspector-section-gap": toPx(token.paddingLG),
+    "--workflow-node-inspector-section-radius": toPx(token.borderRadius),
+    "--workflow-node-inspector-surface": token.colorBgElevated,
+    "--workflow-node-inspector-surface-muted": token.colorFillAlter,
+    "--workflow-node-inspector-text": token.colorText,
+    "--workflow-node-inspector-text-strong": token.colorTextHeading,
+  };
   const schema = getStudioNodeConfigurationSchema(stepDraft.type);
   const hasSemanticFields = schema.fields.length > 0;
   const nodeTypeLabel = formatStudioStepTypeLabel(stepDraft.type);
@@ -342,7 +397,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
 
   return (
     <>
-      <style>{INSPECTOR_CSS}</style>
+      <style>{inspectorCss}</style>
       <aside
         aria-label={t(
           "teamMemberWorkflowStudio.nodeInspector.sectionAria",
@@ -351,22 +406,23 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
         className="workflow-studio-node-inspector"
         data-testid="workflow-node-inspector"
         style={{
-          background: "#ffffff",
-          border: "1px solid #e5e7eb",
-          borderLeft: "1px solid #d1d5db",
-          borderRadius: 14,
-          bottom: 16,
-          boxShadow: "0 24px 60px rgba(15, 23, 42, 0.18)",
+          ...inspectorVariables,
+          background: token.colorBgElevated,
+          border: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
+          borderLeft: `${token.lineWidth}px ${token.lineType} ${token.colorBorder}`,
+          borderRadius: token.borderRadiusLG,
+          bottom: overlayInset,
+          boxShadow: token.boxShadowSecondary,
           display: "flex",
           flexDirection: "column",
-          maxWidth: "calc(100% - 32px)",
+          maxWidth: `calc(100% - ${doubledPx(overlayInset)})`,
           minHeight: 0,
           overflow: "hidden",
           position: "absolute",
-          right: 16,
-          top: 16,
+          right: overlayInset,
+          top: overlayInset,
           width: panelWidth,
-          zIndex: 20,
+          zIndex: token.zIndexPopupBase,
         }}
       >
         <div
@@ -390,19 +446,19 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
         <header
           style={{
             alignItems: "flex-start",
-            borderBottom: "1px solid #e5e7eb",
+            borderBottom: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
             display: "flex",
-            gap: 12,
+            gap: token.paddingSM,
             justifyContent: "space-between",
-            padding: "16px 18px",
+            padding: `${toPx(token.padding)} ${toPx(token.paddingLG)}`,
           }}
         >
           <div style={{ minWidth: 0 }}>
-            <Typography.Text strong style={{ color: "#111827", fontSize: 16 }}>
+            <Typography.Text strong style={{ color: token.colorTextHeading }}>
               {stepDraft.id}
             </Typography.Text>
             <Typography.Paragraph
-              style={{ color: "#6b7280", margin: "2px 0 0" }}
+              style={{ color: token.colorTextSecondary, margin: `${token.marginXXS}px 0 0` }}
             >
               {nodeTypeLabel}
             </Typography.Paragraph>
@@ -422,9 +478,9 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           className="workflow-studio-node-inspector__body"
           style={{
             display: "grid",
-            gap: 18,
+            gap: token.paddingLG,
             overflow: "auto",
-            padding: 18,
+            padding: token.paddingLG,
           }}
         >
           <section aria-labelledby="workflow-node-inspector-basics-heading">
@@ -437,8 +493,8 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             <dl
               style={{
                 display: "grid",
-                gap: 12,
-                margin: "12px 0 0",
+                gap: token.paddingSM,
+                margin: `${token.marginSM}px 0 0`,
               }}
             >
               <InspectorField
@@ -465,8 +521,8 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             <dl
               style={{
                 display: "grid",
-                gap: 12,
-                margin: "12px 0 0",
+                gap: token.paddingSM,
+                margin: `${token.marginSM}px 0 0`,
               }}
             >
               <InspectorField
@@ -485,7 +541,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
               />
             </dl>
           </section>
-        <section style={{ display: "grid", gap: 14 }}>
+        <section style={{ display: "grid", gap: token.padding }}>
           <Space
             align="start"
             style={{ justifyContent: "space-between", width: "100%" }}
@@ -498,7 +554,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
                 )}
               </Typography.Text>
               <Typography.Paragraph
-                style={{ color: "#6b7280", margin: "2px 0 0" }}
+                style={{ color: token.colorTextSecondary, margin: `${token.marginXXS}px 0 0` }}
               >
                 {t(
                   "teamMemberWorkflowStudio.nodeDetail.configurationDescription",
@@ -521,12 +577,12 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           {hasSemanticFields ? (
             schema.fields.map((field) => (
               <div key={field.name} style={fieldStackStyle}>
-                <Typography.Text strong style={{ color: "#374151", fontSize: 13 }}>
+                <Typography.Text strong style={{ color: token.colorText }}>
                   {formatConsoleMessage(field.label)}
                 </Typography.Text>
                 {renderFieldControl(field)}
                 {field.description ? (
-                  <Typography.Text style={{ color: "#6b7280", fontSize: 12 }}>
+                  <Typography.Text style={{ color: token.colorTextSecondary }}>
                     {formatConsoleMessage(field.description)}
                   </Typography.Text>
                 ) : null}
@@ -562,8 +618,8 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
                 "Advanced raw configuration",
               ),
               children: (
-                <div style={{ display: "grid", gap: 10 }}>
-                  <Typography.Paragraph style={{ color: "#6b7280", margin: 0 }}>
+                <div style={{ display: "grid", gap: token.paddingXS }}>
+                  <Typography.Paragraph style={{ color: token.colorTextSecondary, margin: 0 }}>
                     {t(
                       "teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription",
                       "Use this only when a node option is not available as a guided field.",
@@ -594,9 +650,9 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             },
           ]}
           style={{
-            background: "#f9fafb",
-            border: "1px solid #e5e7eb",
-            borderRadius: 8,
+            background: token.colorFillAlter,
+            border: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
+            borderRadius: token.borderRadius,
           }}
         />
         </div>
