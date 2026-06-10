@@ -1224,6 +1224,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 x => string.Equals(x.Id, effectiveTargetRole, StringComparison.OrdinalIgnoreCase));
             if (role is { Connectors.Count: > 0 })
                 request.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
+            ApplyAgentToolScope(request, role?.AgentToolScope, step.AgentToolScope);
+        }
+        else
+        {
+            ApplyAgentToolScope(request, roleScope: null, step.AgentToolScope);
         }
 
         ApplyTransformOperation(request, step.TransformOperation, state);
@@ -1248,6 +1253,48 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         spec.Value = _expressionEvaluator.Evaluate(spec.Value, state.Variables);
         (request.StepParameters ??= new WorkflowStepParameters()).TransformOperation = spec;
     }
+
+    private static void ApplyAgentToolScope(
+        StepRequestEvent request,
+        WorkflowAgentToolScopeDefinition? roleScope,
+        WorkflowAgentToolScopeDefinition? stepScope)
+    {
+        var effectiveScope = IntersectAgentToolScope(roleScope, stepScope);
+        if (effectiveScope == null)
+            return;
+
+        var payload = (request.StepParameters ??= new WorkflowStepParameters()).AgentToolScope = new WorkflowAgentToolScope();
+        foreach (var toolName in effectiveScope.AllowedToolNames)
+            payload.AllowedToolNames.Add(toolName);
+    }
+
+    private static WorkflowAgentToolScopeDefinition? IntersectAgentToolScope(
+        WorkflowAgentToolScopeDefinition? roleScope,
+        WorkflowAgentToolScopeDefinition? stepScope)
+    {
+        if (roleScope == null)
+            return stepScope == null ? null : CloneAgentToolScope(stepScope);
+
+        if (stepScope == null)
+            return CloneAgentToolScope(roleScope);
+
+        var stepAllowed = new HashSet<string>(stepScope.AllowedToolNames, StringComparer.OrdinalIgnoreCase);
+        return new WorkflowAgentToolScopeDefinition
+        {
+            AllowedToolNames = roleScope.AllowedToolNames
+                .Where(stepAllowed.Contains)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+        };
+    }
+
+    private static WorkflowAgentToolScopeDefinition CloneAgentToolScope(WorkflowAgentToolScopeDefinition scope) =>
+        new()
+        {
+            AllowedToolNames = scope.AllowedToolNames
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+        };
 
     private void ApplyInteractionPresentation(
         StepRequestEvent request,

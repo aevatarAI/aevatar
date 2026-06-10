@@ -146,6 +146,26 @@ public class VoicePresenceEndpointsTests
     }
 
     [Fact]
+    public async Task Request_should_detach_using_transport_lifetime_lease_id_when_attach_returns_distinct_lease()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open, keepOpenUntilCancelledWhenEmpty: true);
+        var mediaPort = new RecordingVolatileMediaStreamPort(transportLeaseId: "transport-attached");
+        using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
+        var context = CreateHttpContext(app);
+        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        socket.CompleteReceiveClose();
+        await GetVoiceEndpoint(app).RequestDelegate!(context);
+
+        mediaPort.AttachCalls.ShouldBe(1);
+        mediaPort.DetachCalls.ShouldBe(1);
+        mediaPort.LastDetachedHandle.ShouldNotBeNull();
+        mediaPort.LastDetachedHandle!.ActiveTransportLeaseId.ShouldBe("transport-attached");
+        mediaPort.LastDetachedHandle.ActiveTransportLeaseId.ShouldNotBe(CreateLeaseHandle().ActiveTransportLeaseId);
+    }
+
+    [Fact]
     public async Task Request_should_reject_second_transport_without_detaching_existing_one()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
@@ -313,7 +333,8 @@ public class VoicePresenceEndpointsTests
     }
 
     private sealed class RecordingVolatileMediaStreamPort(
-        Func<IVoiceTransport, CancellationToken, Task>? attachAsync = null)
+        Func<IVoiceTransport, CancellationToken, Task>? attachAsync = null,
+        string transportLeaseId = "transport-1")
         : IVoiceVolatileMediaStreamPort
     {
         public bool SupportsRemoteAudio => true;
@@ -323,6 +344,8 @@ public class VoicePresenceEndpointsTests
         public int DetachCalls { get; private set; }
 
         public int LifetimeCompletionCalls { get; private set; }
+
+        public VoicePresenceSessionLeaseHandle? LastDetachedHandle { get; private set; }
 
         public async Task<VoiceTransportLifetimeCompleted?> AttachAsync(
             VoicePresenceSessionLeaseHandle handle,
@@ -347,7 +370,7 @@ public class VoicePresenceEndpointsTests
             return new VoiceTransportLifetimeCompleted
             {
                 SessionId = handle.SessionId,
-                TransportLeaseId = "transport-1",
+                TransportLeaseId = transportLeaseId,
                 Reason = "completed",
                 OwnerId = handle.OwnerId,
             };
@@ -358,10 +381,10 @@ public class VoicePresenceEndpointsTests
             IVoiceTransport? expectedTransport,
             CancellationToken ct = default)
         {
-            _ = handle;
             _ = expectedTransport;
             ct.ThrowIfCancellationRequested();
             DetachCalls++;
+            LastDetachedHandle = handle;
             return Task.CompletedTask;
         }
 

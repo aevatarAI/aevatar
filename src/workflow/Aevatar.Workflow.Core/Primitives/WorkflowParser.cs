@@ -122,6 +122,7 @@ public sealed class WorkflowParser
             MaxHistoryMessages = role.MaxHistoryMessages,
             EventModules = eventModules,
             EventRoutes = eventRoutes,
+            AgentToolScope = MapAgentToolScope(role.AllowedTools),
             Connectors = role.Connectors?.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Distinct(StringComparer.Ordinal).ToList() ?? [],
         };
     }
@@ -147,6 +148,7 @@ public sealed class WorkflowParser
         var rawParameters = s.Parameters is null
             ? null
             : new Dictionary<string, object?>(s.Parameters, StringComparer.Ordinal);
+        var agentToolScope = MapAgentToolScope(ResolveStepAllowedTools(s, rawParameters));
         var presentation = MapPresentation(canonicalType, s, rawParameters);
         var parameters = NormalizeParameters(rawParameters);
 
@@ -162,6 +164,7 @@ public sealed class WorkflowParser
             Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(parameters),
             TransformOperation = MapTransformOperation(canonicalType, parameters),
             Presentation = presentation,
+            AgentToolScope = agentToolScope,
             Next = s.Next,
             Children = s.Children?.Select(MapStep).ToList(),
             Branches = NormalizeBranches(s.Branches),
@@ -221,6 +224,101 @@ public sealed class WorkflowParser
         }
 
         return null;
+    }
+
+    private static object? ResolveStepAllowedTools(
+        RawStep step,
+        IDictionary<string, object?>? rawParameters)
+    {
+        object? parameterSource = null;
+        if (rawParameters is not null)
+        {
+            foreach (var key in new[] { "allowed_tools", "allowedTools" })
+            {
+                if (!rawParameters.TryGetValue(key, out var source))
+                    continue;
+
+                rawParameters.Remove(key);
+                parameterSource ??= source;
+            }
+        }
+
+        if (step.AllowedTools is not null)
+            return step.AllowedTools;
+
+        return parameterSource;
+    }
+
+    private static WorkflowAgentToolScopeDefinition? MapAgentToolScope(object? source)
+    {
+        if (source is null)
+            return null;
+
+        return new WorkflowAgentToolScopeDefinition
+        {
+            AllowedToolNames = NormalizeToolNames(source).ToList(),
+        };
+    }
+
+    private static IEnumerable<string> NormalizeToolNames(object? source)
+    {
+        switch (source)
+        {
+            case null:
+                yield break;
+            case string text:
+            {
+                if (string.IsNullOrWhiteSpace(text))
+                    yield break;
+
+                var trimmed = text.Trim();
+                if (trimmed.StartsWith("[", StringComparison.Ordinal) ||
+                    trimmed.StartsWith("{", StringComparison.Ordinal))
+                {
+                    using var document = JsonDocument.Parse(trimmed);
+                    foreach (var item in NormalizeToolNames(document.RootElement.Clone()))
+                        yield return item;
+                    yield break;
+                }
+
+                foreach (var item in trimmed.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                    yield return item;
+                yield break;
+            }
+            case JsonElement element:
+            {
+                if (element.ValueKind != JsonValueKind.Array)
+                    yield break;
+
+                foreach (var item in element.EnumerateArray())
+                {
+                    var toolName = ConvertValueToString(item).Trim();
+                    if (!string.IsNullOrWhiteSpace(toolName))
+                        yield return toolName;
+                }
+
+                yield break;
+            }
+            case IEnumerable sequence:
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var item in sequence)
+                {
+                    var toolName = ConvertValueToString(item).Trim();
+                    if (!string.IsNullOrWhiteSpace(toolName) && seen.Add(toolName))
+                        yield return toolName;
+                }
+
+                yield break;
+            }
+            default:
+            {
+                var toolName = ConvertValueToString(source).Trim();
+                if (!string.IsNullOrWhiteSpace(toolName))
+                    yield return toolName;
+                yield break;
+            }
+        }
     }
 
     private static object? ResolveInteractionTemplateSpecSource(
@@ -1097,6 +1195,7 @@ public sealed class WorkflowParser
         public int? MaxHistoryMessages { get; set; }
         public string? EventModules { get; set; }
         public string? EventRoutes { get; set; }
+        public object? AllowedTools { get; set; }
         public RawRoleExtensions? Extensions { get; set; }
         public List<string>? Connectors { get; set; }
     }
@@ -1163,6 +1262,7 @@ public sealed class WorkflowParser
         public string? ValueField { get; set; }
         public string? Field { get; set; }
         public string? Aggregate { get; set; }
+        public object? AllowedTools { get; set; }
         public object? InteractionSpec { get; set; }
         public object? InteractionTemplateSpec { get; set; }
         public string? DeliveryTargetId { get; set; }

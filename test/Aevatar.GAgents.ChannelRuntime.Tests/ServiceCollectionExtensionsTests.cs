@@ -95,6 +95,30 @@ public sealed class ServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddNyxIdChat_ShouldNotRegisterVoiceDemoBootstrapCommandSurface()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+
+        services.Any(ContainsVoiceDemoRegistration).Should().BeFalse();
+        GetOptionalSourcePath("agents", "Aevatar.GAgents.NyxidChat", "IVoiceDemoAgentCommandPort.cs")
+            .Should()
+            .BeNull();
+        GetOptionalSourcePath("agents", "Aevatar.GAgents.NyxidChat", "VoiceDemoAgentCommandPort.cs")
+            .Should()
+            .BeNull();
+    }
+
+    private static bool ContainsVoiceDemoRegistration(ServiceDescriptor descriptor)
+    {
+        var serviceTypeName = descriptor.ServiceType.FullName;
+        var implementationTypeName = descriptor.ImplementationType?.FullName;
+        return serviceTypeName?.Contains("VoiceDemo", StringComparison.Ordinal) == true ||
+               implementationTypeName?.Contains("VoiceDemo", StringComparison.Ordinal) == true;
+    }
+
+    [Fact]
     public void AddDeviceRegistration_RegistersDeviceCommandFacades()
     {
         var services = new ServiceCollection();
@@ -298,6 +322,24 @@ public sealed class ServiceCollectionExtensionsTests
 
     private static bool ContainsChannelRuntimeDiagnosticsName(string? name) =>
         name is not null && name.Contains("ChannelRuntimeDiagnostics", StringComparison.Ordinal);
+
+    private static string? GetOptionalSourcePath(params string[] relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (!File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+            {
+                directory = directory.Parent;
+                continue;
+            }
+
+            var candidate = Path.Combine([directory.FullName, .. relativePath]);
+            return File.Exists(candidate) ? candidate : null;
+        }
+
+        return null;
+    }
 
     private static void AssertProjectionActivationProviderRegistered<TProvider>(IServiceCollection services)
         where TProvider : IProjectionActivationPlanProvider

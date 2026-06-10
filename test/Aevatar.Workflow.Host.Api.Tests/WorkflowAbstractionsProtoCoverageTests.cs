@@ -253,6 +253,8 @@ public class WorkflowAbstractionsProtoCoverageTests
             .Should().Contain(field => field.FieldNumber == 6 && field.Name == "delivery_target_id");
         WorkflowStepParameters.Descriptor.Fields.InDeclarationOrder()
             .Should().Contain(field => field.FieldNumber == 7 && field.Name == "transform_operation");
+        WorkflowStepParameters.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 8 && field.Name == "agent_tool_scope");
         StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
             .Should().NotContain(field => field.FieldNumber == 5);
         StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
@@ -271,6 +273,10 @@ public class WorkflowAbstractionsProtoCoverageTests
             Kind = TransformOperationKind.Round,
             Precision = 2,
         };
+        request.StepParameters.AgentToolScope = new WorkflowAgentToolScope
+        {
+            AllowedToolNames = { "search" },
+        };
         request.Parameters["target"] = "result";
         request.StepParameters.InteractionSpec = new InteractionSpec { Body = "Continue?" };
 
@@ -280,6 +286,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsed.StepParameters.DeliveryTargetId.Should().Be("agent-typed");
         parsed.StepParameters.TransformOperation.Kind.Should().Be(TransformOperationKind.Round);
         parsed.StepParameters.TransformOperation.Precision.Should().Be(2);
+        parsed.StepParameters.AgentToolScope.AllowedToolNames.Should().Equal("search");
         parsed.StepParameters.InteractionSpec.Body.Should().Be("Continue?");
         parsed.ToString().Should().Contain("stepParameters");
         ((IMessage)parsed.StepParameters).Descriptor.Name.Should().Be(nameof(WorkflowStepParameters));
@@ -309,6 +316,8 @@ public class WorkflowAbstractionsProtoCoverageTests
     {
         WorkflowLlmExecutionIntent.Descriptor.Fields.InDeclarationOrder()
             .Should().Contain(field => field.FieldNumber == 16 && field.Name == "input_file_refs");
+        WorkflowLlmExecutionIntent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 17 && field.Name == "agent_tool_scope");
 
         var intent = new WorkflowLlmExecutionIntent
         {
@@ -316,12 +325,17 @@ public class WorkflowAbstractionsProtoCoverageTests
             StepId = "step-1",
             SessionId = "session-1",
             Prompt = "hello",
+            AgentToolScope = new WorkflowAgentToolScope
+            {
+                AllowedToolNames = { "calendar" },
+            },
         };
         intent.InputFileRefs.Add(BuildWorkflowFileRef("file-llm"));
 
         var parsed = WorkflowLlmExecutionIntent.Parser.ParseFrom(intent.ToByteArray());
 
         parsed.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-llm");
+        parsed.AgentToolScope.AllowedToolNames.Should().Equal("calendar");
     }
 
     [Fact]
