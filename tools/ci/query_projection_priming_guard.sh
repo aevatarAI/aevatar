@@ -43,7 +43,6 @@ command_path_hits="$(
 chat_route_policy_endpoint_hits="$(
   rg -n "ChatRoutePolicyProjectionPort|EnsureProjectionForActorAsync|ActivateAsync|PrimeAsync" \
     src/Aevatar.Mainnet.Host.Api/ChatRouting/ChatRoutePolicyAdminEndpoints.cs \
-    src/Aevatar.Mainnet.Host.Api/Voice/VoiceDemoBootstrapEndpoints.cs \
     | rg -v "Refactor \\(iter32/cluster-034-chat-route-policy-request-path-projection-activation\\)|Old pattern:|New principle:" \
     || true
 )"

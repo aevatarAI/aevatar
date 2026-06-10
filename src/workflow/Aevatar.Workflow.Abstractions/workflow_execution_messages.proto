@@ -316,6 +316,7 @@ message WorkflowStepParameters
   aevatar.foundation.interactions.InteractionTemplateSpec interaction_template_spec = 5;
   string delivery_target_id = 6;
   TransformOperationSpec transform_operation = 7;
+  WorkflowAgentToolScope agent_tool_scope = 8;
 }
 message StepRequestEvent
 {
@@ -572,6 +573,7 @@ message WorkflowLlmExecutionIntent
   string sender_nyx_id_access_token = 14;
   WorkflowToolRuntimeContextPayload workflow_runtime_context = 15;
   repeated WorkflowFileRef input_file_refs = 16;
+  WorkflowAgentToolScope agent_tool_scope = 17;
 }
 
 message WorkflowToolRuntimeContextPayload
@@ -581,6 +583,11 @@ message WorkflowToolRuntimeContextPayload
   string parent_step_id = 3;
   string root_run_id = 4;
   int32 depth = 5;
+}
+
+message WorkflowAgentToolScope
+{
+  repeated string allowed_tool_names = 1;
 }
 
 message WorkflowLlmInvocationStartedEvent

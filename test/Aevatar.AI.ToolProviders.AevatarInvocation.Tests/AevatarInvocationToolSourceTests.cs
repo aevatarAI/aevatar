@@ -421,6 +421,7 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.TeamResolver.LastScopeId.Should().Be("scope-1");
         harness.TeamResolver.LastTeamId.Should().Be("team-1");
+        harness.TeamResolver.LastEndpointId.Should().Be("entry");
         harness.TeamInvocation.Request.Should().NotBeNull();
         harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("scope-1");
         harness.TeamInvocation.Request.Identity.ServiceId.Should().Be("service-1");
@@ -1723,16 +1724,19 @@ public sealed class AevatarInvocationToolSourceTests
     {
         public string? LastScopeId { get; private set; }
         public string? LastTeamId { get; private set; }
+        public string? LastEndpointId { get; private set; }
         public TeamEntryMemberResolution Resolution { get; set; } = new("scope-1", "team-1", "member-1", "service-1");
         public TeamEntryMemberResolutionException? Failure { get; set; }
 
         public Task<TeamEntryMemberResolution> ResolveAsync(
             string scopeId,
             string teamId,
+            string endpointId,
             CancellationToken ct = default)
         {
             LastScopeId = scopeId;
             LastTeamId = teamId;
+            LastEndpointId = endpointId;
             if (Failure != null)
                 throw Failure;
 

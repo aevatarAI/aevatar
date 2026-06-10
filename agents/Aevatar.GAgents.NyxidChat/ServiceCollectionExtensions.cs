@@ -34,9 +34,6 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddNyxIdChat(this IServiceCollection services, IConfiguration? configuration = null)
     {
-        // Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
-        //   Old pattern: Mainnet Host voice bootstrap injected actor runtime/dispatch and built initialization envelopes in the endpoint.
-        //   New principle: DI exposes the voice demo Application command port so Host composes the port instead of runtime internals.
         ArgumentNullException.ThrowIfNull(services);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
@@ -73,11 +70,6 @@ public static class ServiceCollectionExtensions
                 sp.GetService<TimeProvider>(),
                 sp.GetService<ILarkNyxClient>(),
                 sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileIngressPort>()));
-        // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
-        //   Old pattern: Mainnet Host/API composed the voice demo agent bootstrap workflow directly.
-        //   New principle: NyxID chat owns the actor-targeted bootstrap command port; hosts only opt into the module.
-        services.TryAddSingleton<IVoiceDemoAgentCommandPort, VoiceDemoAgentCommandPort>();
-
         // ─── Conversation turn-runner override + reply generator ───
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());
         // The CardKit runner depends on Aevatar.AI.ToolProviders.Lark services. AddNyxIdChat()
@@ -105,8 +97,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
-        services.TryAddSingleton<IVoiceDemoAgentCommandPort, VoiceDemoAgentCommandPort>();
-
         // ─── LLM-call middleware that injects channel context into LLM requests ───
         // Lives here (not in Channel.Runtime) because it implements ILLMCallMiddleware
         // (AI.Abstractions); keeping it in NyxidChat lets Channel.Runtime stay free of

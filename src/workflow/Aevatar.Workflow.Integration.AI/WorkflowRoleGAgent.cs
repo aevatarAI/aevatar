@@ -154,6 +154,7 @@ public class WorkflowRoleGAgent(
                 },
             };
         }
+        toolContext = ApplyToolVisibility(intent.AgentToolScope, toolContext);
 
         var request = new ChatRequestEvent
         {
@@ -209,6 +210,19 @@ public class WorkflowRoleGAgent(
         (string.IsNullOrWhiteSpace(fileRef.FileId)
             ? string.Empty
             : $"workflow-file://{fileRef.FileId.Trim()}");
+
+    private static AgentToolExecutionContext ApplyToolVisibility(
+        WorkflowAgentToolScope? scope,
+        AgentToolExecutionContext toolContext)
+    {
+        if (scope == null)
+            return toolContext;
+
+        return toolContext with
+        {
+            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(scope.AllowedToolNames),
+        };
+    }
 
     private static void CopyWorkflowIntentMetadata(
         IEnumerable<KeyValuePair<string, string>> source,

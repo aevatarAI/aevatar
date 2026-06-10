@@ -35,6 +35,8 @@ public sealed class StepDefinition
     /// </summary>
     public StepPresentation? Presentation { get; init; }
 
+    public WorkflowAgentToolScopeDefinition? AgentToolScope { get; init; }
+
     /// <summary>
     /// 下一步骤 ID，用于线性流程控制。
     /// </summary>

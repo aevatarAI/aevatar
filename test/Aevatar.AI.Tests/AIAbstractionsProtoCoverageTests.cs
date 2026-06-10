@@ -304,9 +304,23 @@ public sealed class AIAbstractionsProtoCoverageTests
             MaxHistoryMessages = 40,
             EventModules = "demo",
             EventRoutes = "event.type == X -> demo",
+            VoiceSessionDefaults =
+            {
+                ["voice_presence"] = new VoiceSessionDefaults
+                {
+                    Voice = "verse",
+                    Instructions = "agent voice defaults",
+                    SampleRateHz = 16000,
+                    TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+                    VadDetectionThreshold = 0.4f,
+                    VadPrefixPaddingMs = 120,
+                    VadSilenceDurationMs = 240,
+                },
+            },
         }, InitializeRoleAgentEvent.Parser);
         initialize.RoleName.Should().Be("assistant");
         initialize.HasTemperature.Should().BeTrue();
+        initialize.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("verse");
 
         var overrides = RoundTrip(new AIAgentConfigOverrides
         {
@@ -363,6 +377,22 @@ public sealed class AIAbstractionsProtoCoverageTests
                     LastDrainAckPlayoutSequence = 3400,
                     NextResponseId = 13,
                     ActiveProviderResponseId = "provider-response-12",
+                    ActiveSessionConfig = new VoiceSessionConfig
+                    {
+                        Voice = "verse",
+                        Instructions = "active voice",
+                        SampleRateHz = 16000,
+                        TurnDetectionMode = VoiceTurnDetectionMode.Disabled,
+                    },
+                },
+            },
+            VoiceSessionDefaults =
+            {
+                ["voice_presence"] = new VoiceSessionDefaults
+                {
+                    Voice = "marin",
+                    SampleRateHz = 16000,
+                    TurnDetectionMode = VoiceTurnDetectionMode.ClientVad,
                 },
             },
             Sessions =
@@ -434,6 +464,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         pendingContext.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-from-context");
         state.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(12);
         state.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-12");
+        state.VoicePresence["voice_presence"].ActiveSessionConfig.TurnDetectionMode.Should().Be(VoiceTurnDetectionMode.Disabled);
+        state.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("marin");
     }
 
     [Fact]
