@@ -932,6 +932,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         fileRef.Sha256.Should().Be("sha-file-current");
         fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
         fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        fileRef.OwnerRunId.Should().Be("run-owner");
+        fileRef.OwnerScopeId.Should().Be("scope-owner");
     }
 
     [Fact]
@@ -1275,6 +1277,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             Sha256 = $"sha-{fileId}",
             CreatedAtUnixMs = 1710000000000,
             ExpiresAtUnixMs = 1710003600000,
+            OwnerRunId = "run-owner",
+            OwnerScopeId = "scope-owner",
         };
 
     private sealed class RecordingWriteDispatcher<TReadModel> : IProjectionWriteDispatcher<TReadModel>

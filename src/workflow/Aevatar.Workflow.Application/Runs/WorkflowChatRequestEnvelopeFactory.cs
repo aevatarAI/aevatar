@@ -106,6 +106,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Sha256 = source.Sha256 ?? string.Empty,
             CreatedAtUnixMs = source.CreatedAtUnixMs,
             ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId ?? string.Empty,
+            OwnerScopeId = source.OwnerScopeId ?? string.Empty,
         };
     }
 

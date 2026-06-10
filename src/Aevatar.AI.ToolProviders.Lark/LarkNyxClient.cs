@@ -427,6 +427,35 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
+    public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)
+    {
+        var formFields = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["file_name"] = request.FileName,
+            ["parent_type"] = request.ParentType,
+            ["parent_node"] = request.ParentNode,
+            ["size"] = request.Size.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+
+        if (!string.IsNullOrWhiteSpace(request.Checksum))
+            formFields["checksum"] = request.Checksum.Trim();
+        if (!string.IsNullOrWhiteSpace(request.Extra))
+            formFields["extra"] = request.Extra.Trim();
+
+        return _nyxClient.ProxyRequestMultipartAsync(
+            token,
+            _options.ProviderSlug,
+            "open-apis/drive/v1/medias/upload_all",
+            "POST",
+            formFields,
+            fileFieldName: "file",
+            fileName: request.FileName,
+            fileContentType: request.ContentType,
+            fileContent: request.Content,
+            extraHeaders: null,
+            ct);
+    }
+
     private static string BuildTransferPath(string? userIdType)
     {
         if (string.IsNullOrWhiteSpace(userIdType))

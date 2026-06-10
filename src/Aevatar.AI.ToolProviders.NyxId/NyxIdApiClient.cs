@@ -246,6 +246,51 @@ public sealed class NyxIdApiClient : IDisposable
         return await SendAsync(request, ct);
     }
 
+    public async Task<string> ProxyRequestMultipartAsync(
+        string token,
+        string slug,
+        string path,
+        string method,
+        IReadOnlyDictionary<string, string> formFields,
+        string fileFieldName,
+        string fileName,
+        string fileContentType,
+        Stream fileContent,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileFieldName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileContentType);
+        ArgumentNullException.ThrowIfNull(fileContent);
+
+        var baseUrl = GetBaseUrl();
+        var normalizedPath = path.TrimStart('/');
+        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}/{normalizedPath}";
+
+        var httpMethod = new HttpMethod(method.ToUpperInvariant());
+        using var request = new HttpRequestMessage(httpMethod, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var callerSpecifiedUserAgent = ApplyExtraHeaders(request, extraHeaders);
+        if (!callerSpecifiedUserAgent)
+            request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
+
+        if (httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head)
+        {
+            var multipart = new MultipartFormDataContent();
+            foreach (var (key, value) in formFields)
+                multipart.Add(new StringContent(value, Encoding.UTF8), key);
+
+            var filePart = new StreamContent(fileContent);
+            filePart.Headers.ContentType = MediaTypeHeaderValue.Parse(fileContentType);
+            multipart.Add(filePart, fileFieldName, fileName);
+            request.Content = multipart;
+        }
+
+        return await SendAsync(request, ct);
+    }
+
     public async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseAsync(
         string token,
         string slug,

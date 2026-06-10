@@ -778,7 +778,9 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                     "mediaType": "image/png",
                     "createdAtUnixMs": 1710000000000,
                     "expiresAtUnixMs": 1710003600000,
-                    "sha256": "abc"
+                    "sha256": "abc",
+                    "ownerRunId": "run-1",
+                    "ownerScopeId": "scope-1"
                   }
                 }
               ]
@@ -805,6 +807,8 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             CreatedAtUnixMs = 1710000000000,
             ExpiresAtUnixMs = 1710003600000,
             Sha256 = "abc",
+            OwnerRunId = "run-1",
+            OwnerScopeId = "scope-1",
         });
     }
 

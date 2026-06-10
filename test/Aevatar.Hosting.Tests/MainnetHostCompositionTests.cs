@@ -180,6 +180,8 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is WebAgentToolSource);
         workspace.Sources.Should().Contain(source => source is SkillsAgentToolSource);
         workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
+        app.Services.GetRequiredService<LarkToolOptions>()
+            .EnableWorkflowFileSubmit.Should().BeFalse();
 
         var larkSelfNotify = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.LarkSelfNotify });
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
@@ -199,6 +201,26 @@ public sealed class MainnetHostCompositionTests
         var unknown = registry.Resolve(new ChatRouteToolSetRef { Name = "missing.set" });
         unknown.IsSuccess.Should().BeFalse();
         unknown.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldAllowWorkflowFileSubmitOptInWithoutChangingAgentToolSets()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:Lark:EnableWorkflowFileSubmit"] = "true",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<LarkToolOptions>()
+            .EnableWorkflowFileSubmit.Should().BeTrue();
     }
 
     [Fact]
@@ -302,7 +324,7 @@ public sealed class MainnetHostCompositionTests
         HostedServiceDescriptors<RetiredActorCleanupHostedService>(builder.Services).Should().ContainSingle();
     }
 
-    private static WebApplicationBuilder CreateBuilder()
+    private static WebApplicationBuilder CreateBuilder(IReadOnlyDictionary<string, string?>? overrides = null)
     {
         var options = new WebApplicationOptions
         {
@@ -310,7 +332,7 @@ public sealed class MainnetHostCompositionTests
         };
 
         var builder = WebApplication.CreateBuilder(options);
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        var values = new Dictionary<string, string?>
         {
             ["ActorRuntime:Provider"] = "InMemory",
             ["GAgentService:Demo:Enabled"] = "false",
@@ -319,7 +341,14 @@ public sealed class MainnetHostCompositionTests
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
             ["Aevatar:NyxId:Authority"] = "https://nyxid.example.test",
-        });
+        };
+        if (overrides != null)
+        {
+            foreach (var (key, value) in overrides)
+                values[key] = value;
+        }
+
+        builder.Configuration.AddInMemoryCollection(values);
         return builder;
     }
 
