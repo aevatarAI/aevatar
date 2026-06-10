@@ -141,6 +141,7 @@ public sealed record ChatInputInlineFile
     public string? MediaType { get; init; }
     public string? Name { get; init; }
     public long? SizeBytes { get; init; }
+    public string? OwnerScopeId { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -158,6 +159,8 @@ public sealed record ChatInputFileRef
     public long? CreatedAtUnixMs { get; init; }
     public long? ExpiresAtUnixMs { get; init; }
     public string? Sha256 { get; init; }
+    public string? OwnerRunId { get; init; }
+    public string? OwnerScopeId { get; init; }
 }
 
 public sealed record WorkflowResumeInput

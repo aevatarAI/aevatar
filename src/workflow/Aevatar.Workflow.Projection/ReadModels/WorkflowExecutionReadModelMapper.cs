@@ -169,6 +169,8 @@ public sealed class WorkflowExecutionReadModelMapper
             Sha256 = source.Sha256,
             CreatedAtUnixMs = source.CreatedAtUnixMs,
             ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId,
+            OwnerScopeId = source.OwnerScopeId,
         };
 
     private static WorkflowRunCompletionStatus MapCompletionStatus(
