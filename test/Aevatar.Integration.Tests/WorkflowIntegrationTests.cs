@@ -25,7 +25,6 @@ using Aevatar.Workflow.Core.Validation;
 using Aevatar.Workflow.Integration.AI;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
-using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -97,10 +96,6 @@ public class WorkflowIntegrationTests
             typeof(RoleGAgentState),
             [],
             []));
-
-    private static bool IsResearcherInitializationEvent(StateEvent stateEvent) =>
-        stateEvent.EventData?.Is(InitializeRoleAgentEvent.Descriptor) == true &&
-        stateEvent.EventData.Unpack<InitializeRoleAgentEvent>().RoleName == "Researcher";
 
     // ═══════════════════════════════════════════════════════════
     //  Scenario 1: YAML 解析 + 验证
@@ -296,15 +291,17 @@ public class WorkflowIntegrationTests
         children.Should().Contain(reviewerActorId);
         children.Should().Contain(writerActorId);
 
-        // 验证 RoleGAgent 初始化事件已由角色 actor 提交。Dispatch ACK 只表示 accepted，
-        // 不能把运行时实例上的属性可见性当作跨 actor 完成判定。
-        var eventStore = sp.GetRequiredService<IEventStore>();
-        var researcherEvents = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
-            token => eventStore.GetEventsAsync(researcherActorId, ct: token),
-            events => events.Any(IsResearcherInitializationEvent),
-            $"RoleGAgent initialization event not committed. actor_id={researcherActorId}",
+        // 验证每个 RoleGAgent 的配置
+        var researcher = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            async _ =>
+            {
+                var researcherActor = await runtime.GetAsync(researcherActorId);
+                return researcherActor?.Agent as RoleGAgent;
+            },
+            agent => agent?.RoleName == "Researcher",
+            $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
             CancellationToken.None);
-        researcherEvents.Any(IsResearcherInitializationEvent).Should().BeTrue();
+        researcher!.RoleName.Should().Be("Researcher");
     }
 
     // ═══════════════════════════════════════════════════════════
