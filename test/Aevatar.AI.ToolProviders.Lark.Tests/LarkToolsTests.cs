@@ -2005,6 +2005,46 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkNyxClient_ApprovalFileUpload_UsesFixedMultipartProxyShape()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"code":"approval_file_123"}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+        await using var content = new MemoryStream(Encoding.UTF8.GetBytes("approval upload bytes"));
+
+        await client.UploadApprovalFileAsync(
+            "token-123",
+            new LarkApprovalFileUploadRequest(
+                "invoice.pdf",
+                "attachment",
+                21,
+                "application/pdf",
+                content),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/files/upload");
+        handler.LastRequest.Headers.Authorization!.Parameter.Should().Be("token-123");
+        handler.LastRequest.Content!.Headers.ContentType!.MediaType.Should().Be("multipart/form-data");
+        handler.LastBody.Should().Contain("""name=name""");
+        handler.LastBody.Should().Contain("invoice.pdf");
+        handler.LastBody.Should().Contain("""name=type""");
+        handler.LastBody.Should().Contain("attachment");
+        handler.LastBody.Should().Contain("""name=content; filename=invoice.pdf""");
+        handler.LastBody.Should().Contain("Content-Type: application/pdf");
+        handler.LastBody.Should().Contain("approval upload bytes");
+    }
+
+    [Fact]
     public async Task WorkflowFileSubmit_MissingBearer_ShouldFailWithoutOpeningArtifact()
     {
         var port = new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: 5));
@@ -2284,6 +2324,78 @@ public class LarkToolsTests
         client.LastDriveMediaUploadRequest.Extra.Should().Be("""{"source":"workflow"}""");
     }
 
+    [Fact]
+    public async Task WorkflowFileSubmit_ApprovalFileSuccess_ShouldReturnTypedCodeFactsOnly()
+    {
+        var fileRef = BuildFileRef(fileName: "invoice.pdf", mediaType: "application/pdf", sizeBytes: 12);
+        var port = new RecordingWorkflowFileArtifactReadPort(fileRef, Encoding.UTF8.GetBytes("approval bytes"));
+        var client = new StubLarkNyxClient
+        {
+            ApprovalFileUploadResponse = """{"code":0,"msg":"ok","data":{"code":"approval_file_123"}}""",
+        };
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(
+                fileRef,
+                target: "lark_approval_file",
+                parentType: "",
+                parentNode: "",
+                fileType: "attachment"),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("target").GetString().Should().Be("lark_approval_file");
+        root.GetProperty("file_code").GetString().Should().Be("approval_file_123");
+        root.GetProperty("output_field").GetString().Should().Be("file_code");
+        root.GetProperty("file_type").GetString().Should().Be("attachment");
+        root.TryGetProperty("file_token", out _).Should().BeFalse();
+        root.TryGetProperty("parent_type", out _).Should().BeFalse();
+        root.TryGetProperty("parent_node", out _).Should().BeFalse();
+        result.ResultJson.Should().NotContain("approval bytes");
+        result.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        client.LastApprovalFileUploadToken.Should().Be("token-123");
+        client.LastApprovalFileUploadRequest.Should().NotBeNull();
+        client.LastApprovalFileUploadRequest!.FileName.Should().Be("invoice.pdf");
+        client.LastApprovalFileUploadRequest.FileType.Should().Be("attachment");
+        client.LastApprovalFileUploadRequest.Size.Should().Be(12);
+        client.LastApprovalFileUploadRequest.ContentType.Should().Be("application/pdf");
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("application/pdf", "image", "unsupported_media_type")]
+    [InlineData("image/gif", "image", "unsupported_media_type")]
+    [InlineData("image/jpeg", "bad", "unsupported_file_type")]
+    public async Task WorkflowFileSubmit_ApprovalFileInvalidTypeOrMedia_ShouldFailBeforeProviderCall(
+        string mediaType,
+        string fileType,
+        string expectedError)
+    {
+        var fileRef = BuildFileRef(fileName: "invoice.bin", mediaType: mediaType, sizeBytes: 12);
+        var port = new RecordingWorkflowFileArtifactReadPort(fileRef, Encoding.UTF8.GetBytes("approval bytes"));
+        var client = new StubLarkNyxClient();
+        var tool = await GetWorkflowFileSubmitToolAsync(port, client);
+
+        var result = await tool.ExecuteAsync(NewWorkflowToolRequest(
+            BuildWorkflowFileSubmitArguments(
+                fileRef,
+                target: "lark_approval_file",
+                parentType: "",
+                parentNode: "",
+                fileType: fileType),
+            bearerToken: "token-123"));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("target").GetString().Should().Be("lark_approval_file");
+        document.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
+        client.LastApprovalFileUploadRequest.Should().BeNull();
+        client.LastDriveMediaUploadRequest.Should().BeNull();
+    }
+
     [Theory]
     [InlineData("""{"code":999,"msg":"denied"}""", "lark_error")]
     [InlineData("""{"error":true,"status":502,"message":"gateway","body":"bad upstream"}""", "nyx_proxy_error")]
@@ -2330,7 +2442,7 @@ public class LarkToolsTests
         using var document = JsonDocument.Parse(result.ResultJson);
         document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
         document.RootElement.GetProperty("error").GetString().Should().Be("provider_call_failed");
-        document.RootElement.GetProperty("detail").GetString().Should().Be("Lark media upload request failed.");
+        document.RootElement.GetProperty("detail").GetString().Should().Be("Lark file upload request failed.");
         result.ResultJson.Should().NotContain("bad upstream");
         result.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
         document.RootElement.TryGetProperty("file_token", out _).Should().BeFalse();
@@ -2370,11 +2482,14 @@ public class LarkToolsTests
         public string DocxAppendResponse { get; set; } = """{"code":0,"data":{}}""";
         public string DrivePermissionResponse { get; set; } = """{"code":0,"data":{}}""";
         public string DriveMediaUploadResponse { get; set; } = """{"code":0,"data":{"file_token":"file_default"}}""";
+        public string ApprovalFileUploadResponse { get; set; } = """{"code":0,"data":{"code":"approval_file_default"}}""";
         public Exception? DriveMediaUploadException { get; set; }
+        public Exception? ApprovalFileUploadException { get; set; }
 
         public string? LastSendToken { get; private set; }
         public string? LastDocxCreateToken { get; private set; }
         public string? LastDriveMediaUploadToken { get; private set; }
+        public string? LastApprovalFileUploadToken { get; private set; }
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
         public LarkReplyMessageRequest? LastReplyRequest { get; private set; }
         public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
@@ -2392,6 +2507,7 @@ public class LarkToolsTests
         public LarkDocxAppendBlocksRequest? LastDocxAppendRequest { get; private set; }
         public LarkDrivePermissionRequest? LastDrivePermissionRequest { get; private set; }
         public LarkDriveMediaUploadRequest? LastDriveMediaUploadRequest { get; private set; }
+        public LarkApprovalFileUploadRequest? LastApprovalFileUploadRequest { get; private set; }
 
         public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct)
         {
@@ -2502,6 +2618,15 @@ public class LarkToolsTests
                 throw DriveMediaUploadException;
             return Task.FromResult(DriveMediaUploadResponse);
         }
+
+        public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct)
+        {
+            LastApprovalFileUploadToken = token;
+            LastApprovalFileUploadRequest = request;
+            if (ApprovalFileUploadException != null)
+                throw ApprovalFileUploadException;
+            return Task.FromResult(ApprovalFileUploadResponse);
+        }
     }
 
     private static async Task<IWorkflowTool> GetWorkflowFileSubmitToolAsync(
@@ -2569,6 +2694,7 @@ public class LarkToolsTests
         string parentType = "doc_file",
         string parentNode = "doccn_123",
         string? fileName = null,
+        string? fileType = null,
         string? checksum = null,
         string? extra = null)
     {
@@ -2597,6 +2723,8 @@ public class LarkToolsTests
 
         if (fileName != null)
             payload["file_name"] = fileName;
+        if (fileType != null)
+            payload["file_type"] = fileType;
         if (checksum != null)
             payload["checksum"] = checksum;
         if (extra != null)
