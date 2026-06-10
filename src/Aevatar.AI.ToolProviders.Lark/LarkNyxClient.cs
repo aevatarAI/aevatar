@@ -456,6 +456,28 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
+    public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct)
+    {
+        var formFields = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["name"] = request.FileName,
+            ["type"] = request.FileType,
+        };
+
+        return _nyxClient.ProxyRequestMultipartAsync(
+            token,
+            _options.ProviderSlug,
+            "open-apis/approval/v4/files/upload",
+            "POST",
+            formFields,
+            fileFieldName: "content",
+            fileName: request.FileName,
+            fileContentType: request.ContentType,
+            fileContent: request.Content,
+            extraHeaders: null,
+            ct);
+    }
+
     private static string BuildTransferPath(string? userIdType)
     {
         if (string.IsNullOrWhiteSpace(userIdType))
