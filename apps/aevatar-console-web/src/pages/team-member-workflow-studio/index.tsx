@@ -366,6 +366,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
               error={studio.selectedStepConfigurationError}
               onClose={studio.selectCanvas}
               onConfigurationChange={studio.updateSelectedStepConfiguration}
+              onConfigurationErrorChange={studio.setSelectedStepConfigurationError}
               stepDraft={studio.selectedStepDraft}
             />
           )}

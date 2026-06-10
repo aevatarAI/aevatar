@@ -574,6 +574,8 @@ const enUSMessages = {
     'This node type does not have guided fields yet. Use advanced raw configuration when needed.',
   'teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria':
     'Raw node configuration',
+  'teamMemberWorkflowStudio.nodeDetail.rawConfigurationError':
+    'Raw node configuration must be a JSON object.',
   'teamMemberWorkflowStudio.nodeDetail.sectionAria': 'Node detail',
   'teamMemberWorkflowStudio.nodeDetail.stepId': 'Step ID: {stepId}',
   'teamMemberWorkflowStudio.nodeDetail.updateNode': 'Update node',

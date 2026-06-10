@@ -161,6 +161,7 @@ type TeamMemberWorkflowStudioState = {
   readonly selectedStepConfigurationError: string;
   readonly selectedTab: "editor" | "runs";
   readonly setSelectedTab: (tab: "editor" | "runs") => void;
+  readonly setSelectedStepConfigurationError: (error: string) => void;
   readonly updateSelectedStepConfiguration: (parametersText: string) => void;
   readonly selectCanvas: () => void;
   readonly selectEdge: (edgeId: string) => void;
@@ -1234,12 +1235,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             route.teamId &&
             editableDocument &&
             dirty &&
+            !selectedStepConfigurationError &&
             !createWorkflowMemberMutation.isPending,
         )
       : Boolean(
           workflowQuery.data &&
             editableDocument &&
             dirty &&
+            !selectedStepConfigurationError &&
             !linkedWorkflowMissing &&
             !saveMutation.isPending,
         );
@@ -1265,6 +1268,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       !workflowQuery.data ||
       !editableDocument ||
       !workflowHasSteps ||
+      Boolean(selectedStepConfigurationError) ||
       publishMutation.isPending ||
       publishBindingStillInProgress ||
       (memberIsPublished && !publishHasDraftChanges),
@@ -1274,6 +1278,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       ? "Create and link a workflow member before publishing."
       : linkedWorkflowMissing
         ? "No stable workflow draft is linked to this member yet."
+        : selectedStepConfigurationError
+          ? selectedStepConfigurationError
         : publishBindingStillInProgress
           ? "Publish was accepted and binding is still in progress. Refresh later before publishing again."
         : memberIsPublished && !publishHasDraftChanges
@@ -1583,7 +1589,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
   return {
     publishMember: () => {
-      if (workflowQuery.data && editableDocument) {
+      if (
+        workflowQuery.data &&
+        editableDocument &&
+        !selectedStepConfigurationError
+      ) {
         publishMutation.mutate({
           document: editableDocument,
           layout:
@@ -1672,6 +1682,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedTab("editor");
       setSelectedEdgeId("");
       setSelectedNodeId("");
+      setSelectedStepConfigurationError("");
       setRunOptionsOpen(true);
     },
     save: () => {
@@ -1708,20 +1719,24 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     selectCanvas: () => {
       setSelectedEdgeId("");
       setSelectedNodeId("");
+      setSelectedStepConfigurationError("");
       setRunOptionsOpen(false);
     },
     selectEdge: (edgeId: string) => {
       setSelectedEdgeId(edgeId);
       setSelectedNodeId("");
+      setSelectedStepConfigurationError("");
       setRunOptionsOpen(false);
     },
     selectNode: (nodeId: string) => {
       setSelectedEdgeId("");
       setSelectedNodeId(nodeId);
+      setSelectedStepConfigurationError("");
       setRunOptionsOpen(false);
     },
     setExecutionRunMessage,
     setSelectedTab,
+    setSelectedStepConfigurationError,
     setWorkflowTitle,
     teamName,
     updateSelectedStepConfiguration,

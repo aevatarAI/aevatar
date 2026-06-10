@@ -8,9 +8,16 @@ import {
 import type { ConsoleMessageDescriptor } from '@/shared/i18n/messages';
 
 export type StudioNodeConfigurationFieldKind =
+  | 'array'
+  | 'boolean'
+  | 'json'
+  | 'number'
+  | 'object'
+  | 'select'
   | 'single-line'
   | 'multi-line'
-  | 'select';
+  | 'text'
+  | 'textarea';
 
 export type StudioNodeConfigurationOption = {
   readonly label: ConsoleMessageDescriptor;
@@ -18,17 +25,36 @@ export type StudioNodeConfigurationOption = {
 };
 
 export type StudioNodeConfigurationField = {
+  readonly control?: StudioNodeConfigurationFieldKind;
+  readonly defaultValue?: unknown;
   readonly description?: ConsoleMessageDescriptor;
   readonly kind: StudioNodeConfigurationFieldKind;
   readonly label: ConsoleMessageDescriptor;
   readonly name: string;
   readonly options?: readonly StudioNodeConfigurationOption[];
+  readonly path?: string;
   readonly parameterName: string;
   readonly placeholder?: ConsoleMessageDescriptor;
   readonly required?: boolean;
+  readonly validation?: {
+    readonly integer?: boolean;
+    readonly max?: number;
+    readonly min?: number;
+  };
+};
+
+export type NodeConfigField = StudioNodeConfigurationField & {
+  readonly path: string;
 };
 
 export type StudioNodeConfigurationSchema = {
+  readonly fields: readonly NodeConfigField[];
+  readonly stepType: string;
+};
+
+type StudioNodeConfigurationSchemaSource = Record<string, unknown> | null | undefined;
+
+type StudioNodeConfigurationSchemaDefinition = {
   readonly fields: readonly StudioNodeConfigurationField[];
   readonly stepType: string;
 };
@@ -258,7 +284,7 @@ const STEP_TYPE_OPTIONS = [
   },
 ] satisfies readonly StudioNodeConfigurationOption[];
 
-const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchema> = {
+const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefinition> = {
   assign: {
     stepType: 'assign',
     fields: [
@@ -873,6 +899,102 @@ function normalizeStepType(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function normalizeParameterName(value: string): string {
+  return value.trim();
+}
+
+function labelFromParameterName(parameterName: string): ConsoleMessageDescriptor {
+  const normalized = normalizeParameterName(parameterName);
+  const label = normalized
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+
+  return message(
+    `shared.studio.nodeConfiguration.inferred.${normalized || 'parameter'}.label`,
+    label || 'Parameter',
+  );
+}
+
+function normalizeField(
+  field: StudioNodeConfigurationField,
+): NodeConfigField {
+  const parameterName = normalizeParameterName(field.parameterName || field.path || '');
+  return {
+    ...field,
+    control: field.control ?? field.kind,
+    parameterName,
+    path: normalizeParameterName(field.path || parameterName),
+  };
+}
+
+function inferControlFromValue(value: unknown): StudioNodeConfigurationFieldKind {
+  if (typeof value === 'boolean') {
+    return 'boolean';
+  }
+
+  if (typeof value === 'number') {
+    return 'number';
+  }
+
+  if (Array.isArray(value)) {
+    return 'array';
+  }
+
+  if (value && typeof value === 'object') {
+    return 'object';
+  }
+
+  if (typeof value === 'string' && value.includes('\n')) {
+    return 'textarea';
+  }
+
+  return 'text';
+}
+
+function inferConfigurationFields(
+  parameters: Record<string, unknown> | null | undefined,
+): readonly NodeConfigField[] {
+  const normalizedParameters =
+    parameters && typeof parameters === 'object' && !Array.isArray(parameters)
+      ? parameters
+      : {};
+
+  return Object.entries(normalizedParameters).map(([parameterName, value]) => {
+    const control = inferControlFromValue(value);
+    return normalizeField({
+      control,
+      defaultValue: value,
+      kind: control,
+      label: labelFromParameterName(parameterName),
+      name: parameterName,
+      parameterName,
+      path: parameterName,
+    });
+  });
+}
+
+function buildConfigurationSchema(
+  stepType: string,
+  parameters?: Record<string, unknown> | null,
+): StudioNodeConfigurationSchema {
+  const normalizedType = normalizeStepType(stepType);
+  const schema = SCHEMAS_BY_STEP_TYPE[normalizedType];
+
+  if (schema) {
+    return {
+      ...schema,
+      fields: schema.fields.map(normalizeField),
+    };
+  }
+
+  return {
+    fields: inferConfigurationFields(parameters),
+    stepType: normalizedType || 'step',
+  };
+}
+
 function stringifyConfigurationValue(value: unknown): string {
   if (value === undefined || value === null) {
     return '';
@@ -891,21 +1013,17 @@ function stringifyConfigurationValue(value: unknown): string {
 
 export function getStudioNodeConfigurationSchema(
   stepType: string,
+  parameters?: Record<string, unknown> | null,
 ): StudioNodeConfigurationSchema {
-  const normalizedType = normalizeStepType(stepType);
-  return (
-    SCHEMAS_BY_STEP_TYPE[normalizedType] ?? {
-      stepType: normalizedType || 'step',
-      fields: [],
-    }
-  );
+  return buildConfigurationSchema(stepType, parameters);
 }
 
 export function readStudioNodeConfigurationValues(
   stepType: string,
   parameters: Record<string, unknown> | null | undefined,
+  schemaParameters: StudioNodeConfigurationSchemaSource = parameters,
 ): Record<string, string> {
-  const schema = getStudioNodeConfigurationSchema(stepType);
+  const schema = getStudioNodeConfigurationSchema(stepType, schemaParameters);
   return Object.fromEntries(
     schema.fields.map((field) => [
       field.name,
@@ -920,26 +1038,147 @@ export function applyStudioNodeConfigurationValues(
   stepType: string,
   parameters: Record<string, unknown> | null | undefined,
   values: Record<string, string>,
+  schemaParameters?: StudioNodeConfigurationSchemaSource,
 ): Record<string, unknown> {
-  const schema = getStudioNodeConfigurationSchema(stepType);
+  const result = applyStudioNodeConfigurationValuesWithValidation(
+    stepType,
+    parameters,
+    values,
+    schemaParameters,
+  );
+
+  if (!result.valid) {
+    throw new Error(result.errors[0] ?? 'Node configuration is invalid.');
+  }
+
+  return result.parameters;
+}
+
+function readFieldValueFromInput(
+  field: StudioNodeConfigurationField,
+  value: string,
+): { error?: string; include: boolean; value?: unknown } {
+  const trimmed = value.trim();
+  const control = field.control ?? field.kind;
+
+  if (!trimmed && !field.required) {
+    return { include: false };
+  }
+
+  if (!trimmed && field.required) {
+    return {
+      error: `${field.label.defaultMessage} is required.`,
+      include: false,
+    };
+  }
+
+  switch (control) {
+    case 'array':
+    case 'json':
+    case 'object': {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (control === 'array' && !Array.isArray(parsed)) {
+          return {
+            error: `${field.label.defaultMessage} must be a JSON array.`,
+            include: false,
+          };
+        }
+        if (
+          control === 'object' &&
+          (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        ) {
+          return {
+            error: `${field.label.defaultMessage} must be a JSON object.`,
+            include: false,
+          };
+        }
+        return { include: true, value: parsed };
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error
+              ? `${field.label.defaultMessage}: ${error.message}`
+              : `${field.label.defaultMessage} must be valid JSON.`,
+          include: false,
+        };
+      }
+    }
+    case 'boolean':
+      return { include: true, value: trimmed === 'true' };
+    case 'number': {
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed)) {
+        return {
+          error: `${field.label.defaultMessage} must be a number.`,
+          include: false,
+        };
+      }
+      if (field.validation?.integer && !Number.isInteger(parsed)) {
+        return {
+          error: `${field.label.defaultMessage} must be a whole number.`,
+          include: false,
+        };
+      }
+      if (field.validation?.min !== undefined && parsed < field.validation.min) {
+        return {
+          error: `${field.label.defaultMessage} must be at least ${field.validation.min}.`,
+          include: false,
+        };
+      }
+      if (field.validation?.max !== undefined && parsed > field.validation.max) {
+        return {
+          error: `${field.label.defaultMessage} must be at most ${field.validation.max}.`,
+          include: false,
+        };
+      }
+      return { include: true, value: parsed };
+    }
+    default:
+      return { include: true, value };
+  }
+}
+
+export function applyStudioNodeConfigurationValuesWithValidation(
+  stepType: string,
+  parameters: Record<string, unknown> | null | undefined,
+  values: Record<string, string>,
+  schemaParameters: StudioNodeConfigurationSchemaSource = parameters,
+): {
+  readonly errors: readonly string[];
+  readonly parameters: Record<string, unknown>;
+  readonly valid: boolean;
+} {
+  const schema = getStudioNodeConfigurationSchema(stepType, schemaParameters);
   const nextParameters = {
     ...(parameters && typeof parameters === 'object' ? parameters : {}),
   };
+  const errors: string[] = [];
 
   for (const field of schema.fields) {
     const value = values[field.name] ?? '';
+    const fieldValue = readFieldValueFromInput(field, value);
+    if (fieldValue.error) {
+      errors.push(fieldValue.error);
+      continue;
+    }
+
     const resolvedParameterName = resolveStepParameterName(
       stepType,
       field.parameterName,
     );
-    if (field.required || value.trim()) {
-      nextParameters[resolvedParameterName] = value;
+    if (fieldValue.include) {
+      nextParameters[resolvedParameterName] = fieldValue.value;
     } else {
       delete nextParameters[resolvedParameterName];
     }
   }
 
-  return normalizeStepParametersForType(stepType, nextParameters);
+  return {
+    errors,
+    parameters: normalizeStepParametersForType(stepType, nextParameters),
+    valid: errors.length === 0,
+  };
 }
 
 export function applyRawStudioNodeConfiguration(
