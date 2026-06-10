@@ -2665,15 +2665,13 @@ public class NyxIdChatEndpointsCoverageTests
 
         await projector.ProjectAsync(
             context,
-            new EventEnvelope { Payload = Any.Pack(new AiTextMessageContentEvent { Delta = "delta-1" }) },
-            CancellationToken.None);
-        await projector.ProjectAsync(
-            context,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new ChatTokenUsageEvent
+            CommittedNyxIdCompletionEnvelope(
+                context.RootActorId,
+                new RoleChatSessionCompletedEvent
                 {
                     SessionId = "session-1",
+                    Content = "done",
+                    ContentEmitted = false,
                     Usage = new TokenUsagePayload
                     {
                         PromptTokens = 2,
@@ -2682,22 +2680,36 @@ public class NyxIdChatEndpointsCoverageTests
                     },
                     Model = "nyxid-model",
                 }),
-            },
-            CancellationToken.None);
-        await projector.ProjectAsync(
-            context,
-            new EventEnvelope { Payload = Any.Pack(new AiTextMessageEndEvent { Content = "done" }) },
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(4);
-        sessionHub.Published[0].Event.TextMessageContent.Delta.Should().Be("delta-1");
-        sessionHub.Published[1].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.Usage);
-        sessionHub.Published[1].Event.Usage.Available.Should().BeTrue();
-        sessionHub.Published[1].Event.Usage.TotalTokens.Should().Be(6);
-        sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
-        sessionHub.Published[3].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
+        sessionHub.Published.Should().HaveCount(5);
+        sessionHub.Published[0].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageStart);
+        sessionHub.Published[1].Event.TextMessageContent.Delta.Should().Be("done");
+        sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.Usage);
+        sessionHub.Published[2].Event.Usage.Available.Should().BeTrue();
+        sessionHub.Published[2].Event.Usage.TotalTokens.Should().Be(6);
+        sessionHub.Published[3].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
+        sessionHub.Published[4].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
         sessionHub.Published.Should().OnlyContain(x => x.RootActorId == "actor-1" && x.SessionId == "session-1");
     }
+
+    private static EventEnvelope CommittedNyxIdCompletionEnvelope(string actorId, RoleChatSessionCompletedEvent evt) => new()
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Payload = Any.Pack(new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = Guid.NewGuid().ToString("N"),
+                Version = 1,
+                EventData = Any.Pack(evt),
+                Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            StateRoot = Any.Pack(new RoleGAgentState()),
+        }),
+        Route = EnvelopeRouteSemantics.CreateObserverPublication(actorId),
+        Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+    };
 
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
     {
