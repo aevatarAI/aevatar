@@ -11,9 +11,22 @@ public sealed record WorkflowFileIngressRequest(
 
 public sealed record WorkflowFileIngressResult(WorkflowFileRef FileRef);
 
+public sealed record WorkflowFileArtifactContent(WorkflowFileRef FileRef, Stream Content);
+
 public interface IWorkflowFileIngressPort
 {
     ValueTask<WorkflowFileIngressResult> IngestAsync(
         WorkflowFileIngressRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IWorkflowFileArtifactReadPort
+{
+    ValueTask<WorkflowFileRef> DescribeAsync(
+        WorkflowFileRef fileRef,
+        CancellationToken cancellationToken = default);
+
+    ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
+        WorkflowFileRef fileRef,
         CancellationToken cancellationToken = default);
 }

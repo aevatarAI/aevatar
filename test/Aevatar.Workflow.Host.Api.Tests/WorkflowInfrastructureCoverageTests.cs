@@ -43,6 +43,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Text;
+using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
 using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -72,6 +73,8 @@ public sealed class WorkflowInfrastructureCoverageTests
             .Should().BeOfType<FileSystemWorkflowRunReportExporter>();
         provider.GetRequiredService<IWorkflowFileIngressPort>()
             .Should().BeOfType<FileSystemWorkflowFileIngressPort>();
+        provider.GetRequiredService<IWorkflowFileArtifactReadPort>()
+            .Should().BeSameAs(provider.GetRequiredService<IWorkflowFileIngressPort>());
         services.Should().Contain(x =>
             x.ServiceType == typeof(WorkflowRunActorPort) &&
             x.ImplementationType == typeof(WorkflowRunActorPort));
@@ -271,7 +274,10 @@ public sealed class WorkflowInfrastructureCoverageTests
             x.ImplementationType == typeof(FileSystemWorkflowRunReportExporter));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowFileIngressPort) &&
-            x.ImplementationType == typeof(FileSystemWorkflowFileIngressPort));
+            x.ImplementationFactory != null);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowFileArtifactReadPort) &&
+            x.ImplementationFactory != null);
         services.Should().Contain(x =>
             x.ServiceType == typeof(WorkflowWebhookIngressRequestBuilder));
         services.Should().NotContain(x =>
@@ -361,6 +367,123 @@ public sealed class WorkflowInfrastructureCoverageTests
             var storedPath = Path.Combine(root, descriptor.FileId!, "content.bin");
             File.Exists(storedPath).Should().BeTrue();
             (await File.ReadAllTextAsync(storedPath)).Should().Be("hello");
+            File.Exists(Path.Combine(root, descriptor.FileId!, "descriptor.pb")).Should().BeTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FileSystemWorkflowFileIngressPort_ShouldDescribeAndOpenStoredContent()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-file-read-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = new FileSystemWorkflowFileIngressPort(
+                Options.Create(new FileSystemWorkflowFileIngressOptions
+                {
+                    RootDirectory = root,
+                    TimeToLive = TimeSpan.FromMinutes(30),
+                }));
+
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                Encoding.UTF8.GetBytes("stored document"),
+                ApplicationWorkflowFileSourceKind.ConnectedServiceResource,
+                SourceMessageId: "om_123",
+                SourceResourceKey: "file_key_123",
+                FileName: "invoice.pdf",
+                MediaType: "application/pdf"));
+
+            var readPort = (IWorkflowFileArtifactReadPort)port;
+            var secondPort = new FileSystemWorkflowFileIngressPort(
+                Options.Create(new FileSystemWorkflowFileIngressOptions
+                {
+                    RootDirectory = root,
+                    TimeToLive = TimeSpan.FromMinutes(30),
+                }));
+            var descriptor = await ((IWorkflowFileArtifactReadPort)secondPort).DescribeAsync(new ApplicationWorkflowFileRef
+            {
+                ArtifactId = result.FileRef.ArtifactId,
+                Sha256 = result.FileRef.Sha256,
+                SizeBytes = result.FileRef.SizeBytes,
+            });
+
+            descriptor.Should().BeEquivalentTo(result.FileRef);
+
+            var opened = await readPort.OpenReadAsync(result.FileRef);
+            opened.FileRef.Should().BeEquivalentTo(result.FileRef);
+            await using (opened.Content)
+            using (var reader = new StreamReader(opened.Content, Encoding.UTF8))
+            {
+                (await reader.ReadToEndAsync()).Should().Be("stored document");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FileSystemWorkflowFileIngressPort_ShouldRejectMismatchedOrExpiredRefs()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-file-reject-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = new FileSystemWorkflowFileIngressPort(
+                Options.Create(new FileSystemWorkflowFileIngressOptions
+                {
+                    RootDirectory = root,
+                    TimeToLive = TimeSpan.FromMinutes(30),
+                }));
+
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                Encoding.UTF8.GetBytes("sealed"),
+                ApplicationWorkflowFileSourceKind.ChatInput));
+            var readPort = (IWorkflowFileArtifactReadPort)port;
+
+            await readPort.Invoking(x => x.DescribeAsync(new ApplicationWorkflowFileRef
+                {
+                    FileId = result.FileRef.FileId,
+                    ArtifactId = "workflow-file://wf-file-other",
+                }).AsTask())
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*does not match*");
+
+            await readPort.Invoking(x => x.DescribeAsync(new ApplicationWorkflowFileRef
+                {
+                    FileId = "../wf-file-escape",
+                }).AsTask())
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*invalid*");
+
+            var expired = await port.IngestAsync(new WorkflowFileIngressRequest(
+                Encoding.UTF8.GetBytes("old"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                ExpiresAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds()));
+
+            await readPort.Invoking(x => x.OpenReadAsync(expired.FileRef).AsTask())
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*expired*");
+
+            var missing = await port.IngestAsync(new WorkflowFileIngressRequest(
+                Encoding.UTF8.GetBytes("missing"),
+                ApplicationWorkflowFileSourceKind.ChatInput));
+            File.Delete(Path.Combine(root, missing.FileRef.FileId!, "content.bin"));
+            await readPort.Invoking(x => x.OpenReadAsync(missing.FileRef).AsTask())
+                .Should().ThrowAsync<FileNotFoundException>();
+
+            var tampered = await port.IngestAsync(new WorkflowFileIngressRequest(
+                Encoding.UTF8.GetBytes("original"),
+                ApplicationWorkflowFileSourceKind.ChatInput));
+            await File.WriteAllTextAsync(Path.Combine(root, tampered.FileRef.FileId!, "content.bin"), "mutated!");
+            await readPort.Invoking(x => x.OpenReadAsync(tampered.FileRef).AsTask())
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*hash*");
         }
         finally
         {
