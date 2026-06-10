@@ -169,6 +169,7 @@ roles:
     event_routes: |
       event.type == ChatRequestEvent -> llm_handler
     connectors: [incident_api, search_mcp]
+    allowed_tools: [web_search, issue_lookup]
     extensions:
       event_modules: "fallback_module"
       event_routes: "event.type == X -> fallback_module"
@@ -178,6 +179,9 @@ roles:
 
 - `workflow roles` 与 `role yaml` 共用同一份解析归一化逻辑（`RoleConfigurationNormalizer`）。
 - `agent_kind` 是 role-level actor lifecycle 入口，可指向任意已注册 primary `[GAgent]` kind；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
+- `allowed_tools` 是 role actor 上 agent tool 可见范围的上限；未配置表示兼容旧行为的全量工具，配置为空数组表示默认不暴露工具。
+- `llm_call` step 可在根部配置 `allowed_tools` 继续收窄本次调用；role scope 与 step scope 取交集后写入 `WorkflowStepParameters.agent_tool_scope`，再由 `WorkflowLlmExecutionIntent.agent_tool_scope` 传给 AI `AgentToolExecutionContext.ToolVisibility`。
+- 工具可见范围同时作用于 provider 看到的 `LLMRequest.Tools` 和 streaming tool executor 的实际 lookup；未授权工具调用会得到 not-available tool result，不会执行工具。
 - `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
 - 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。
 - Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):

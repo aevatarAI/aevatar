@@ -109,6 +109,35 @@ public sealed class WorkflowRoleGAgentMappingTests
         completed.ManagedHandoff.ParentStepId.Should().Be("reply");
     }
 
+    [Fact]
+    public async Task WorkflowRoleGAgent_ShouldMapWorkflowToolScopeToAiVisibility()
+    {
+        var provider = new RecordingLlmProvider();
+        var publisher = new RecordingEventPublisher();
+        var agent = new WorkflowRoleGAgent(provider)
+        {
+            EventPublisher = publisher,
+        };
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-1",
+            StepId = "reply",
+            SessionId = "session-1",
+            Prompt = "hello",
+            AgentToolScope = new WorkflowAgentToolScope
+            {
+                AllowedToolNames = { "search" },
+            },
+        });
+
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.ToolContext.Should().NotBeNull();
+        provider.LastRequest.ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue();
+        provider.LastRequest.ToolContext.ToolVisibility.Allows("search").Should().BeTrue();
+        provider.LastRequest.ToolContext.ToolVisibility.Allows("calendar").Should().BeFalse();
+    }
+
     private sealed class RecordingLlmProvider : ILLMProviderFactory, ILLMProvider
     {
         public LLMRequest? LastRequest { get; private set; }

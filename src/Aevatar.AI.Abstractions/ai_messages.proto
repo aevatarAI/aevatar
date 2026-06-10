@@ -100,6 +100,7 @@ message AgentToolExecutionContextPayload {
   map<string, string> external_metadata = 8;
   AgentSkillRecoveryContextPayload skill_recovery = 9;
   AgentWorkflowRuntimeContextPayload workflow_runtime = 10;
+  AgentToolVisibilityScopePayload tool_visibility = 11;
 }
 
 message AgentSkillRecoveryContextPayload {
@@ -111,6 +112,10 @@ message AgentSkillRecoveryContextPayload {
   int32 max_ornn_search_attempts = 6;
   string command_arguments = 7;
   bool discovery_requested = 8;
+}
+
+message AgentToolVisibilityScopePayload {
+  repeated string allowed_tool_names = 1;
 }
 
 message AgentToolRequestIdentityPayload {
