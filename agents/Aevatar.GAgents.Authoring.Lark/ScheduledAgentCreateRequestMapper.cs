@@ -25,6 +25,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
         "max_tool_rounds",
         "max_history_messages",
         "requires_nyxid_proxy_success",
+        "required_service_slugs",
         "output_format",
         "external_trigger_sources",
         "run_immediately",
@@ -68,6 +69,9 @@ internal sealed class ScheduledAgentCreateRequestMapper
 
         if (!TryParseOutputFormat(args.Str("output_format"), out var outputFormat, out var outputFormatError))
             return ScheduledAgentCreatePlanResult.Failed(outputFormatError);
+
+        if (!args.TryStringArray("required_service_slugs", out var requiredServiceSlugs, out var requiredServiceSlugsError))
+            return ScheduledAgentCreatePlanResult.Failed(requiredServiceSlugsError);
 
         var conversationId = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.ConversationId));
         if (conversationId is null)
@@ -118,7 +122,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 FailureNotificationSlug: failureSlug,
                 ReceiveTarget: target,
                 Caller: caller.Clone()),
-            ServiceSlugs: new ScheduledAgentServiceSlugs(primarySlug, failureSlug),
+            ServiceSlugs: new ScheduledAgentServiceSlugs(primarySlug, failureSlug, requiredServiceSlugs),
             ErrorJson: null);
     }
 
@@ -301,6 +305,43 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 return true;
 
             return element.ValueKind == JsonValueKind.String && double.TryParse(element.GetString(), out value);
+        }
+
+        public bool TryStringArray(
+            string name,
+            out IReadOnlyList<string> values,
+            out string error)
+        {
+            values = [];
+            error = string.Empty;
+            if (!Properties.TryGetValue(name, out var element))
+                return true;
+
+            if (element.ValueKind != JsonValueKind.Array)
+            {
+                error = $"{name} must be an array of strings";
+                return false;
+            }
+
+            var normalized = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in element.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                {
+                    error = $"{name} must contain only strings";
+                    return false;
+                }
+
+                var value = item.GetString()?.Trim();
+                if (string.IsNullOrEmpty(value) || !seen.Add(value))
+                    continue;
+
+                normalized.Add(value);
+            }
+
+            values = normalized;
+            return true;
         }
 
         public IReadOnlyList<ExternalTriggerSource> ExternalTriggerSources(string name)
