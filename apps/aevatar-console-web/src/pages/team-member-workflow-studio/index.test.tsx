@@ -2462,6 +2462,20 @@ describe("TeamMemberWorkflowStudioPage", () => {
         updatedAt: "2026-06-08T00:00:00Z",
       },
     });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
     (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue(createSseResponse());
     (parseBackendSSEStream as jest.Mock).mockReturnValue(createWorkflowInvokeEvents());
 
@@ -2469,6 +2483,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     const runActiveMemberButton = await screen.findByRole("button", {
       name: "Run active member",
+    });
+    await waitFor(() => {
+      expect(studioApi.getWorkflow).toHaveBeenCalledWith(
+        "member-alpha",
+        "scope-1",
+      );
+      expect(screen.getByText("nodes:1")).toBeTruthy();
     });
     await waitFor(() => {
       expect(runActiveMemberButton).toBeEnabled();
@@ -2479,7 +2500,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
         "scope-1",
         {
-          metadata: undefined,
+          metadata: {
+            workflowId: "workflow-alpha",
+          },
           prompt: "Run Workflow Alpha",
         },
         expect.any(AbortSignal),
