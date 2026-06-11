@@ -51,6 +51,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
         detail.ImplementationRef.Should().NotBeNull();
         detail.ImplementationRef!.WorkflowId.Should().Be("wf-1");
         detail.ImplementationRef.WorkflowRevision.Should().Be("v2");
+        detail.Summary.ImplementationRef.Should().BeEquivalentTo(detail.ImplementationRef);
         detail.LastBinding.Should().NotBeNull();
         detail.LastBinding!.RevisionId.Should().Be("rev-bind");
         detail.CurrentBindingRun.Should().NotBeNull();
@@ -90,7 +91,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
     [Fact]
     public async Task ListAsync_ShouldReturnOnlyMembersInScope()
     {
-        var inScopeA = NewDocument(scopeId: ScopeId, memberId: "m-1");
+        var inScopeA = NewDocument(scopeId: ScopeId, memberId: "m-1", includeImplementationRef: true);
         var inScopeB = NewDocument(scopeId: ScopeId, memberId: "m-2");
         var inOtherScope = NewDocument(scopeId: "scope-other", memberId: "m-3");
 
@@ -101,6 +102,13 @@ public sealed class ProjectionStudioMemberQueryPortTests
 
         roster.ScopeId.Should().Be(ScopeId);
         roster.Members.Select(m => m.MemberId).Should().BeEquivalentTo("m-1", "m-2");
+        var workflowMember = roster.Members.Single(m => m.MemberId == "m-1");
+        workflowMember.ImplementationRef.Should().NotBeNull();
+        workflowMember.ImplementationRef!.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
+        workflowMember.ImplementationRef.WorkflowId.Should().Be("wf-1");
+        workflowMember.ImplementationRef.WorkflowRevision.Should().Be("v2");
+        reader.QueryCallCount.Should().Be(1);
+        reader.GetCallCount.Should().Be(0);
     }
 
     [Fact]
@@ -129,7 +137,11 @@ public sealed class ProjectionStudioMemberQueryPortTests
     public async Task ListAsync_ShouldApplyTeamFilterBeforePagination()
     {
         var inOtherTeamA = NewDocument(scopeId: ScopeId, memberId: "m-other-1", teamId: "other-team");
-        var inTeamA = NewDocument(scopeId: ScopeId, memberId: "m-team-1", teamId: "team-1");
+        var inTeamA = NewDocument(
+            scopeId: ScopeId,
+            memberId: "m-team-1",
+            includeImplementationRef: true,
+            teamId: "team-1");
         var inOtherScope = NewDocument(scopeId: "scope-other", memberId: "m-foreign", teamId: "team-1");
         var inOtherTeamB = NewDocument(scopeId: ScopeId, memberId: "m-other-2", teamId: "other-team");
         var inTeamB = NewDocument(scopeId: ScopeId, memberId: "m-team-2", teamId: "team-1");
@@ -157,7 +169,13 @@ public sealed class ProjectionStudioMemberQueryPortTests
             string.Equals(team, "team-1", StringComparison.Ordinal))
             .Should().BeTrue();
         roster.Members.Select(m => m.MemberId).Should().ContainInOrder("m-team-1", "m-team-2");
+        var workflowMember = roster.Members.Single(m => m.MemberId == "m-team-1");
+        workflowMember.ImplementationRef.Should().NotBeNull();
+        workflowMember.ImplementationRef!.WorkflowId.Should().Be("wf-1");
+        workflowMember.ImplementationRef.WorkflowRevision.Should().Be("v2");
         roster.NextPageToken.Should().Be("team-cursor-2");
+        reader.QueryCallCount.Should().Be(1);
+        reader.GetCallCount.Should().Be(0);
     }
 
     [Fact]

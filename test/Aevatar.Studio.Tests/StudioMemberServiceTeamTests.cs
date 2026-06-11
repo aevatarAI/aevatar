@@ -157,6 +157,7 @@ public sealed class StudioMemberServiceTeamTests
             new InertBindingRunQueryPort(),
             teamQueryPort ?? new InMemoryTeamQueryPort(NewTeamSummary()),
             new ThrowingServiceLifecycleQueryPort(),
+            new ReadyScopeBindingReadinessQueryPort(),
             new ThrowingServiceCommandPort());
 
     private static StudioMemberDetailResponse NewDetail(string? currentTeamId = null)
@@ -290,6 +291,24 @@ public sealed class StudioMemberServiceTeamTests
         public Task<ScopeBindingUpsertResult> UpsertAsync(
             ScopeBindingUpsertRequest request, CancellationToken ct = default) =>
             throw new InvalidOperationException("scope binding should not be called in team tests.");
+    }
+
+    private sealed class ReadyScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    {
+        public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
+            ScopeBindingReadinessRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ScopeBindingReadinessSnapshot(
+                request.ScopeId,
+                request.ServiceId,
+                ScopeBindingReadinessStatus.Ready,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: true,
+                RevisionId: request.ExpectedRevisionId,
+                DeploymentId: "dep-1",
+                ObservedAtUtc: DateTimeOffset.UtcNow));
     }
 
     private sealed class ThrowingServiceLifecycleQueryPort : IServiceLifecycleQueryPort

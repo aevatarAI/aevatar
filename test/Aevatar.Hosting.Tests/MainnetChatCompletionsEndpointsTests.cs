@@ -665,9 +665,18 @@ public sealed class MainnetChatCompletionsEndpointsTests
             string responseId,
             LlmSessionCompletion completion,
             CancellationToken ct = default) =>
+<<<<<<< HEAD
             Task.FromResult(DispatchAdmissionFactory.Create(
                 sessionActorId,
                 new EventEnvelope { Id = $"{responseId}:completion" }));
+=======
+            Task.FromResult(new DispatchAdmission(
+                true,
+                $"{responseId}:completion",
+                DateTimeOffset.UtcNow,
+                sessionActorId,
+                $"{responseId}:completion"));
+>>>>>>> origin/auto-refact-dev
 
         public Task ReceiveForwardedToolResultAsync(
             string sessionActorId,
