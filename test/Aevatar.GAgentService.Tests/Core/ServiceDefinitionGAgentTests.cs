@@ -29,6 +29,18 @@ public sealed class ServiceDefinitionGAgentTests
         agent.State.Spec.Identity.ServiceId.Should().Be("svc");
         agent.State.Spec.DisplayName.Should().Be("Service");
 
+        var updatedSpec = GAgentServiceTestKit.CreateDefinitionSpec(identity);
+        updatedSpec.ExternalExposure = new ExternalExposure
+        {
+            NyxidSlug = "aevatar-orders",
+        };
+        await agent.HandleUpdateAsync(new UpdateServiceDefinitionCommand
+        {
+            Spec = updatedSpec,
+        });
+        agent.State.Spec.ExternalExposure.Should().NotBeNull();
+        agent.State.Spec.ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
+
         await agent.DeactivateAsync();
 
         var replayed = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
@@ -39,7 +51,9 @@ public sealed class ServiceDefinitionGAgentTests
 
         replayed.State.Spec.Identity.ServiceId.Should().Be("svc");
         replayed.State.Spec.DisplayName.Should().Be("Service");
-        replayed.State.LastAppliedEventVersion.Should().Be(1);
+        replayed.State.Spec.ExternalExposure.Should().NotBeNull();
+        replayed.State.Spec.ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
+        replayed.State.LastAppliedEventVersion.Should().Be(2);
     }
 
     [Fact]
@@ -382,5 +396,28 @@ public sealed class ServiceDefinitionGAgentTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("service endpoints are required.");
+    }
+
+    [Fact]
+    public async Task HandleCreateAsync_ShouldRejectBlankExternalExposureSlug()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            new InMemoryEventStore(),
+            ServiceActorIds.Definition(identity),
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
+        var spec = GAgentServiceTestKit.CreateDefinitionSpec(identity);
+        spec.ExternalExposure = new ExternalExposure
+        {
+            NyxidSlug = " ",
+        };
+
+        var act = () => agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = spec,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("external_exposure.nyxid_slug or external_exposure.registered_at is required when external_exposure is specified.");
     }
 }

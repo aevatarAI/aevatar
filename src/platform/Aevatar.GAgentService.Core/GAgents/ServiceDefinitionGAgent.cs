@@ -139,6 +139,13 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         _ = ServiceKeys.Build(spec.Identity);
         if (spec.Endpoints.Count == 0)
             throw new InvalidOperationException("service endpoints are required.");
+        if (spec.ExternalExposure != null &&
+            string.IsNullOrWhiteSpace(spec.ExternalExposure.NyxidSlug) &&
+            spec.ExternalExposure.RegisteredAt == null)
+        {
+            throw new InvalidOperationException(
+                "external_exposure.nyxid_slug or external_exposure.registered_at is required when external_exposure is specified.");
+        }
     }
 
     private void EnsureExistingIdentity(ServiceIdentity identity)

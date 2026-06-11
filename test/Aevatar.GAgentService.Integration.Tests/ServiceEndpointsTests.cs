@@ -625,6 +625,10 @@ public sealed class ServiceEndpointsTests
 
         listResponse.Should().HaveCount(3);
         listResponse!.Single(x => x.ServiceId == "orders").InvokeReady.Should().BeTrue();
+        listResponse.Single(x => x.ServiceId == "orders").ExternalExposure.Should().NotBeNull();
+        listResponse.Single(x => x.ServiceId == "orders").ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
+        listResponse.Single(x => x.ServiceId == "orders").ExternalExposure!.RegisteredAt.Should()
+            .Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
         listResponse.Single(x => x.ServiceId == "orders").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         listResponse.Single(x => x.ServiceId == "orders").InvokeUnavailableReason.Should().BeNull();
         listResponse.Single(x => x.ServiceId == "billing").InvokeReady.Should().BeFalse();
@@ -634,10 +638,10 @@ public sealed class ServiceEndpointsTests
         listResponse.Single(x => x.ServiceId == "search").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unspecified.ToString());
         listResponse.Single(x => x.ServiceId == "search").InvokeUnavailableReason.Should().BeNull();
         getResponse!.ServiceId.Should().Be("orders");
+        getResponse.ExternalExposure.Should().NotBeNull();
         getResponse.InvokeReady.Should().BeTrue();
         getResponse.InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         getResponse.InvokeUnavailableReason.Should().BeNull();
-        getResponse.ExternalExposure.Should().NotBeNull();
         getResponse.ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
         getResponse.ExternalExposure.RegisteredAt.Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
         revisionResponse!.Revisions.Should().ContainSingle();

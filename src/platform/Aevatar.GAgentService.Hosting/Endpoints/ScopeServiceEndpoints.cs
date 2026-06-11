@@ -307,7 +307,8 @@ public static class ScopeServiceEndpoints
                 null,
                 [],
                 0,
-                string.Empty));
+                string.Empty,
+                null));
         }
 
         var revisions = await lifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);

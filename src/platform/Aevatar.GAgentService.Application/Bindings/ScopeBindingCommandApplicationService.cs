@@ -580,6 +580,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (!string.Equals(existingService.DisplayName, desiredDefinition.DisplayName, StringComparison.Ordinal))
             return true;
 
+        if (desiredDefinition.ExternalExposure != null &&
+            !ServiceExternalExposureEquals(existingService.ExternalExposure, desiredDefinition.ExternalExposure))
+        {
+            return true;
+        }
+
         var existingEndpoints = existingService.Endpoints
             .OrderBy(x => x.EndpointId, StringComparer.Ordinal)
             .ToArray();
@@ -605,6 +611,16 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         return false;
     }
 
+    private static bool ServiceExternalExposureEquals(
+        ServiceExternalExposureSnapshot? existingExposure,
+        ExternalExposure? desiredExposure)
+    {
+        var existingSlug = existingExposure?.NyxidSlug ?? string.Empty;
+        var desiredSlug = desiredExposure?.NyxidSlug ?? string.Empty;
+        return string.Equals(existingSlug, desiredSlug, StringComparison.Ordinal) &&
+            existingExposure?.RegisteredAt == desiredExposure?.RegisteredAt?.ToDateTimeOffset();
+    }
+
     private static ServiceDefinitionSpec CloneServiceDefinition(ServiceDefinitionSpec source)
     {
         var clone = new ServiceDefinitionSpec
@@ -623,7 +639,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ServiceDefinitionSpec spec,
         ServiceExternalExposureSnapshot? existingExternalExposure)
     {
-        if (existingExternalExposure == null)
+        if (spec.ExternalExposure != null || existingExternalExposure == null)
             return;
 
         spec.ExternalExposure = new ExternalExposure
