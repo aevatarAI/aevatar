@@ -14,6 +14,7 @@ using Orleans.Hosting;
 using Orleans.Serialization;
 using Orleans.Streams;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Streaming;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
@@ -159,10 +160,24 @@ public static class ServiceCollectionExtensions
             builder.AddRedisGrainStorage(
                 OrleansRuntimeConstants.GrainStateStorageName,
                 redisOptions => redisOptions.ConfigurationOptions = StackExchange.Redis.ConfigurationOptions.Parse(options.GarnetConnectionString));
+            builder.AddRedisGrainStorage(
+                OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName,
+                redisOptions =>
+                {
+                    redisOptions.ConfigurationOptions = StackExchange.Redis.ConfigurationOptions.Parse(options.GarnetConnectionString);
+                    redisOptions.GrainStorageSerializer = new RuntimeCallbackSchedulerStateGrainStorageSerializer();
+                    redisOptions.GetStorageKey = static (serviceId, grainId) =>
+                        (StackExchange.Redis.RedisKey)
+                        $"{OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName}/{grainId}/{serviceId}";
+                });
             return;
         }
 
         builder.AddMemoryGrainStorage(OrleansRuntimeConstants.GrainStateStorageName);
+        builder.AddMemoryGrainStorage(
+            OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName,
+            storageOptions => storageOptions.GrainStorageSerializer =
+                new RuntimeCallbackSchedulerStateGrainStorageSerializer());
     }
 
     private static void EnsurePersistentStreamPubSubStorage(
