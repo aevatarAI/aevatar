@@ -3,7 +3,6 @@ import React from "react";
 import WorkflowStudioCanvas from "./components/WorkflowStudioCanvas";
 import WorkflowStudioExecutionPanel from "./components/WorkflowStudioExecutionPanel";
 import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
-import WorkflowStudioMemberRunsPanel from "./components/WorkflowStudioMemberRunsPanel";
 import WorkflowStudioNodeDetailPanel from "./components/WorkflowStudioNodeDetailPanel";
 import WorkflowStudioNodeLibrary from "./components/WorkflowStudioNodeLibrary";
 import WorkflowStudioRunOptionsPanel from "./components/WorkflowStudioRunOptionsPanel";
@@ -242,17 +241,21 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         onDeleteConnection={studio.deleteSelectedConnection}
         onDeleteNode={studio.deleteSelectedNode}
         onOpenRunOptions={studio.openRunOptions}
+        onPasteYaml={studio.pasteYaml}
         onRunActiveMember={studio.runActiveMember}
         onNavigateBack={studio.navigateBack}
+        onNavigateToTeam={studio.navigateToTeam}
+        onNavigateToTeams={studio.navigateToTeams}
         onSave={studio.save}
         onTitleChange={studio.setWorkflowTitle}
+        pasteYamlPending={studio.pasteYamlPending}
         savePending={studio.savePending}
         savePlaceholderReason={studio.savePlaceholderReason}
         selectedEdgeId={studio.selectedEdgeId}
         selectedNodeId={studio.selectedNodeId}
-        selectedTab={studio.selectedTab}
-        onTabChange={studio.setSelectedTab}
+        teamHref={studio.teamHref}
         teamName={studio.teamName}
+        teamsHref={studio.teamsHref}
         workflowTitle={studio.workflowTitle}
       />
       {studio.linkedWorkflowMissing ? (
@@ -269,117 +272,107 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           type="warning"
         />
       ) : null}
-      {studio.selectedTab === "editor" ? (
-        <section
-          ref={editorRegionRef}
-          style={{
-            display: "flex",
-            flex: 1,
-            minHeight: 0,
-            overflow: "hidden",
-            position: "relative",
-          }}
-        >
-          {studio.loading ? (
-            <div
-              style={{
-                alignItems: "center",
-                display: "flex",
-                flex: 1,
-                justifyContent: "center",
-              }}
-            >
-              <Spin />
-            </div>
-          ) : (
-            <WorkflowStudioCanvas
-              edges={studio.graph.edges}
-              emptyDescription={studio.emptyDescription}
-              nodes={studio.graph.nodes}
-              onAddFirstStep={studio.openNodeLibrary}
-              onCanvasSelect={studio.selectCanvas}
-              onConnectNodes={studio.connectNodes}
-              onDeleteEdges={(edgeIds) => {
-                if (edgeIds.includes(studio.selectedEdgeId)) {
-                  studio.deleteSelectedConnection();
-                }
-              }}
-              onDeleteNodes={(nodeIds) => {
-                if (nodeIds.includes(studio.selectedNodeId)) {
-                  studio.deleteSelectedNode();
-                }
-              }}
-              onEdgeSelect={studio.selectEdge}
-              onNodeLayoutChange={studio.moveNodes}
-              onNodeSelect={studio.selectNode}
-              selectedEdgeId={studio.selectedEdgeId}
-              selectedNodeId={studio.selectedNodeId}
-            />
-          )}
-          <WorkflowStudioNodeLibrary
-            onClose={studio.closeNodeLibrary}
-            onInsertNode={studio.insertNode}
-            open={studio.nodeLibraryOpen}
+      <section
+        ref={editorRegionRef}
+        style={{
+          display: "flex",
+          flex: 1,
+          minHeight: 0,
+          overflow: "hidden",
+          position: "relative",
+        }}
+      >
+        {studio.loading ? (
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flex: 1,
+              justifyContent: "center",
+            }}
+          >
+            <Spin />
+          </div>
+        ) : (
+          <WorkflowStudioCanvas
+            edges={studio.graph.edges}
+            emptyDescription={studio.emptyDescription}
+            nodes={studio.graph.nodes}
+            onAddFirstStep={studio.openNodeLibrary}
+            onCanvasSelect={studio.selectCanvas}
+            onConnectNodes={studio.connectNodes}
+            onDeleteEdges={(edgeIds) => {
+              if (edgeIds.includes(studio.selectedEdgeId)) {
+                studio.deleteSelectedConnection();
+              }
+            }}
+            onDeleteNodes={(nodeIds) => {
+              if (nodeIds.includes(studio.selectedNodeId)) {
+                studio.deleteSelectedNode();
+              }
+            }}
+            onEdgeSelect={studio.selectEdge}
+            onNodeLayoutChange={studio.moveNodes}
+            onNodeSelect={studio.selectNode}
+            selectedEdgeId={studio.selectedEdgeId}
+            selectedNodeId={studio.selectedNodeId}
           />
-          {sidePanelOpen ? (
-            <hr
-              aria-label={t(
-                "teamMemberWorkflowStudio.resize.sidePanel",
-                "Resize side panel",
-              )}
-              aria-orientation="vertical"
-              aria-valuemax={resolveSidePanelMaxWidth(editorRegionRef.current)}
-              aria-valuemin={SIDE_PANEL_MIN_WIDTH}
-              aria-valuenow={sidePanelWidth}
-              onKeyDown={handleSidePanelResizeKeyDown}
-              onMouseDown={startSidePanelResize}
-              style={{
-                alignItems: "center",
-                background: "#cbd5e1",
-                borderBottom: 0,
-                borderLeft: "3px solid #ffffff",
-                borderRight: "3px solid #ffffff",
-                borderTop: 0,
-                boxSizing: "border-box",
-                cursor: "col-resize",
-                display: "flex",
-                flex: "0 0 10px",
-                height: "100%",
-                justifyContent: "center",
-                margin: 0,
-                minHeight: 0,
-                position: "relative",
-                zIndex: 2,
-              }}
-              tabIndex={0}
-            />
-          ) : null}
-          <WorkflowStudioRunOptionsPanel
-            onClose={studio.selectCanvas}
-            onRunMessageChange={studio.setExecutionRunMessage}
-            open={studio.runOptionsOpen}
-            runMessage={studio.executionRunMessage}
-            width={sidePanelWidth}
-          />
-          {studio.runOptionsOpen ? null : (
-            <WorkflowStudioNodeDetailPanel
-              error={studio.selectedStepConfigurationError}
-              onClose={studio.selectCanvas}
-              onConfigurationChange={studio.updateSelectedStepConfiguration}
-              onConfigurationErrorChange={studio.setSelectedStepConfigurationError}
-              stepDraft={studio.selectedStepDraft}
-            />
-          )}
-        </section>
-      ) : (
-        <WorkflowStudioMemberRunsPanel
-          emptyReason={studio.memberRunsEmptyReason}
-          error={studio.memberRunsError}
-          executions={studio.memberRuns}
-          loading={studio.memberRunsLoading}
-          onOpenExecution={studio.openExecution}
+        )}
+        <WorkflowStudioNodeLibrary
+          onClose={studio.closeNodeLibrary}
+          onInsertNode={studio.insertNode}
+          open={studio.nodeLibraryOpen}
         />
-      )}
+        {sidePanelOpen ? (
+          <hr
+            aria-label={t(
+              "teamMemberWorkflowStudio.resize.sidePanel",
+              "Resize side panel",
+            )}
+            aria-orientation="vertical"
+            aria-valuemax={resolveSidePanelMaxWidth(editorRegionRef.current)}
+            aria-valuemin={SIDE_PANEL_MIN_WIDTH}
+            aria-valuenow={sidePanelWidth}
+            onKeyDown={handleSidePanelResizeKeyDown}
+            onMouseDown={startSidePanelResize}
+            style={{
+              alignItems: "center",
+              background: "#cbd5e1",
+              borderBottom: 0,
+              borderLeft: "3px solid #ffffff",
+              borderRight: "3px solid #ffffff",
+              borderTop: 0,
+              boxSizing: "border-box",
+              cursor: "col-resize",
+              display: "flex",
+              flex: "0 0 10px",
+              height: "100%",
+              justifyContent: "center",
+              margin: 0,
+              minHeight: 0,
+              position: "relative",
+              zIndex: 2,
+            }}
+            tabIndex={0}
+          />
+        ) : null}
+        <WorkflowStudioRunOptionsPanel
+          onClose={studio.selectCanvas}
+          onRunMessageChange={studio.setExecutionRunMessage}
+          open={studio.runOptionsOpen}
+          runMessage={studio.executionRunMessage}
+          width={sidePanelWidth}
+        />
+        {studio.runOptionsOpen ? null : (
+          <WorkflowStudioNodeDetailPanel
+            error={studio.selectedStepConfigurationError}
+            onClose={studio.selectCanvas}
+            onConfigurationChange={studio.updateSelectedStepConfiguration}
+            onConfigurationErrorChange={studio.setSelectedStepConfigurationError}
+            stepDraft={studio.selectedStepDraft}
+          />
+        )}
+      </section>
       {executionPanelOpen ? (
         <hr
           aria-label={t(

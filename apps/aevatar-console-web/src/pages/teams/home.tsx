@@ -39,7 +39,8 @@ import {
 import { describeError } from "@/shared/ui/errorText";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
 import {
-  buildScopeHref,
+  buildTeamCreateRoute,
+  buildTeamWorkspaceRoute,
   readScopeQueryDraft,
 } from "../scopes/components/scopeQuery";
 import type { WorkflowOperationalAttention } from "./workflowOperationalUnits";
@@ -858,18 +859,6 @@ const TeamRosterCard: React.FC<{
         </span>
       </div>
 
-      <Typography.Text
-        title={preview.teamId}
-        ellipsis={{ tooltip: preview.teamId }}
-        style={{
-          color: token.colorTextSecondary,
-          display: "block",
-          fontSize: 12,
-        }}
-      >
-        {t("pages.teams.home.id", "ID：")}{preview.teamId}
-      </Typography.Text>
-
       <div
         style={{
           borderTop: `1px solid ${token.colorBorderSecondary}`,
@@ -978,18 +967,6 @@ const TeamRosterRow: React.FC<{
           >
             {preview.attentionDetail}
           </Typography.Paragraph>
-          <Typography.Text
-            title={preview.teamId}
-            ellipsis={{ tooltip: preview.teamId }}
-            style={{
-              color: token.colorTextSecondary,
-              display: "block",
-              fontSize: 12,
-              marginTop: 4,
-            }}
-          >
-            {t("pages.teams.home.id.2", "ID：")}{preview.teamId}
-          </Typography.Text>
         </div>
 
         <div className="teams-home-roster-row-actions">
@@ -1093,7 +1070,7 @@ const TeamsHomePage: React.FC = () => {
       return;
     }
 
-    const nextPath = buildScopeHref("/teams", { scopeId });
+    const nextPath = buildTeamWorkspaceRoute(scopeId);
     const currentPath =
       typeof window === "undefined"
         ? ""
@@ -1290,7 +1267,7 @@ const TeamsHomePage: React.FC = () => {
           <Button
             icon={<PlusOutlined />}
             onClick={() =>
-              history.push(buildScopeHref("/teams/new", { scopeId }))
+              history.push(buildTeamCreateRoute(scopeId))
             }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
@@ -1460,7 +1437,7 @@ const TeamsHomePage: React.FC = () => {
               >
                 <Button
                   onClick={() =>
-                    history.push(buildScopeHref("/teams/new", { scopeId }))
+                    history.push(buildTeamCreateRoute(scopeId))
                   }
                   type="primary"
                 >

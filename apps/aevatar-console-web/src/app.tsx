@@ -54,8 +54,8 @@ const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
 const STUDIO_HOST_ROUTES = new Set([
   "/studio",
-  "/teams/:scopeId/:teamId/members/new/workflow",
-  "/teams/:scopeId/:teamId/members/:memberId/workflow",
+  "/scopes/:scopeId/teams/:teamId/members/new/workflow",
+  "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow",
 ]);
 
 function isStudioHostRoute(pathname: string): boolean {
@@ -63,7 +63,11 @@ function isStudioHostRoute(pathname: string): boolean {
     return true;
   }
 
-  return /^\/teams\/[^/]+\/[^/]+\/members\/(?:new|[^/]+)\/workflow$/.test(pathname);
+  return (
+    /^\/scopes\/[^/]+\/teams\/[^/]+\/members\/(?:new|[^/]+)\/workflow$/.test(
+      pathname,
+    )
+  );
 }
 
 function shouldDefaultCollapseLayout(pathname: string, search: string): boolean {
@@ -164,7 +168,7 @@ const CONSOLE_LOCALE_OPTIONS: readonly ConsoleLocaleOption[] = [
   { key: "en-US", messageId: "common.language.english" },
 ];
 const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
-  "/teams": "nav.items.myTeams",
+  "/scopes": "nav.items.myTeams",
   "/runtime/runs": "nav.items.eventStream",
   "/services": "nav.items.services",
   "/governance": "nav.items.governance",

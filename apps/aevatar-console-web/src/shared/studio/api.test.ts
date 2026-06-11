@@ -480,6 +480,8 @@ describe('studioApi host-session requests', () => {
 
     await expect(studioApi.listWorkflows('scope-1')).resolves.toEqual([
       {
+        activeRevisionId: 'rev-draft',
+        serviceKey: 'svc-draft',
         workflowId: 'workflow-draft',
         name: 'draft-demo',
         description: 'draft copy',
@@ -492,6 +494,8 @@ describe('studioApi host-session requests', () => {
         updatedAtUtc: '2026-04-16T00:00:00Z',
       },
       {
+        activeRevisionId: 'rev-published',
+        serviceKey: 'svc-published',
         workflowId: 'workflow-published',
         name: 'published-demo',
         description: '',
@@ -1757,6 +1761,110 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('does not send a caller-derived memberId when creating a workflow member', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        memberId: 'm-generated-member',
+        scopeId: 'scope-1',
+        displayName: 'Untitled member',
+        description: '',
+        implementationKind: 'workflow',
+        lifecycleStage: 'created',
+        publishedServiceId: 'member-m-generated-member',
+        lastBoundRevisionId: null,
+        teamId: 'team-1',
+        createdAt: '2026-04-27T08:10:00Z',
+        updatedAt: '2026-04-27T08:10:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.createMember({
+      scopeId: 'scope-1',
+      displayName: 'Untitled member',
+      implementationKind: 'workflow',
+      teamId: 'team-1',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members',
+      expect.objectContaining({
+        body: JSON.stringify({
+          displayName: 'Untitled member',
+          implementationKind: 'workflow',
+          teamId: 'team-1',
+        }),
+      }),
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty(
+      'memberId',
+    );
+  });
+
+  it('requires the explicit createMemberWithId helper when callers own the member id', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        memberId: 'script-alpha',
+        scopeId: 'scope-1',
+        displayName: 'Script Alpha',
+        description: '',
+        implementationKind: 'script',
+        lifecycleStage: 'created',
+        publishedServiceId: 'member-script-alpha',
+        lastBoundRevisionId: null,
+        createdAt: '2026-04-27T08:10:00Z',
+        updatedAt: '2026-04-27T08:10:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.createMemberWithId({
+      scopeId: 'scope-1',
+      memberId: 'script-alpha',
+      displayName: 'Script Alpha',
+      implementationKind: 'script',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members',
+      expect.objectContaining({
+        body: JSON.stringify({
+          displayName: 'Script Alpha',
+          implementationKind: 'script',
+          memberId: 'script-alpha',
+        }),
+      }),
+    );
+  });
+
   it('assigns an existing workflow member to a team with the member patch endpoint', async () => {
     persistAuthSession({
       tokens: {
@@ -1834,6 +1942,78 @@ describe('studioApi host-session requests', () => {
         method: 'PATCH',
         body: JSON.stringify({
           teamId: 'team-1',
+        }),
+      }),
+    );
+  });
+
+  it('removes an existing workflow member from a team with explicit null teamId', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        summary: {
+          memberId: 'orders-draft',
+          scopeId: 'scope-1',
+          displayName: 'orders-draft',
+          description: '',
+          implementationKind: 'workflow',
+          lifecycleStage: 'created',
+          publishedServiceId: '',
+          lastBoundRevisionId: null,
+          teamId: null,
+          createdAt: '2026-04-27T08:10:00Z',
+          updatedAt: '2026-04-27T08:11:00Z',
+        },
+        implementationRef: null,
+        lastBinding: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.updateMemberTeamAssignment({
+        scopeId: 'scope-1',
+        memberId: 'orders-draft',
+        teamId: null,
+      }),
+    ).resolves.toEqual({
+      summary: {
+        memberId: 'orders-draft',
+        scopeId: 'scope-1',
+        displayName: 'orders-draft',
+        description: '',
+        implementationKind: 'workflow',
+        lifecycleStage: 'created',
+        publishedServiceId: '',
+        lastBoundRevisionId: null,
+        teamId: null,
+        createdAt: '2026-04-27T08:10:00Z',
+        updatedAt: '2026-04-27T08:11:00Z',
+      },
+      implementationRef: null,
+      lastBinding: null,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members/orders-draft',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'PATCH',
+        body: JSON.stringify({
+          teamId: null,
         }),
       }),
     );

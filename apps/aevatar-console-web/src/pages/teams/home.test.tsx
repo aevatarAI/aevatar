@@ -130,7 +130,7 @@ function buildServiceRunCatalog(serviceId: string) {
 
 describe("TeamsHomePage", () => {
   beforeEach(() => {
-    window.history.replaceState({}, "", "/teams?scopeId=scope-a");
+    window.history.replaceState({}, "", "/scopes/scope-a/teams");
     window.sessionStorage.clear();
     clearStoredAuthSession();
     jest.clearAllMocks();
@@ -178,7 +178,7 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText("需要处理")).toBeNull();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
-    expect(screen.getByText("ID：t-support")).toBeTruthy();
+    expect(screen.queryByText("ID：t-support")).toBeNull();
     expect(screen.getByText("客服运行时")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "切换到列表视图" })).toBeNull();
     expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
@@ -196,7 +196,7 @@ describe("TeamsHomePage", () => {
     expect(screen.getByText("Total AI teams")).toBeTruthy();
     expect(screen.getByText("Teams needing action")).toBeTruthy();
     expect(screen.getByText("Team list")).toBeTruthy();
-    expect(screen.getByText("ID: t-support")).toBeTruthy();
+    expect(screen.queryByText("ID: t-support")).toBeNull();
     expect(screen.queryByText("我的 AI 团队")).toBeNull();
     expect(screen.queryByText("组建新团队")).toBeNull();
   });
@@ -236,7 +236,7 @@ describe("TeamsHomePage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
 
-    expect(window.location.pathname).toBe("/teams/new");
+    expect(window.location.pathname).toBe("/scopes/scope-a/teams/new");
   });
 
   it("does not show the roster view toggle when only one Team is visible", async () => {
@@ -451,10 +451,7 @@ describe("TeamsHomePage", () => {
       "title",
       expect.stringContaining("另一个非常长的服务名用于验证 hover 全量展示"),
     );
-    expect(screen.getByText("ID：t-long").closest("[title]")).toHaveAttribute(
-      "title",
-      "t-long",
-    );
+    expect(screen.queryByText("ID：t-long")).toBeNull();
   });
 
   it("does not query service runs for a Team without an entry member", async () => {
@@ -577,7 +574,7 @@ describe("TeamsHomePage", () => {
 
     await waitFor(() => {
       expect(window.location.pathname).toBe(
-        "/teams/scope-a/t-support/members/member-alpha/workflow",
+        "/scopes/scope-a/teams/t-support/members/member-alpha/workflow",
       );
     });
   });
@@ -617,7 +614,7 @@ describe("TeamsHomePage", () => {
 
     await waitFor(() => {
       expect(window.location.pathname).toBe(
-        "/teams/scope-a/t-support/members/member-entry/workflow",
+        "/scopes/scope-a/teams/t-support/members/member-entry/workflow",
       );
     });
   });
@@ -628,7 +625,7 @@ describe("TeamsHomePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "查看团队" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams/scope-a/t-support");
+      expect(window.location.pathname).toBe("/scopes/scope-a/teams/t-support");
     });
 
     const params = new URLSearchParams(window.location.search);
@@ -643,7 +640,7 @@ describe("TeamsHomePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "查看成员" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams/scope-a/t-support");
+      expect(window.location.pathname).toBe("/scopes/scope-a/teams/t-support");
     });
 
     const params = new URLSearchParams(window.location.search);
@@ -692,7 +689,7 @@ describe("TeamsHomePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "管理成员" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams/scope-a/t-support");
+      expect(window.location.pathname).toBe("/scopes/scope-a/teams/t-support");
     });
 
     const params = new URLSearchParams(window.location.search);
@@ -700,7 +697,7 @@ describe("TeamsHomePage", () => {
   });
 
   it("does not load roster data from a locally restored scope when server auth fails", async () => {
-    window.history.replaceState({}, "", "/teams");
+    window.history.replaceState({}, "", "/scopes");
     persistAuthSession({
       tokens: {
         accessToken: "access-token",
@@ -734,7 +731,8 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText("AI 团队总数")).toBeNull();
 
     await waitFor(() => {
-      expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");
+      expect(window.location.pathname).toBe("/scopes/scope-a/teams");
+      expect(new URLSearchParams(window.location.search).get("scopeId")).toBeNull();
     });
   });
 
@@ -800,7 +798,7 @@ describe("TeamsHomePage", () => {
 
     expect(await screen.findByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 3, name: "joker" })).toBeTruthy();
-    expect(screen.getByText("ID：t-joker")).toBeTruthy();
+    expect(screen.queryByText("ID：t-joker")).toBeNull();
     expect(screen.getAllByRole("button", { name: "调试入口工作流" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "调试工作流" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "查看团队" })).toHaveLength(2);
@@ -832,7 +830,7 @@ describe("TeamsHomePage", () => {
 
     expect(await screen.findByText("团队列表")).toBeTruthy();
     expect(screen.queryByText("存在未归队成员")).toBeNull();
-    expect(screen.getByText("ID：t-support")).toBeTruthy();
+    expect(screen.queryByText("ID：t-support")).toBeNull();
     expect(screen.queryByRole("heading", { level: 3, name: "未归队成员" })).toBeNull();
   });
 
@@ -885,11 +883,11 @@ describe("TeamsHomePage", () => {
     expect(
       await screen.findByRole("heading", { level: 3, name: "刚创建的团队" }),
     ).toBeTruthy();
-    expect(screen.getByText("ID：t-new")).toBeTruthy();
+    expect(screen.queryByText("ID：t-new")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "创建工作流成员" }));
     await waitFor(() => {
       expect(window.location.pathname).toBe(
-        "/teams/scope-a/t-new/members/new/workflow",
+        "/scopes/scope-a/teams/t-new/members/new/workflow",
       );
     });
     expect(
@@ -915,6 +913,6 @@ describe("TeamsHomePage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
 
-    expect(window.location.pathname).toBe("/teams/new");
+    expect(window.location.pathname).toBe("/scopes/scope-a/teams/new");
   });
 });
