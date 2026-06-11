@@ -312,7 +312,10 @@ public sealed class ScopeServiceEndpointsTests
                         "Run command"),
                 ],
                 [],
-                DateTimeOffset.UtcNow),
+                DateTimeOffset.UtcNow,
+                new ServiceExternalExposureSnapshot(
+                    "aevatar-orders",
+                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))),
             new ServiceCatalogSnapshot(
                 "scope-a:default:default:billing",
                 "scope-a",
@@ -418,6 +421,10 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().NotBeNull();
         body!.Should().HaveCount(4);
         body.Single(x => x.ServiceId == "orders").Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        body.Single(x => x.ServiceId == "orders").ExternalExposure.Should().NotBeNull();
+        body.Single(x => x.ServiceId == "orders").ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
+        body.Single(x => x.ServiceId == "orders").ExternalExposure!.RegisteredAt.Should()
+            .Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
         body.Single(x => x.ServiceId == "orders").InvokeReady.Should().BeTrue();
         body.Single(x => x.ServiceId == "orders").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         body.Single(x => x.ServiceId == "orders").InvokeUnavailableReason.Should().BeNull();

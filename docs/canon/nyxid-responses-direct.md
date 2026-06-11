@@ -220,11 +220,20 @@ NyxID slug proxy 路由是 REST proxy plane：
 /api/v1/proxy/s/{slug}/{path}
 ```
 
+## 10. Aevatar Service 外部暴露记录
+
+Aevatar service catalog 的 `externalExposure` 是 service definition 拥有的 typed fact，用来记录该 service 已经作为外部 NyxID downstream service 暴露时的稳定信息：
+
+- `nyxidSlug`：NyxID 侧用于 `/api/v1/proxy/s/{slug}/...` 的 slug。
+- `registeredAt`：该外部暴露记录写入 Aevatar service definition 的时间。
+
+这个事实不属于 service binding。Binding 只表达本 service 依赖的下游资源；`externalExposure` 表达本 service 自身对外暴露后的可发现信息。Aevatar 不会因为该字段自动向 NyxID 注册服务，也不会把该字段接入 dispatcher 路由。写入仍走 service definition 的窄 external exposure 更新入口，读取走 service catalog readmodel 与现有 service/scope service API 响应。
+
 因此 API key 至少需要 `proxy` scope，或更宽的 proxy scope。生产上可以用 `--allowed-services` 收紧到 Aevatar 与目标 LLM 服务；调试时可以先用 `--allow-all-services` 验证链路。
 
 `--allowed-services` 必须填 `nyxid service list --output json` 里的 UserService id，不是 catalog id。填错时常见错误是 `api_key_scope_forbidden_legacy`。
 
-## 10. 代码锚点
+## 11. 代码锚点
 
 主机端入口：
 

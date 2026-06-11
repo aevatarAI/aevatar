@@ -25,6 +25,15 @@ public sealed partial class ServiceCatalogReadModel : IProjectionReadModel<Servi
     }
 }
 
+public sealed partial class ServiceCatalogExternalExposureReadModel
+{
+    public DateTimeOffset? RegisteredAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(RegisteredAtUtcValue);
+        set => RegisteredAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+}
+
 public sealed partial class ServiceDeploymentCatalogReadModel : IProjectionReadModel<ServiceDeploymentCatalogReadModel>
 {
     public DateTimeOffset UpdatedAt
