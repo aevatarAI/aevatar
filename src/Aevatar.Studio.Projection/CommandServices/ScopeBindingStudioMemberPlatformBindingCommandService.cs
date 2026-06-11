@@ -191,6 +191,26 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             return null;
         }
 
+        StudioMemberImplementationRef implementationRef;
+        try
+        {
+            implementationRef = BuildImplementationRef(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "StudioMember platform binding result mapping failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                request.BindingRunId,
+                commandId);
+
+            return BuildFailedContinuation(
+                request.BindingRunId,
+                commandId,
+                PlatformBindingFailedFailureCode,
+                ex.Message);
+        }
+
         return new StudioMemberPlatformBindingSucceeded
         {
             BindingRunId = request.BindingRunId,
@@ -202,7 +222,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 RevisionId = result.RevisionId,
                 ImplementationKind = ToStudioKind(result.ImplementationKind),
                 ExpectedActorId = result.ExpectedActorId,
-                ImplementationRef = BuildImplementationRef(result),
+                ImplementationRef = implementationRef,
             },
         };
     }
@@ -467,6 +487,6 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         if (!string.IsNullOrWhiteSpace(workflowId))
             return workflowId;
 
-        return result.Workflow?.WorkflowName?.Trim() ?? result.WorkflowName?.Trim() ?? string.Empty;
+        throw new InvalidOperationException("scope binding workflow result workflow id is required for workflow member binding.");
     }
 }

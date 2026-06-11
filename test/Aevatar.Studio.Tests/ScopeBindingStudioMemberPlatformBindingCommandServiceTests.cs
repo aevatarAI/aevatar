@@ -118,7 +118,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenWorkflowResultHasNoWorkflowId_ShouldUseWorkflowNameFallback()
+    public async Task ExecuteAsync_WhenWorkflowResultHasNoWorkflowId_ShouldDispatchFailedContinuation()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort
         {
@@ -132,9 +132,9 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             NewWorkflowStartRequest());
 
-        var succeeded = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
-        succeeded.Result.PublishedServiceId.Should().Be("member-m-1");
-        succeeded.Result.ImplementationRef.Workflow.WorkflowId.Should().Be("workflow-main");
+        var failed = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingFailed>();
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_FAILED");
+        failed.Failure.Message.Should().Be("scope binding workflow result workflow id is required for workflow member binding.");
     }
 
     [Fact]
