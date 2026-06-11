@@ -118,6 +118,26 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenWorkflowResultHasNoWorkflowId_ShouldUseWorkflowNameFallback()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort
+        {
+            OmitWorkflowId = true,
+        };
+        var dispatchPort = new RecordingDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            NewWorkflowStartRequest());
+
+        var succeeded = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
+        succeeded.Result.PublishedServiceId.Should().Be("member-m-1");
+        succeeded.Result.ImplementationRef.Workflow.WorkflowId.Should().Be("workflow-main");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldBuildGAgentBindingRequestAndDispatchGAgentResult()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
@@ -643,6 +663,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         public List<ScopeBindingUpsertRequest> Requests { get; } = [];
         public Exception? Failure { get; init; }
         public bool OmitExpectedDeploymentId { get; init; }
+        public bool OmitWorkflowId { get; init; }
         public TaskCompletionSource<ScopeBindingUpsertRequest> UpsertStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<object?>? ReleaseUpsert { get; init; }
@@ -660,7 +681,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
 
             var result = request.ImplementationKind switch
             {
-                ScopeBindingImplementationKind.Workflow => BuildWorkflowResult(request),
+                ScopeBindingImplementationKind.Workflow => BuildWorkflowResult(request, OmitWorkflowId),
                 ScopeBindingImplementationKind.GAgent => BuildGAgentResult(request),
                 _ => BuildScriptResult(request),
             };
@@ -668,7 +689,9 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             return OmitExpectedDeploymentId ? result with { ExpectedDeploymentId = "" } : result;
         }
 
-        private static ScopeBindingUpsertResult BuildWorkflowResult(ScopeBindingUpsertRequest request)
+        private static ScopeBindingUpsertResult BuildWorkflowResult(
+            ScopeBindingUpsertRequest request,
+            bool omitWorkflowId)
         {
             var revisionId = request.RevisionId ?? "rev-1";
             return new ScopeBindingUpsertResult(
@@ -681,7 +704,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 WorkflowName: "workflow-main",
                 DefinitionActorIdPrefix: "scope-workflow:scope-1:workflow-main",
                 Workflow: new ScopeBindingWorkflowResult(
-                    request.Workflow?.WorkflowId ?? string.Empty,
+                    omitWorkflowId ? string.Empty : request.Workflow?.WorkflowId ?? string.Empty,
                     "workflow-main",
                     "scope-workflow:scope-1:workflow-main"),
                 ExpectedDeploymentId: "deployment-1");

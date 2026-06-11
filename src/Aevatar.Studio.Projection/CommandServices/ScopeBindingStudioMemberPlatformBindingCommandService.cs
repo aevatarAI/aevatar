@@ -467,6 +467,6 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         if (!string.IsNullOrWhiteSpace(workflowId))
             return workflowId;
 
-        return result.ServiceId?.Trim() ?? string.Empty;
+        return result.Workflow?.WorkflowName?.Trim() ?? result.WorkflowName?.Trim() ?? string.Empty;
     }
 }
