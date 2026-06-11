@@ -12,8 +12,14 @@ public static class SkillRunnerDefaults
     public const string StatusRunning = "running";
     public const string StatusError = "error";
     public const string StatusDisabled = "disabled";
+    public const string StatusCompleted = "completed";
     public const string RejectionReasonRunnerDisabled = "runner_disabled";
     public const string ExternalTriggerReason = "external_trigger";
+    public const string OneShotTriggerReason = "one_shot";
+    public const string OneShotSkillName = "one-shot-reminder";
+    public const string OneShotRetirementReasonCompleted = "one_shot_completed";
+    public const string OneShotRetirementReasonFailed = "one_shot_failed";
+    public const string OneShotRetirementReasonRejected = "one_shot_rejected";
     public const string ExternalTriggerRejectedReasonUnknownSource = "unknown";
     public const string ExternalTriggerRejectedReasonDisabledSource = "disabled";
     public const string ExternalTriggerRejectedReasonMalformedDelivery = "malformed_delivery";

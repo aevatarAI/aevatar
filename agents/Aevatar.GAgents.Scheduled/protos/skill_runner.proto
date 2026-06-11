@@ -26,6 +26,12 @@ enum SkillRunnerOutputFormat {
   SKILL_RUNNER_OUTPUT_FORMAT_FEISHU_DOC = 2;
 }
 
+enum SkillRunnerScheduleMode {
+  SKILL_RUNNER_SCHEDULE_MODE_UNSPECIFIED = 0;
+  SKILL_RUNNER_SCHEDULE_MODE_CRON = 1;
+  SKILL_RUNNER_SCHEDULE_MODE_ONE_SHOT = 2;
+}
+
 enum SkillRunnerExecutionErrorCode {
   SKILL_RUNNER_EXECUTION_ERROR_CODE_UNSPECIFIED = 0;
   SKILL_RUNNER_EXECUTION_ERROR_CODE_SKILL_REFERENCE_REQUIRED = 1;
@@ -162,6 +168,11 @@ message SkillRunnerState {
   SkillRunnerSkillReference skill_ref = 22;
   repeated ExternalTriggerSource external_trigger_sources = 23;
   repeated SkillRunnerExternalTriggerDeliveryRecord recent_external_trigger_deliveries = 24;
+  SkillRunnerScheduleMode schedule_mode = 25;
+  google.protobuf.Timestamp one_shot_run_at = 26;
+  google.protobuf.Timestamp retired_at = 27;
+  string retirement_reason = 28;
+  string one_shot_message = 29;
 }
 
 message SkillRunnerExecutionDocument {
@@ -180,6 +191,10 @@ message SkillRunnerExecutionDocument {
   google.protobuf.Timestamp next_run_at_utc = 13;
   int32 error_count = 14;
   string last_error = 15;
+  SkillRunnerScheduleMode schedule_mode = 16;
+  google.protobuf.Timestamp run_at_utc = 17;
+  google.protobuf.Timestamp retired_at_utc = 18;
+  string retirement_reason = 19;
 }
 
 message InitializeSkillRunnerCommand {
@@ -203,6 +218,9 @@ message InitializeSkillRunnerCommand {
   SkillRunnerSkillReference skill_ref = 17;
   repeated ExternalTriggerSource external_trigger_sources = 18;
   SkillRunnerOutputFormat output_format = 19;
+  SkillRunnerScheduleMode schedule_mode = 20;
+  google.protobuf.Timestamp one_shot_run_at = 21;
+  string one_shot_message = 22;
 }
 
 message SkillRunnerInitializedEvent {
@@ -225,6 +243,9 @@ message SkillRunnerInitializedEvent {
   bool requires_nyxid_proxy_success = 16;
   SkillRunnerSkillReference skill_ref = 17;
   repeated ExternalTriggerSource external_trigger_sources = 18;
+  SkillRunnerScheduleMode schedule_mode = 19;
+  google.protobuf.Timestamp one_shot_run_at = 20;
+  string one_shot_message = 21;
 }
 
 message TriggerSkillRunnerExecutionCommand {
@@ -242,6 +263,11 @@ message AdmitSkillRunnerExternalTriggerCommand {
 
 message SkillRunnerNextRunScheduledEvent {
   google.protobuf.Timestamp next_run_at = 1;
+}
+
+message SkillRunnerOneShotRetiredEvent {
+  google.protobuf.Timestamp retired_at = 1;
+  string reason = 2;
 }
 
 message SkillRunnerExecutionCompletedEvent {

@@ -95,6 +95,63 @@ public sealed class ChannelScheduleRunnerTests
             new DateTimeOffset(2026, 4, 14, 9, 30, 0, TimeSpan.Zero));
     }
 
+    [Fact]
+    public async Task ScheduleNextRunAsync_WhenOneShot_UsesFixedUtcRunAt()
+    {
+        var now = new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero);
+        var clock = new FakeClock(now);
+        var resolver = new FakeTimeZoneResolver(TimeZoneInfo.Utc);
+        var runAt = now.AddMinutes(12);
+        var source = new TestSchedulable
+        {
+            Schedule =
+            {
+                Enabled = true,
+                Mode = ScheduleState.ModeOneShot,
+                RunAt = Timestamp.FromDateTimeOffset(runAt),
+            },
+        };
+        var scheduled = new List<ScheduledTimeout>();
+        var persisted = new List<DateTimeOffset>();
+        var runner = CreateRunner(source, clock, resolver, scheduled, persisted);
+
+        await runner.ScheduleNextRunAsync(CancellationToken.None);
+
+        resolver.RequestedTimezones.Should().BeEmpty();
+        scheduled.Should().ContainSingle();
+        scheduled[0].DueTime.Should().Be(TimeSpan.FromMinutes(12));
+        persisted.Should().ContainSingle().Which.Should().Be(runAt);
+    }
+
+    [Fact]
+    public async Task ScheduleNextRunAsync_WhenRetired_ShouldSkipScheduling()
+    {
+        var now = new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero);
+        var source = new TestSchedulable
+        {
+            Schedule =
+            {
+                Enabled = true,
+                Mode = ScheduleState.ModeOneShot,
+                RunAt = Timestamp.FromDateTimeOffset(now.AddMinutes(12)),
+                RetiredAt = Timestamp.FromDateTimeOffset(now.AddMinutes(13)),
+            },
+        };
+        var scheduled = new List<ScheduledTimeout>();
+        var persisted = new List<DateTimeOffset>();
+        var runner = CreateRunner(
+            source,
+            new FakeClock(now),
+            new FakeTimeZoneResolver(TimeZoneInfo.Utc),
+            scheduled,
+            persisted);
+
+        await runner.ScheduleNextRunAsync(CancellationToken.None);
+
+        scheduled.Should().BeEmpty();
+        persisted.Should().BeEmpty();
+    }
+
     private static ChannelScheduleRunner CreateRunner(
         TestSchedulable source,
         FakeClock clock,

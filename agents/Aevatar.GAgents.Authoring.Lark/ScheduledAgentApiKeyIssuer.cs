@@ -32,7 +32,6 @@ internal sealed class ScheduledAgentApiKeyIssuer
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(skillName);
         ArgumentNullException.ThrowIfNull(serviceSlugs);
 
         var slugs = RequiredSlugs(serviceSlugs).Distinct(StringComparer.Ordinal).ToArray();
@@ -60,6 +59,9 @@ internal sealed class ScheduledAgentApiKeyIssuer
 
         var issuedKey = ExtractIssuedKey(response);
         if (!issuedKey.Success)
+            return issuedKey;
+
+        if (string.IsNullOrWhiteSpace(skillName))
             return issuedKey;
 
         var ornnSlug = GetOrnnServiceSlug();
@@ -102,7 +104,8 @@ internal sealed class ScheduledAgentApiKeyIssuer
     private IEnumerable<string> RequiredSlugs(ScheduledAgentServiceSlugs serviceSlugs)
     {
         var ornnSlug = GetOrnnServiceSlug();
-        yield return ornnSlug;
+        if (serviceSlugs.RequiresOrnnService)
+            yield return ornnSlug;
         yield return serviceSlugs.PrimaryOutboundSlug;
 
         if (!string.IsNullOrWhiteSpace(serviceSlugs.FailureNotificationSlug) &&
@@ -368,7 +371,8 @@ internal sealed record ScheduledAgentSkillPreflightResult(
 internal sealed record ScheduledAgentServiceSlugs(
     string PrimaryOutboundSlug,
     string? FailureNotificationSlug,
-    IReadOnlyList<string> RequiredServiceSlugs);
+    IReadOnlyList<string> RequiredServiceSlugs,
+    bool RequiresOrnnService = true);
 
 internal sealed record ScheduledAgentApiKeyIssueResult(
     bool Success,

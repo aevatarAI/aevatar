@@ -319,6 +319,10 @@ public sealed class AgentBuilderTool : IAgentTool
             scope_id = entry.ScopeId,
             schedule_cron = entry.ScheduleCron,
             schedule_timezone = entry.ScheduleTimezone,
+            schedule_mode = ToScheduleModeJsonValue(entry.ScheduleMode),
+            run_at_utc = entry.RunAt,
+            retired_at_utc = entry.RetiredAt,
+            retirement_reason = entry.RetirementReason,
             output_format = ToOutputFormatJsonValue(entry.OutputFormat),
             last_run_at = entry.LastRunAt,
             next_scheduled_run = entry.NextRunAt,
@@ -349,6 +353,9 @@ public sealed class AgentBuilderTool : IAgentTool
                 status = x.Status,
                 schedule_cron = x.ScheduleCron,
                 schedule_timezone = x.ScheduleTimezone,
+                schedule_mode = ToScheduleModeJsonValue(x.ScheduleMode),
+                run_at_utc = x.RunAt,
+                retired_at_utc = x.RetiredAt,
                 output_format = ToOutputFormatJsonValue(x.OutputFormat),
                 last_run_at = x.LastRunAt,
                 next_scheduled_run = x.NextRunAt,
@@ -427,6 +434,10 @@ public sealed class AgentBuilderTool : IAgentTool
             ApiKeyId = catalog.ApiKeyId,
             ScheduleCron = catalog.ScheduleCron,
             ScheduleTimezone = catalog.ScheduleTimezone,
+            ScheduleMode = execution.ScheduleMode,
+            RunAt = execution.RunAtUtc,
+            RetiredAt = execution.RetiredAtUtc,
+            RetirementReason = execution.RetirementReason ?? string.Empty,
             Status = execution.Status ?? string.Empty,
             LastRunAt = execution.LastRunAtUtc,
             NextRunAt = execution.NextRunAtUtc,
@@ -455,6 +466,9 @@ public sealed class AgentBuilderTool : IAgentTool
             SkillRunnerOutputFormat.FeishuDoc => "feishu_doc",
             _ => "auto",
         };
+
+    private static string ToScheduleModeJsonValue(SkillRunnerScheduleMode scheduleMode) =>
+        scheduleMode == SkillRunnerScheduleMode.OneShot ? "one_shot" : "cron";
 
     private static async Task<(bool success, string? error)> TryDispatchLifecycleAsync(
         UserAgentCatalogReadModelEntry entry,

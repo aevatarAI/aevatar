@@ -14,6 +14,11 @@ public sealed partial class SkillRunnerState : ISchedulable
         NextRunAt = NextRunAt,
         LastRunAt = LastRunAt,
         ErrorCount = ErrorCount,
+        Mode = ScheduleMode == SkillRunnerScheduleMode.OneShot
+            ? ScheduleState.ModeOneShot
+            : ScheduleState.ModeCron,
+        RunAt = OneShotRunAt,
+        RetiredAt = RetiredAt,
     };
 
     public ExternalTriggerSource? FindExternalTriggerSource(string? sourceId)

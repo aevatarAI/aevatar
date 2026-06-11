@@ -74,4 +74,36 @@ public sealed class ChannelScheduleCalculatorTests
 
         due.Should().Be(TimeSpan.FromSeconds(1));
     }
+
+    [Fact]
+    public void TryGetOneShotOccurrence_ReturnsRunAt_WhenFuture()
+    {
+        var now = new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero);
+        var runAt = now.AddMinutes(10);
+
+        var ok = ChannelScheduleCalculator.TryGetOneShotOccurrence(
+            runAt,
+            now,
+            out var nextRunAtUtc,
+            out var error);
+
+        ok.Should().BeTrue();
+        error.Should().BeNull();
+        nextRunAtUtc.Should().Be(runAt);
+    }
+
+    [Fact]
+    public void TryGetOneShotOccurrence_ReturnsFalse_WhenElapsed()
+    {
+        var now = new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero);
+
+        var ok = ChannelScheduleCalculator.TryGetOneShotOccurrence(
+            now.AddSeconds(-1),
+            now,
+            out _,
+            out var error);
+
+        ok.Should().BeFalse();
+        error.Should().Contain("future");
+    }
 }
