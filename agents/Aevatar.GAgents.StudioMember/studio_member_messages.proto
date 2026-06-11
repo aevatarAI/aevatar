@@ -100,6 +100,7 @@ message StudioMemberBindingAuthorityState {
 
 message StudioMemberWorkflowBindingRequest {
   repeated string workflow_yamls = 1;
+  string workflow_id = 2;
 }
 
 message StudioMemberScriptBindingRequest {

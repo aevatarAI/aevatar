@@ -1,5 +1,7 @@
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
+using System.Text.Json.Serialization;
+
 /// <summary>
 /// Wire-format implementation kind for HTTP/JSON. Uses lowercase strings so
 /// Studio's HTTP surface stays member-centric and frontend-friendly. Mapped
@@ -207,8 +209,26 @@ public sealed record UpdateStudioMemberBindingRequest(
     StudioMemberScriptBindingSpec? Script = null,
     StudioMemberGAgentBindingSpec? GAgent = null);
 
-public sealed record StudioMemberWorkflowBindingSpec(
-    IReadOnlyList<string> WorkflowYamls);
+public sealed record StudioMemberWorkflowBindingSpec
+{
+    [JsonConstructor]
+    public StudioMemberWorkflowBindingSpec(
+        string WorkflowId,
+        IReadOnlyList<string> WorkflowYamls)
+    {
+        this.WorkflowId = WorkflowId;
+        this.WorkflowYamls = WorkflowYamls;
+    }
+
+    public StudioMemberWorkflowBindingSpec(IReadOnlyList<string> WorkflowYamls)
+        : this(string.Empty, WorkflowYamls)
+    {
+    }
+
+    public string WorkflowId { get; init; }
+
+    public IReadOnlyList<string> WorkflowYamls { get; init; }
+}
 
 public sealed record StudioMemberScriptBindingSpec(
     string ScriptId,
