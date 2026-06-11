@@ -731,7 +731,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             new ToolApprovalMiddleware(_approvalHandler ?? MissingApprovalHandler.Instance),
         };
-        effective.AddRange(_toolMiddlewares);
+        effective.AddRange(_toolMiddlewares.Where(static middleware => middleware is not ToolApprovalMiddleware));
         return effective;
     }
 

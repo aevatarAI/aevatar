@@ -240,11 +240,6 @@ public static class MainnetHostBuilderExtensions
                 o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
             o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
         });
-        // Keep the canonical yielding local handler for approval-required tools.
-        // mainnet bypasses ssh_exec locally above, but other tools can still yield to
-        // actor-owned remote continuation (NyxIdRemoteToolApprovalPort submit/status
-        // -> RoleGAgent.HandleRemoteApprovalStatusCheck). See iter23/cluster-001.
-        builder.Services.TryAddSingleton<IToolApprovalHandler, YieldApprovalHandler>();
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IToolCallMiddleware, ToolApprovalMiddleware>());
         builder.Services.AddLarkTools(o =>
         {

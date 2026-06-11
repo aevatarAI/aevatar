@@ -700,6 +700,8 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         reply.Text.Should().Contain("No tool approval handler is registered.");
+        reply.Text.Should().NotContain("An approval request has been sent.");
+        reply.Text.Should().NotContain("\"approval_required\":true");
         tool.ExecuteCount.Should().Be(0);
     }
 

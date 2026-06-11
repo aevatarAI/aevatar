@@ -145,33 +145,6 @@ internal static class LarkProxyResponseParser
             PageToken: TryReadString(data, "page_token"));
     }
 
-    public static LarkMessageSearchResult ParseMessageSearchSuccess(string response)
-    {
-        using var document = JsonDocument.Parse(response);
-        var data = ResolveDataRoot(document.RootElement);
-        var messageIds = new List<string>();
-
-        if (data.TryGetProperty("items", out var itemsProp) && itemsProp.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in itemsProp.EnumerateArray())
-            {
-                var meta = item.TryGetProperty("meta_data", out var metaProp) &&
-                           metaProp.ValueKind == JsonValueKind.Object
-                    ? metaProp
-                    : item;
-                var messageId = TryReadString(meta, "message_id");
-                if (!string.IsNullOrWhiteSpace(messageId))
-                    messageIds.Add(messageId);
-            }
-        }
-
-        return new LarkMessageSearchResult(
-            MessageIds: messageIds,
-            HasMore: TryReadBool(data, "has_more") ?? false,
-            PageToken: TryReadString(data, "page_token"),
-            Count: TryReadInt(data, "count") ?? messageIds.Count);
-    }
-
     public static LarkMessageBatchGetResult ParseMessageBatchGetSuccess(string response)
     {
         using var document = JsonDocument.Parse(response);
@@ -527,12 +500,6 @@ internal sealed record LarkMessageReactionListResult(
     IReadOnlyList<LarkMessageReactionResult> Items,
     bool HasMore,
     string? PageToken);
-
-internal sealed record LarkMessageSearchResult(
-    IReadOnlyList<string> MessageIds,
-    bool HasMore,
-    string? PageToken,
-    int Count);
 
 internal sealed record LarkMessageMention(
     string? Id,
