@@ -569,6 +569,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.activation.publishing': '发布中',
   'teamMemberWorkflowStudio.header.activation.ready': '就绪',
   'teamMemberWorkflowStudio.header.addNode': '添加节点',
+  'teamMemberWorkflowStudio.header.back': '返回',
   'teamMemberWorkflowStudio.header.currentTeam': '当前团队',
   'teamMemberWorkflowStudio.header.deleteConnection': '删除连接',
   'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
@@ -577,6 +578,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow 草稿和节点操作',
+  'teamMemberWorkflowStudio.header.pasteYaml': '粘贴 YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow 主操作',
   'teamMemberWorkflowStudio.header.runMessage': '运行消息',
@@ -657,6 +659,11 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': '成员运行记录',
   'teamMemberWorkflowStudio.runsPanel.title': '成员运行记录',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': '未知',
+  'teamMemberWorkflowStudio.yamlModal.import': '导入',
+  'teamMemberWorkflowStudio.yamlModal.placeholder':
+    'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
+  'teamMemberWorkflowStudio.yamlModal.textareaAria': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlModal.title': '粘贴 Workflow YAML',
   'pages.studio.studiomembercurrentrunpanel.details': '详情',
   'pages.studio.studiomemberinvokepanel.endpoint': '端点',
 };

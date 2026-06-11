@@ -608,6 +608,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.activation.publishing': 'Publishing',
   'teamMemberWorkflowStudio.header.activation.ready': 'Ready',
   'teamMemberWorkflowStudio.header.addNode': 'Add node',
+  'teamMemberWorkflowStudio.header.back': 'Back',
   'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
   'teamMemberWorkflowStudio.header.deleteConnection': 'Delete connection',
   'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
@@ -616,6 +617,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow draft and node actions',
+  'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
@@ -697,6 +699,11 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.title': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': 'unknown',
+  'teamMemberWorkflowStudio.yamlModal.import': 'Import',
+  'teamMemberWorkflowStudio.yamlModal.placeholder':
+    'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
+  'teamMemberWorkflowStudio.yamlModal.textareaAria': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlModal.title': 'Paste workflow YAML',
   'pages.studio.studiomembercurrentrunpanel.details': 'Details',
   'pages.studio.studiomemberinvokepanel.endpoint': 'Endpoint',
 };
