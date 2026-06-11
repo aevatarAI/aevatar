@@ -1,4 +1,5 @@
-import { Alert, Tooltip, message } from 'antd';
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { Alert, Button, Tooltip, message } from 'antd';
 import React, {
   useCallback,
   useEffect,
@@ -40,7 +41,7 @@ import {
   type StudioInvokeChatMessage,
 } from './StudioMemberInvokePanel.currentRun';
 import StudioMemberCurrentRunPanel from './StudioMemberCurrentRunPanel';
-import StudioMemberInvokeHistoryPanel from './StudioMemberInvokeHistoryPanel';
+import StudioMemberInvokeInspector from './StudioMemberInvokeInspector';
 import { StudioMemberInvokeComposerPanel } from './StudioMemberInvokeSetupPanels';
 import {
   getInvokeStatusTone,
@@ -408,7 +409,7 @@ const invokeWorkspaceStyle: React.CSSProperties = {
   overflow: 'visible',
 };
 
-const mainDebugAreaStyle: React.CSSProperties = {
+const mainConsoleAreaStyle: React.CSSProperties = {
   display: 'flex',
   flex: '0 0 auto',
   flexDirection: 'column',
@@ -437,11 +438,6 @@ const currentRunViewportStyle: React.CSSProperties = {
   minHeight: 0,
   minWidth: 0,
   overflow: 'visible',
-};
-
-const invokeHistoryPanelStyle: React.CSSProperties = {
-  flex: '0 0 auto',
-  minHeight: 0,
 };
 
 const invokeComposerDockStyle: React.CSSProperties = {
@@ -514,6 +510,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const [activeRunCompletedAt, setActiveRunCompletedAt] = useState<
     number | null
   >(null);
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
 
   const selectedService =
     services.find((service) => service.serviceId === selectedServiceId) ?? null;
@@ -1498,6 +1495,38 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setSelectedHistoryId('');
   }, []);
 
+  const handleCopyHistoryInput = useCallback(
+    (entryId: string) => {
+      const entry = requestHistory.find((item) => item.id === entryId);
+      writeClipboardText(entry?.prompt || '', 'Input');
+    },
+    [requestHistory],
+  );
+
+  const handleCopyHistoryOutput = useCallback(
+    (entryId: string) => {
+      const entry = requestHistory.find((item) => item.id === entryId);
+      writeClipboardText(entry ? getHistoryOutputText(entry) : '', 'Output');
+    },
+    [requestHistory],
+  );
+
+  const handleRetryHistoryAsNewRun = useCallback(
+    (entryId: string) => {
+      const entry = requestHistory.find((item) => item.id === entryId);
+      restorePromptForNewRun(entry?.prompt || '');
+    },
+    [requestHistory, restorePromptForNewRun],
+  );
+
+  const getInspectorHistoryOutputText = useCallback(
+    (entryId: string) => {
+      const entry = requestHistory.find((item) => item.id === entryId);
+      return entry ? getHistoryOutputText(entry) : '';
+    },
+    [requestHistory],
+  );
+
   return (
     <div data-testid="studio-member-invoke-panel" style={surfaceStyle}>
       {!scopeId ? (
@@ -1555,37 +1584,17 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               />
               {getRunStatusLabel(invokeResult.status)}
             </div>
+            <Button
+              icon={<InfoCircleOutlined />}
+              onClick={() => setIsInspectorOpen(true)}
+            >
+              {t("pages.studio.studiomemberinvokepanel.inspector", "Inspector")}
+            </Button>
           </div>
 
           <div
-            data-testid="studio-invoke-composer-dock"
-            ref={composerDockRef}
-            style={invokeComposerDockStyle}
-          >
-            <StudioMemberInvokeComposerPanel
-              blockedReason={invokeBlockedReason}
-              canInvoke={canInvoke}
-              defaultPrompt={effectiveDefaultPrompt}
-              formError={formError}
-              invokeStatus={invokeResult.status}
-              isHistoricalRunSelected={runViewMode === 'historical'}
-              isChatEndpoint={isChatEndpoint}
-              layout="dock"
-              payloadBase64={payloadBase64}
-              payloadTypeUrl={payloadTypeUrl}
-              prompt={prompt}
-              onAbort={handleAbort}
-              onClear={handleClear}
-              onInvoke={() => void handleInvoke()}
-              onPayloadBase64Change={setPayloadBase64}
-              onPayloadTypeUrlChange={setPayloadTypeUrl}
-              onPromptChange={setPrompt}
-            />
-          </div>
-
-          <div
-            data-testid="studio-invoke-main-debug-area"
-            style={mainDebugAreaStyle}
+            data-testid="studio-invoke-main-console"
+            style={mainConsoleAreaStyle}
           >
             <div
               data-testid="studio-invoke-run-output-section"
@@ -1614,10 +1623,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                       invokeResult={invokeResult}
                       runElapsedLabel={runElapsedLabel}
                       runViewMode={runViewMode}
+                      showDebugTabs={false}
                       transcriptViewportRef={transcriptViewportRef}
                       onCopyError={() =>
                         writeClipboardText(invokeResult.error, 'Error')
                       }
+                      onOpenInspector={() => setIsInspectorOpen(true)}
                       onRetryAsNewRun={() => {
                         restorePromptForNewRun(currentRunRequest?.prompt || '');
                       }}
@@ -1628,32 +1639,63 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               </div>
             </div>
 
-            <StudioMemberInvokeHistoryPanel
-              entries={visibleRequestHistory}
-              getEntryOutputText={(entryId) => {
-                const entry = requestHistory.find((item) => item.id === entryId);
-                return entry ? getHistoryOutputText(entry) : '';
-              }}
-              selectedHistoryId={selectedHistoryId}
-              style={invokeHistoryPanelStyle}
-              onCopyInput={(entryId) => {
-                const entry = requestHistory.find((item) => item.id === entryId);
-                writeClipboardText(entry?.prompt || '', 'Input');
-              }}
-              onCopyOutput={(entryId) => {
-                const entry = requestHistory.find((item) => item.id === entryId);
-                writeClipboardText(
-                  entry ? getHistoryOutputText(entry) : '',
-                  'Output',
-                );
-              }}
-              onRetryAsNewRun={(entryId) => {
-                const entry = requestHistory.find((item) => item.id === entryId);
-                restorePromptForNewRun(entry?.prompt || '');
-              }}
-              onSelectEntry={handleSelectHistoryEntry}
-            />
+            <div
+              data-testid="studio-invoke-composer-dock"
+              ref={composerDockRef}
+              style={invokeComposerDockStyle}
+            >
+              <StudioMemberInvokeComposerPanel
+                blockedReason={invokeBlockedReason}
+                canInvoke={canInvoke}
+                defaultPrompt={effectiveDefaultPrompt}
+                formError={formError}
+                invokeStatus={invokeResult.status}
+                isHistoricalRunSelected={runViewMode === 'historical'}
+                isChatEndpoint={isChatEndpoint}
+                layout="dock"
+                prompt={prompt}
+                onAbort={handleAbort}
+                onClear={handleClear}
+                onInvoke={() => void handleInvoke()}
+                onPromptChange={setPrompt}
+              />
+            </div>
           </div>
+
+          <StudioMemberInvokeInspector
+            activeRunCompletedAt={activeRunCompletedAt}
+            activeRunTab={consoleTab}
+            chatMessages={chatMessages}
+            currentRawOutput={currentRawOutput}
+            currentRunHasData={currentRunHasData}
+            currentRunRequest={currentRunRequest}
+            endpointLabel={endpointLabel}
+            entries={visibleRequestHistory}
+            getEntryOutputText={getInspectorHistoryOutputText}
+            invokeResult={invokeResult}
+            isChatEndpoint={isChatEndpoint}
+            open={isInspectorOpen}
+            payloadBase64={payloadBase64}
+            payloadTypeUrl={payloadTypeUrl}
+            publishedServiceId={selectedService?.serviceId || ''}
+            revisionId={currentRevisionId}
+            runElapsedLabel={runElapsedLabel}
+            runViewMode={runViewMode}
+            selectedHistoryId={selectedHistoryId}
+            transcriptViewportRef={transcriptViewportRef}
+            onClose={() => setIsInspectorOpen(false)}
+            onCopyError={() => writeClipboardText(invokeResult.error, 'Error')}
+            onCopyInput={handleCopyHistoryInput}
+            onCopyOutput={handleCopyHistoryOutput}
+            onPayloadBase64Change={setPayloadBase64}
+            onPayloadTypeUrlChange={setPayloadTypeUrl}
+            onRetryCurrentRunAsNewRun={() => {
+              restorePromptForNewRun(currentRunRequest?.prompt || '');
+            }}
+            onRetryAsNewRun={handleRetryHistoryAsNewRun}
+            onRunTabChange={setConsoleTab}
+            onSelectEntry={handleSelectHistoryEntry}
+          />
         </div>
       )}
     </div>

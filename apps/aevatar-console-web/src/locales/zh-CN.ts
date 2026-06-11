@@ -736,7 +736,32 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.yamlModal.textareaAria': 'Workflow YAML',
   'teamMemberWorkflowStudio.yamlModal.title': '粘贴 Workflow YAML',
   'pages.studio.studiomembercurrentrunpanel.details': '详情',
+  'pages.studio.studiomemberinvokeinspector.copy':
+    '端点详情、类型化载荷和最近运行记录会在这里按需打开，不改变主控制台布局。',
+  'pages.studio.studiomemberinvokeinspector.current.run': '当前运行',
+  'pages.studio.studiomemberinvokeinspector.close': '关闭调用检查器',
+  'pages.studio.studiomemberinvokeinspector.drag.handle': '拖拽调用检查器',
+  'pages.studio.studiomemberinvokeinspector.endpoint': '端点',
+  'pages.studio.studiomemberinvokeinspector.endpoint.2': '端点',
+  'pages.studio.studiomemberinvokeinspector.history': '历史',
+  'pages.studio.studiomemberinvokeinspector.payload': '载荷',
+  'pages.studio.studiomemberinvokeinspector.payload.base64': '载荷 base64',
+  'pages.studio.studiomemberinvokeinspector.payload.base64.2':
+    '载荷 base64',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url':
+    '载荷类型 URL',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url.2':
+    '载荷类型 URL',
+  'pages.studio.studiomemberinvokeinspector.paste.encoded.protobuf.payload.when':
+    '当文本无法构造该类型时，粘贴编码后的 protobuf 载荷。',
+  'pages.studio.studiomemberinvokeinspector.revision': '版本',
+  'pages.studio.studiomemberinvokeinspector.resize.handle':
+    '调整调用检查器宽度',
+  'pages.studio.studiomemberinvokeinspector.run': '运行',
+  'pages.studio.studiomemberinvokeinspector.service.target': '服务目标',
+  'pages.studio.studiomemberinvokeinspector.title': '调用检查器',
   'pages.studio.studiomemberinvokepanel.endpoint': '端点',
+  'pages.studio.studiomemberinvokepanel.inspector': '检查器',
 };
 
 export default zhCNMessages;

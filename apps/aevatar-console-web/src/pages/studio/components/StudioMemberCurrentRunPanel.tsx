@@ -39,8 +39,10 @@ type StudioMemberCurrentRunPanelProps = {
   readonly invokeResult: InvokeResultState;
   readonly runElapsedLabel: string;
   readonly runViewMode: RunViewMode;
+  readonly showDebugTabs?: boolean;
   readonly transcriptViewportRef: React.RefObject<HTMLDivElement | null>;
   readonly onCopyError: () => void;
+  readonly onOpenInspector?: () => void;
   readonly onRetryAsNewRun: () => void;
   readonly onTabChange: (tab: RunOutputTab) => void;
 };
@@ -491,10 +493,12 @@ const StudioMemberCurrentRunPanel: React.FC<
   endpointLabel,
   invokeResult,
   onCopyError,
+  onOpenInspector,
   onRetryAsNewRun,
   onTabChange,
   runElapsedLabel,
   runViewMode,
+  showDebugTabs = true,
   transcriptViewportRef,
 }) => {
   const outputText = getOutputText({ chatMessages, invokeResult });
@@ -691,7 +695,9 @@ const StudioMemberCurrentRunPanel: React.FC<
           <div style={errorActionsStyle}>
             <Button
               icon={<UnorderedListOutlined />}
-              onClick={() => onTabChange('events')}
+              onClick={() =>
+                onOpenInspector ? onOpenInspector() : onTabChange('events')
+              }
             >
               {t("pages.studio.studiomembercurrentrunpanel.view.events", "View events")}</Button>
             <Button icon={<CopyOutlined />} onClick={onCopyError}>
@@ -881,31 +887,37 @@ const StudioMemberCurrentRunPanel: React.FC<
           </span>
         ) : null}
       </div>
-      <div style={tabsStyle}>
-        <div aria-label={t("pages.studio.studiomembercurrentrunpanel.run.output.views", "Run output views")} role="tablist" style={tabListStyle}>
-          {tabItems.map((item) => {
-            const selected = item.key === activeTab;
-            return (
-              <button
-                key={item.key}
-                aria-selected={selected}
-                role="tab"
-                style={{
-                  ...tabButtonStyle,
-                  ...(selected ? activeTabButtonStyle : null),
-                }}
-                type="button"
-                onClick={() => onTabChange(item.key)}
-              >
-                {item.label}
-              </button>
-            );
-          })}
+      {showDebugTabs ? (
+        <div style={tabsStyle}>
+          <div aria-label={t("pages.studio.studiomembercurrentrunpanel.run.output.views", "Run output views")} role="tablist" style={tabListStyle}>
+            {tabItems.map((item) => {
+              const selected = item.key === activeTab;
+              return (
+                <button
+                  key={item.key}
+                  aria-selected={selected}
+                  role="tab"
+                  style={{
+                    ...tabButtonStyle,
+                    ...(selected ? activeTabButtonStyle : null),
+                  }}
+                  type="button"
+                  onClick={() => onTabChange(item.key)}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+          <div role="tabpanel" style={tabPaneStyle}>
+            {renderActivePane()}
+          </div>
         </div>
-        <div role="tabpanel" style={tabPaneStyle}>
-          {renderActivePane()}
+      ) : (
+        <div role="region" style={tabPaneStyle}>
+          {renderOutput()}
         </div>
-      </div>
+      )}
     </div>
   );
 };

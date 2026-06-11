@@ -5,7 +5,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
-import { message } from 'antd';
+import { Grid, message } from 'antd';
 import React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
@@ -18,6 +18,17 @@ jest.mock('antd', () => {
   const actual = jest.requireActual('antd');
   return {
     ...actual,
+    Grid: {
+      ...actual.Grid,
+      useBreakpoint: jest.fn(() => ({
+        lg: true,
+        md: true,
+        sm: true,
+        xl: true,
+        xs: false,
+        xxl: false,
+      })),
+    },
     message: {
       ...actual.message,
       info: jest.fn(),
@@ -55,6 +66,24 @@ describe('StudioMemberInvokePanel', () => {
     jest.clearAllMocks();
     Element.prototype.scrollTo = jest.fn();
     Element.prototype.scrollIntoView = jest.fn();
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      value: 768,
+      writable: true,
+    });
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 1024,
+      writable: true,
+    });
+    (Grid.useBreakpoint as jest.Mock).mockReturnValue({
+      lg: true,
+      md: true,
+      sm: true,
+      xl: true,
+      xs: false,
+      xxl: false,
+    });
     Object.defineProperty(window.navigator, 'clipboard', {
       configurable: true,
       value: { writeText: jest.fn().mockResolvedValue(undefined) },
@@ -93,6 +122,19 @@ describe('StudioMemberInvokePanel', () => {
       async function* () {},
     );
   });
+
+  function dispatchWindowPointerEvent(
+    type: 'pointercancel' | 'pointermove' | 'pointerup',
+    init: MouseEventInit = {},
+  ): void {
+    window.dispatchEvent(
+      new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      }),
+    );
+  }
 
   it('renders the invoke workbench skeleton with a compact contract and a persistent console', async () => {
     render(
@@ -167,39 +209,36 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByText('缺少提示词')).toBeNull();
     expect(screen.getByText('Run output')).toBeTruthy();
     expect(screen.queryByText('Conversation')).toBeNull();
-    expect(screen.getAllByText('Output').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Timeline')).toBeTruthy();
-    expect(screen.getByText('Events')).toBeTruthy();
-    expect(screen.getByText('Details')).toBeTruthy();
-    expect(screen.getByText('Advanced typed payload')).toBeTruthy();
+    expect(screen.queryByText('Output')).toBeNull();
+    expect(screen.queryByText('Timeline')).toBeNull();
+    expect(screen.queryByText('Events')).toBeNull();
+    expect(screen.queryByText('Details')).toBeNull();
+    expect(screen.queryByText('Advanced typed payload')).toBeNull();
     expect(screen.queryByLabelText('Payload base64')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Inspector' })).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-playground-actions')).toBeTruthy();
     const invokeWorkspace = screen.getByTestId('studio-invoke-workspace');
-    const mainDebugArea = screen.getByTestId('studio-invoke-main-debug-area');
+    const mainConsole = screen.getByTestId('studio-invoke-main-console');
     const invokeComposerDock = screen.getByTestId(
       'studio-invoke-composer-dock',
     );
     const runOutputSection = screen.getByTestId(
       'studio-invoke-run-output-section',
     );
-    const historyPanel = screen.getByTestId('studio-invoke-history-panel');
     const currentRunViewport = screen.getByTestId(
       'studio-invoke-current-run-viewport',
     );
     expect(invokeWorkspace).toContainElement(targetSummary);
-    expect(invokeWorkspace).toContainElement(mainDebugArea);
+    expect(invokeWorkspace).toContainElement(mainConsole);
     expect(invokeWorkspace).toContainElement(invokeComposerDock);
-    expect(invokeWorkspace.children[1]).toBe(invokeComposerDock);
-    expect(mainDebugArea).not.toContainElement(invokeComposerDock);
+    expect(mainConsole).toContainElement(invokeComposerDock);
     expect(invokeComposerDock).toContainElement(
       screen.getByLabelText('Invocation request input'),
     );
-    expect(mainDebugArea.style.overflow).toBe('visible');
-    expect(mainDebugArea.style.minHeight).toBe('0');
+    expect(mainConsole.style.overflow).toBe('visible');
+    expect(mainConsole.style.minHeight).toBe('0');
     expect(runOutputSection.style.flex).toBe('0 0 auto');
     expect(runOutputSection.style.minHeight).toBe('0');
-    expect(historyPanel.style.flex).toBe('0 0 auto');
-    expect(historyPanel.style.minHeight).toBe('0');
     expect(currentRunViewport.style.overflow).toBe('visible');
     expect(invokeComposerDock.style.flex).toBe('0 0 auto');
     expect(screen.getByRole('button', { name: 'Invoke' })).toBeTruthy();
@@ -208,13 +247,74 @@ describe('StudioMemberInvokePanel', () => {
     expect(
       screen.getByText('Send a prompt above to create the first run.'),
     ).toBeTruthy();
-    expect(screen.getByText('Run history (0)')).toBeTruthy();
-    expect(screen.getAllByText('No runs yet').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Run history (0)')).toBeNull();
+    expect(screen.queryByText('No runs yet')).toBeNull();
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();
     expect(screen.queryByText('调用契约')).toBeNull();
     expect(screen.queryByRole('button', { name: /Details|详情|展开/ })).toBeNull();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
+    expect(screen.queryByTestId('studio-invoke-inspector')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inspector' }));
+    const inspector = await screen.findByTestId('studio-invoke-inspector');
+    expect(inspector).toBeTruthy();
+    expect(inspector.style.position).toBe('fixed');
+    expect(inspector.style.width).toBe('420px');
+    expect(inspector.style.left).toBe('572px');
+    expect(inspector.style.top).toBe('96px');
+    expect(screen.getByText('Invoke Inspector')).toBeTruthy();
+    const dragHandle = screen.getByTestId('studio-invoke-inspector-drag-handle');
+    const initialInspectorLeft = inspector.style.left;
+    const initialInspectorTop = inspector.style.top;
+    fireEvent.pointerDown(dragHandle, { clientX: 800, clientY: 120 });
+    await waitFor(() => {
+      expect(document.body.style.cursor).toBe('grabbing');
+    });
+    dispatchWindowPointerEvent('pointermove', { clientX: 780, clientY: 150 });
+    await waitFor(() => {
+      expect(inspector.style.left).not.toBe(initialInspectorLeft);
+      expect(inspector.style.top).not.toBe(initialInspectorTop);
+    });
+    expect(Number.parseFloat(inspector.style.left)).toBeGreaterThanOrEqual(16);
+    expect(Number.parseFloat(inspector.style.left)).toBeLessThanOrEqual(
+      1024 - 420 - 16,
+    );
+    expect(Number.parseFloat(inspector.style.top)).toBeGreaterThanOrEqual(16);
+    expect(Number.parseFloat(inspector.style.top)).toBeLessThanOrEqual(
+      768 - 220 - 16,
+    );
+    dispatchWindowPointerEvent('pointerup');
+    await waitFor(() => {
+      expect(document.body.style.cursor).toBe('');
+    });
+    const resizeHandle = screen.getByTestId(
+      'studio-invoke-inspector-resize-handle',
+    );
+    fireEvent.pointerDown(resizeHandle, { clientX: 552, clientY: 180 });
+    await waitFor(() => {
+      expect(document.body.style.cursor).toBe('ew-resize');
+    });
+    dispatchWindowPointerEvent('pointermove', {
+      clientX: -1000,
+      clientY: 180,
+    });
+    await waitFor(() => {
+      expect(inspector.style.width).toBe('500px');
+    });
+    dispatchWindowPointerEvent('pointerup');
+    fireEvent.pointerDown(resizeHandle, { clientX: 472, clientY: 180 });
+    dispatchWindowPointerEvent('pointermove', { clientX: 700, clientY: 180 });
+    await waitFor(() => {
+      expect(inspector.style.width).toBe('360px');
+    });
+    dispatchWindowPointerEvent('pointerup');
+    fireEvent.click(screen.getByText('Payload'));
+    expect(screen.getByLabelText('Payload type URL')).toHaveValue(
+      'type.googleapis.com/google.protobuf.StringValue',
+    );
+    fireEvent.click(screen.getByText('History'));
+    expect(screen.getByText('Run history (0)')).toBeTruthy();
   });
 
   it('keeps prompt validation local and does not create a failed run for empty chat input', async () => {
@@ -256,8 +356,8 @@ describe('StudioMemberInvokePanel', () => {
     expect(
       screen.getByText('Send a prompt above to create the first run.'),
     ).toBeTruthy();
-    expect(screen.getByText('Run history (0)')).toBeTruthy();
-    expect(screen.getAllByText('No runs yet').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Run history (0)')).toBeNull();
+    expect(screen.queryByText('No runs yet')).toBeNull();
     expect(screen.queryByText('Run failed')).toBeNull();
   });
 
@@ -912,13 +1012,10 @@ describe('StudioMemberInvokePanel', () => {
       );
     });
 
-    expect(await screen.findByText('Run history (1)')).toBeTruthy();
+    expect(screen.queryByText('Run history (1)')).toBeNull();
     expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
       'Invoke receipt was captured. Switch to Observe to watch backend events and read-model materialization catch up for this member.',
     );
-    expect(
-      screen.getByTestId('studio-invoke-history-scroll').style.overflow,
-    ).toBe('visible');
     expect(
       screen.getAllByText('Route this escalation to billing review.').length,
     ).toBeGreaterThanOrEqual(1);
@@ -933,11 +1030,14 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Inspector' }));
+    expect(await screen.findByTestId('studio-invoke-inspector')).toBeTruthy();
+    fireEvent.click(screen.getByText('Run'));
     fireEvent.click(screen.getByRole('tab', { name: 'Details' }));
     expect(screen.getByText('Run details')).toBeTruthy();
     expect(screen.getByText('Status')).toBeTruthy();
     expect(screen.getAllByText('Succeeded').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Endpoint')).toBeTruthy();
+    expect(screen.getAllByText('Endpoint').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Submit').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('Full Run ID')).toBeNull();
     expect(screen.queryByText('run-1')).toBeNull();
@@ -949,6 +1049,11 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('Event payload')).toBeTruthy();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
 
+    fireEvent.click(screen.getByText('History'));
+    expect(screen.getByText('Run history (1)')).toBeTruthy();
+    expect(
+      screen.getByTestId('studio-invoke-history-scroll').style.overflow,
+    ).toBe('visible');
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(
       screen.getByText('Send a prompt above to create the first run.'),
@@ -1111,10 +1216,10 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    expect(
-      await screen.findByText('Advanced typed payload'),
-    ).toBeTruthy();
-    fireEvent.click(screen.getByText('Advanced typed payload'));
+    expect(screen.queryByText('Advanced typed payload')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Inspector' }));
+    expect(await screen.findByTestId('studio-invoke-inspector')).toBeTruthy();
+    fireEvent.click(screen.getByText('Payload'));
     await waitFor(() => {
       expect(screen.getByLabelText('Payload type URL')).toHaveValue(
         'type.googleapis.com/example.ContractSubmit',
@@ -1134,7 +1239,7 @@ describe('StudioMemberInvokePanel', () => {
       ),
     ).toBeTruthy();
     expect(runtimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
-    expect(screen.getByText('Run history (0)')).toBeTruthy();
+    expect(screen.queryByText('Run history (0)')).toBeNull();
 
     fireEvent.change(screen.getByLabelText('Payload base64'), {
       target: {
@@ -1259,7 +1364,10 @@ describe('StudioMemberInvokePanel', () => {
       expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalled();
     });
 
-    expect(screen.getByText('Run history (1)')).toBeTruthy();
+    expect(screen.queryByText('Run history (1)')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Inspector' }));
+    expect(await screen.findByTestId('studio-invoke-inspector')).toBeTruthy();
+    fireEvent.click(screen.getByText('Run'));
     fireEvent.click(screen.getByRole('tab', { name: 'Details' }));
     expect(screen.getByText('Run details')).toBeTruthy();
     expect(screen.queryByText('Command ID')).toBeNull();

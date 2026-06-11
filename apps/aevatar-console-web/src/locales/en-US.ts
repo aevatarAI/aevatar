@@ -778,7 +778,34 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.yamlModal.textareaAria': 'Workflow YAML',
   'teamMemberWorkflowStudio.yamlModal.title': 'Paste workflow YAML',
   'pages.studio.studiomembercurrentrunpanel.details': 'Details',
+  'pages.studio.studiomemberinvokeinspector.copy':
+    'Endpoint details, typed payloads, and recent runs are available here without changing the main console layout.',
+  'pages.studio.studiomemberinvokeinspector.current.run': 'Current run',
+  'pages.studio.studiomemberinvokeinspector.close':
+    'Close invoke inspector',
+  'pages.studio.studiomemberinvokeinspector.drag.handle':
+    'Drag invoke inspector',
+  'pages.studio.studiomemberinvokeinspector.endpoint': 'Endpoint',
+  'pages.studio.studiomemberinvokeinspector.endpoint.2': 'Endpoint',
+  'pages.studio.studiomemberinvokeinspector.history': 'History',
+  'pages.studio.studiomemberinvokeinspector.payload': 'Payload',
+  'pages.studio.studiomemberinvokeinspector.payload.base64': 'Payload base64',
+  'pages.studio.studiomemberinvokeinspector.payload.base64.2':
+    'Payload base64',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url':
+    'Payload type URL',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url.2':
+    'Payload type URL',
+  'pages.studio.studiomemberinvokeinspector.paste.encoded.protobuf.payload.when':
+    'Paste encoded protobuf payload when this type cannot be built from text.',
+  'pages.studio.studiomemberinvokeinspector.revision': 'Revision',
+  'pages.studio.studiomemberinvokeinspector.resize.handle':
+    'Resize invoke inspector',
+  'pages.studio.studiomemberinvokeinspector.run': 'Run',
+  'pages.studio.studiomemberinvokeinspector.service.target': 'Service target',
+  'pages.studio.studiomemberinvokeinspector.title': 'Invoke Inspector',
   'pages.studio.studiomemberinvokepanel.endpoint': 'Endpoint',
+  'pages.studio.studiomemberinvokepanel.inspector': 'Inspector',
 };
 
 export default enUSMessages;

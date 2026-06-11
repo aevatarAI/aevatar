@@ -189,7 +189,7 @@ describe("TeamMemberInvokePage", () => {
       "member:member-alpha",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
-      "target:default",
+      "target:service",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
       "team:team-1",
