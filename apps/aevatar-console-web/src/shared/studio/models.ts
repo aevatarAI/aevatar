@@ -98,6 +98,8 @@ export interface StudioWorkspaceSettings {
 }
 
 export interface StudioWorkflowDraftSummary {
+  readonly activeRevisionId?: string | null;
+  readonly serviceKey?: string | null;
   readonly workflowId: string;
   readonly name: string;
   readonly description: string;
@@ -190,7 +192,7 @@ export interface StudioExecutionSummary {
   readonly roleReplyCount?: number | null;
   readonly output?: string | null;
   readonly auditUpdatedAtUtc?: string | null;
-  readonly auditSource?: 'service-run-summary' | 'run-audit' | 'invoke-session';
+  readonly auditSource?: 'service-run-summary' | 'run-audit' | 'invoke-session' | 'draft-run-session';
 }
 
 export interface StudioExecutionFrame {

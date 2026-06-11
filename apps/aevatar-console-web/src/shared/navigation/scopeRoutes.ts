@@ -12,21 +12,26 @@ function trimOptional(value: string | null | undefined): string {
 
 function isTeamCreatePath(pathname: string): boolean {
   const normalizedPathname = pathname.split(/[?#]/)[0]?.replace(/\/+$/, "") ?? "";
-  return normalizedPathname === "/teams/new";
+  return /^\/scopes\/[^/]+\/teams\/new$/.test(normalizedPathname);
 }
 
-function readTeamScopeId(pathname: string): string {
-  const match = pathname.match(/^\/teams\/([^/?#]+)/);
-  if (!match) {
+function readPathScopeId(pathname: string): string {
+  const scopedMatch = pathname.match(/^\/scopes\/([^/?#]+)\/teams(?:\/|$)/);
+  if (!scopedMatch) {
     return "";
   }
 
-  const rawScopeId = match[1] ?? "";
+  const rawScopeId = scopedMatch[1] ?? "";
+
   try {
     return decodeURIComponent(rawScopeId).trim();
   } catch {
     return rawScopeId.trim();
   }
+}
+
+function isTeamWorkspacePath(pathname: string): boolean {
+  return /^\/scopes\/[^/?#]+\/teams(?:\/|$)/.test(pathname);
 }
 
 export function normalizeScopeDraft(draft: ScopeQueryDraft): ScopeQueryDraft {
@@ -41,6 +46,13 @@ export function readScopeQueryDraft(
 ): ScopeQueryDraft {
   const params = new URLSearchParams(search);
   const isCreatePath = isTeamCreatePath(pathname);
+  const pathScopeId = readPathScopeId(pathname);
+  if (pathScopeId) {
+    return {
+      scopeId: pathScopeId,
+    };
+  }
+
   const queryScopeId = readString(params.get("scopeId"));
   if (queryScopeId && !(isCreatePath && queryScopeId === "new")) {
     return {
@@ -55,7 +67,7 @@ export function readScopeQueryDraft(
   }
 
   return {
-    scopeId: readTeamScopeId(pathname),
+    scopeId: "",
   };
 }
 
@@ -94,20 +106,32 @@ export function buildTeamWorkspaceRoute(
 ): string {
   const normalizedScopeId = trimOptional(scopeId);
   const path = normalizedScopeId
-    ? `/teams/${encodeURIComponent(normalizedScopeId)}`
-    : "/teams";
+    ? `/scopes/${encodeURIComponent(normalizedScopeId)}/teams`
+    : "/scopes";
 
-  return buildScopeHref(path, { scopeId: normalizedScopeId }, extras);
+  return buildScopeHref(path, { scopeId: "" }, extras);
+}
+
+export function buildTeamCreateRoute(
+  scopeId: string,
+  extras?: Record<string, string | null | undefined>,
+): string {
+  const normalizedScopeId = trimOptional(scopeId);
+  const path = normalizedScopeId
+    ? `/scopes/${encodeURIComponent(normalizedScopeId)}/teams/new`
+    : "/scopes";
+
+  return buildScopeHref(path, { scopeId: "" }, extras);
 }
 
 export function resolveScopeOverviewPath(
   draft: ScopeQueryDraft,
   pathname = typeof window === "undefined" ? "" : window.location.pathname,
 ): string {
-  if (pathname.startsWith("/teams/")) {
-    const normalizedScopeId = trimOptional(draft.scopeId) || readTeamScopeId(pathname);
+  if (isTeamWorkspacePath(pathname)) {
+    const normalizedScopeId = trimOptional(draft.scopeId) || readPathScopeId(pathname);
     if (normalizedScopeId) {
-      return `/teams/${encodeURIComponent(normalizedScopeId)}`;
+      return `/scopes/${encodeURIComponent(normalizedScopeId)}/teams`;
     }
   }
 
@@ -119,5 +143,10 @@ export function buildScopeOverviewHref(
   extras?: Record<string, string | null | undefined>,
   pathname = typeof window === "undefined" ? "" : window.location.pathname,
 ): string {
-  return buildScopeHref(resolveScopeOverviewPath(draft, pathname), draft, extras);
+  const overviewPath = resolveScopeOverviewPath(draft, pathname);
+  const routeDraft = /^\/scopes\/[^/]+\/teams(?:\/|$)/.test(overviewPath)
+    ? { scopeId: "" }
+    : draft;
+
+  return buildScopeHref(overviewPath, routeDraft, extras);
 }

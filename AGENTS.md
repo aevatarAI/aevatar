@@ -13,6 +13,18 @@
 - 不保留无效层：空转发、重复抽象、无业务价值代码直接删除。
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
 
+## Studio Workflow / Member 身份语义（最高优先级）
+- 禁止用 `Build / Bind / Invoke / Observe` 作为 Studio workflow 的全局产品生命周期模型。仓库中若仍出现 `BuildReady / BindReady / binding / invoke / observe`，只能按所在资源边界解释为局部状态或动作，不得反推出一条线性 workflow 生命周期。
+- `memberId`、`workflowId`、`publishedServiceId` 是隔离身份，不是同一资源在不同阶段的别名：`memberId` 表示 Studio team member authority；`workflowId` 表示 workspace workflow draft / definition document；`publishedServiceId` 表示 callable service runtime identity。
+- 禁止把 `workflowId` 传给 member API，禁止把 `memberId` 传给 workflow draft API，禁止把二者冒充 `publishedServiceId`。任何身份转换都必须来自明确后端 contract/read model，不能靠字符串规则、前缀、相等关系或路由位置猜测。
+- 正常业务语义下不得假设 `memberId === workflowId`。若历史 repair/migration/materialization 代码中出现从 workflow draft 派生 member 的逻辑，只能作为命名明确的后台修复路径理解，不能进入新前端、路由、API helper、普通业务逻辑或测试 fixture。
+- 前端 Team 资源 canonical 路由必须表达 `scope -> team -> member` 所有权：Team 集合为 `/scopes/:scopeId/teams`，Team detail 为 `/scopes/:scopeId/teams/:teamId`，Team member surface 为 `/scopes/:scopeId/teams/:teamId/members/:memberId/...`。`/scopes` 只能作为登录后解析 scope 的技术入口，不是 Team 集合资源 URL。
+- 前端 team member workflow editor 的 canonical 路由是 `/scopes/:scopeId/teams/:teamId/members/:memberId/workflow` 或 `/scopes/:scopeId/teams/:teamId/members/new/workflow`。其中 `workflow` 是 member implementation editor surface，不是 workflow resource identity；query `workflowId` 若存在，只能表示 draft workflow identity hint，不能覆盖或替代 path `memberId`。
+- 不保留 `/teams/:scopeId...` 或 `/teams/:scopeId/:teamId...` hidden 兼容入口；新代码、测试主断言、跳转 builder 不得继续生成或解析旧路由。解析 path 时必须按资源名读取 `scopeId / teamId / memberId`，不得依赖会把 scope/team/member 顺序混掉的旧 segment index。
+- 前端变量命名必须保留身份边界：从 path 读出的成员身份命名为 `routeMemberId` / `memberId`；从 query 或 draft API 读出的 workflow 身份命名为 `routeDraftWorkflowId` / `draftWorkflowId`；从 member summary 读出的服务身份命名为 `publishedServiceId`。禁止用一个 `workflowId` 变量同时承载 member、service、draft 候选身份。
+- 凡是需要在 `workflowId / memberId / publishedServiceId` 之间做身份判别的值，都不得命名为其中任何一个确定身份；必须先命名为 `routeIdentityCandidate` / `bindingIdentityCandidate` 等候选身份，并在确定来源后一次性解析成具体 ID。解析后的确定身份才能进入对应 API。
+- 测试 fixture 必须使用不同 ID 形态暴露错传：例如 `memberId = "m-alpha"`、`workflowId = "wf-alpha"`、`publishedServiceId = "svc-alpha"`。禁止用同一个字符串或同一前缀规律同时代表多个身份。
+
 ## 架构设计哲学（抽象）
 - 单一主干，插件扩展：系统只保留一条权威业务主链路；新增能力以插件/模块方式挂载，避免平行“第二系统”。
 - 内核最小化：核心层只承载稳定业务不变量与通用机制；波动能力下沉到扩展层，减少核心侵蚀。

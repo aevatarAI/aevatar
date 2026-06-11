@@ -21,7 +21,6 @@ import {
   monoFontFamily,
   studioInvokeColors,
   trimOptional,
-  truncateMiddle,
 } from './studioInvokeUi';
 import { t } from "@/shared/i18n/messages";
 
@@ -38,9 +37,6 @@ type StudioMemberCurrentRunPanelProps = {
   readonly currentRunRequest: CurrentRunRequest | null;
   readonly endpointLabel: string;
   readonly invokeResult: InvokeResultState;
-  readonly memberId: string;
-  readonly publishedContext: string;
-  readonly revisionId: string;
   readonly runElapsedLabel: string;
   readonly runViewMode: RunViewMode;
   readonly transcriptViewportRef: React.RefObject<HTMLDivElement | null>;
@@ -103,11 +99,6 @@ function getRunMarker(input: {
   return 'Latest run';
 }
 
-function getShortRunId(runId: string): string {
-  const normalized = trimOptional(runId);
-  return normalized ? truncateMiddle(normalized, 6, 4) : 'pending';
-}
-
 function buildStatusSummary(input: {
   readonly endpointLabel: string;
   readonly invokeResult: InvokeResultState;
@@ -115,9 +106,7 @@ function buildStatusSummary(input: {
 }): string {
   return `${getStatusLabel(input.invokeResult.status)} · ${
     input.runElapsedLabel
-  } · ${input.endpointLabel || 'chat'} · Run ${getShortRunId(
-    input.invokeResult.runId,
-  )}`;
+  } · ${input.endpointLabel || 'chat'}`;
 }
 
 function readEventString(event: unknown, key: string): string {
@@ -501,12 +490,9 @@ const StudioMemberCurrentRunPanel: React.FC<
   currentRunRequest,
   endpointLabel,
   invokeResult,
-  memberId,
   onCopyError,
   onRetryAsNewRun,
   onTabChange,
-  publishedContext,
-  revisionId,
   runElapsedLabel,
   runViewMode,
   transcriptViewportRef,
@@ -633,7 +619,7 @@ const StudioMemberCurrentRunPanel: React.FC<
     },
     {
       key: 'metadata' as const,
-      label: t("pages.studio.studiomembercurrentrunpanel.metadata", "Metadata"),
+      label: t("pages.studio.studiomembercurrentrunpanel.details", "Details"),
     },
   ];
 
@@ -746,7 +732,7 @@ const StudioMemberCurrentRunPanel: React.FC<
               <div>{t("pages.studio.studiomembercurrentrunpanel.no.displayable.content.returned", "No displayable content returned.")}</div>
               <div>
                 {t("pages.studio.studiomembercurrentrunpanel.the.run.ended.successfully", "The Run ended successfully but no user-visible Output was returned.")}</div>
-              <div>{t("pages.studio.studiomembercurrentrunpanel.you.can.view.events", "You can view Events or Metadata to troubleshoot the cause.")}</div>
+              <div>{t("pages.studio.studiomembercurrentrunpanel.you.can.view.events", "You can view Events or Details to troubleshoot the cause.")}</div>
             </div>
           ) : (
             <Typography.Text style={helperTextStyle} type="secondary">
@@ -824,35 +810,15 @@ const StudioMemberCurrentRunPanel: React.FC<
   const renderMetadata = () => (
     <div style={outputPaneStyle}>
       <div style={sectionStyle}>
-        <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.technical.fields", "Technical fields")}</span>
+        <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.run.details", "Run details")}</span>
         <div style={metadataGridStyle}>
           <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.full.run.id", "Full Run ID")}
-            value={<MetadataValue value={invokeResult.runId} />}
-          />
-          <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.command.id", "Command ID")}
-            value={<MetadataValue value={invokeResult.commandId} />}
-          />
-          <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.actor.id", "Actor ID")}
-            value={<MetadataValue value={invokeResult.actorId} />}
-          />
-          <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.member.id", "Member ID")}
-            value={<MetadataValue value={memberId} />}
+            label={t("pages.studio.studiomembercurrentrunpanel.status", "Status")}
+            value={<MetadataValue value={getStatusLabel(invokeResult.status)} />}
           />
           <MetadataItem
             label={t("pages.studio.studiomembercurrentrunpanel.endpoint", "Endpoint")}
             value={<MetadataValue value={endpointLabel} />}
-          />
-          <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.revision", "Revision")}
-            value={<MetadataValue value={revisionId} />}
-          />
-          <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.published.context", "Published context")}
-            value={<MetadataValue value={publishedContext} />}
           />
           <MetadataItem
             label={t("pages.studio.studiomembercurrentrunpanel.started.at", "Started at")}
@@ -877,7 +843,7 @@ const StudioMemberCurrentRunPanel: React.FC<
         </div>
       </div>
       <details style={sectionStyle}>
-        <summary style={contractValueStyle}>{t("pages.studio.studiomembercurrentrunpanel.advanced.details", "Advanced details")}</summary>
+        <summary style={contractValueStyle}>{t("pages.studio.studiomembercurrentrunpanel.event.payload", "Event payload")}</summary>
         <pre style={rawOutputStyle}>
           {currentRawOutput ||
             t("pages.studio.studiomembercurrentrunpanel.no.raw.json", "No raw JSON.")}

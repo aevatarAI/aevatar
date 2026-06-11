@@ -66,19 +66,19 @@ const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps
           <Typography.Text strong>
             {t(
               "teamMemberWorkflowStudio.runOptionsPanel.messageLabel",
-              "Message to active member",
+              "Draft run input",
             )}
           </Typography.Text>
           <Input.TextArea
             aria-label={t(
               "teamMemberWorkflowStudio.runOptionsPanel.messageLabel",
-              "Message to active member",
+              "Draft run input",
             )}
             autoSize={{ minRows: 8, maxRows: 16 }}
             onChange={(event) => onRunMessageChange(event.target.value)}
             placeholder={t(
               "teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder",
-              "Optional message sent with this active member run",
+              "Optional input sent to this workflow draft run",
             )}
             style={{
               marginTop: 8,

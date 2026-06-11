@@ -911,6 +911,33 @@ jest.mock("@/shared/studio/api", () => ({
         return nextMember;
       }
     ),
+    createMemberWithId: jest.fn(
+      async (input: {
+        scopeId: string;
+        memberId: string;
+        displayName: string;
+        implementationKind: "workflow" | "script" | "gagent";
+        description?: string | null;
+        teamId?: string | null;
+      }) => {
+        const nextMemberId = input.memberId.trim();
+        const nextMember = {
+          memberId: nextMemberId,
+          scopeId: input.scopeId,
+          displayName: input.displayName.trim(),
+          description: input.description?.trim() || "",
+          implementationKind: input.implementationKind,
+          lifecycleStage: "created",
+          publishedServiceId: `member-${nextMemberId}`,
+          lastBoundRevisionId: null,
+          teamId: input.teamId ?? null,
+          createdAt: "2026-04-27T08:10:00Z",
+          updatedAt: "2026-04-27T08:10:00Z",
+        };
+        mockStudioMembers = [nextMember, ...mockStudioMembers];
+        return nextMember;
+      }
+    ),
     getSkillsHealth: jest.fn(async () => ({
       baseUrl: "https://ornn.chrono-ai.fun",
       reachable: true,
@@ -4560,7 +4587,7 @@ describe("StudioPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Back to Team" }));
 
-    expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("memberId")).toBe("workspace-demo");
     expect(searchParams.get("tab")).toBe("overview");
@@ -4568,7 +4595,7 @@ describe("StudioPage", () => {
 
   it("returns to the explicit Team handoff target after Studio settles its route", async () => {
     renderStudioPage(
-      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=build&tab=studio&returnTo=%2Fteams%2Fscope-1%2Ft-alpha%3FmemberId%3Dworkspace-demo%26tab%3Dmembers"
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=build&tab=studio&returnTo=%2Fscopes%2Fscope-1%2Fteams%2Ft-alpha%3FmemberId%3Dworkspace-demo%26tab%3Dmembers"
     );
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
@@ -4576,13 +4603,13 @@ describe("StudioPage", () => {
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("returnTo")).toBe(
-        "/teams/scope-1/t-alpha?memberId=workspace-demo&tab=members"
+        "/scopes/scope-1/teams/t-alpha?memberId=workspace-demo&tab=members"
       );
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Back to Team" }));
 
-    expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("memberId")).toBe("workspace-demo");
     expect(searchParams.get("tab")).toBe("members");
@@ -4699,9 +4726,10 @@ describe("StudioPage", () => {
     expect(
       window.localStorage.getItem("aevatar:studio:script-drafts:v1"),
     ).toContain("refund-handler");
-    expect(studioApi.createMember).toHaveBeenCalledWith(
+    expect(studioApi.createMemberWithId).toHaveBeenCalledWith(
       expect.objectContaining({
         scopeId: "scope-1",
+        memberId: "refund-handler",
         displayName: "Refund Handler",
         implementationKind: "script",
       }),

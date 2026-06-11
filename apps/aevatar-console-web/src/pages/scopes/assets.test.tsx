@@ -130,7 +130,7 @@ describe('TeamAssetsPage', () => {
     expect(await screen.findByText('Legacy asset summary')).toBeTruthy();
     expect(
       screen.getByText(
-        'Team home now lives under /teams. Keep this page for older asset deep links, source inspection, and catalog detail while the team-first flow finishes taking over.',
+        'Team home now lives under /scopes/:scopeId/teams. Keep this page for older asset deep links, source inspection, and catalog detail while the scoped team flow finishes taking over.',
       ),
     ).toBeTruthy();
     expect(

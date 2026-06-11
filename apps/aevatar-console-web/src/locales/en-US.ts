@@ -21,6 +21,7 @@ const enUSMessages = {
   'menu.Services': 'Services',
   'menu.Settings': 'Settings',
   'menu.Team Details': 'Team Details',
+  'menu.Team Member Invoke': 'Team Member Invoke',
   'menu.Team Member Workflow Studio': 'Team Member Workflow Studio',
   'menu.Topology': 'Topology',
   'nav.groups.platform': 'Platform',
@@ -118,7 +119,6 @@ const enUSMessages = {
   'teams.home.summary.actionable': 'Teams needing action',
   'teams.home.summary.healthy': 'Recently completed teams',
   'teams.home.summary.total': 'Total AI teams',
-  'teams.home.team.identity': 'Team ID: {teamId}',
   'teams.home.team.unnamed': 'Unnamed team',
   'teams.home.title': 'My AI teams',
   'teams.home.view.cards': 'Card view',
@@ -171,8 +171,8 @@ const enUSMessages = {
   'teams.detail.messages.updateFailed': 'Failed to update team.',
   'teams.detail.messages.updateSuccess': 'Team updated.',
   'teams.detail.meta.memberCount': '{count, plural, one {# member} other {# members}}',
-  'teams.detail.meta.scopeId': 'Scope ID',
-  'teams.detail.meta.teamId': 'Team ID',
+  'teams.detail.meta.scopeId': 'Workspace',
+  'teams.detail.meta.teamId': 'Team',
   'teams.detail.overview.cards.currentRun': 'Latest run',
   'teams.detail.overview.cards.currentMember': 'Current member',
   'teams.detail.overview.cards.currentService': 'Current service',
@@ -200,8 +200,25 @@ const enUSMessages = {
   'teams.detail.overview.fallback.primaryService': 'Primary service',
   'teams.detail.overview.fallback.serviceEntry': 'Service entry {serviceId}',
   'teams.detail.overview.fallback.teamWorkflow': 'Team workflow',
-  'teams.detail.overview.identity.noService': 'No additional service identity yet',
+  'teams.detail.overview.identity.noService': 'No service is visible yet',
   'teams.detail.overview.identity.noVisibleRun': 'No visible run synced yet',
+  'teams.detail.overview.composition.memberDraft': 'Not bound yet.',
+  'teams.detail.overview.composition.memberReady':
+    'Bound and ready to receive traffic.',
+  'teams.detail.overview.configuration.versionAvailable':
+    'Current serving version is available.',
+  'teams.detail.overview.configuration.versionPending':
+    'Serving version is pending.',
+  'teams.detail.overview.configuration.workflowLinked': 'Workflow draft is linked.',
+  'teams.detail.overview.configuration.workflowPending':
+    'Workflow draft is not linked yet.',
+  'teams.detail.overview.member.selectedCaption':
+    "Selected from this team's members.",
+  'teams.detail.overview.run.visibleCaption': 'Latest run is available.',
+  'teams.detail.overview.service.boundCaption':
+    'Traffic is routed through the bound service.',
+  'teams.detail.overview.service.boundFallback': 'Bound service',
+  'teams.detail.overview.service.configuredCaption': 'Service routing is configured.',
   'teams.detail.overview.pill.run': 'Run · {value}',
   'teams.detail.overview.pill.runMissing': 'No recent visible run',
   'teams.detail.overview.pill.service': 'Service · {value}',
@@ -541,13 +558,15 @@ const enUSMessages = {
   'teams.members.actions.createFirst': 'Create first member',
   'teams.members.actions.createFirstWorkflow': 'Create first workflow member',
   'teams.members.actions.createWorkflowMember': 'Create workflow member',
-  'teams.members.actions.debugWorkflow': 'Debug workflow',
-  'teams.members.actions.editWorkflow': 'Edit workflow',
   'teams.members.actions.editInStudio': 'Edit in Studio',
+  'teams.members.actions.invokeRequiresBinding':
+    'Bind this workflow member before invoking it.',
+  'teams.members.actions.invokeWorkflow': 'Invoke',
   'teams.members.actions.setEntry': 'Set as entry member',
   'teams.members.actions.workflowOnly': 'Workflow only',
   'teams.members.actions.workflowOnlyTitle':
     'This console currently supports workflow members only.',
+  'teams.members.actions.workflowStudio': 'Workflow Studio',
   'teams.members.columns.actions': 'Actions',
   'teams.members.columns.implementation': 'Implementation',
   'teams.members.columns.member': 'Member',
@@ -555,17 +574,22 @@ const enUSMessages = {
   'teams.members.columns.service': 'Service',
   'teams.members.count': '{count, plural, one {# member} other {# members}}',
   'teams.members.description':
-    'Confirm entry members here: Set entry determines where team tests start. Workflow debug opens the supported member implementation and binding path, then return to team detail to test the team.',
+    'Review team members, choose the Team entry member, and open workflow members in Studio. Invoke is available only after a workflow member is bound to a published service.',
   'teams.members.empty.description':
     'The team exists as a backend fact, but its current member roster is empty. New members will appear here.',
   'teams.members.empty.title': 'This team has no members yet',
   'teams.members.entry': 'Entry member',
   'teams.members.selected': 'Selected',
-  'teams.members.fallback.team': 'Team {teamId}',
+  'teams.members.unnamed': 'Untitled member',
+  'teams.members.service.bound': 'Bound service',
+  'teams.members.service.needsBinding':
+    'Bind this member before invoking it.',
+  'teams.members.service.notBound': 'Not bound yet',
+  'teams.members.service.ready': 'Ready to invoke.',
   'teams.members.loading.description': 'Reading members for this team.',
   'teams.members.loading.title': 'Reading member roster',
   'teams.members.noSelection.description':
-    'The current route has no team ID, so only runtime-observed member identities can be shown.',
+    'Choose a team from the list to review its members.',
   'teams.members.noSelection.title': 'No real team selected',
   'teams.members.roster': 'Member roster',
   'teams.members.syncing.description':
@@ -575,17 +599,68 @@ const enUSMessages = {
   'teams.members.unavailable.description':
     'The member roster for this team cannot be read right now.',
   'teams.members.unavailable.title': 'Member roster unavailable',
+  'pages.teammemberinvoke.back': 'Team members',
+  'pages.teammemberinvoke.description':
+    'Run the bound published workflow member and keep the runtime observation pinned to this member.',
+  'pages.teammemberinvoke.endpoint.missing':
+    'No callable endpoint is available.',
+  'pages.teammemberinvoke.endpoint.missing.description':
+    'The published service has no callable endpoints available to this page.',
+  'pages.teammemberinvoke.fact.member': 'Member',
+  'pages.teammemberinvoke.fact.revision': 'Serving state',
+  'pages.teammemberinvoke.fact.service': 'Service',
+  'pages.teammemberinvoke.fact.workflow': 'Implementation',
+  'pages.teammemberinvoke.implementation.workflow': 'Workflow',
+  'pages.teammemberinvoke.load.failed':
+    'Member invoke context could not be loaded.',
+  'pages.teammemberinvoke.loading': 'Loading invoke context...',
+  'pages.teammemberinvoke.member': 'Member',
+  'pages.teammemberinvoke.next.step': 'Next step',
+  'pages.teammemberinvoke.open.studio': 'Workflow Studio',
+  'pages.teammemberinvoke.resolve.in.studio': 'Open Workflow Studio',
+  'pages.teammemberinvoke.route.missing': 'Missing member route',
+  'pages.teammemberinvoke.route.missing.description':
+    'Open this page from a concrete team member so the invoke target stays stable.',
+  'pages.teammemberinvoke.service.pending':
+    'Published service is not visible yet.',
+  'pages.teammemberinvoke.service.pending.description':
+    'The member binding exists, but the service catalog has not exposed its callable endpoints yet.',
+  'pages.teammemberinvoke.title': 'Run member',
+  'pages.teammemberinvoke.revision.ready': 'Ready',
+  'pages.teammemberinvoke.service.bound': 'Bound service',
+  'pages.teammemberinvoke.unbound': 'This workflow member is not bound yet.',
+  'pages.teammemberinvoke.unbound.description':
+    'Bind this workflow member first so it has a published callable service and endpoint contract.',
+  'pages.teammemberinvoke.workflow.only':
+    'Invoke is available for workflow members only.',
+  'pages.teammemberinvoke.workflow.only.description':
+    "This page only runs workflow members. Use the member's own surface for other implementation kinds.",
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     'This Phase 1 page only loads workflow members through a stable workflow reference. Add that backend/read-model reference before editing this member here.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     'No workflow draft is linked to this member yet.',
   'teamMemberWorkflowStudio.common.close': 'Close',
   'teamMemberWorkflowStudio.executionPanel.consoleAria':
-    'Member run console',
+    'Draft run console',
+  'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
+  'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
+    'Usage, snapshots, and raw observed events will appear here when the backend emits them.',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Run logs will appear here after the active member returns events.',
+    'Run logs will appear here after the workflow draft returns events.',
+  'teamMemberWorkflowStudio.executionPanel.emptyOutput':
+    'Output will appear after the draft run emits a result.',
+  'teamMemberWorkflowStudio.executionPanel.evidence': 'Evidence frames',
+  'teamMemberWorkflowStudio.executionPanel.events': 'Events',
+  'teamMemberWorkflowStudio.executionPanel.items': 'items',
+  'teamMemberWorkflowStudio.executionPanel.logs': 'Logs',
+  'teamMemberWorkflowStudio.executionPanel.output': 'Output',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
     '{count} run event(s) received, but no step logs are available yet.',
+  'teamMemberWorkflowStudio.executionPanel.resultFirst': 'Result',
+  'teamMemberWorkflowStudio.executionPanel.runLog': 'Run log',
+  'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
+  'teamMemberWorkflowStudio.executionPanel.summary': 'Summary',
+  'teamMemberWorkflowStudio.executionPanel.timeline': 'Timeline',
   'teamMemberWorkflowStudio.executionsPanel.description':
     'This tab only shows executions that can be safely scoped to the current workflow member by stable workflow or service identifiers.',
   'teamMemberWorkflowStudio.executionsPanel.empty':
@@ -606,6 +681,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.activation.publishing': 'Publishing',
   'teamMemberWorkflowStudio.header.activation.ready': 'Ready',
   'teamMemberWorkflowStudio.header.addNode': 'Add node',
+  'teamMemberWorkflowStudio.header.back': 'Back',
   'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
   'teamMemberWorkflowStudio.header.deleteConnection': 'Delete connection',
   'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
@@ -614,11 +690,13 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow draft and node actions',
+  'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
   'teamMemberWorkflowStudio.header.runOptionsAria': 'Run options',
-  'teamMemberWorkflowStudio.header.runActiveMember': 'Run active member',
+  'teamMemberWorkflowStudio.header.runActiveMember': 'Run draft',
+  'teamMemberWorkflowStudio.header.runDraft': 'Run draft',
   'teamMemberWorkflowStudio.header.save': 'Save',
   'teamMemberWorkflowStudio.header.saveDraft': 'Save draft',
   'teamMemberWorkflowStudio.header.tabs.editor': 'Editor',
@@ -650,7 +728,6 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeDetail.rawConfigurationError':
     'Raw node configuration must be a JSON object.',
   'teamMemberWorkflowStudio.nodeDetail.sectionAria': 'Node detail',
-  'teamMemberWorkflowStudio.nodeDetail.stepId': 'Step ID: {stepId}',
   'teamMemberWorkflowStudio.nodeDetail.updateNode': 'Update node',
   'teamMemberWorkflowStudio.nodeInspector.basics': 'Basics',
   'teamMemberWorkflowStudio.nodeInspector.branches': 'Branches',
@@ -664,7 +741,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeInspector.resizeHandle':
     'Resize node inspector',
   'teamMemberWorkflowStudio.nodeInspector.sectionAria': 'Node inspector',
-  'teamMemberWorkflowStudio.nodeInspector.stepId': 'Step ID',
+  'teamMemberWorkflowStudio.nodeInspector.selectedNode': 'Selected node',
   'teamMemberWorkflowStudio.nodeInspector.targetRole': 'Target role',
   'teamMemberWorkflowStudio.nodeInspector.type': 'Type',
   'teamMemberWorkflowStudio.nodeLibrary.closeAria': 'Close node library',
@@ -678,9 +755,9 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
   'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
-    'Message to active member',
+    'Draft run input',
   'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
-    'Optional message sent with this active member run',
+    'Optional input sent to this workflow draft run',
   'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': 'Run options panel',
   'teamMemberWorkflowStudio.runOptionsPanel.title': 'Run options',
   'teamMemberWorkflowStudio.runsPanel.description':
@@ -695,6 +772,13 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.title': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': 'unknown',
+  'teamMemberWorkflowStudio.yamlModal.import': 'Import',
+  'teamMemberWorkflowStudio.yamlModal.placeholder':
+    'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
+  'teamMemberWorkflowStudio.yamlModal.textareaAria': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlModal.title': 'Paste workflow YAML',
+  'pages.studio.studiomembercurrentrunpanel.details': 'Details',
+  'pages.studio.studiomemberinvokepanel.endpoint': 'Endpoint',
 };
 
 export default enUSMessages;
