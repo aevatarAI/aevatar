@@ -302,7 +302,7 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
-    public async Task VoiceVolatileMediaStreamPort_should_relay_raw_audio_inside_volatile_path_and_dispatch_only_control_events()
+    public async Task VoiceVolatileMediaStreamPort_should_relay_raw_audio_and_dispatch_control_and_input_image_events()
     {
         var leasePort = new RecordingLeasePort();
         var attachmentPort = new RecordingAttachmentPort();
@@ -324,6 +324,11 @@ public class VoiceRealtimeSessionTests
                     ResponseId = 5,
                     PlayoutSequence = 9,
                 },
+            }),
+            VoiceTransportFrame.InputImageFrame(new VoiceInputImage
+            {
+                MediaType = "image/png",
+                Data = ByteString.CopyFrom([5, 6, 7]),
             }));
 
         var lifetimeCompleted = await port.AttachAsync(handle, transport, CancellationToken.None);
@@ -344,9 +349,14 @@ public class VoiceRealtimeSessionTests
         var signals = dispatchPort.Dispatches
             .Select(static dispatch => dispatch.Envelope.Payload.Unpack<VoiceModuleSignal>())
             .ToList();
-        signals.Count.ShouldBe(2);
+        signals.Count.ShouldBe(3);
         signals.ShouldContain(static signal =>
             signal.SignalCase == VoiceModuleSignal.SignalOneofCase.TransportControlFrameReceived);
+        signals.ShouldContain(signal =>
+            signal.SignalCase == VoiceModuleSignal.SignalOneofCase.InputImageReceived &&
+            signal.InputImageReceived.TransportLeaseId == "transport-1" &&
+            signal.InputImageReceived.InputImage.MediaType == "image/png" &&
+            signal.InputImageReceived.InputImage.Data.ToByteArray().SequenceEqual(new byte[] { 5, 6, 7 }));
         signals.ShouldContain(static signal =>
             signal.SignalCase == VoiceModuleSignal.SignalOneofCase.ProviderEventReceived);
     }

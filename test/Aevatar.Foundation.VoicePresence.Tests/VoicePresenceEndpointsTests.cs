@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Text;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
@@ -143,6 +144,45 @@ public class VoicePresenceEndpointsTests
         mediaPort.AttachCalls.ShouldBe(1);
         mediaPort.DetachCalls.ShouldBe(1);
         socket.State.ShouldBe(WebSocketState.Closed);
+    }
+
+    [Fact]
+    public async Task Request_should_accept_input_image_text_frame_at_host_boundary()
+    {
+        var receivedFrames = new List<VoiceTransportFrame>();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Text,
+            Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(new VoiceControlFrame
+            {
+                InputImage = new VoiceInputImage
+                {
+                    MediaType = "image/jpeg",
+                    Data = ByteString.CopyFrom([7, 8, 9]),
+                },
+            })));
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: async (transport, ct) =>
+            {
+                await using (transport)
+                {
+                    await foreach (var frame in transport.ReceiveFramesAsync(ct))
+                        receivedFrames.Add(frame);
+                }
+            });
+        using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
+        var context = CreateHttpContext(app);
+        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetVoiceEndpoint(app).RequestDelegate!(context);
+
+        mediaPort.AttachCalls.ShouldBe(1);
+        mediaPort.DetachCalls.ShouldBe(1);
+        var frame = receivedFrames.ShouldHaveSingleItem();
+        frame.InputImage.ShouldNotBeNull();
+        frame.InputImage!.MediaType.ShouldBe("image/jpeg");
+        frame.InputImage.Data.ToByteArray().ShouldBe(new byte[] { 7, 8, 9 });
     }
 
     [Fact]

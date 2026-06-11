@@ -41,13 +41,17 @@ internal sealed class FakeWebSocket : WebSocket
 
     public int CloseCalls { get; private set; }
 
+    public WebSocketCloseStatus? LastCloseStatus { get; private set; }
+
+    public string? LastCloseDescription { get; private set; }
+
     public List<string> SentTexts { get; } = [];
 
     public List<byte[]> SentBinaries { get; } = [];
 
-    public override WebSocketCloseStatus? CloseStatus => null;
+    public override WebSocketCloseStatus? CloseStatus => LastCloseStatus;
 
-    public override string? CloseStatusDescription => null;
+    public override string? CloseStatusDescription => LastCloseDescription;
 
     public override WebSocketState State => _state;
 
@@ -70,8 +74,9 @@ internal sealed class FakeWebSocket : WebSocket
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = closeStatus;
-        _ = statusDescription;
         CloseCalls++;
+        LastCloseStatus = closeStatus;
+        LastCloseDescription = statusDescription;
         if (ThrowOnClose)
             throw new WebSocketException("close failed");
 
@@ -86,7 +91,8 @@ internal sealed class FakeWebSocket : WebSocket
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = closeStatus;
-        _ = statusDescription;
+        LastCloseStatus = closeStatus;
+        LastCloseDescription = statusDescription;
         _state = WebSocketState.CloseSent;
         return Task.CompletedTask;
     }
