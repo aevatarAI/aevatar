@@ -330,6 +330,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         CancellationToken ct)
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
+        var workflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId) ??
+                         ScopeWorkflowCapabilityOptions.NormalizeRequired(identity.ServiceId, nameof(identity.ServiceId));
         var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(_options, normalizedScopeId);
         var displayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(
             request.DisplayName,
@@ -373,6 +375,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     WorkflowName: workflowBundle.EntryWorkflowName,
                     DefinitionActorIdPrefix: definitionActorIdPrefix,
                     Workflow: new ScopeBindingWorkflowResult(
+                        workflowId,
                         workflowBundle.EntryWorkflowName,
                         definitionActorIdPrefix),
                     ExpectedDeploymentId: expectedDeploymentId));

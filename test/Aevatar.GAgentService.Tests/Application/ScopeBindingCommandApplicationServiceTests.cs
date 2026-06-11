@@ -46,10 +46,12 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            Workflow: new ScopeBindingWorkflowSpec([
-                "name: main\nsteps:\n  - run: echo hello",
-                "name: child\nsteps:\n  - run: echo child",
-            ])));
+            Workflow: new ScopeBindingWorkflowSpec(
+                "workflow-stable-id",
+                [
+                    "name: main_runtime\nsteps:\n  - run: echo hello",
+                    "name: child\nsteps:\n  - run: echo child",
+                ])));
 
         commandPort.Calls.Should().HaveCount(6);
         commandPort.Calls[0].Method.Should().Be("CreateServiceAsync");
@@ -64,8 +66,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         result.AcceptanceStage.Should().Be("accepted");
         result.PropagationStage.Should().Be("readmodel_propagating");
         result.Workflow.Should().NotBeNull();
-        result.Workflow!.WorkflowName.Should().Be("main");
-        result.DisplayName.Should().Be("main");
+        result.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
+        result.Workflow!.WorkflowName.Should().Be("main_runtime");
+        result.DisplayName.Should().Be("main_runtime");
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
         createCommand.Spec.Identity.Should().BeEquivalentTo(new ServiceIdentity

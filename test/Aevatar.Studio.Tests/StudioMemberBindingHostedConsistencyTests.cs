@@ -33,7 +33,9 @@ public sealed class StudioMemberBindingHostedConsistencyTests
         var bindResponse = await host.Client.PutAsJsonAsync(
             $"/api/scopes/{ScopeId}/members/{MemberId}/binding",
             new UpdateStudioMemberBindingRequest(
-                Workflow: new StudioMemberWorkflowBindingSpec(["name: main\nsteps:\n  - run: echo hello"])));
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "workflow-stable-id",
+                    ["name: main\nsteps:\n  - run: echo hello"])));
 
         bindResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
 
@@ -51,7 +53,8 @@ public sealed class StudioMemberBindingHostedConsistencyTests
         startedRun.ScopeId.Should().Be(ScopeId);
         startedRun.MemberId.Should().Be(MemberId);
         startedRun.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
-        startedRun.Binding.Workflow!.WorkflowYamls.Should().ContainSingle()
+        startedRun.Binding.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
+        startedRun.Binding.Workflow.WorkflowYamls.Should().ContainSingle()
             .Which.Should().Contain("echo hello");
 
         var runWhilePending = await host.Client.GetFromJsonAsync<StudioMemberBindingRunStatusResponse>(
@@ -93,6 +96,9 @@ public sealed class StudioMemberBindingHostedConsistencyTests
         completedDetail.Should().NotBeNull();
         completedDetail!.Summary.PublishedServiceId.Should().Be("member-member-1");
         completedDetail.Summary.LastBoundRevisionId.Should().Be("rev-1");
+        completedDetail.ImplementationRef.Should().NotBeNull();
+        completedDetail.ImplementationRef!.WorkflowId.Should().Be("workflow-stable-id");
+        completedDetail.ImplementationRef.WorkflowRevision.Should().Be("rev-1");
 
         var completedRun = await host.Client.GetFromJsonAsync<StudioMemberBindingRunStatusResponse>(
             $"/api/scopes/{ScopeId}/members/{MemberId}/binding-runs/{accepted.BindingRunId}");
@@ -285,7 +291,7 @@ public sealed class StudioMemberBindingHostedConsistencyTests
                     UpdatedAt: now),
                 ImplementationRef: new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.Workflow,
-                    WorkflowId: "main",
+                    WorkflowId: "workflow-stable-id",
                     WorkflowRevision: completed ? "rev-1" : null),
                 LastBinding: completed
                     ? new StudioMemberBindingContractResponse(
