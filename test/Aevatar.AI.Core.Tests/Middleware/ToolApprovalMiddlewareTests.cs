@@ -27,7 +27,7 @@ public class ToolApprovalMiddlewareTests
         ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
         ctx.TerminationKind.Should().NotBe(ToolCallTerminationKind.ApprovalPending);
         ctx.PendingApproval.Should().BeNull();
-        ctx.Result.Should().Contain("No tool approval handler is registered.");
+        ctx.Result.Should().Contain("approval-gated tools cannot run here");
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class ToolApprovalMiddlewareTests
         ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
         ctx.TerminationKind.Should().NotBe(ToolCallTerminationKind.ApprovalPending);
         ctx.PendingApproval.Should().BeNull();
-        ctx.Result.Should().Contain("No tool approval handler is registered.");
+        ctx.Result.Should().Contain("approval-gated tools cannot run here");
     }
 
     [Fact]
