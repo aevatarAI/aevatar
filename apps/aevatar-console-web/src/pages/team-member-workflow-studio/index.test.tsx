@@ -420,12 +420,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
       directoryId: "scope:scope-1",
       directoryLabel: "scope-1",
       draftExists: true,
-      fileName: "untitled-member.yaml",
-      filePath: "scope://scope-1/untitled-member.yaml",
+      fileName: "wf-untitled-member.yaml",
+      filePath: "scope://scope-1/wf-untitled-member.yaml",
       findings: [],
       layout: null,
       name: "Untitled member",
-      workflowId: "untitled-member",
+      workflowId: "wf-untitled-member",
       yaml: "name: Untitled member\nsteps: []\n",
       document: {
         name: "Untitled member",
@@ -443,29 +443,29 @@ describe("TeamMemberWorkflowStudioPage", () => {
       },
       updatedAtUtc: "2026-06-08T00:00:01Z",
     });
-    (studioApi.createMemberWithId as jest.Mock).mockResolvedValue({
+    (studioApi.createMember as jest.Mock).mockResolvedValue({
       createdAt: "2026-06-08T00:00:00Z",
       description: "",
       displayName: "Untitled member",
       implementationKind: "workflow",
       lastBoundRevisionId: null,
       lifecycleStage: "created",
-      memberId: "untitled-member",
-      publishedServiceId: "member-untitled-member",
+      memberId: "m-untitled-member",
+      publishedServiceId: "member-m-untitled-member",
       scopeId: "scope-1",
       teamId: "t-alpha",
       updatedAt: "2026-06-08T00:00:01Z",
     });
     (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValue({
       bindingRunId: "binding-run-new",
-      memberId: "untitled-member",
+      memberId: "m-untitled-member",
       scopeId: "scope-1",
       status: "accepted",
     });
     (studioApi.getMember as jest.Mock).mockResolvedValue({
       implementationRef: {
         implementationKind: "workflow",
-        workflowId: "untitled-member",
+        workflowId: "wf-untitled-member",
       },
       summary: {
         createdAt: "2026-06-08T00:00:00Z",
@@ -474,7 +474,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         implementationKind: "workflow",
         lastBoundRevisionId: null,
         lifecycleStage: "created",
-        memberId: "untitled-member",
+        memberId: "m-untitled-member",
         publishedServiceId: "",
         scopeId: "scope-1",
         teamId: "t-alpha",
@@ -485,12 +485,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
       directoryId: "scope:scope-1",
       directoryLabel: "scope-1",
       draftExists: true,
-      fileName: "untitled-member.yaml",
-      filePath: "scope://scope-1/untitled-member.yaml",
+      fileName: "wf-untitled-member.yaml",
+      filePath: "scope://scope-1/wf-untitled-member.yaml",
       findings: [],
       layout: null,
       name: "Untitled member",
-      workflowId: "untitled-member",
+      workflowId: "wf-untitled-member",
       yaml: "name: Untitled member\nsteps: []\n",
       document: {
         name: "Untitled member",
@@ -552,28 +552,27 @@ describe("TeamMemberWorkflowStudioPage", () => {
           workflowId: "",
         }),
       );
-      expect(studioApi.createMemberWithId).toHaveBeenCalledWith({
+      expect(studioApi.createMember).toHaveBeenCalledWith({
         displayName: "Untitled member",
         implementationKind: "workflow",
-        memberId: "untitled-member",
         scopeId: "scope-1",
         teamId: "t-alpha",
       });
-      expect(studioApi.createMember).not.toHaveBeenCalled();
+      expect(studioApi.createMemberWithId).not.toHaveBeenCalled();
       expect(studioApi.updateMemberTeamAssignment).not.toHaveBeenCalled();
       expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith({
         displayName: "Untitled member",
-        memberId: "untitled-member",
+        memberId: "m-untitled-member",
         scopeId: "scope-1",
-        workflowId: "untitled-member",
+        workflowId: "wf-untitled-member",
         workflowYamls: [expect.stringContaining("name: Untitled member")],
       });
     });
     expect(window.location.pathname).toBe(
-      "/scopes/scope-1/teams/t-alpha/members/untitled-member/workflow",
+      "/scopes/scope-1/teams/t-alpha/members/m-untitled-member/workflow",
     );
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
-      "untitled-member",
+      "wf-untitled-member",
     );
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({
       queryKey: ["team-member-workflow-studio", "team", "scope-1", "t-alpha"],
@@ -602,12 +601,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
       directoryId: "scope:scope-1",
       directoryLabel: "scope-1",
       draftExists: true,
-      fileName: "untitled-member.yaml",
-      filePath: "scope://scope-1/untitled-member.yaml",
+      fileName: "wf-untitled-member.yaml",
+      filePath: "scope://scope-1/wf-untitled-member.yaml",
       findings: [],
       layout: null,
       name: "Untitled member",
-      workflowId: "untitled-member",
+      workflowId: "wf-untitled-member",
       yaml: "name: Untitled member\nsteps: []\n",
       document: {
         name: "Untitled member",
@@ -628,7 +627,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     const createdMemberDetail = {
       implementationRef: {
         implementationKind: "workflow",
-        workflowId: "untitled-member",
+        workflowId: "wf-untitled-member",
       },
       summary: {
         createdAt: "2026-06-08T00:00:00Z",
@@ -637,19 +636,19 @@ describe("TeamMemberWorkflowStudioPage", () => {
         implementationKind: "workflow",
         lastBoundRevisionId: null,
         lifecycleStage: "created",
-        memberId: "untitled-member",
-        publishedServiceId: "member-untitled-member",
+        memberId: "m-untitled-member",
+        publishedServiceId: "member-m-untitled-member",
         scopeId: "scope-1",
         teamId: "t-alpha",
         updatedAt: "2026-06-08T00:00:01Z",
       },
     };
-    (studioApi.createMemberWithId as jest.Mock).mockResolvedValue(
+    (studioApi.createMember as jest.Mock).mockResolvedValue(
       createdMemberDetail.summary,
     );
     (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValue({
       bindingRunId: "binding-run-new",
-      memberId: "untitled-member",
+      memberId: "m-untitled-member",
       scopeId: "scope-1",
       status: "accepted",
     });
@@ -657,12 +656,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
       directoryId: "scope:scope-1",
       directoryLabel: "scope-1",
       draftExists: true,
-      fileName: "untitled-member.yaml",
-      filePath: "scope://scope-1/untitled-member.yaml",
+      fileName: "wf-untitled-member.yaml",
+      filePath: "scope://scope-1/wf-untitled-member.yaml",
       findings: [],
       layout: null,
       name: "Untitled member",
-      workflowId: "untitled-member",
+      workflowId: "wf-untitled-member",
       yaml: "name: Untitled member\nsteps: []\n",
       document: {
         name: "Untitled member",
@@ -682,11 +681,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
     };
     (studioApi.getMember as jest.Mock).mockImplementation(
       async (_scopeId: string, memberId: string) =>
-        memberId === "untitled-member" ? createdMemberDetail : undefined,
+        memberId === "m-untitled-member" ? createdMemberDetail : undefined,
     );
     (studioApi.getWorkflow as jest.Mock).mockImplementation(
       async (workflowId: string) =>
-        workflowId === "untitled-member" ? createdWorkflow : undefined,
+        workflowId === "wf-untitled-member" ? createdWorkflow : undefined,
     );
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
@@ -699,17 +698,17 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     await waitFor(() => {
       expect(window.location.pathname).toBe(
-        "/scopes/scope-1/teams/t-alpha/members/untitled-member/workflow",
+        "/scopes/scope-1/teams/t-alpha/members/m-untitled-member/workflow",
       );
       expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
-        "untitled-member",
+        "wf-untitled-member",
       );
       expect(studioApi.getMember).toHaveBeenCalledWith(
         "scope-1",
-        "untitled-member",
+        "m-untitled-member",
       );
       expect(studioApi.getWorkflow).toHaveBeenCalledWith(
-        "untitled-member",
+        "wf-untitled-member",
         "scope-1",
       );
     });

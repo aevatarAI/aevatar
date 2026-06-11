@@ -1294,9 +1294,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         throw new Error("Workflow draft save did not return a stable workflow id.");
       }
 
-      const createdMember = await studioApi.createMemberWithId({
+      const createdMember = await studioApi.createMember({
         scopeId: route.scopeId,
-        memberId: savedWorkflowId,
         displayName: normalizedTitle,
         implementationKind: "workflow",
         teamId: route.teamId,
