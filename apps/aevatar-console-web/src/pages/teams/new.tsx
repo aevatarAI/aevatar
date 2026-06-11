@@ -17,10 +17,7 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 const primaryActionButtonStyle: React.CSSProperties = {
-  background: '#6c5ce7',
-  borderColor: '#6c5ce7',
   borderRadius: 10,
-  color: '#ffffff',
   fontSize: 14,
   fontWeight: 600,
   height: 44,
@@ -167,6 +164,7 @@ const TeamCreatePage: React.FC = () => {
             loading={isCreatingTeam}
             onClick={() => void handleCreateTeam()}
             style={primaryActionButtonStyle}
+            type="primary"
           >
             {t("pages.teams.new.create.team", "Create Team")}</Button>
         </Space>
@@ -238,6 +236,7 @@ const TeamCreatePage: React.FC = () => {
               loading={isCreatingTeam}
               onClick={() => void handleCreateTeam()}
               style={primaryActionButtonStyle}
+              type="primary"
             >
               {t("pages.teams.new.create.team.3", "Create Team")}</Button>
             <Button onClick={() => history.push(buildTeamsHref())}>
