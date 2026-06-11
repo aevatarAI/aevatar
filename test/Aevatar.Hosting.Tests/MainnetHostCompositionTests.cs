@@ -1,4 +1,6 @@
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
@@ -127,6 +129,10 @@ public sealed class MainnetHostCompositionTests
         toolSources.Should().Contain(source => source is TelegramAgentToolSource);
         toolSources.Should().Contain(source => source is SkillsAgentToolSource);
         toolSources.Should().Contain(source => source is OrnnAgentToolSource);
+        app.Services.GetServices<IToolApprovalHandler>()
+            .Should()
+            .ContainSingle(handler => handler is YieldApprovalHandler);
+        app.Services.GetServices<IToolCallMiddleware>().Should().ContainSingle(middleware => middleware is ToolApprovalMiddleware);
 
         await app.StopAsync();
     }

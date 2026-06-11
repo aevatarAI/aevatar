@@ -124,55 +124,6 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
-    public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct)
-    {
-        var paramsParts = new List<string>
-        {
-            $"page_size={request.PageSize}",
-        };
-        if (!string.IsNullOrWhiteSpace(request.PageToken))
-            paramsParts.Add($"page_token={Uri.EscapeDataString(request.PageToken.Trim())}");
-
-        var body = new Dictionary<string, object?>
-        {
-            ["query"] = request.Query,
-        };
-        var filter = new Dictionary<string, object?>();
-        if (request.ChatIds is { Count: > 0 })
-            filter["chat_ids"] = request.ChatIds;
-        if (request.SenderIds is { Count: > 0 })
-            filter["from_ids"] = request.SenderIds;
-        if (!string.IsNullOrWhiteSpace(request.IncludeAttachmentType))
-            filter["include_attachment_types"] = new[] { request.IncludeAttachmentType.Trim() };
-        if (!string.IsNullOrWhiteSpace(request.ChatType))
-            filter["chat_type"] = request.ChatType.Trim();
-        if (!string.IsNullOrWhiteSpace(request.SenderType))
-            filter["from_types"] = new[] { request.SenderType.Trim() };
-        if (!string.IsNullOrWhiteSpace(request.ExcludeSenderType))
-            filter["exclude_from_types"] = new[] { request.ExcludeSenderType.Trim() };
-        if (request.IsAtMe)
-            filter["is_at_me"] = true;
-
-        var timeRange = new Dictionary<string, object?>();
-        if (!string.IsNullOrWhiteSpace(request.StartTime))
-            timeRange["start_time"] = request.StartTime.Trim();
-        if (!string.IsNullOrWhiteSpace(request.EndTime))
-            timeRange["end_time"] = request.EndTime.Trim();
-        if (timeRange.Count > 0)
-            filter["time_range"] = timeRange;
-        if (filter.Count > 0)
-            body["filter"] = filter;
-
-        return _nyxClient.ProxyRequestAsync(
-            token,
-            _options.ProviderSlug,
-            $"open-apis/im/v1/messages/search?{string.Join("&", paramsParts)}",
-            "POST",
-            JsonSerializer.Serialize(body, JsonOptions),
-            extraHeaders: null,
-            ct);
-    }
-
     public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct)
     {
         var parts = new List<string>

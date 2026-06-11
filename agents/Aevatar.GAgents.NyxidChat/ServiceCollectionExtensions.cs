@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -13,6 +15,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.AI.ToolProviders.Lark;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -94,7 +97,20 @@ public static class ServiceCollectionExtensions
                     sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
             }));
         }
-        services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
+        services.TryAddSingleton<IConversationReplyGenerator>(sp =>
+            new NyxIdConversationReplyGenerator(
+                sp.GetRequiredService<ILLMProviderFactory>(),
+                sp.GetServices<IAgentToolSource>(),
+                sp.GetServices<IAgentRunMiddleware>(),
+                sp.GetServices<IToolCallMiddleware>(),
+                sp.GetServices<ILLMCallMiddleware>(),
+                sp.GetService<LocalSkillCatalog>(),
+                sp.GetService<IRemoteSkillFetcher>(),
+                sp.GetService<NyxIdRelayOptions>(),
+                sp.GetService<INyxIdUserLlmPreferencesStore>(),
+                sp.GetService<IUserMemoryStore>(),
+                approvalHandler: null,
+                logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>()));
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         // ─── LLM-call middleware that injects channel context into LLM requests ───

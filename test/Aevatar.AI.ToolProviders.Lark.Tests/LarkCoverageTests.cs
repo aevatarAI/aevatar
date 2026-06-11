@@ -44,12 +44,6 @@ public sealed class LarkCoverageTests
         reactionsDeleteTool.Description.Should().Contain("Delete a specific Lark message reaction");
         reactionsDeleteTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
 
-        var searchTool = new LarkMessagesSearchTool(client);
-        searchTool.Name.Should().Be("lark_messages_search");
-        searchTool.Description.Should().Contain("Search Lark messages");
-        searchTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
-        searchTool.IsReadOnly.Should().BeTrue();
-
         var batchGetTool = new LarkMessagesBatchGetTool(client);
         batchGetTool.Name.Should().Be("lark_messages_batch_get");
         batchGetTool.Description.Should().Contain("Batch fetch full Lark message details");
@@ -376,14 +370,6 @@ public sealed class LarkCoverageTests
             _ = request;
             _ = ct;
             return Task.FromResult("""{"code":0,"data":{}}""");
-        }
-
-        public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct)
-        {
-            _ = token;
-            _ = request;
-            _ = ct;
-            return Task.FromResult("""{"code":0,"data":{"items":[],"count":0}}""");
         }
 
         public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct)
