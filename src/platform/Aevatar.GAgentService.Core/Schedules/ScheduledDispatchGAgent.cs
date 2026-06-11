@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -267,7 +266,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             if (prepared.Envelope.Payload?.TryUnpack<ServiceInvocationRequest>(out var request) != true)
                 throw new InvalidOperationException("Scheduled service invocation payload is not configured.");
 
-            var receipt = await _serviceInvocationDispatchPort.DispatchAsync(request, ct);
+            var receipt = await _serviceInvocationDispatchPort.DispatchAsync(
+                new ScheduledServiceInvocationDispatchRequest(
+                    request,
+                    ToRuntimeAuth(State.Target?.ServiceInvocation?.Auth),
+                    ReadOnlyCopy(prepared.Headers ?? EmptyHeaders)),
+                ct);
             return new ScheduledDispatchReceipt(
                 receipt.Accepted,
                 receipt.CommandId,
@@ -307,7 +311,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         var headers = BuildFireHeaders(scheduledFireAtUtc, idempotencyKey);
         if (ResolveTargetKind() == ScheduledDispatchTargetKindState.ServiceInvocation)
-            return BuildServiceInvocationDispatchEnvelope(headers, idempotencyKey);
+            return await BuildServiceInvocationDispatchEnvelopeAsync(headers, idempotencyKey, ct);
 
         var envelope = State.TriggerEnvelope?.Clone()
             ?? throw new InvalidOperationException("Scheduled dispatch trigger envelope is not configured.");
@@ -335,31 +339,26 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 envelope);
         }
 
-        if (envelope.Payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
-        {
-            chatRequest.SessionId = idempotencyKey;
-            foreach (var (key, value) in headers)
-                chatRequest.Metadata[key] = value;
-            envelope.Payload = Any.Pack(chatRequest);
-        }
-
         return new ScheduledDispatchEnvelope(
             ResolveDispatchTargetActorId(),
             ResolveTargetKind(),
             envelope);
     }
 
-    private ScheduledDispatchEnvelope BuildServiceInvocationDispatchEnvelope(
+    private Task<ScheduledDispatchEnvelope> BuildServiceInvocationDispatchEnvelopeAsync(
         IReadOnlyDictionary<string, string> headers,
-        string idempotencyKey)
+        string idempotencyKey,
+        CancellationToken ct)
     {
         var target = State.Target?.ServiceInvocation
             ?? throw new InvalidOperationException("Scheduled service invocation target is not configured.");
+        ct.ThrowIfCancellationRequested();
         var request = new ServiceInvocationRequest
         {
             Identity = target.Identity?.Clone(),
             EndpointId = target.EndpointId ?? string.Empty,
-            Payload = EnrichServiceInvocationPayload(target.Payload, headers),
+            Payload = target.Payload?.Clone()
+                ?? throw new InvalidOperationException("Scheduled service invocation payload is not configured."),
             CommandId = idempotencyKey,
             CorrelationId = idempotencyKey,
             RevisionId = target.RevisionId ?? string.Empty,
@@ -383,23 +382,31 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         foreach (var (key, value) in headers)
             envelope.Propagation.Baggage[key] = value;
 
-        return new ScheduledDispatchEnvelope(
+        return Task.FromResult(new ScheduledDispatchEnvelope(
             ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
             ScheduledDispatchTargetKindState.ServiceInvocation,
-            envelope);
+            envelope,
+            ReadOnlyCopy(headers)));
     }
 
-    private static Any EnrichServiceInvocationPayload(Any? payload, IReadOnlyDictionary<string, string> headers)
+    private static ScheduledServiceInvocationAuth? ToRuntimeAuth(ScheduledServiceInvocationAuthState? auth)
     {
-        if (payload == null)
-            throw new InvalidOperationException("Scheduled service invocation payload is not configured.");
-        if (!payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
-            return payload.Clone();
+        if (auth?.SenderNyxId == null)
+            return null;
 
-        foreach (var (key, value) in headers)
-            chatRequest.Metadata[key] = value;
-        return Any.Pack(chatRequest);
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef(
+                auth.SenderNyxId.Subject?.Platform ?? string.Empty,
+                auth.SenderNyxId.Subject?.Tenant ?? string.Empty,
+                auth.SenderNyxId.Subject?.ExternalUserId ?? string.Empty),
+            auth.SenderNyxId.Scope ?? string.Empty));
     }
+
+    private static IReadOnlyDictionary<string, string> ReadOnlyCopy(IReadOnlyDictionary<string, string> headers) =>
+        new Dictionary<string, string>(headers, StringComparer.Ordinal);
+
+    private static readonly IReadOnlyDictionary<string, string> EmptyHeaders =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 
     private IReadOnlyDictionary<string, string> BuildFireHeaders(
         DateTimeOffset scheduledFireAtUtc,
@@ -414,7 +421,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private sealed record ScheduledDispatchEnvelope(
         string TargetActorId,
         ScheduledDispatchTargetKindState TargetKind,
-        EventEnvelope Envelope);
+        EventEnvelope Envelope,
+        IReadOnlyDictionary<string, string>? Headers = null);
 
     private sealed record ScheduledDispatchReceipt(
         bool Accepted,
@@ -615,6 +623,28 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             Payload = serviceInvocation.Payload?.Clone(),
             RevisionId = NormalizeOptional(serviceInvocation.RevisionId),
             Caller = serviceInvocation.Caller?.Clone(),
+            Auth = NormalizeServiceInvocationAuth(serviceInvocation.Auth),
+        };
+    }
+
+    private static ScheduledServiceInvocationAuthState? NormalizeServiceInvocationAuth(
+        ScheduledServiceInvocationAuthState? auth)
+    {
+        if (auth?.SenderNyxId == null)
+            return null;
+
+        return new ScheduledServiceInvocationAuthState
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                {
+                    Platform = NormalizeOptional(auth.SenderNyxId.Subject?.Platform),
+                    Tenant = NormalizeOptional(auth.SenderNyxId.Subject?.Tenant),
+                    ExternalUserId = NormalizeOptional(auth.SenderNyxId.Subject?.ExternalUserId),
+                },
+                Scope = NormalizeOptional(auth.SenderNyxId.Scope),
+            },
         };
     }
 

@@ -36,6 +36,7 @@ The resolver is exposed through `IMemberPublishedServiceResolver`, so a later ac
 
 - Member routes for Bind / Invoke / Observe-read / run lifecycle control do not require frontend callers to know or pass `serviceId`.
 - Binding writes are asynchronous. The `PUT /binding` response only means the command was accepted for dispatch and returns a stable `bindingRunId`; completion is observed through `GET /binding-runs/{bindingRunId}` or `GET /binding`.
+- Workflow binding requests must carry `workflow.workflowId` as the stable workflow identity. The first YAML document's `name` remains the runtime/display `workflowName` and may differ from `workflowId`; successful member binding returns the stable id in `implementationRef.workflow.workflowId`.
 - The binding-run `Location` is read-model backed and can be briefly unavailable immediately after `202 Accepted`. Clients should treat a short-lived `404` for the accepted run id as pending/read-model lag, not as terminal failure. Only explicit `failed` or `rejected` run status should surface as a binding error.
 - Binding execution still publishes through the existing service command/runtime path after the member actor has admitted the request and resolved its `publishedServiceId`.
 - Runs and run detail still read workflow run read models; they do not query actor state or replay events.

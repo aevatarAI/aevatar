@@ -1106,7 +1106,7 @@ public sealed class MainnetMessagesEndpointsTests
             LlmSessionForwardedToolCall call,
             CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task RecordCompletionAsync(
+        public Task<DispatchAdmission> RecordCompletionAsync(
             string sessionActorId,
             string responseId,
             LlmSessionCompletion completion,
@@ -1147,7 +1147,12 @@ public sealed class MainnetMessagesEndpointsTests
                 _completionObservationLagReads[responseId] = CompletionObservationLagReads;
             }
 
-            return Task.CompletedTask;
+            return Task.FromResult(new DispatchAdmission(
+                true,
+                $"{responseId}:completion",
+                DateTimeOffset.UtcNow,
+                sessionActorId,
+                $"{responseId}:completion"));
         }
 
         public Task ReceiveForwardedToolResultAsync(

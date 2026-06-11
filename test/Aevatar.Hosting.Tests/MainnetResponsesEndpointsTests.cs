@@ -140,7 +140,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenCompletionReadModelLags_ShouldWaitAndReturnCompletedResponse()
+    public async Task PostResponses_WithNonStreamingProviderCompletion_ShouldReturnCompletedResponse()
     {
         var provider = new RecordingLLMProvider
         {
@@ -153,10 +153,7 @@ public sealed class MainnetResponsesEndpointsTests
                 },
             ],
         };
-        var sessions = new RecordingResponseSessionStore
-        {
-            CompletionObservationLagReads = 1,
-        };
+        var sessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(provider, sessions);
         var client = app.GetTestClient();
 
@@ -178,6 +175,7 @@ public sealed class MainnetResponsesEndpointsTests
             .GetString()
             .Should()
             .Be("eventually visible");
+        sessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "eventually visible");
     }
 
     [Fact]
@@ -747,7 +745,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WithDuplicateResolvedToolResult_ShouldReturnWithoutCallingProvider()
+    public async Task PostResponses_WithDuplicateResolvedToolResult_ShouldReturnAcceptedWithoutCallingProvider()
     {
         var provider = new RecordingLLMProvider
         {
@@ -811,9 +809,12 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("output")[0].GetProperty("content")[0].GetProperty("text").GetString()
+        doc.RootElement.GetProperty("status").GetString()
             .Should()
-            .Be("""{"temperature":28}""");
+            .Be("in_progress");
+        doc.RootElement.GetProperty("output")[0].GetProperty("status").GetString()
+            .Should()
+            .Be("in_progress");
         provider.LastRequest.Should().BeNull();
         sessions.Registered.Should().ContainSingle()
             .Which.PreviousResponseId.Should().Be("resp_previous");
@@ -3180,7 +3181,6 @@ public sealed class MainnetResponsesEndpointsTests
         ILlmSessionQueryPort
     {
         private readonly Dictionary<string, LlmSessionSnapshot> _snapshots = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, int> _completionObservationLagReads = new(StringComparer.Ordinal);
 
         public List<LlmSessionRecord> Registered { get; } = [];
 
@@ -3193,8 +3193,6 @@ public sealed class MainnetResponsesEndpointsTests
         public List<(string ActorId, string ResponseId, string CallId, string SchemaHash, string ResultJson)> ToolResults { get; } = [];
 
         public List<(string ActorId, string ResponseId, string CallId)> ResolvedToolResults { get; } = [];
-
-        public int CompletionObservationLagReads { get; init; }
 
         public void Seed(LlmSessionSnapshot snapshot)
         {
@@ -3284,7 +3282,7 @@ public sealed class MainnetResponsesEndpointsTests
             return Task.CompletedTask;
         }
 
-        public Task RecordCompletionAsync(
+        public Task<DispatchAdmission> RecordCompletionAsync(
             string sessionActorId,
             string responseId,
             LlmSessionCompletion completion,
@@ -3320,12 +3318,12 @@ public sealed class MainnetResponsesEndpointsTests
                                 clone.Usage.TotalTokens)),
                 };
             }
-            if (CompletionObservationLagReads > 0)
-            {
-                _completionObservationLagReads[responseId] = CompletionObservationLagReads;
-            }
-
-            return Task.CompletedTask;
+            return Task.FromResult(new DispatchAdmission(
+                true,
+                $"{responseId}:completion",
+                DateTimeOffset.UtcNow,
+                sessionActorId,
+                $"{responseId}:completion"));
         }
 
         public Task ReceiveForwardedToolResultAsync(
@@ -3394,14 +3392,6 @@ public sealed class MainnetResponsesEndpointsTests
             CancellationToken ct = default)
         {
             _snapshots.TryGetValue(responseId, out var snapshot);
-            if (snapshot?.Completion is not null &&
-                _completionObservationLagReads.TryGetValue(responseId, out var remaining) &&
-                remaining > 0)
-            {
-                _completionObservationLagReads[responseId] = remaining - 1;
-                return Task.FromResult<LlmSessionSnapshot?>(snapshot with { Completion = null });
-            }
-
             return Task.FromResult(snapshot);
         }
 

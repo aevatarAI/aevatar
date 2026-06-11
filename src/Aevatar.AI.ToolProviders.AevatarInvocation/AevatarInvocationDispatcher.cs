@@ -170,6 +170,7 @@ public sealed class AevatarInvocationDispatcher
             var resolution = await _teamEntryMemberResolver.ResolveAsync(
                 scope.Value!.ScopeId,
                 request.TeamId.Trim(),
+                request.EndpointId.Trim(),
                 ct);
             var invocation = BuildStaticInvocationRequest(resolution, request);
             // Refactor (v1/issue1470-first): InvokeTeam wait=complete must return the dispatch receipt only;

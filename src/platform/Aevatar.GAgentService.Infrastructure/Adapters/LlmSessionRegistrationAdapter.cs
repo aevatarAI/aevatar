@@ -131,7 +131,7 @@ public sealed class LlmSessionRegistrationAdapter : ILlmSessionRegistrationPort
     // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
     //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
     //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
-    public async Task RecordCompletionAsync(
+    public async Task<DispatchAdmission> RecordCompletionAsync(
         string sessionActorId,
         string responseId,
         LlmSessionCompletion completion,
@@ -157,7 +157,7 @@ public sealed class LlmSessionRegistrationAdapter : ILlmSessionRegistrationPort
             }),
             envelopeId);
 
-        await _dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
+        return await _dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
     }
 
     public async Task ReceiveForwardedToolResultAsync(

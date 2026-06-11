@@ -275,11 +275,15 @@ public sealed class LlmSessionRegistrationAdapterTests
             },
         };
 
-        await adapter.RecordCompletionAsync("actor-1", "resp_1", completion);
+        var result = await adapter.RecordCompletionAsync("actor-1", "resp_1", completion);
 
         dispatch.Calls.Should().ContainSingle();
         dispatch.Calls[0].actorId.Should().Be("actor-1");
         dispatch.Calls[0].envelope.Payload.TypeUrl.Should().Contain("RecordResponseSessionCompletionRequested");
+        result.Should().Be(dispatch.Calls[0].admission);
+        result.ActorId.Should().Be("actor-1");
+        result.CommandId.Should().Be(dispatch.Calls[0].envelope.Id);
+        result.CorrelationId.Should().Be(dispatch.Calls[0].envelope.Propagation.CorrelationId);
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<RecordResponseSessionCompletionRequested>();
         packed.ResponseId.Should().Be("resp_1");
         packed.Completion.OutputText.Should().Be("forwarded done");
@@ -299,10 +303,19 @@ public sealed class LlmSessionRegistrationAdapterTests
             CompletedAt = preset,
         };
 
-        await adapter.RecordCompletionAsync("actor-1", "resp_1", completion);
+        var expectedAdmission = new DispatchAdmission(
+            false,
+            "dispatch-command-1",
+            DateTimeOffset.Parse("2026-04-02T00:00:00+00:00"),
+            "dispatch-actor-1",
+            "dispatch-correlation-1");
+        dispatch.NextAdmission = expectedAdmission;
+
+        var result = await adapter.RecordCompletionAsync("actor-1", "resp_1", completion);
 
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<RecordResponseSessionCompletionRequested>();
         packed.Completion.CompletedAt.Should().Be(preset);
+        result.Should().Be(expectedAdmission);
     }
 
     [Theory]
@@ -367,12 +380,16 @@ public sealed class LlmSessionRegistrationAdapterTests
 
     private sealed class RecordingDispatchPort : IActorDispatchPort
     {
-        public List<(string actorId, EventEnvelope envelope)> Calls { get; } = [];
+        public List<(string actorId, EventEnvelope envelope, DispatchAdmission admission)> Calls { get; } = [];
+
+        public DispatchAdmission? NextAdmission { get; set; }
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            Calls.Add((actorId, envelope));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+            var admission = NextAdmission ?? DispatchAdmissionFactory.Create(actorId, envelope);
+            NextAdmission = null;
+            Calls.Add((actorId, envelope, admission));
+            return Task.FromResult(admission);
         }
     }
     private sealed class RecordingActor : IActor

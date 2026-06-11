@@ -1,6 +1,8 @@
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -101,6 +103,44 @@ public sealed class ProjectionRuntimeRegistrationTests
         dispatchPort.Dispatched[1].actorId.Should().Be(ProjectionScopeActorId.Build(scopeKey));
         dispatchPort.Dispatched[1].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().SessionId
             .Should().Be("correlation-1");
+    }
+
+    [Fact]
+    public async Task AddProjectionMaterializationRuntimeCore_ShouldNotWriteObservationRelayFromActivationService()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var streamProvider = new RecordingStreamProvider();
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IStreamProvider>(streamProvider);
+
+        services.AddProjectionMaterializationRuntimeCore<
+            TestMaterializationContext,
+            TestMaterializationLease,
+            ProjectionMaterializationScopeGAgent<TestMaterializationContext>>(
+            scopeKey => new TestMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new TestMaterializationLease(context));
+
+        await using var provider = services.BuildServiceProvider();
+        var activation = provider.GetRequiredService<IProjectionScopeActivationService<TestMaterializationLease>>();
+
+        await activation.EnsureAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = "actor-relay",
+            ProjectionKind = "projection-relay",
+            Mode = ProjectionRuntimeMode.DurableMaterialization,
+        });
+
+        streamProvider.Streams.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().ContainSingle();
+        var command = dispatchPort.Dispatched[0].command.Payload!.Unpack<EnsureProjectionScopeCommand>();
+        command.RootActorId.Should().Be("actor-relay");
     }
 
     [Fact]
@@ -308,7 +348,7 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         lease.Should().NotBeNull();
         lease!.Context.RootActorId.Should().Be("actor-session");
-        lease.SessionId.Should().Be("session-lookup");
+        lease.Context.SessionId.Should().Be("session-lookup");
         runtime.CreatedActorIds.Should().BeEmpty();
         dispatchPort.Dispatched.Should().BeEmpty();
     }
@@ -404,6 +444,69 @@ public sealed class ProjectionRuntimeRegistrationTests
         {
             Dispatched.Add((actorId, envelope));
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed class RecordingStreamProvider : IStreamProvider
+    {
+        public Dictionary<string, RecordingStream> Streams { get; } = new(StringComparer.Ordinal);
+
+        public IStream GetStream(string actorId)
+        {
+            if (!Streams.TryGetValue(actorId, out var stream))
+            {
+                stream = new RecordingStream(actorId);
+                Streams[actorId] = stream;
+            }
+
+            return stream;
+        }
+    }
+
+    private sealed class RecordingStream(string streamId) : IStream
+    {
+        public string StreamId { get; } = streamId;
+
+        public List<StreamForwardingBinding> UpsertedRelays { get; } = [];
+
+        public Task ProduceAsync<T>(T message, CancellationToken ct = default)
+            where T : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
+            where T : IMessage, new()
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = handler;
+            return Task.FromResult<IAsyncDisposable>(new NoOpSubscription());
+        }
+
+        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            UpsertedRelays.Add(binding);
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = targetStreamId;
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>(UpsertedRelays);
+        }
+
+        private sealed class NoOpSubscription : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 
