@@ -56,7 +56,6 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetRequiredService<IWorkflowDefinitionParser>(),
             sp.GetService<IStudioWorkspaceQueryPort>(),
             sp.GetService<IStudioWorkspaceCommandPort>(),
-            sp.GetService<IStudioMemberCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
         services.AddSingleton(sp => new AppScopedScriptService(
             sp.GetRequiredService<IHttpClientFactory>(),
