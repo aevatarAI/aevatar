@@ -275,26 +275,15 @@ public sealed class LlmSessionRegistrationAdapterTests
             },
         };
 
-<<<<<<< HEAD
         var admission = await adapter.RecordCompletionAsync("actor-1", "resp_1", completion);
-=======
-        var result = await adapter.RecordCompletionAsync("actor-1", "resp_1", completion);
->>>>>>> origin/auto-refact-dev
 
         dispatch.Calls.Should().ContainSingle();
         dispatch.Calls[0].actorId.Should().Be("actor-1");
         dispatch.Calls[0].envelope.Payload.TypeUrl.Should().Contain("RecordResponseSessionCompletionRequested");
-<<<<<<< HEAD
         admission.Accepted.Should().BeTrue();
         admission.ActorId.Should().Be("actor-1");
         admission.CommandId.Should().Be("resp_1:completion");
         admission.CorrelationId.Should().Be("resp_1:completion");
-=======
-        result.Should().Be(dispatch.Calls[0].admission);
-        result.ActorId.Should().Be("actor-1");
-        result.CommandId.Should().Be(dispatch.Calls[0].envelope.Id);
-        result.CorrelationId.Should().Be(dispatch.Calls[0].envelope.Propagation.CorrelationId);
->>>>>>> origin/auto-refact-dev
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<RecordResponseSessionCompletionRequested>();
         packed.ResponseId.Should().Be("resp_1");
         packed.Completion.OutputText.Should().Be("forwarded done");

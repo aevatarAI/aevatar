@@ -773,11 +773,7 @@ public sealed class ResponsesCommandFacade(
                 session.ResponseId,
                 completion,
                 ct);
-<<<<<<< HEAD
             return CompletionRecordResult.FromAdmission(admission);
-=======
-            return CompletionRecordResult.FromAccepted(admission);
->>>>>>> origin/auto-refact-dev
         }
         catch (OperationCanceledException)
         {
@@ -1109,10 +1105,6 @@ public sealed class ResponsesCommandFacade(
     {
         public static CompletionRecordResult FromError(ResponsesCommandError error) => new(error, null);
 
-<<<<<<< HEAD
         public static CompletionRecordResult FromAdmission(DispatchAdmission admission) => new(null, admission);
-=======
-        public static CompletionRecordResult FromAccepted(DispatchAdmission admission) => new(null, admission);
->>>>>>> origin/auto-refact-dev
     }
 }

@@ -1139,23 +1139,9 @@ public sealed class MainnetMessagesEndpointsTests
                                 clone.Usage.TotalTokens)),
                 };
             }
-<<<<<<< HEAD
             return Task.FromResult(DispatchAdmissionFactory.Create(
                 sessionActorId,
                 new EventEnvelope { Id = $"{responseId}:completion" }));
-=======
-            if (CompletionObservationLagReads > 0)
-            {
-                _completionObservationLagReads[responseId] = CompletionObservationLagReads;
-            }
-
-            return Task.FromResult(new DispatchAdmission(
-                true,
-                $"{responseId}:completion",
-                DateTimeOffset.UtcNow,
-                sessionActorId,
-                $"{responseId}:completion"));
->>>>>>> origin/auto-refact-dev
         }
 
         public Task ReceiveForwardedToolResultAsync(

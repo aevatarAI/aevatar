@@ -360,18 +360,9 @@ public sealed class MessagesCommandFacadeTests
             CancellationToken ct = default)
         {
             RecordedCompletions.Add(completion.Clone());
-<<<<<<< HEAD
             return Task.FromResult(DispatchAdmissionFactory.Create(
                 sessionActorId,
                 new EventEnvelope { Id = $"{responseId}:completion" }));
-=======
-            return Task.FromResult(new DispatchAdmission(
-                true,
-                $"{responseId}:completion",
-                DateTimeOffset.UtcNow,
-                sessionActorId,
-                $"{responseId}:completion"));
->>>>>>> origin/auto-refact-dev
         }
 
         public Task ReceiveForwardedToolResultAsync(

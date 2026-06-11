@@ -866,18 +866,9 @@ public sealed class ResponsesCommandFacadeTests
             QueryPort.Snapshot = QueryPort.Snapshot is null
                 ? BuildSnapshot(responseId, "scope-1", LlmSessionStatus.Completed) with { Completion = ToSnapshot(completion) }
                 : QueryPort.Snapshot with { Completion = ToSnapshot(completion) };
-<<<<<<< HEAD
             return Task.FromResult(DispatchAdmissionFactory.Create(
                 sessionActorId,
                 new EventEnvelope { Id = $"{responseId}:completion" }));
-=======
-            return Task.FromResult(new DispatchAdmission(
-                true,
-                $"{responseId}:completion",
-                DateTimeOffset.UtcNow,
-                sessionActorId,
-                $"{responseId}:completion"));
->>>>>>> origin/auto-refact-dev
         }
 
         public Task ReceiveForwardedToolResultAsync(

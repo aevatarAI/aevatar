@@ -140,11 +140,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-<<<<<<< HEAD
     public async Task PostResponses_WhenCompletionReadModelLags_ShouldReturnAcceptedResponseWithoutPolling()
-=======
-    public async Task PostResponses_WithNonStreamingProviderCompletion_ShouldReturnCompletedResponse()
->>>>>>> origin/auto-refact-dev
     {
         var provider = new RecordingLLMProvider
         {
@@ -158,11 +154,7 @@ public sealed class MainnetResponsesEndpointsTests
             ],
         };
         var sessions = new RecordingResponseSessionStore();
-<<<<<<< HEAD
         await using var app = await CreateAppAsync(provider, sessions, completeNonStreaming: false);
-=======
-        await using var app = await CreateAppAsync(provider, sessions);
->>>>>>> origin/auto-refact-dev
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
@@ -176,7 +168,6 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
-<<<<<<< HEAD
         doc.RootElement.GetProperty("status").GetString().Should().Be("in_progress");
         var output = doc.RootElement.GetProperty("output");
         output.GetArrayLength().Should().Be(1);
@@ -184,16 +175,6 @@ public sealed class MainnetResponsesEndpointsTests
         output[0].GetProperty("content").GetArrayLength().Should().Be(0);
         provider.LastRequest.Should().BeNull();
         sessions.RecordedCompletions.Should().BeEmpty();
-=======
-        doc.RootElement.GetProperty("status").GetString().Should().Be("completed");
-        doc.RootElement.GetProperty("output")[0]
-            .GetProperty("content")[0]
-            .GetProperty("text")
-            .GetString()
-            .Should()
-            .Be("eventually visible");
-        sessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "eventually visible");
->>>>>>> origin/auto-refact-dev
     }
 
     [Fact]
@@ -827,20 +808,11 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
-<<<<<<< HEAD
         doc.RootElement.GetProperty("status").GetString().Should().Be("in_progress");
         var output = doc.RootElement.GetProperty("output");
         output.GetArrayLength().Should().Be(1);
         output[0].GetProperty("status").GetString().Should().Be("in_progress");
         output[0].GetProperty("content").GetArrayLength().Should().Be(0);
-=======
-        doc.RootElement.GetProperty("status").GetString()
-            .Should()
-            .Be("in_progress");
-        doc.RootElement.GetProperty("output")[0].GetProperty("status").GetString()
-            .Should()
-            .Be("in_progress");
->>>>>>> origin/auto-refact-dev
         provider.LastRequest.Should().BeNull();
         sessions.Registered.Should().ContainSingle()
             .Which.PreviousResponseId.Should().Be("resp_previous");
@@ -3348,18 +3320,9 @@ public sealed class MainnetResponsesEndpointsTests
                                 clone.Usage.TotalTokens)),
                 };
             }
-<<<<<<< HEAD
             return Task.FromResult(DispatchAdmissionFactory.Create(
                 sessionActorId,
                 new EventEnvelope { Id = $"{responseId}:completion" }));
-=======
-            return Task.FromResult(new DispatchAdmission(
-                true,
-                $"{responseId}:completion",
-                DateTimeOffset.UtcNow,
-                sessionActorId,
-                $"{responseId}:completion"));
->>>>>>> origin/auto-refact-dev
         }
 
         public Task ReceiveForwardedToolResultAsync(
