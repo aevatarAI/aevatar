@@ -68,6 +68,7 @@ public static partial class ServiceEndpoints
                 DisplayName = request.DisplayName ?? string.Empty,
                 Endpoints = { request.Endpoints.Select(ToEndpointSpec) },
                 PolicyIds = { request.PolicyIds ?? [] },
+                ExternalExposure = ToExternalExposureSpec(request.ExternalExposure),
             },
         }, ct);
         return Results.Accepted($"/api/services/{identity.ServiceId}", receipt);
@@ -555,6 +556,7 @@ public static partial class ServiceEndpoints
             service.Endpoints,
             service.PolicyIds,
             service.UpdatedAt,
+            service.ExternalExposure,
             ready,
             status.ToString(),
             reason);
@@ -599,6 +601,17 @@ public static partial class ServiceEndpoints
             Description = request.Description ?? string.Empty,
         };
 
+    private static ServiceExternalExposureSpec? ToExternalExposureSpec(ServiceExternalExposureHttpRequest? request)
+    {
+        if (string.IsNullOrWhiteSpace(request?.NyxIdSlug))
+            return null;
+
+        return new ServiceExternalExposureSpec
+        {
+            NyxIdSlug = request.NyxIdSlug.Trim(),
+        };
+    }
+
     private static ServiceImplementationKind ParseImplementationKind(string? rawValue)
     {
         return rawValue?.Trim().ToLowerInvariant() switch
@@ -641,6 +654,7 @@ public static partial class ServiceEndpoints
         IReadOnlyList<ServiceEndpointSnapshot> Endpoints,
         IReadOnlyList<string> PolicyIds,
         DateTimeOffset UpdatedAt,
+        ServiceExternalExposureSnapshot? ExternalExposure,
         bool InvokeReady,
         string InvokeReadinessStatus,
         string? InvokeUnavailableReason);
@@ -665,7 +679,11 @@ public static partial class ServiceEndpoints
         string ServiceId,
         string DisplayName,
         IReadOnlyList<ServiceEndpointHttpRequest> Endpoints,
-        IReadOnlyList<string>? PolicyIds = null);
+        IReadOnlyList<string>? PolicyIds = null,
+        ServiceExternalExposureHttpRequest? ExternalExposure = null);
+
+    public sealed record ServiceExternalExposureHttpRequest(
+        string? NyxIdSlug);
 
     public sealed record StaticRevisionHttpRequest(
         string ActorTypeName,

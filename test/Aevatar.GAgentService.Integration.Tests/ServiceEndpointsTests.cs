@@ -44,7 +44,8 @@ public sealed class ServiceEndpointsTests
                     "type.googleapis.com/demo.Submit",
                     string.Empty,
                     "submit command"),
-            ]));
+            ],
+            ExternalExposure: new ServiceEndpoints.ServiceExternalExposureHttpRequest(" orders-agent ")));
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
         host.CommandPort.CreateServiceCommand.Should().NotBeNull();
@@ -57,6 +58,8 @@ public sealed class ServiceEndpointsTests
         });
         host.CommandPort.CreateServiceCommand.Spec.Endpoints.Should().ContainSingle();
         host.CommandPort.CreateServiceCommand.Spec.Endpoints[0].Kind.Should().Be(ServiceEndpointKind.Command);
+        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.Should().NotBeNull();
+        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure!.NyxIdSlug.Should().Be("orders-agent");
     }
 
     [Fact]
@@ -492,7 +495,8 @@ public sealed class ServiceEndpointsTests
                     new ServiceEndpointSnapshot("submit", "Submit", "command", "req", string.Empty, "desc"),
                 ],
                 [],
-                DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")),
+                DateTimeOffset.Parse("2026-03-14T00:00:00+00:00"),
+                new ServiceExternalExposureSnapshot("orders-agent")),
             new ServiceCatalogSnapshot(
                 "tenant/app/ns/billing",
                 "tenant",
@@ -572,6 +576,8 @@ public sealed class ServiceEndpointsTests
 
         listResponse.Should().HaveCount(3);
         listResponse!.Single(x => x.ServiceId == "orders").InvokeReady.Should().BeTrue();
+        listResponse.Single(x => x.ServiceId == "orders").ExternalExposure.Should().NotBeNull();
+        listResponse.Single(x => x.ServiceId == "orders").ExternalExposure!.NyxIdSlug.Should().Be("orders-agent");
         listResponse.Single(x => x.ServiceId == "orders").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         listResponse.Single(x => x.ServiceId == "orders").InvokeUnavailableReason.Should().BeNull();
         listResponse.Single(x => x.ServiceId == "billing").InvokeReady.Should().BeFalse();
@@ -581,6 +587,8 @@ public sealed class ServiceEndpointsTests
         listResponse.Single(x => x.ServiceId == "search").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unspecified.ToString());
         listResponse.Single(x => x.ServiceId == "search").InvokeUnavailableReason.Should().BeNull();
         getResponse!.ServiceId.Should().Be("orders");
+        getResponse.ExternalExposure.Should().NotBeNull();
+        getResponse.ExternalExposure!.NyxIdSlug.Should().Be("orders-agent");
         getResponse.InvokeReady.Should().BeTrue();
         getResponse.InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         getResponse.InvokeUnavailableReason.Should().BeNull();

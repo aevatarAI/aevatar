@@ -11,6 +11,11 @@ message ServiceDefinitionSpec {
   string display_name = 2;
   repeated ServiceEndpointSpec endpoints = 3;
   repeated string policy_ids = 4;
+  ServiceExternalExposureSpec external_exposure = 5;
+}
+
+message ServiceExternalExposureSpec {
+  string nyx_id_slug = 1;
 }
 
 message ServiceDefinitionState {

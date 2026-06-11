@@ -120,6 +120,15 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
                     x.Description))
                 .ToList(),
             [.. readModel.PolicyIds],
-            readModel.UpdatedAt);
+            readModel.UpdatedAt,
+            MapExternalExposure(readModel.ExternalExposure));
+    }
+
+    private static ServiceExternalExposureSnapshot? MapExternalExposure(ServiceExternalExposureReadModel? exposure)
+    {
+        if (string.IsNullOrWhiteSpace(exposure?.NyxIdSlug))
+            return null;
+
+        return new ServiceExternalExposureSnapshot(exposure.NyxIdSlug);
     }
 }

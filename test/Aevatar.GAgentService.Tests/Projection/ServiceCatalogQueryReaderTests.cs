@@ -22,6 +22,10 @@ public sealed class ServiceCatalogQueryReaderTests
             Namespace = "default",
             ServiceId = "svc",
             DisplayName = "Service",
+            ExternalExposure = new ServiceExternalExposureReadModel
+            {
+                NyxIdSlug = "orders-agent",
+            },
             Endpoints =
             {
                 new ServiceCatalogEndpointReadModel
@@ -41,6 +45,8 @@ public sealed class ServiceCatalogQueryReaderTests
         snapshot.Should().NotBeNull();
         snapshot!.ServiceKey.Should().Be("tenant:app:default:svc");
         snapshot.Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        snapshot.ExternalExposure.Should().NotBeNull();
+        snapshot.ExternalExposure!.NyxIdSlug.Should().Be("orders-agent");
     }
 
     [Fact]

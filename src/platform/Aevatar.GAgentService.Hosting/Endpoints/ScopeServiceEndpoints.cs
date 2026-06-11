@@ -307,7 +307,8 @@ public static class ScopeServiceEndpoints
                 null,
                 [],
                 0,
-                string.Empty));
+                string.Empty,
+                null));
         }
 
         var revisions = await lifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);
@@ -2404,7 +2405,8 @@ public static class ScopeServiceEndpoints
             service.UpdatedAt,
             revisionSnapshots,
             revisions?.StateVersion ?? 0,
-            revisions?.LastEventId ?? string.Empty);
+            revisions?.LastEventId ?? string.Empty,
+            service.ExternalExposure);
     }
 
     private static async Task<IReadOnlyList<ScopeServiceHttpResponse>> JoinScopeInvokeReadinessAsync(
@@ -2449,6 +2451,7 @@ public static class ScopeServiceEndpoints
                 service.Endpoints,
                 service.PolicyIds,
                 service.UpdatedAt,
+                service.ExternalExposure,
                 ready,
                 status.ToString(),
                 reason));
@@ -3530,7 +3533,8 @@ const response = await fetch("{{invokePath}}", {
         DateTimeOffset? UpdatedAt,
         IReadOnlyList<ScopeBindingRevisionHttpResponse> Revisions,
         long CatalogStateVersion = 0,
-        string CatalogLastEventId = "");
+        string CatalogLastEventId = "",
+        ServiceExternalExposureSnapshot? ExternalExposure = null);
 
     public sealed record MemberPublishedServiceHttpResponse(
         string ScopeId,
@@ -3586,6 +3590,7 @@ const response = await fetch("{{invokePath}}", {
         IReadOnlyList<ServiceEndpointSnapshot> Endpoints,
         IReadOnlyList<string> PolicyIds,
         DateTimeOffset UpdatedAt,
+        ServiceExternalExposureSnapshot? ExternalExposure,
         bool InvokeReady,
         string InvokeReadinessStatus,
         string? InvokeUnavailableReason);

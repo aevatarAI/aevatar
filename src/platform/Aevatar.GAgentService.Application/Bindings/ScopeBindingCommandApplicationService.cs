@@ -80,6 +80,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             var updateSpec = CloneServiceDefinition(desiredBinding.ServiceDefinition);
             updateSpec.PolicyIds.Add(existingService.PolicyIds);
+            updateSpec.ExternalExposure ??= ToExternalExposureSpec(existingService.ExternalExposure);
             await _serviceCommandPort.UpdateServiceAsync(new UpdateServiceDefinitionCommand
             {
                 Spec = updateSpec,
@@ -579,6 +580,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (!string.Equals(existingService.DisplayName, desiredDefinition.DisplayName, StringComparison.Ordinal))
             return true;
 
+        if (desiredDefinition.ExternalExposure != null &&
+            !ServiceExternalExposureEquals(existingService.ExternalExposure, desiredDefinition.ExternalExposure))
+        {
+            return true;
+        }
+
         var existingEndpoints = existingService.Endpoints
             .OrderBy(x => x.EndpointId, StringComparer.Ordinal)
             .ToArray();
@@ -604,12 +611,33 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         return false;
     }
 
+    private static bool ServiceExternalExposureEquals(
+        ServiceExternalExposureSnapshot? existingExposure,
+        ServiceExternalExposureSpec? desiredExposure)
+    {
+        var existingSlug = existingExposure?.NyxIdSlug ?? string.Empty;
+        var desiredSlug = desiredExposure?.NyxIdSlug ?? string.Empty;
+        return string.Equals(existingSlug, desiredSlug, StringComparison.Ordinal);
+    }
+
+    private static ServiceExternalExposureSpec? ToExternalExposureSpec(ServiceExternalExposureSnapshot? source)
+    {
+        if (source == null)
+            return null;
+
+        return new ServiceExternalExposureSpec
+        {
+            NyxIdSlug = source.NyxIdSlug,
+        };
+    }
+
     private static ServiceDefinitionSpec CloneServiceDefinition(ServiceDefinitionSpec source)
     {
         var clone = new ServiceDefinitionSpec
         {
             Identity = source.Identity.Clone(),
             DisplayName = source.DisplayName,
+            ExternalExposure = source.ExternalExposure?.Clone(),
         };
         clone.Endpoints.Add(source.Endpoints.Select(CloneEndpointSpec));
         clone.PolicyIds.Add(source.PolicyIds);

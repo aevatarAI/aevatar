@@ -312,7 +312,8 @@ public sealed class ScopeServiceEndpointsTests
                         "Run command"),
                 ],
                 [],
-                DateTimeOffset.UtcNow),
+                DateTimeOffset.UtcNow,
+                new ServiceExternalExposureSnapshot("orders-agent")),
             new ServiceCatalogSnapshot(
                 "scope-a:default:default:billing",
                 "scope-a",
@@ -418,6 +419,8 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().NotBeNull();
         body!.Should().HaveCount(4);
         body.Single(x => x.ServiceId == "orders").Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        body.Single(x => x.ServiceId == "orders").ExternalExposure.Should().NotBeNull();
+        body.Single(x => x.ServiceId == "orders").ExternalExposure!.NyxIdSlug.Should().Be("orders-agent");
         body.Single(x => x.ServiceId == "orders").InvokeReady.Should().BeTrue();
         body.Single(x => x.ServiceId == "orders").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         body.Single(x => x.ServiceId == "orders").InvokeUnavailableReason.Should().BeNull();

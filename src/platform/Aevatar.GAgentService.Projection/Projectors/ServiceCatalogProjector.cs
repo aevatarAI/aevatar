@@ -49,6 +49,7 @@ public sealed class ServiceCatalogProjector
             DefaultServingRevisionId = state.DefaultServingRevisionId ?? string.Empty,
             Endpoints = state.Spec.Endpoints.Select(MapEndpoint).ToList(),
             PolicyIds = [.. state.Spec.PolicyIds],
+            ExternalExposure = MapExternalExposure(state.Spec.ExternalExposure),
         };
         ApplyIdentity(readModel, state.Spec.Identity);
         ApplyProjectionStamp(readModel, context.RootActorId, eventId, stateVersion, observedAt);
@@ -87,4 +88,15 @@ public sealed class ServiceCatalogProjector
             ResponseTypeUrl = endpoint.ResponseTypeUrl ?? string.Empty,
             Description = endpoint.Description ?? string.Empty,
         };
+
+    private static ServiceExternalExposureReadModel? MapExternalExposure(ServiceExternalExposureSpec? exposure)
+    {
+        if (string.IsNullOrWhiteSpace(exposure?.NyxIdSlug))
+            return null;
+
+        return new ServiceExternalExposureReadModel
+        {
+            NyxIdSlug = exposure.NyxIdSlug,
+        };
+    }
 }
