@@ -16,6 +16,26 @@ namespace Aevatar.AI.LLMProviders.NyxId;
 public sealed class NyxIdLLMProvider : ILLMProvider
 {
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1/";
+    private static readonly LLMProviderCapabilities ProviderCapabilities = new()
+    {
+        SupportedInputModalities = new HashSet<ContentPartKind>
+        {
+            ContentPartKind.Text,
+            ContentPartKind.Image,
+            ContentPartKind.Audio,
+            ContentPartKind.Video,
+        },
+        SupportedOutputModalities = new HashSet<ContentPartKind>
+        {
+            ContentPartKind.Text,
+            ContentPartKind.Image,
+            ContentPartKind.Audio,
+            ContentPartKind.Video,
+        },
+        SupportsStreaming = true,
+        SupportsToolCalls = true,
+        SupportsReasoningDeltas = true,
+    };
 
     private readonly string _defaultModel;
     private readonly Uri _defaultNyxEndpoint;
@@ -46,6 +66,8 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     }
 
     public string Name { get; }
+
+    public LLMProviderCapabilities Capabilities => ProviderCapabilities;
 
     // Refactor (iter18/cluster-001):
     //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路

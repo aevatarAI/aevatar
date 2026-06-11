@@ -149,6 +149,7 @@ public sealed class AgentRunToolStepInteractiveReplyTests
             LLMControlContext? llmControl,
             AgentToolExecutionContext? toolContext,
             IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+            ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
             CancellationToken ct) =>
             Task.FromResult(plan);
