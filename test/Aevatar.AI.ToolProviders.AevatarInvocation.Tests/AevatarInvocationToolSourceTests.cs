@@ -23,7 +23,7 @@ namespace Aevatar.AI.ToolProviders.AevatarInvocation.Tests;
 public sealed class AevatarInvocationToolSourceTests
 {
     [Fact]
-    public async Task AddAevatarInvocationTools_ShouldRegisterFiveTaggedToolSources()
+    public async Task AddAevatarInvocationTools_ShouldRegisterFourTaggedToolSources()
     {
         var services = new ServiceCollection();
         var harness = new Harness();
@@ -39,7 +39,6 @@ public sealed class AevatarInvocationToolSourceTests
         sources.OfType<InvokeTeamToolSource>().Should().ContainSingle();
         sources.OfType<StartWorkflowToolSource>().Should().ContainSingle();
         sources.OfType<ObserveRunToolSource>().Should().ContainSingle();
-        sources.OfType<QueryReadModelToolSource>().Should().ContainSingle();
 
         var tools = new List<IAgentTool>();
         foreach (var source in sources)
@@ -49,8 +48,7 @@ public sealed class AevatarInvocationToolSourceTests
             "aevatar_invoke_gagent",
             "aevatar_invoke_team",
             "aevatar_start_workflow",
-            "aevatar_observe_run",
-            "aevatar_query_readmodel");
+            "aevatar_observe_run");
         tools.All(static tool => tool is IAevatarInvocationTool invocationTool &&
                                  invocationTool.ToolSetTag == AevatarInvocationToolTags.ToolSet)
             .Should()
@@ -82,33 +80,11 @@ public sealed class AevatarInvocationToolSourceTests
         tool.Description.Should().Contain("use_skill");
     }
 
-    [Fact]
-    public async Task QueryReadModelSchema_ShouldExposeClosedReadModelSet()
-    {
-        var tool = await DiscoverSingleAsync(new QueryReadModelToolSource(new Harness().CreateDispatcher()));
-        using var doc = JsonDocument.Parse(tool.ParametersSchema);
-
-        var values = doc.RootElement
-            .GetProperty("properties")
-            .GetProperty("readmodel_name")
-            .GetProperty("enum")
-            .EnumerateArray()
-            .Select(static item => item.GetString())
-            .ToArray();
-
-        values.Should().BeEquivalentTo(
-            "service_run_current_state",
-            "gagent_run_terminal",
-            "workflow_actor_current_state",
-            "workflow_actor_timeline");
-    }
-
     [Theory]
     [InlineData("aevatar_invoke_gagent", "{}")]
     [InlineData("aevatar_invoke_team", """{"team_id":"team"}""")]
     [InlineData("aevatar_start_workflow", """{"workflow_id":"wf"}""")]
     [InlineData("aevatar_observe_run", "{}")]
-    [InlineData("aevatar_query_readmodel", """{"readmodel_name":"service_run_current_state"}""")]
     public async Task Tools_ShouldReturnStructuredValidationError(string toolName, string argumentsJson)
     {
         var harness = new Harness();
@@ -916,48 +892,13 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task QueryReadModel_ShouldUseClosedServiceRunReaderWithCallerScope()
+    public async Task AevatarInvocationTools_ShouldNotExposeGenericReadModelQueryWrapper()
     {
         var harness = new Harness();
-        harness.ServiceRunQuery.ListResult =
-        [
-            BuildServiceRun("scope-1", "service-1", "run-1", "command-1"),
-        ];
-        var tool = await harness.DiscoverToolAsync("aevatar_query_readmodel");
 
-        using var _ = PushContext(callId: "call-query");
-        var output = await tool.ExecuteAsync("""
-            {
-              "readmodel_name": "service_run_current_state",
-              "query": {
-                "service_id": "service-1",
-                "take": 10
-              }
-            }
-            """);
+        var tools = await harness.DiscoverAllToolsAsync();
 
-        ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.ServiceRunQuery.LastQuery.Should().Be(new ServiceRunQuery("scope-1", "service-1", 10));
-        var result = Read(output);
-        result.GetProperty("readmodel_name").GetString().Should().Be("service_run_current_state");
-        result.GetProperty("count").GetInt32().Should().Be(1);
-    }
-
-    [Fact]
-    public async Task QueryReadModel_WhenNameIsNotRegistered_ShouldReturnStructuredError()
-    {
-        var harness = new Harness();
-        var tool = await harness.DiscoverToolAsync("aevatar_query_readmodel");
-
-        using var _ = PushContext(callId: "call-query-missing");
-        var output = await tool.ExecuteAsync("""
-            {
-              "readmodel_name": "arbitrary_collection",
-              "query": { "id": "1" }
-            }
-            """);
-
-        ErrorCode(output).Should().Be("readmodel_not_registered");
+        tools.Select(static tool => tool.Name).Should().NotContain("aevatar_query_readmodel");
     }
 
     private static bool HasStrictObjectSchema(string schema)
@@ -1151,11 +1092,25 @@ public sealed class AevatarInvocationToolSourceTests
                 "aevatar_invoke_team" => new InvokeTeamToolSource(CreateDispatcher()),
                 "aevatar_start_workflow" => new StartWorkflowToolSource(CreateDispatcher()),
                 "aevatar_observe_run" => new ObserveRunToolSource(CreateDispatcher()),
-                "aevatar_query_readmodel" => new QueryReadModelToolSource(CreateDispatcher()),
                 _ => throw new ArgumentOutOfRangeException(nameof(toolName), toolName, null),
             };
             var tools = await source.DiscoverToolsAsync();
             return tools.Single(tool => tool.Name == toolName);
+        }
+
+        public async Task<IReadOnlyList<IAgentTool>> DiscoverAllToolsAsync()
+        {
+            IAgentToolSource[] sources =
+            [
+                new InvokeGAgentToolSource(CreateDispatcher()),
+                new InvokeTeamToolSource(CreateDispatcher()),
+                new StartWorkflowToolSource(CreateDispatcher()),
+                new ObserveRunToolSource(CreateDispatcher()),
+            ];
+            var tools = new List<IAgentTool>();
+            foreach (var source in sources)
+                tools.AddRange(await source.DiscoverToolsAsync());
+            return tools;
         }
     }
 

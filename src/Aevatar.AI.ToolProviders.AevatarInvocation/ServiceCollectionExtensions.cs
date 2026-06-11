@@ -15,7 +15,6 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, InvokeTeamToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, StartWorkflowToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, ObserveRunToolSource>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, QueryReadModelToolSource>());
         return services;
     }
 }

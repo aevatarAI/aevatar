@@ -14,7 +14,6 @@ using Aevatar.AGUI.Contracts;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
-using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -41,15 +40,6 @@ public sealed class AevatarInvocationDispatcher
         LLMRequestMetadataKeys.ConnectedServicesContext,
         "scope_id",
     ];
-
-    private static readonly JsonFormatter ProtoJsonFormatter = new(
-        JsonFormatter.Settings.Default
-            .WithFormatDefaultValues(false)
-            .WithTypeRegistry(TypeRegistry.FromFiles(
-                AGUIEvent.Descriptor.File,
-                AnyReflection.Descriptor,
-                StructReflection.Descriptor,
-                WrappersReflection.Descriptor)));
 
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IGAgentActorRegistryQueryPort _actorRegistryQueryPort;
@@ -328,35 +318,6 @@ public sealed class AevatarInvocationDispatcher
         });
     }
 
-    public async Task<string> QueryReadModelAsync(string argumentsJson, CancellationToken ct = default)
-    {
-        var parsed = ProtoToolArguments.Parse<QueryReadModelToolRequest>(argumentsJson);
-        if (parsed.Error != null)
-            return AevatarInvocationJson.Error(parsed.Error);
-
-        var request = parsed.Value!;
-        var error = ProtoToolArguments.Require(request.ReadmodelName, "readmodel_name", "readmodel_name is required.") ??
-                    ProtoToolArguments.RequireMessage(request.Query, "query");
-        if (error != null)
-            return AevatarInvocationJson.Error(error);
-
-        return request.ReadmodelName.Trim() switch
-        {
-            AevatarInvocationReadModels.ServiceRunCurrentState => await QueryServiceRunAsync(request.Query, ct),
-            AevatarInvocationReadModels.GAgentRunTerminal => await QueryGAgentRunTerminalAsync(request.Query, ct),
-            AevatarInvocationReadModels.WorkflowActorCurrentState => await QueryWorkflowActorSnapshotAsync(request.Query, ct),
-            AevatarInvocationReadModels.WorkflowActorTimeline => await QueryWorkflowActorTimelineAsync(request.Query, ct),
-            _ => AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = request.ReadmodelName,
-                Error = Error(
-                    "readmodel_not_registered",
-                    $"readmodel_name must be one of: {string.Join(", ", AevatarInvocationToolSchemas.ReadModelNames)}",
-                    "readmodel_name"),
-            }),
-        };
-    }
-
     private async Task<ChatRunToolCompletionRequest> InvokeTeamToAcceptanceAsync(
         ChatRunToolCompletionRequest? chatRunRequest,
         StaticGAgentStreamInvocationRequest invocation,
@@ -613,146 +574,6 @@ public sealed class AevatarInvocationDispatcher
         }
 
         return ActorTargetResolution.Success(group.ActorIds[0]);
-    }
-
-    private async Task<string> QueryServiceRunAsync(ReadModelQuery query, CancellationToken ct)
-    {
-        var scope = ResolveCallerScope(requireOwner: false);
-        if (scope.Error != null)
-            return AevatarInvocationJson.Error(scope.Error);
-
-        if (string.IsNullOrWhiteSpace(query.ServiceId))
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.ServiceRunCurrentState,
-                Error = Error("invalid_arguments", "query.service_id is required.", "query.service_id"),
-            });
-        }
-
-        ServiceRunSnapshot? one = null;
-        if (!string.IsNullOrWhiteSpace(query.RunId))
-        {
-            one = await _serviceRunQueryPort.GetByRunIdAsync(
-                scope.Value!.ScopeId,
-                query.ServiceId.Trim(),
-                query.RunId.Trim(),
-                ct);
-        }
-        else if (!string.IsNullOrWhiteSpace(query.CommandId))
-        {
-            one = await _serviceRunQueryPort.GetByCommandIdAsync(
-                scope.Value!.ScopeId,
-                query.ServiceId.Trim(),
-                query.CommandId.Trim(),
-                ct);
-        }
-
-        if (one != null)
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.ServiceRunCurrentState,
-                ResultJson = AevatarInvocationJson.ToJson(one),
-                Count = 1,
-            });
-        }
-
-        var items = await _serviceRunQueryPort.ListAsync(
-            new ServiceRunQuery(
-                scope.Value!.ScopeId,
-                query.ServiceId.Trim(),
-                BoundTake(query.Take)),
-            ct);
-        return AevatarInvocationJson.Serialize(new QueryReadModelResult
-        {
-            ReadmodelName = AevatarInvocationReadModels.ServiceRunCurrentState,
-            ResultJson = AevatarInvocationJson.ToJson(items),
-            Count = items.Count,
-        });
-    }
-
-    private async Task<string> QueryGAgentRunTerminalAsync(ReadModelQuery query, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(query.ActorId))
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.GAgentRunTerminal,
-                Error = Error("invalid_arguments", "query.actor_id is required.", "query.actor_id"),
-            });
-        }
-
-        var correlationId = FirstNonEmpty(query.CommandId, query.RunId, query.Id);
-        if (string.IsNullOrWhiteSpace(correlationId))
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.GAgentRunTerminal,
-                Error = Error("invalid_arguments", "query.command_id, query.run_id, or query.id is required.", "query.run_id"),
-            });
-        }
-
-        var snapshot = await _terminalQueryPort.GetByCorrelationIdAsync(
-            query.ActorId.Trim(),
-            correlationId!,
-            ct);
-        return AevatarInvocationJson.Serialize(new QueryReadModelResult
-        {
-            ReadmodelName = AevatarInvocationReadModels.GAgentRunTerminal,
-            ResultJson = snapshot == null ? "null" : AevatarInvocationJson.ToJson(snapshot),
-            Count = snapshot == null ? 0 : 1,
-        });
-    }
-
-    private async Task<string> QueryWorkflowActorSnapshotAsync(ReadModelQuery query, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(query.ActorId))
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.WorkflowActorCurrentState,
-                Error = Error("invalid_arguments", "query.actor_id is required.", "query.actor_id"),
-            });
-        }
-
-        var snapshot = await _workflowQueryService.GetWorkflowActorCurrentStateAsync(query.ActorId.Trim(), ct);
-        return AevatarInvocationJson.Serialize(new QueryReadModelResult
-        {
-            ReadmodelName = AevatarInvocationReadModels.WorkflowActorCurrentState,
-            ResultJson = snapshot == null ? "null" : ProtoJsonFormatter.Format(snapshot),
-            Count = snapshot == null ? 0 : 1,
-        });
-    }
-
-    private async Task<string> QueryWorkflowActorTimelineAsync(ReadModelQuery query, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(query.ActorId))
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.WorkflowActorTimeline,
-                Error = Error("invalid_arguments", "query.actor_id is required.", "query.actor_id"),
-            });
-        }
-
-        var items = await _workflowQueryService.ListWorkflowRunTimelineExportAsync(
-            query.ActorId.Trim(),
-            BoundTake(query.Take),
-            ct);
-        return AevatarInvocationJson.Serialize(new QueryReadModelResult
-        {
-            ReadmodelName = AevatarInvocationReadModels.WorkflowActorTimeline,
-            ResultJson = ProtoJsonFormatter.Format(new ListValue
-            {
-                Values =
-                {
-                    items.Select(item => Value.ForStruct(JsonParser.Default.Parse<Struct>(
-                        ProtoJsonFormatter.Format(item)))),
-                },
-            }),
-            Count = items.Count,
-        });
     }
 
     private static ObserveRunResult MapTerminal(GAgentRunTerminalSnapshot terminal, string runId) =>

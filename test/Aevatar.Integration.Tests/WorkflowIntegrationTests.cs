@@ -28,6 +28,7 @@ using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Runtime.CompilerServices;
 
 namespace Aevatar.Integration.Tests;
 
@@ -66,9 +67,13 @@ public class WorkflowIntegrationTests
 
     // ─── 辅助：构建完整 DI 环境 ───
 
-    private static (ServiceProvider sp, IActorRuntime runtime, MockLLMProvider mockLlm) BuildTestEnvironment()
+    private static (ServiceProvider sp, IActorRuntime runtime, MockLLMProvider mockLlm) BuildTestEnvironment() =>
+        BuildTestEnvironment(new MockLLMProvider());
+
+    private static (ServiceProvider sp, IActorRuntime runtime, TProvider mockLlm) BuildTestEnvironment<TProvider>(
+        TProvider mockLlm)
+        where TProvider : ILLMProvider, ILLMProviderFactory
     {
-        var mockLlm = new MockLLMProvider();
         var services = new ServiceCollection();
 
         // 注册 Aevatar 运行时
@@ -212,7 +217,8 @@ public class WorkflowIntegrationTests
     public async Task Scenario2_CreateAgentTree()
     {
         // Given
-        var (sp, runtime, _) = BuildTestEnvironment();
+        var blockingLlm = new BlockingMockLLMProvider();
+        var (sp, runtime, _) = BuildTestEnvironment(blockingLlm);
         await using var _ = sp;
         var actorSuffix = Guid.NewGuid().ToString("N")[..8];
         var definitionActorId = $"wf-{actorSuffix}";
@@ -275,31 +281,35 @@ public class WorkflowIntegrationTests
             },
         });
 
-        // Then
-        (await runtime.ExistsAsync(definitionActorId)).Should().BeTrue();
-        (await runtime.ExistsAsync(runActorId)).Should().BeTrue();
-        (await runtime.ExistsAsync(researcherActorId)).Should().BeTrue();
-        (await runtime.ExistsAsync(reviewerActorId)).Should().BeTrue();
-        (await runtime.ExistsAsync(writerActorId)).Should().BeTrue();
+        try
+        {
+            var researcher = await WaitForRoleAsync(runtime, researcherActorId, "Researcher");
+            var reviewer = await WaitForRoleAsync(runtime, reviewerActorId, "Reviewer");
+            var writer = await WaitForRoleAsync(runtime, writerActorId, "Writer");
 
-        // 验证层级
-        var children = await runActor.GetChildrenIdsAsync();
-        children.Should().HaveCount(3);
-        children.Should().Contain(researcherActorId);
-        children.Should().Contain(reviewerActorId);
-        children.Should().Contain(writerActorId);
+            // Then
+            (await runtime.ExistsAsync(definitionActorId)).Should().BeTrue();
+            (await runtime.ExistsAsync(runActorId)).Should().BeTrue();
+            (await runtime.ExistsAsync(researcherActorId)).Should().BeTrue();
+            (await runtime.ExistsAsync(reviewerActorId)).Should().BeTrue();
+            (await runtime.ExistsAsync(writerActorId)).Should().BeTrue();
 
-        // 验证每个 RoleGAgent 的配置
-        var researcher = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
-            async _ =>
-            {
-                var researcherActor = await runtime.GetAsync(researcherActorId);
-                return researcherActor?.Agent as RoleGAgent;
-            },
-            agent => agent?.RoleName == "Researcher",
-            $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
-            CancellationToken.None);
-        researcher!.RoleName.Should().Be("Researcher");
+            // 验证层级
+            var children = await runActor.GetChildrenIdsAsync();
+            children.Should().HaveCount(3);
+            children.Should().Contain(researcherActorId);
+            children.Should().Contain(reviewerActorId);
+            children.Should().Contain(writerActorId);
+
+            // 验证每个 RoleGAgent 的配置
+            researcher.RoleName.Should().Be("Researcher");
+            reviewer.RoleName.Should().Be("Reviewer");
+            writer.RoleName.Should().Be("Writer");
+        }
+        finally
+        {
+            blockingLlm.Release();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -546,5 +556,47 @@ public class WorkflowIntegrationTests
         factory.TryCreate("nonexistent", out m).Should().BeFalse();
         factory.TryCreate("maker_vote", out m).Should().BeFalse(); // maker module pack is not registered in this test scope
         m.Should().BeNull();
+    }
+
+    private static async Task<RoleGAgent> WaitForRoleAsync(
+        IActorRuntime runtime,
+        string actorId,
+        string roleName)
+    {
+        var role = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            async _ =>
+            {
+                var actor = await runtime.GetAsync(actorId);
+                return actor?.Agent as RoleGAgent;
+            },
+            agent => string.Equals(agent?.RoleName, roleName, StringComparison.Ordinal),
+            $"RoleGAgent initialization not visible. actor_id={actorId}",
+            CancellationToken.None);
+        return role!;
+    }
+
+    private sealed class BlockingMockLLMProvider : ILLMProvider, ILLMProviderFactory
+    {
+        private readonly MockLLMProvider _inner = new();
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string Name => _inner.Name;
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => _inner.GetAvailableProviders();
+
+        public void Release() => _release.TrySetResult();
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await _release.Task.WaitAsync(ct);
+            await foreach (var chunk in _inner.ChatStreamAsync(request, ct).WithCancellation(ct))
+                yield return chunk;
+        }
     }
 }
