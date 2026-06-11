@@ -35,24 +35,12 @@ public interface IStudioMemberService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Applies partial member authority updates. This patch path updates
-    /// the member-owned implementation reference only; it does not bind,
-    /// publish, start runtime lifecycle, or create service revisions.
+    /// Accepts a binding request for asynchronous actor-owned execution.
+    /// The returned receipt only means the command was dispatched with a
+    /// stable binding run id; admission and platform completion are observed
+    /// later through binding run status queries.
     /// </summary>
-    Task<StudioMemberDetailResponse> PatchAsync(
-        string scopeId,
-        string memberId,
-        PatchStudioMemberRequest request,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Binds the given member to its own stable <c>publishedServiceId</c>
-    /// (never the scope default service). Resolves the member, builds a
-    /// scope binding request with <c>ServiceId = publishedServiceId</c>,
-    /// delegates to the existing scope binding command port, and records the
-    /// resulting revision back on the member authority.
-    /// </summary>
-    Task<StudioMemberBindingResponse> BindAsync(
+    Task<StudioMemberBindingAcceptedResponse> BindAsync(
         string scopeId,
         string memberId,
         UpdateStudioMemberBindingRequest request,
@@ -65,9 +53,15 @@ public interface IStudioMemberService
     /// itself does not exist — endpoints distinguish "missing member" (404)
     /// from "exists, never bound" (200 with null binding).
     /// </summary>
-    Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+    Task<StudioMemberBindingViewResponse> GetBindingAsync(
         string scopeId,
         string memberId,
+        CancellationToken ct = default);
+
+    Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
+        string scopeId,
+        string memberId,
+        string bindingRunId,
         CancellationToken ct = default);
 
     /// <summary>
@@ -114,5 +108,18 @@ public interface IStudioMemberService
         string scopeId,
         string memberId,
         string revisionId,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Patches a member's properties — currently the team assignment
+    /// (ADR-0017 §Q6). Merge Patch semantics: <c>request.TeamId</c> absent
+    /// means "no change", <c>request.TeamId.Value == null</c> means
+    /// "unassign", and a non-empty value means "assign / reassign".
+    /// Returns the updated member detail.
+    /// </summary>
+    Task<StudioMemberDetailResponse> UpdateAsync(
+        string scopeId,
+        string memberId,
+        UpdateStudioMemberRequest request,
         CancellationToken ct = default);
 }

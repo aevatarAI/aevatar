@@ -1,7 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Threading.Channels;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.MiniCPM.Internal;
 using Microsoft.Extensions.Logging;
@@ -12,6 +11,13 @@ namespace Aevatar.Foundation.VoicePresence.MiniCPM;
 /// <summary>
 /// MiniCPM-o demo-protocol adapter for <see cref="IRealtimeVoiceProvider" />.
 /// </summary>
+// Refactor (iter15/cluster-026-voice-provider-background-state):
+//   Old pattern: realtime provider receive loop writes _responseEpochs dictionary from background thread outside actor event-loop
+//   New principle: provider callbacks emit provider-native response ids only.
+//   VoicePresenceModule owns actor response epoch mapping inside the actor turn.
+// Refactor (iter106/cluster-106-voice-provider-session-runtime):
+//   Old pattern: Realtime voice providers and the module keep provider session, event channel, cancellation source, dispatch loop, and transport pump as process-local mutable runtime objects.
+//   New principle: Provider callbacks emit typed signals with lease/session keys; session ownership and pump lifecycle are actor-owned or distributed state, while provider objects are disposable transport handles only.
 public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
 {
     private readonly HttpClient _httpClient;
@@ -19,17 +25,7 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
     private readonly MiniCPMRealtimeProviderOptions _options;
     private readonly ILogger _logger;
 
-    private Channel<VoiceProviderEvent>? _eventChannel;
-    private CancellationTokenSource? _lifetimeCts;
-    private Task? _dispatchLoop;
-    private Task? _completionsLoop;
-    private Uri? _endpoint;
-    private string? _uid;
     private bool _disposed;
-    private int _inputSampleRateHz = MiniCPMRealtimeProviderOptions.DefaultInputSampleRateHz;
-    private int _nextResponseId;
-    private int _activeResponseId;
-    private int _suppressedResponseId;
 
     public MiniCPMRealtimeProvider(
         MiniCPMRealtimeProviderOptions? options = null,
@@ -54,164 +50,188 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
-
-    public Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct)
+    public Task<RealtimeVoiceProviderSession> ConnectAsync(
+        VoiceProviderSessionKey sessionKey,
+        VoiceProviderConfig config,
+        Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+        CancellationToken ct)
     {
         _ = ct;
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(config);
-        EnsureDisconnected();
+        ArgumentNullException.ThrowIfNull(eventSink);
         ValidateProviderConfig(config);
 
-        _endpoint = new Uri(config.Endpoint.Trim(), UriKind.Absolute);
-        _uid = Guid.NewGuid().ToString("n");
-        _eventChannel = Channel.CreateBounded<VoiceProviderEvent>(new BoundedChannelOptions(_options.EventQueueCapacity)
-        {
-            SingleReader = true,
-            SingleWriter = false,
-            FullMode = BoundedChannelFullMode.DropOldest,
-            AllowSynchronousContinuations = false,
-        });
-        _lifetimeCts = new CancellationTokenSource();
-        _completionsLoop = RunCompletionsLoopAsync(_eventChannel.Writer, _lifetimeCts.Token);
-        _dispatchLoop = RunDispatchLoopAsync(_eventChannel.Reader, _lifetimeCts.Token);
-        return Task.CompletedTask;
+        var session = new MiniCPMRealtimeProviderSession(
+            sessionKey,
+            new Uri(config.Endpoint.Trim(), UriKind.Absolute),
+            Guid.NewGuid().ToString("n"),
+            _httpClient,
+            _options,
+            _logger,
+            eventSink);
+        session.Start();
+        return Task.FromResult<RealtimeVoiceProviderSession>(session);
     }
 
-    public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-    {
-        if (pcm16.IsEmpty)
-            return;
-
-        var request = new MiniCPMMessageRequest
-        {
-            Messages =
-            {
-                new MiniCPMMessage
-                {
-                    Role = "user",
-                    Content =
-                    {
-                        new MiniCPMMessageContent
-                        {
-                            Type = "input_audio",
-                            InputAudio = new MiniCPMInputAudio
-                            {
-                                Data = Convert.ToBase64String(
-                                    MiniCPMWaveCodec.EncodePcm16Mono(pcm16.Span, _inputSampleRateHz)),
-                                Format = "wav",
-                            },
-                        },
-                    },
-                },
-            },
-        };
-
-        using var message = new HttpRequestMessage(HttpMethod.Post, BuildUri(_options.StreamPath))
-        {
-            Content = JsonContent.Create(request),
-        };
-        ApplyUidHeader(message);
-
-        using var response = await _httpClient.SendAsync(message, HttpCompletionOption.ResponseContentRead, ct);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(await BuildHttpFailureMessageAsync("stream", response, ct));
-    }
-
-    public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
-    {
-        _ = callId;
-        _ = resultJson;
-        _ = ct;
-        throw new NotSupportedException(
-            "MiniCPM-o demo protocol does not support provider-side tool result continuation.");
-    }
-
-    public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
-    {
-        _ = injection;
-        _ = ct;
-        throw new NotSupportedException(
-            "MiniCPM-o demo protocol does not support structured external event injection.");
-    }
-
-    public async Task CancelResponseAsync(CancellationToken ct)
-    {
-        using var message = new HttpRequestMessage(HttpMethod.Post, BuildUri(_options.StopPath));
-        ApplyUidHeader(message);
-
-        using var response = await _httpClient.SendAsync(message, HttpCompletionOption.ResponseContentRead, ct);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(await BuildHttpFailureMessageAsync("stop", response, ct));
-
-        var responseId = Interlocked.Exchange(ref _activeResponseId, 0);
-        if (responseId <= 0 || _eventChannel == null)
-            return;
-
-        Volatile.Write(ref _suppressedResponseId, responseId);
-        await _eventChannel.Writer.WriteAsync(new VoiceProviderEvent
-        {
-            ResponseCancelled = new VoiceResponseCancelled
-            {
-                ResponseId = responseId,
-            },
-        }, ct);
-    }
-
-    public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
-    {
-        _ = ct;
-        ArgumentNullException.ThrowIfNull(session);
-        EnsureConnected();
-
-        _inputSampleRateHz = ResolveInputSampleRate(session.SampleRateHz);
-
-        if (!string.IsNullOrWhiteSpace(session.Voice))
-            _logger.LogInformation("MiniCPM voice provider ignores voice selection '{Voice}'.", session.Voice);
-        if (!string.IsNullOrWhiteSpace(session.Instructions))
-            _logger.LogInformation("MiniCPM voice provider ignores session instructions.");
-        if (session.ToolNames.Count > 0 || session.ToolDefinitions.Count > 0)
-            _logger.LogInformation("MiniCPM voice provider does not expose provider-side tool registration.");
-
-        return Task.CompletedTask;
-    }
-
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: cancel mutated active/suppressed response epoch state and emitted synthetic cancel events.
+    //   New principle: cancel only sends provider stop; VoicePresenceModule owns actor cancellation state.
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
 
         _disposed = true;
-
-        var cts = _lifetimeCts;
-        _lifetimeCts = null;
-        cts?.Cancel();
-
-        if (_eventChannel != null)
-            _eventChannel.Writer.TryComplete();
-
-        await AwaitLoopAsync(_completionsLoop);
-        await AwaitLoopAsync(_dispatchLoop);
-
-        _completionsLoop = null;
-        _dispatchLoop = null;
-        _eventChannel = null;
-        _endpoint = null;
-        _uid = null;
-        _activeResponseId = 0;
-        _suppressedResponseId = 0;
-
-        cts?.Dispose();
+        await ValueTask.CompletedTask;
         if (_ownsHttpClient)
             _httpClient.Dispose();
     }
 
-    private async Task RunCompletionsLoopAsync(ChannelWriter<VoiceProviderEvent> writer, CancellationToken ct)
+    // Refactor (iter106/cluster-106-voice-provider-session-runtime):
+    //   Old pattern: Realtime voice providers and the module keep provider session, event channel, cancellation source, dispatch loop, and transport pump as process-local mutable runtime objects.
+    //   New principle: Provider callbacks emit typed signals with lease/session keys; session ownership and pump lifecycle are actor-owned or distributed state, while provider objects are disposable transport handles only.
+    private sealed class MiniCPMRealtimeProviderSession : RealtimeVoiceProviderSession
     {
-        try
+        private readonly VoiceProviderSessionKey _callbackKey;
+        private readonly HttpClient _httpClient;
+        private readonly MiniCPMRealtimeProviderOptions _options;
+        private readonly ILogger _logger;
+        private readonly Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> _eventSink;
+        private readonly CancellationTokenSource _physicalSessionCancellation = new();
+        private Task? _completionsLoop;
+        private bool _disposed;
+        private int _inputSampleRateHz = MiniCPMRealtimeProviderOptions.DefaultInputSampleRateHz;
+
+        public MiniCPMRealtimeProviderSession(
+            VoiceProviderSessionKey sessionKey,
+            Uri endpoint,
+            string uid,
+            HttpClient httpClient,
+            MiniCPMRealtimeProviderOptions options,
+            ILogger logger,
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink)
         {
-            while (!ct.IsCancellationRequested)
+            _callbackKey = sessionKey;
+            Endpoint = endpoint;
+            Uid = uid;
+            _httpClient = httpClient;
+            _options = options;
+            _logger = logger;
+            _eventSink = eventSink;
+        }
+
+        public Uri Endpoint { get; }
+        public string Uid { get; }
+
+        public void Start()
+        {
+            _completionsLoop = RunCompletionsLoopAsync(_physicalSessionCancellation.Token);
+        }
+
+        public override async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+        {
+            if (pcm16.IsEmpty)
+                return;
+
+            var request = new MiniCPMMessageRequest
+            {
+                Messages =
+                {
+                    new MiniCPMMessage
+                    {
+                        Role = "user",
+                        Content =
+                        {
+                            new MiniCPMMessageContent
+                            {
+                                Type = "input_audio",
+                                InputAudio = new MiniCPMInputAudio
+                                {
+                                    Data = Convert.ToBase64String(
+                                        MiniCPMWaveCodec.EncodePcm16Mono(pcm16.Span, _inputSampleRateHz)),
+                                    Format = "wav",
+                                },
+                            },
+                        },
+                    },
+                },
+            };
+
+            using var message = new HttpRequestMessage(HttpMethod.Post, BuildUri(_options.StreamPath))
+            {
+                Content = JsonContent.Create(request),
+            };
+            ApplyUidHeader(message);
+
+            using var response = await _httpClient.SendAsync(message, HttpCompletionOption.ResponseContentRead, ct);
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException(await BuildHttpFailureMessageAsync("stream", response, ct));
+        }
+
+        public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
+        {
+            _ = callId;
+            _ = resultJson;
+            _ = ct;
+            throw new NotSupportedException(
+                "MiniCPM-o demo protocol does not support provider-side tool result continuation.");
+        }
+
+        public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+        {
+            _ = injection;
+            _ = ct;
+            throw new NotSupportedException(
+                "MiniCPM-o demo protocol does not support structured external event injection.");
+        }
+
+        public override async Task CancelResponseAsync(CancellationToken ct)
+        {
+            using var message = new HttpRequestMessage(HttpMethod.Post, BuildUri(_options.StopPath));
+            ApplyUidHeader(message);
+
+            using var response = await _httpClient.SendAsync(message, HttpCompletionOption.ResponseContentRead, ct);
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException(await BuildHttpFailureMessageAsync("stop", response, ct));
+        }
+
+        public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
+        {
+            _ = ct;
+            ArgumentNullException.ThrowIfNull(session);
+
+            _inputSampleRateHz = ResolveInputSampleRate(_options, session.SampleRateHz);
+
+            if (!string.IsNullOrWhiteSpace(session.Voice))
+                _logger.LogInformation("MiniCPM voice provider ignores voice selection '{Voice}'.", session.Voice);
+            if (!string.IsNullOrWhiteSpace(session.Instructions))
+                _logger.LogInformation("MiniCPM voice provider ignores session instructions.");
+            if (session.ToolNames.Count > 0 || session.ToolDefinitions.Count > 0)
+                _logger.LogInformation("MiniCPM voice provider does not expose provider-side tool registration.");
+
+            return Task.CompletedTask;
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            _physicalSessionCancellation.Cancel();
+            await AwaitLoopAsync(_completionsLoop);
+            _physicalSessionCancellation.Dispose();
+        }
+
+        private Uri BuildUri(string path) => new(Endpoint, path);
+
+        private void ApplyUidHeader(HttpRequestMessage message) =>
+            message.Headers.TryAddWithoutValidation(_options.UidHeaderName, Uid);
+
+        private async Task RunCompletionsLoopAsync(CancellationToken ct)
+        {
+            try
             {
                 using var request = new HttpRequestMessage(HttpMethod.Post, BuildUri(_options.CompletionsPath))
                 {
@@ -223,7 +243,7 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
                 using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
                 if (!response.IsSuccessStatusCode)
                 {
-                    await TryWriteAsync(writer, new VoiceProviderEvent
+                    await EmitAsync(new VoiceProviderEvent
                     {
                         Error = new VoiceProviderError
                         {
@@ -231,7 +251,7 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
                             ErrorMessage = await BuildHttpFailureMessageAsync("completions", response, ct),
                         },
                     }, ct);
-                    await TryWriteAsync(writer, new VoiceProviderEvent
+                    await EmitAsync(new VoiceProviderEvent
                     {
                         Disconnected = new VoiceProviderDisconnected
                         {
@@ -242,230 +262,181 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
                 }
 
                 await using var stream = await response.Content.ReadAsStreamAsync(ct);
-                await ReadCompletionStreamAsync(stream, writer, ct);
+                await ReadCompletionStreamAsync(stream, ct);
             }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "MiniCPM completions loop terminated unexpectedly.");
-            await TryWriteAsync(writer, new VoiceProviderEvent
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                Disconnected = new VoiceProviderDisconnected
-                {
-                    Reason = $"error:{ex.Message}",
-                },
-            }, ct);
-        }
-        finally
-        {
-            writer.TryComplete();
-        }
-    }
-
-    private async Task ReadCompletionStreamAsync(
-        Stream stream,
-        ChannelWriter<VoiceProviderEvent> writer,
-        CancellationToken ct)
-    {
-        var responseStarted = false;
-        var responseTerminated = false;
-        var responseId = 0;
-
-        await foreach (var payload in MiniCPMSsePayloadReader.ReadPayloadsAsync(stream, ct))
-        {
-            if (string.IsNullOrWhiteSpace(payload))
-                continue;
-
-            MiniCPMCompletionsFrame? frame;
-            try
-            {
-                frame = JsonSerializer.Deserialize<MiniCPMCompletionsFrame>(payload);
             }
-            catch (JsonException ex)
+            catch (Exception ex)
             {
-                await TryWriteAsync(writer, new VoiceProviderEvent
+                _logger.LogWarning(ex, "MiniCPM completions loop terminated unexpectedly.");
+                await EmitAsync(new VoiceProviderEvent
                 {
-                    Error = new VoiceProviderError
+                    Disconnected = new VoiceProviderDisconnected
                     {
-                        ErrorCode = "invalid_payload",
-                        ErrorMessage = $"Failed to parse MiniCPM SSE payload: {ex.Message}",
+                        Reason = $"error:{ex.Message}",
                     },
-                }, ct);
-                continue;
+                }, CancellationToken.None);
             }
+        }
 
-            if (frame == null)
-                continue;
+        // Refactor (iter15/cluster-026-voice-provider-background-state):
+        //   Old pattern: completion stream allocated actor response ids and suppressed stale audio in provider state.
+        //   New principle: stream parsing emits provider-native response ids; module actor turn maps and suppresses.
+        private async Task ReadCompletionStreamAsync(Stream stream, CancellationToken ct)
+        {
+            var responseStarted = false;
+            var responseTerminated = false;
+            var providerResponseId = string.Empty;
 
-            if (!string.IsNullOrWhiteSpace(frame.Error))
+            await foreach (var payload in MiniCPMSsePayloadReader.ReadPayloadsAsync(stream, ct))
             {
-                await TryWriteAsync(writer, new VoiceProviderEvent
-                {
-                    Error = new VoiceProviderError
-                    {
-                        ErrorCode = "provider_error",
-                        ErrorMessage = frame.Error,
-                    },
-                }, ct);
-                continue;
-            }
-
-            var choice = frame.Choices?.FirstOrDefault();
-            if (choice == null)
-                continue;
-
-            if (ShouldIgnorePreludeFrame(frame, choice))
-                continue;
-
-            if (IsEndMarker(choice.Text))
-            {
-                if (!responseStarted)
+                if (string.IsNullOrWhiteSpace(payload))
                     continue;
 
-                responseTerminated = true;
-                Interlocked.CompareExchange(ref _activeResponseId, 0, responseId);
-                if (Volatile.Read(ref _suppressedResponseId) == responseId)
+                MiniCPMCompletionsFrame? frame;
+                try
                 {
-                    Volatile.Write(ref _suppressedResponseId, 0);
+                    frame = JsonSerializer.Deserialize<MiniCPMCompletionsFrame>(payload);
+                }
+                catch (JsonException ex)
+                {
+                    await EmitAsync(new VoiceProviderEvent
+                    {
+                        Error = new VoiceProviderError
+                        {
+                            ErrorCode = "invalid_payload",
+                            ErrorMessage = $"Failed to parse MiniCPM SSE payload: {ex.Message}",
+                        },
+                    }, ct);
                     continue;
                 }
 
-                await TryWriteAsync(writer, new VoiceProviderEvent
+                if (frame == null)
+                    continue;
+
+                if (!string.IsNullOrWhiteSpace(frame.Error))
                 {
-                    ResponseDone = new VoiceResponseDone
+                    await EmitAsync(new VoiceProviderEvent
                     {
-                        ResponseId = responseId,
-                    },
-                }, ct);
-                continue;
-            }
+                        Error = new VoiceProviderError
+                        {
+                            ErrorCode = "provider_error",
+                            ErrorMessage = frame.Error,
+                        },
+                    }, ct);
+                    continue;
+                }
 
-            if (!HasMeaningfulContent(choice))
-                continue;
+                var choice = frame.Choices?.FirstOrDefault();
+                if (choice == null)
+                    continue;
 
-            if (!responseStarted)
-            {
-                responseStarted = true;
-                responseId = Interlocked.Increment(ref _nextResponseId);
-                Volatile.Write(ref _activeResponseId, responseId);
-                await TryWriteAsync(writer, new VoiceProviderEvent
+                if (ShouldIgnorePreludeFrame(frame, choice))
+                    continue;
+
+                if (IsEndMarker(choice.Text))
                 {
-                    ResponseStarted = new VoiceResponseStarted
+                    if (!responseStarted)
+                        continue;
+
+                    responseTerminated = true;
+                    await EmitAsync(new VoiceProviderEvent
                     {
-                        ResponseId = responseId,
-                    },
-                }, ct);
-            }
+                        ResponseDone = new VoiceResponseDone
+                        {
+                            ProviderResponseId = providerResponseId,
+                        },
+                    }, ct);
+                    continue;
+                }
 
-            if (Volatile.Read(ref _suppressedResponseId) == responseId)
-                continue;
+                if (!HasMeaningfulContent(choice))
+                    continue;
 
-            if (string.IsNullOrWhiteSpace(choice.Audio))
-                continue;
-
-            try
-            {
-                var wavBytes = Convert.FromBase64String(choice.Audio);
-                var decoded = MiniCPMWaveCodec.DecodePcm16Mono(wavBytes);
-                await TryWriteAsync(writer, new VoiceProviderEvent
+                if (!responseStarted)
                 {
-                    AudioReceived = new VoiceAudioReceived
+                    responseStarted = true;
+                    providerResponseId = ResolveProviderResponseId(frame);
+                    await EmitAsync(new VoiceProviderEvent
                     {
-                        Pcm16 = Google.Protobuf.ByteString.CopyFrom(decoded.Pcm16),
-                        SampleRateHz = decoded.SampleRateHz,
-                    },
-                }, ct);
-            }
-            catch (Exception ex) when (ex is FormatException or InvalidDataException)
-            {
-                await TryWriteAsync(writer, new VoiceProviderEvent
-                {
-                    Error = new VoiceProviderError
-                    {
-                        ErrorCode = "invalid_audio",
-                        ErrorMessage = ex.Message,
-                    },
-                }, ct);
-            }
-        }
+                        ResponseStarted = new VoiceResponseStarted
+                        {
+                            ProviderResponseId = providerResponseId,
+                        },
+                    }, ct);
+                }
 
-        if (!responseStarted)
-            return;
-
-        Interlocked.CompareExchange(ref _activeResponseId, 0, responseId);
-        if (Volatile.Read(ref _suppressedResponseId) == responseId)
-        {
-            Volatile.Write(ref _suppressedResponseId, 0);
-            return;
-        }
-
-        if (!responseTerminated)
-        {
-            await TryWriteAsync(writer, new VoiceProviderEvent
-            {
-                Disconnected = new VoiceProviderDisconnected
-                {
-                    Reason = "mini-cpm completions stream ended before response completion.",
-                },
-            }, ct);
-        }
-    }
-
-    private async Task RunDispatchLoopAsync(ChannelReader<VoiceProviderEvent> reader, CancellationToken ct)
-    {
-        try
-        {
-            await foreach (var providerEvent in reader.ReadAllAsync(ct))
-            {
-                var callback = OnEvent;
-                if (callback == null)
+                if (string.IsNullOrWhiteSpace(choice.Audio))
                     continue;
 
                 try
                 {
-                    await callback(providerEvent, ct);
+                    var wavBytes = Convert.FromBase64String(choice.Audio);
+                    var decoded = MiniCPMWaveCodec.DecodePcm16Mono(wavBytes);
+                    await EmitAsync(new VoiceProviderEvent
+                    {
+                        AudioReceived = new VoiceAudioReceived
+                        {
+                            Pcm16 = Google.Protobuf.ByteString.CopyFrom(decoded.Pcm16),
+                            SampleRateHz = decoded.SampleRateHz,
+                            ProviderResponseId = providerResponseId,
+                        },
+                    }, ct);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is FormatException or InvalidDataException)
                 {
-                    _logger.LogWarning(ex, "MiniCPM provider callback failed for event {EventCase}.",
-                        providerEvent.EventCase);
+                    await EmitAsync(new VoiceProviderEvent
+                    {
+                        Error = new VoiceProviderError
+                        {
+                            ErrorCode = "invalid_audio",
+                            ErrorMessage = ex.Message,
+                        },
+                    }, ct);
                 }
             }
+
+            if (!responseStarted)
+                return;
+
+            if (!responseTerminated)
+            {
+                await EmitAsync(new VoiceProviderEvent
+                {
+                    Disconnected = new VoiceProviderDisconnected
+                    {
+                        Reason = "mini-cpm completions stream ended before response completion.",
+                    },
+                }, ct);
+            }
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+
+        private async Task EmitAsync(VoiceProviderEvent providerEvent, CancellationToken ct)
         {
+            try
+            {
+                await _eventSink(_callbackKey, providerEvent, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "MiniCPM provider callback failed for event {EventCase}.",
+                    providerEvent.EventCase);
+            }
         }
     }
 
-    private Uri BuildUri(string path) => new(EnsureConnected(), path);
-
-    private void ApplyUidHeader(HttpRequestMessage message) =>
-        message.Headers.TryAddWithoutValidation(_options.UidHeaderName, EnsureUid());
-
-    private Uri EnsureConnected() =>
-        _endpoint ?? throw new InvalidOperationException("MiniCPM voice provider is not connected.");
-
-    private string EnsureUid() =>
-        _uid ?? throw new InvalidOperationException("MiniCPM voice provider is not connected.");
-
-    private void EnsureDisconnected()
-    {
-        if (_endpoint != null)
-            throw new InvalidOperationException("MiniCPM voice provider is already connected.");
-    }
-
-    private int ResolveInputSampleRate(int requestedSampleRateHz)
+    private static int ResolveInputSampleRate(
+        MiniCPMRealtimeProviderOptions options,
+        int requestedSampleRateHz)
     {
         if (requestedSampleRateHz == 0)
-            return _options.SupportedInputSampleRateHz;
+            return options.SupportedInputSampleRateHz;
 
-        if (requestedSampleRateHz != _options.SupportedInputSampleRateHz)
+        if (requestedSampleRateHz != options.SupportedInputSampleRateHz)
         {
             throw new InvalidOperationException(
-                $"MiniCPM voice provider currently accepts PCM16 input at {_options.SupportedInputSampleRateHz} Hz only.");
+                $"MiniCPM voice provider currently accepts PCM16 input at {options.SupportedInputSampleRateHz} Hz only.");
         }
 
         return requestedSampleRateHz;
@@ -481,6 +452,14 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         frame.ResponseId.GetValueOrDefault() == 0 &&
         !string.IsNullOrWhiteSpace(choice.Audio) &&
         string.Equals(choice.Text?.Trim(), "assistant:", StringComparison.Ordinal);
+
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: MiniCPM fallback ids doubled as actor response epochs inside the provider loop.
+    //   New principle: provider fallback ids are provider-local correlation keys; VoicePresenceModule allocates actor response ids.
+    private static string ResolveProviderResponseId(MiniCPMCompletionsFrame frame) =>
+        frame.ResponseId is > 0
+            ? frame.ResponseId.GetValueOrDefault().ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : Guid.NewGuid().ToString("n");
 
     private static void ValidateProviderConfig(VoiceProviderConfig config)
     {
@@ -510,23 +489,6 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
             return $"MiniCPM {operation} request failed with HTTP {(int)response.StatusCode}.";
 
         return $"MiniCPM {operation} request failed with HTTP {(int)response.StatusCode}: {body}";
-    }
-
-    private static async Task TryWriteAsync(
-        ChannelWriter<VoiceProviderEvent> writer,
-        VoiceProviderEvent providerEvent,
-        CancellationToken ct)
-    {
-        try
-        {
-            await writer.WriteAsync(providerEvent, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-        }
-        catch (ChannelClosedException)
-        {
-        }
     }
 
     private static async Task AwaitLoopAsync(Task? loop)

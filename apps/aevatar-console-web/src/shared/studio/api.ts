@@ -14,6 +14,11 @@ import type {
   StudioExecutionDetail,
   StudioExecutionSummary,
   StudioMemberBindingContract,
+  StudioMemberBindingAcceptedResponse,
+  StudioMemberBindingFailure,
+  StudioMemberBindingRunStatus,
+  StudioMemberBindingRunStatusResponse,
+  StudioMemberBindingViewResponse,
   StudioMemberDetail,
   StudioMemberImplementationKind,
   StudioMemberImplementationRef,
@@ -38,8 +43,15 @@ import type {
   StudioSerializeYamlResult,
   StudioSettings,
   StudioStartExecutionInput,
+  StudioTeamCreateInput,
+  StudioTeamLifecycleStage,
+  StudioTeamRoster,
+  StudioTeamSummary,
+  StudioTeamUpdateInput,
   StudioUserConfig,
-  StudioUserConfigModelsResponse,
+  StudioUserConfigSaveReceipt,
+  StudioUserConfigRuntime,
+  StudioUserLlmSettings,
   StudioWorkflowDraft,
   StudioWorkflowDraftSummary,
   StudioWorkflowDocument,
@@ -50,6 +62,7 @@ import type {
 import {
   normalizeStudioMemberLifecycleStage,
   normalizeStudioScopeBindingImplementationKind,
+  normalizeStudioTeamLifecycleStage,
 } from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
 import { scopesApi } from "@/shared/api/scopesApi";
@@ -63,7 +76,7 @@ import {
   readNumber,
   readString,
 } from "@/shared/api/http/decoders";
-import { readResponseError } from "@/shared/api/http/error";
+import { readResponseErrorDetails } from "@/shared/api/http/error";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
 import { authFetch } from "@/shared/auth/fetch";
 import type {
@@ -71,6 +84,7 @@ import type {
   ScopeWorkflowSummary,
 } from "@/shared/models/scopes";
 import { getOrnnRuntimeConfig } from "./ornnConfig";
+import { t } from "@/shared/i18n/messages";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -101,6 +115,27 @@ async function externalFetch(
     ...init,
     headers,
   });
+}
+
+export class StudioApiError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "StudioApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export function isStudioApiStatus(error: unknown, status: number): boolean {
+  return error instanceof StudioApiError && error.status === status;
+}
+
+async function createStudioApiError(response: Response): Promise<StudioApiError> {
+  const details = await readResponseErrorDetails(response);
+  return new StudioApiError(details.message, response.status, details.code);
 }
 
 function isJsonContentType(contentType: string | null): boolean {
@@ -268,92 +303,133 @@ function decodeOrnnSkillSearchResult(
   };
 }
 
-function decodeStudioUserConfigModelsResponse(
+function decodeStudioUserLlmSettings(
   value: unknown,
-  label = "StudioUserConfigModelsResponse"
-): StudioUserConfigModelsResponse {
+  label = "StudioUserLlmSettings"
+): StudioUserLlmSettings {
   const record = expectRecord(value, label);
-  const providersSource = record.providers ?? [];
-  const supportedModelsSource =
-    record.supportedModels ?? record.supported_models ?? [];
   return {
-    providers: expectArray(
-      providersSource,
-      `${label}.providers`,
-      (entry, providerLabel) => {
-        const resolvedProviderLabel =
-          providerLabel ?? `${label}.providers[]`;
-        const provider = expectRecord(entry, resolvedProviderLabel);
+    savedRoute: readString(record, "savedRoute", `${label}.savedRoute`),
+    savedRouteLabel: readString(record, "savedRouteLabel", `${label}.savedRouteLabel`),
+    effectiveRoute: readString(record, "effectiveRoute", `${label}.effectiveRoute`),
+    effectiveRouteLabel: readString(record, "effectiveRouteLabel", `${label}.effectiveRouteLabel`),
+    routeFallbackActive: readBoolean(record, "routeFallbackActive", `${label}.routeFallbackActive`),
+    fallbackReason: readNullableString(record, "fallbackReason", `${label}.fallbackReason`),
+    routeOptions: expectArray(
+      record.routeOptions ?? [],
+      `${label}.routeOptions`,
+      (entry, optionLabel) => {
+        const resolvedOptionLabel = optionLabel ?? `${label}.routeOptions[]`;
+        const option = expectRecord(entry, resolvedOptionLabel);
         return {
-          providerSlug: readNullableString(
-            provider,
-            ["providerSlug", "provider_slug"],
-            `${resolvedProviderLabel}.providerSlug`
-          ) ?? "",
-          providerName: readNullableString(
-            provider,
-            ["providerName", "provider_name"],
-            `${resolvedProviderLabel}.providerName`
-          ) ?? "",
-          status:
-            readNullableString(
-              provider,
-              "status",
-              `${resolvedProviderLabel}.status`
-            )?.trim().toLowerCase() ?? "",
-          proxyUrl:
-            readNullableString(
-              provider,
-              ["proxyUrl", "proxy_url"],
-              `${resolvedProviderLabel}.proxyUrl`
-            ) ?? "",
-          source:
-            readNullableString(
-              provider,
-              "source",
-              `${resolvedProviderLabel}.source`
-            ) ?? undefined,
+          routeValue: readString(option, "routeValue", `${resolvedOptionLabel}.routeValue`),
+          label: readString(option, "label", `${resolvedOptionLabel}.label`),
+          source: readString(option, "source", `${resolvedOptionLabel}.source`),
+          status: readString(option, "status", `${resolvedOptionLabel}.status`),
+          allowed: readBoolean(option, "allowed", `${resolvedOptionLabel}.allowed`),
+          ready: readBoolean(option, "ready", `${resolvedOptionLabel}.ready`),
+          serviceId: readNullableString(option, "serviceId", `${resolvedOptionLabel}.serviceId`),
+          serviceSlug: readNullableString(option, "serviceSlug", `${resolvedOptionLabel}.serviceSlug`),
+          description: readNullableString(option, "description", `${resolvedOptionLabel}.description`),
         };
       }
     ),
-    gatewayUrl:
-      readNullableString(
-        record,
-        ["gatewayUrl", "gateway_url"],
-        `${label}.gatewayUrl`
-      ) ?? "",
-    supportedModels: expectArray(
-      supportedModelsSource,
-      `${label}.supportedModels`,
-      (entry, entryLabel) =>
-        expectString(entry, entryLabel ?? `${label}.supportedModels[]`)
+    modelGroupsByRoute: expectArray(
+      record.modelGroupsByRoute ?? [],
+      `${label}.modelGroupsByRoute`,
+      (entry, groupLabel) => {
+        const resolvedGroupLabel = groupLabel ?? `${label}.modelGroupsByRoute[]`;
+        const group = expectRecord(entry, resolvedGroupLabel);
+        return {
+          routeValue: readString(group, "routeValue", `${resolvedGroupLabel}.routeValue`),
+          groupId: readString(group, "groupId", `${resolvedGroupLabel}.groupId`),
+          label: readString(group, "label", `${resolvedGroupLabel}.label`),
+          models: expectArray(
+            group.models ?? [],
+            `${resolvedGroupLabel}.models`,
+            (entryModel, modelLabel) =>
+              expectString(entryModel, modelLabel ?? `${resolvedGroupLabel}.models[]`)
+          ),
+        };
+      }
     ),
-    modelsByProvider: Object.fromEntries(
-      Object.entries(
-        expectRecord(
-          record.modelsByProvider ?? record.models_by_provider ?? {},
-          `${label}.modelsByProvider`
-        )
-      ).map(([providerSlug, models]) => [
-        providerSlug,
-        expectArray(
-          models,
-          `${label}.modelsByProvider.${providerSlug}`,
-          (entry, entryLabel) =>
-            expectString(
-              entry,
-              entryLabel ?? `${label}.modelsByProvider.${providerSlug}[]`
-            )
-        ),
-      ])
+    catalogStatus: readString(record, "catalogStatus", `${label}.catalogStatus`),
+    capabilities: (() => {
+      const capabilities = expectRecord(record.capabilities, `${label}.capabilities`);
+      return {
+        canEditRoute: readBoolean(capabilities, "canEditRoute", `${label}.capabilities.canEditRoute`),
+        canEditModel: readBoolean(capabilities, "canEditModel", `${label}.capabilities.canEditModel`),
+        canSave: readBoolean(capabilities, "canSave", `${label}.capabilities.canSave`),
+        canRetryCatalog: readBoolean(capabilities, "canRetryCatalog", `${label}.capabilities.canRetryCatalog`),
+      };
+    })(),
+    defaultModel: readString(record, "defaultModel", `${label}.defaultModel`),
+    setupHint: record.setupHint,
+  };
+}
+
+function decodeStudioUserConfigRuntime(
+  value: unknown,
+  label = "StudioUserConfigRuntime"
+): StudioUserConfigRuntime {
+  const record = expectRecord(value, label);
+  const runtimeDefaults = expectRecord(
+    record.runtimeDefaults,
+    `${label}.runtimeDefaults`
+  );
+  return {
+    runtimeMode: readString(record, "runtimeMode", `${label}.runtimeMode`),
+    activeRuntimeBaseUrl: readString(
+      record,
+      "activeRuntimeBaseUrl",
+      `${label}.activeRuntimeBaseUrl`
     ),
+    localRuntimeBaseUrl: readString(
+      record,
+      "localRuntimeBaseUrl",
+      `${label}.localRuntimeBaseUrl`
+    ),
+    remoteRuntimeBaseUrl: readString(
+      record,
+      "remoteRuntimeBaseUrl",
+      `${label}.remoteRuntimeBaseUrl`
+    ),
+    runtimeDefaults: {
+      localRuntimeBaseUrl: readString(
+        runtimeDefaults,
+        "localRuntimeBaseUrl",
+        `${label}.runtimeDefaults.localRuntimeBaseUrl`
+      ),
+      remoteRuntimeBaseUrl: readString(
+        runtimeDefaults,
+        "remoteRuntimeBaseUrl",
+        `${label}.runtimeDefaults.remoteRuntimeBaseUrl`
+      ),
+      localMode: readString(runtimeDefaults, "localMode", `${label}.runtimeDefaults.localMode`),
+      remoteMode: readString(runtimeDefaults, "remoteMode", `${label}.runtimeDefaults.remoteMode`),
+    },
+  };
+}
+
+function decodeStudioUserConfigSaveReceipt(
+  value: unknown,
+  label = "StudioUserConfigSaveReceipt"
+): StudioUserConfigSaveReceipt {
+  const record = expectRecord(value, label);
+  return {
+    accepted: readBoolean(record, "accepted", `${label}.accepted`),
+    commandId: readString(record, "commandId", `${label}.commandId`),
+    ackStage: readString(record, "ackStage", `${label}.ackStage`),
+    actorId: readString(record, "actorId", `${label}.actorId`),
+    correlationId: readString(record, "correlationId", `${label}.correlationId`),
+    ackedAtUtc: readString(record, "ackedAtUtc", `${label}.ackedAtUtc`),
   };
 }
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
@@ -373,7 +449,7 @@ async function requestJsonOrNull<T>(
   }
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
@@ -390,11 +466,28 @@ async function requestDecodedJson<T>(
 ): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
     return undefined as T;
+  }
+
+  return decoder(await response.json());
+}
+
+async function requestDecodedJsonOrAccepted<T>(
+  input: string,
+  decoder: (value: unknown) => T,
+  init?: RequestInit
+): Promise<T | undefined> {
+  const response = await studioHostFetch(input, init);
+  if (!response.ok) {
+    throw await createStudioApiError(response);
+  }
+
+  if (response.status === 202 || response.status === 204) {
+    return undefined;
   }
 
   return decoder(await response.json());
@@ -416,7 +509,7 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     headers,
   });
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
@@ -428,6 +521,13 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+async function requestAccepted(input: string, init?: RequestInit): Promise<void> {
+  const response = await studioHostFetch(input, init);
+  if (!response.ok) {
+    throw await createStudioApiError(response);
+  }
 }
 
 async function streamSse(
@@ -446,7 +546,7 @@ async function streamSse(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (!response.body) {
@@ -951,6 +1051,15 @@ function readStudioMemberLifecycle(
   );
 }
 
+function readStudioTeamLifecycle(
+  record: Record<string, unknown>,
+  keys: string | string[]
+): StudioTeamLifecycleStage {
+  return normalizeStudioTeamLifecycleStage(
+    readNullableString(record, keys, "StudioTeamSummary.lifecycleStage")
+  );
+}
+
 function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
   const record = expectRecord(value, "StudioMemberSummary");
   return {
@@ -994,6 +1103,12 @@ function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
         ["lastBoundRevisionId", "LastBoundRevisionId"],
         "StudioMemberSummary.lastBoundRevisionId"
       ) ?? null,
+    teamId:
+      readNullableString(
+        record,
+        ["teamId", "TeamId"],
+        "StudioMemberSummary.teamId"
+      ) ?? null,
     createdAt: readString(
       record,
       ["createdAt", "CreatedAt"],
@@ -1004,6 +1119,80 @@ function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
       ["updatedAt", "UpdatedAt"],
       "StudioMemberSummary.updatedAt"
     ),
+  };
+}
+
+function decodeStudioTeamSummary(value: unknown): StudioTeamSummary {
+  const record = expectRecord(value, "StudioTeamSummary");
+  return {
+    teamId: readString(
+      record,
+      ["teamId", "TeamId"],
+      "StudioTeamSummary.teamId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioTeamSummary.scopeId"
+    ),
+    displayName: readString(
+      record,
+      ["displayName", "DisplayName"],
+      "StudioTeamSummary.displayName"
+    ),
+    description:
+      readNullableString(
+        record,
+        ["description", "Description"],
+        "StudioTeamSummary.description"
+      ) ?? "",
+    entryMemberId:
+      readNullableString(
+        record,
+        ["entryMemberId", "EntryMemberId"],
+        "StudioTeamSummary.entryMemberId"
+      ) ?? null,
+    lifecycleStage: readStudioTeamLifecycle(record, [
+      "lifecycleStage",
+      "LifecycleStage",
+    ]),
+    memberCount: readNumber(
+      record,
+      ["memberCount", "MemberCount"],
+      "StudioTeamSummary.memberCount"
+    ),
+    createdAt: readString(
+      record,
+      ["createdAt", "CreatedAt"],
+      "StudioTeamSummary.createdAt"
+    ),
+    updatedAt: readString(
+      record,
+      ["updatedAt", "UpdatedAt"],
+      "StudioTeamSummary.updatedAt"
+    ),
+  };
+}
+
+function decodeStudioTeamRoster(value: unknown): StudioTeamRoster {
+  const record = expectRecord(value, "StudioTeamRoster");
+  return {
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioTeamRoster.scopeId"
+    ),
+    teams: expectArray(
+      record.teams ?? record.Teams,
+      "StudioTeamRoster.teams",
+      decodeStudioTeamSummary
+    ),
+    nextPageToken:
+      readNullableString(
+        record,
+        ["nextPageToken", "NextPageToken"],
+        "StudioTeamRoster.nextPageToken"
+      ) ?? null,
   };
 }
 
@@ -1098,8 +1287,164 @@ function decodeStudioMemberBindingContract(
   };
 }
 
+function normalizeStudioMemberBindingRunStatus(
+  value: string | number | null | undefined
+): StudioMemberBindingRunStatus {
+  if (value == null) {
+    return "unknown";
+  }
+
+  return normalizeEnumValue(value, "status", {
+    "0": "unknown",
+    "1": "accepted",
+    "2": "admission_pending",
+    "3": "admitted",
+    "4": "platform_binding_pending",
+    "5": "succeeded",
+    "6": "failed",
+    "7": "rejected",
+    "8": "member_notification_pending",
+    accepted: "accepted",
+    admission_pending: "admission_pending",
+    admissionpending: "admission_pending",
+    admitted: "admitted",
+    platform_binding_pending: "platform_binding_pending",
+    platformbindingpending: "platform_binding_pending",
+    platform_pending: "platform_binding_pending",
+    platformpending: "platform_binding_pending",
+    member_notification_pending: "member_notification_pending",
+    membernotificationpending: "member_notification_pending",
+    notification_pending: "member_notification_pending",
+    notificationpending: "member_notification_pending",
+    succeeded: "succeeded",
+    completed: "succeeded",
+    failed: "failed",
+    rejected: "rejected",
+    unspecified: "unknown",
+    unknown: "unknown",
+  }) as StudioMemberBindingRunStatus;
+}
+
+function decodeStudioMemberBindingFailure(
+  value: unknown
+): StudioMemberBindingFailure {
+  const record = expectRecord(value, "StudioMemberBindingFailure");
+  return {
+    code: readString(record, ["code", "Code"], "StudioMemberBindingFailure.code"),
+    message:
+      readNullableString(
+        record,
+        ["message", "Message"],
+        "StudioMemberBindingFailure.message"
+      ) ?? null,
+    failedAt:
+      readNullableString(
+        record,
+        ["failedAt", "FailedAt", "failedAtUtc", "FailedAtUtc"],
+        "StudioMemberBindingFailure.failedAt"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberBindingRunStatusResponse(
+  value: unknown
+): StudioMemberBindingRunStatusResponse {
+  const record = expectRecord(value, "StudioMemberBindingRunStatusResponse");
+  return {
+    status: normalizeStudioMemberBindingRunStatus(
+      readOptionalScalar(record, ["status", "Status"])
+    ),
+    bindingRunId: readString(
+      record,
+      ["bindingRunId", "BindingRunId"],
+      "StudioMemberBindingRunStatusResponse.bindingRunId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberBindingRunStatusResponse.scopeId"
+    ),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberBindingRunStatusResponse.memberId"
+    ),
+    stateVersion:
+      readOptionalNumber(record.stateVersion ?? record.StateVersion) ?? null,
+    platformBindingCommandId:
+      readNullableString(
+        record,
+        ["platformBindingCommandId", "PlatformBindingCommandId"],
+        "StudioMemberBindingRunStatusResponse.platformBindingCommandId"
+      ) ?? null,
+    failure:
+      record.failure == null && record.Failure == null
+        ? null
+        : decodeStudioMemberBindingFailure(record.failure ?? record.Failure),
+    updatedAt:
+      readNullableString(
+        record,
+        ["updatedAt", "UpdatedAt", "updatedAtUtc", "UpdatedAtUtc"],
+        "StudioMemberBindingRunStatusResponse.updatedAt"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberBindingAcceptedResponse(
+  value: unknown
+): StudioMemberBindingAcceptedResponse {
+  const record = expectRecord(value, "StudioMemberBindingAcceptedResponse");
+  return {
+    status: normalizeStudioMemberBindingRunStatus(
+      readOptionalScalar(record, ["status", "Status"])
+    ),
+    bindingRunId: readString(
+      record,
+      ["bindingRunId", "BindingRunId"],
+      "StudioMemberBindingAcceptedResponse.bindingRunId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberBindingAcceptedResponse.scopeId"
+    ),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberBindingAcceptedResponse.memberId"
+    ),
+  };
+}
+
+function decodeStudioMemberBindingViewResponse(
+  value: unknown
+): StudioMemberBindingViewResponse {
+  const record = expectRecord(value, "StudioMemberBindingViewResponse");
+  const currentBindingRun =
+    record.currentBindingRun == null && record.CurrentBindingRun == null
+      ? undefined
+      : decodeStudioMemberBindingRunStatusResponse(
+          record.currentBindingRun ?? record.CurrentBindingRun
+        );
+  return {
+    lastBinding:
+      record.lastBinding == null && record.LastBinding == null
+        ? null
+        : decodeStudioMemberBindingContract(
+            record.lastBinding ?? record.LastBinding
+          ),
+    ...(currentBindingRun === undefined ? {} : { currentBindingRun }),
+  };
+}
+
 function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
   const record = expectRecord(value, "StudioMemberDetail");
+  const currentBindingRun =
+    record.currentBindingRun == null && record.CurrentBindingRun == null
+      ? undefined
+      : decodeStudioMemberBindingRunStatusResponse(
+          record.currentBindingRun ?? record.CurrentBindingRun
+        );
   return {
     summary: decodeStudioMemberSummary(
       expectRecord(record.summary ?? record.Summary, "StudioMemberDetail.summary")
@@ -1116,6 +1461,7 @@ function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
         : decodeStudioMemberBindingContract(
             record.lastBinding ?? record.LastBinding
           ),
+    ...(currentBindingRun === undefined ? {} : { currentBindingRun }),
   };
 }
 
@@ -1130,6 +1476,107 @@ export const studioApi = {
 
   getWorkspaceSettings(scopeId?: string | null): Promise<StudioWorkspaceSettings> {
     return requestJson(withOptionalScopeId("/api/workspace/", scopeId));
+  },
+
+  listTeams(scopeId: string): Promise<StudioTeamRoster> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams`,
+      decodeStudioTeamRoster
+    );
+  },
+
+  getTeam(scopeId: string, teamId: string): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}`,
+      decodeStudioTeamSummary
+    );
+  },
+
+  createTeam(input: StudioTeamCreateInput): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/teams`,
+      decodeStudioTeamSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName: input.displayName.trim(),
+            description: trimOptional(input.description),
+            teamId: trimOptional(input.teamId),
+          })
+        ),
+      }
+    );
+  },
+
+  updateTeam(input: StudioTeamUpdateInput): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/teams/${encodeURIComponent(input.teamId.trim())}`,
+      decodeStudioTeamSummary,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName:
+              input.displayName === null ? null : trimOptional(input.displayName),
+            description:
+              input.description === null ? null : trimOptional(input.description),
+          })
+        ),
+      }
+    );
+  },
+
+  archiveTeam(scopeId: string, teamId: string): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/archive`,
+      decodeStudioTeamSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+      }
+    );
+  },
+
+  setTeamEntryMember(
+    scopeId: string,
+    teamId: string,
+    memberId: string
+  ): Promise<StudioTeamSummary | undefined> {
+    return requestDecodedJsonOrAccepted(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/entry-member`,
+      decodeStudioTeamSummary,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          memberId: memberId.trim(),
+        }),
+      }
+    );
+  },
+
+  clearTeamEntryMember(
+    scopeId: string,
+    teamId: string
+  ): Promise<StudioTeamSummary | undefined> {
+    return requestDecodedJsonOrAccepted(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/entry-member`,
+      decodeStudioTeamSummary,
+      {
+        method: "DELETE",
+        headers: JSON_HEADERS,
+      }
+    );
+  },
+
+  listTeamMembers(scopeId: string, teamId: string): Promise<StudioMemberRoster> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/members`,
+      decodeStudioMemberRoster
+    );
   },
 
   listMembers(scopeId: string): Promise<StudioMemberRoster> {
@@ -1152,6 +1599,7 @@ export const studioApi = {
     implementationKind: StudioMemberImplementationKind;
     description?: string | null;
     memberId?: string | null;
+    teamId?: string | null;
   }): Promise<StudioMemberSummary> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members`,
@@ -1165,6 +1613,7 @@ export const studioApi = {
             implementationKind: input.implementationKind,
             description: trimOptional(input.description),
             memberId: trimOptional(input.memberId),
+            teamId: trimOptional(input.teamId),
           })
         ),
       }
@@ -1447,11 +1896,11 @@ export const studioApi = {
           compactObject({
             implementationKind: "script",
             displayName: trimOptional(input.displayName),
+            serviceId: trimOptional(input.serviceId),
             script: compactObject({
               scriptId: input.scriptId.trim(),
               scriptRevision: input.scriptRevision.trim(),
             }),
-            revisionId: trimOptional(input.revisionId),
           })
         ),
       }
@@ -1507,10 +1956,10 @@ export const studioApi = {
     displayName?: string | null;
     workflowYamls: readonly string[];
     revisionId?: string | null;
-  }): Promise<StudioScopeBindingResult> {
+  }): Promise<StudioMemberBindingAcceptedResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
-      decodeStudioScopeBindingResult,
+      decodeStudioMemberBindingAcceptedResponse,
       {
         method: "PUT",
         headers: JSON_HEADERS,
@@ -1535,10 +1984,10 @@ export const studioApi = {
     scriptId: string;
     scriptRevision: string;
     revisionId?: string | null;
-  }): Promise<StudioScopeScriptBindingResult> {
+  }): Promise<StudioMemberBindingAcceptedResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
-      decodeStudioScopeBindingResult,
+      decodeStudioMemberBindingAcceptedResponse,
       {
         method: "PUT",
         headers: JSON_HEADERS,
@@ -1564,10 +2013,10 @@ export const studioApi = {
     actorTypeName: string;
     endpoints: StudioScopeGAgentBindingInput["endpoints"];
     revisionId?: string | null;
-  }): Promise<StudioScopeGAgentBindingResult> {
+  }): Promise<StudioMemberBindingAcceptedResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
-      decodeStudioScopeBindingResult,
+      decodeStudioMemberBindingAcceptedResponse,
       {
         method: "PUT",
         headers: JSON_HEADERS,
@@ -1600,10 +2049,21 @@ export const studioApi = {
   getMemberBinding(
     scopeId: string,
     memberId: string
-  ): Promise<StudioScopeBindingStatus> {
+  ): Promise<StudioMemberBindingViewResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding`,
-      decodeStudioScopeBindingStatus
+      decodeStudioMemberBindingViewResponse
+    );
+  },
+
+  getMemberBindingRun(
+    scopeId: string,
+    memberId: string,
+    bindingRunId: string
+  ): Promise<StudioMemberBindingRunStatusResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding-runs/${encodeURIComponent(bindingRunId.trim())}`,
+      decodeStudioMemberBindingRunStatusResponse
     );
   },
 
@@ -1855,25 +2315,57 @@ export const studioApi = {
     return requestJson("/api/user-config");
   },
 
-  saveUserConfig(input: StudioUserConfig): Promise<StudioUserConfig> {
-    return requestJson("/api/user-config", {
-      method: "PUT",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        defaultModel: input.defaultModel.trim(),
-        preferredLlmRoute: trimOptional(input.preferredLlmRoute),
-        runtimeMode: trimOptional(input.runtimeMode),
-        localRuntimeBaseUrl: trimOptional(input.localRuntimeBaseUrl),
-        remoteRuntimeBaseUrl: trimOptional(input.remoteRuntimeBaseUrl),
-        maxToolRounds: input.maxToolRounds ?? null,
-      }),
-    });
+  saveUserConfig(input: StudioUserConfig): Promise<StudioUserConfigSaveReceipt> {
+    return requestDecodedJson(
+      "/api/user-config",
+      decodeStudioUserConfigSaveReceipt,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          defaultModel: input.defaultModel.trim(),
+          preferredLlmRoute:
+            input.preferredLlmRoute === undefined || input.preferredLlmRoute === null
+              ? undefined
+              : input.preferredLlmRoute.trim(),
+          runtimeMode: trimOptional(input.runtimeMode),
+          localRuntimeBaseUrl: trimOptional(input.localRuntimeBaseUrl),
+          remoteRuntimeBaseUrl: trimOptional(input.remoteRuntimeBaseUrl),
+          maxToolRounds: input.maxToolRounds ?? null,
+        }),
+      }
+    );
   },
 
-  getUserConfigModels(): Promise<StudioUserConfigModelsResponse> {
+  getUserLlmSettings(): Promise<StudioUserLlmSettings> {
     return requestDecodedJson(
-      "/api/user-config/models",
-      decodeStudioUserConfigModelsResponse
+      "/api/user-config/llm",
+      decodeStudioUserLlmSettings
+    );
+  },
+
+  saveUserLlmSettings(input: {
+    routeValue: string;
+    model?: string | null;
+  }): Promise<StudioUserConfigSaveReceipt> {
+    return requestDecodedJson(
+      "/api/user-config/llm",
+      decodeStudioUserConfigSaveReceipt,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          routeValue: input.routeValue.trim(),
+          model: input.model?.trim() ?? "",
+        }),
+      }
+    );
+  },
+
+  getUserConfigRuntime(): Promise<StudioUserConfigRuntime> {
+    return requestDecodedJson(
+      "/api/user-config/runtime",
+      decodeStudioUserConfigRuntime
     );
   },
 
@@ -1897,14 +2389,16 @@ export const studioApi = {
         return {
           baseUrl,
           reachable: false,
-          message: `Cannot reach Ornn (${response.status}).`,
+          message: t("shared.studio.api.cannot.reach.ornn.status", "Cannot reach Ornn ({status}).", {
+            status: response.status,
+          }),
         };
       }
 
       return {
         baseUrl,
         reachable: true,
-        message: "Connected to Ornn.",
+        message: t("shared.studio.api.connected.to.ornn", "Connected to Ornn."),
       };
     } catch (error) {
       return {
@@ -1955,7 +2449,7 @@ export const studioApi = {
       `${baseUrl}/api/web/skill-search?${params.toString()}`
     );
     if (!response.ok) {
-      throw new Error(await readResponseError(response));
+      throw await createStudioApiError(response);
     }
 
     const contentType = response.headers?.get?.("content-type") ?? null;

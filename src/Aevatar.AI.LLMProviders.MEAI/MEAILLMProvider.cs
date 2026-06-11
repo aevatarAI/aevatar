@@ -13,6 +13,9 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using OpenAIAssistantChatMessage = OpenAI.Chat.AssistantChatMessage;
+using OpenAIChatMessageContentPart = OpenAI.Chat.ChatMessageContentPart;
+using OpenAIChatToolCall = OpenAI.Chat.ChatToolCall;
 
 namespace Aevatar.AI.LLMProviders.MEAI;
 
@@ -64,25 +67,12 @@ public sealed class MEAILLMProvider : ILLMProvider
         _logger = logger ?? NullLogger.Instance;
     }
 
-    // ─── ILLMProvider.ChatAsync ───
-
-    /// <summary>Single-turn LLM call. Converts Aevatar's LLMRequest into a list of MEAI ChatMessage instances.</summary>
-    public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-    {
-        var messages = ConvertMessages(request.Messages);
-        var options = BuildOptions(request);
-
-        _logger.LogDebug("MEAI ChatAsync: {MessageCount} messages, model={Model}",
-            messages.Count, options?.ModelId);
-
-        var response = await _client.GetResponseAsync(messages, options, ct);
-
-        return ConvertResponse(response);
-    }
-
     // ─── ILLMProvider.ChatStreamAsync ───
 
     /// <summary>Streaming LLM call. Returns an async-enumerable stream of chunks.</summary>
+    // Refactor (iter18/cluster-001):
+    //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+    //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -100,6 +90,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                 lastFinishReason = update.FinishReason.Value.ToString();
 
             var emittedTextFromContents = false;
+            var emittedReasoningFromContents = false;
             if (update.Contents is { Count: > 0 })
             {
                 foreach (var part in update.Contents)
@@ -115,6 +106,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                             };
                             break;
                         case TextReasoningContent reasoningContent when !string.IsNullOrEmpty(reasoningContent.Text):
+                            emittedReasoningFromContents = true;
                             emittedStreamChunk = true;
                             yield return new LLMStreamChunk
                             {
@@ -154,6 +146,16 @@ public sealed class MEAILLMProvider : ILLMProvider
                     DeltaContent = update.Text,
                 };
             }
+
+            if (!emittedReasoningFromContents &&
+                TryExtractOpenAIReasoningDelta(update, out var reasoningDelta))
+            {
+                emittedStreamChunk = true;
+                yield return new LLMStreamChunk
+                {
+                    DeltaReasoningContent = reasoningDelta,
+                };
+            }
         }
 
         // Some providers may terminate a streaming call without emitting any chunk at all.
@@ -165,47 +167,81 @@ public sealed class MEAILLMProvider : ILLMProvider
                 Name);
 
             var fallback = ConvertResponse(await _client.GetResponseAsync(messages, options, ct));
-            if (!string.IsNullOrEmpty(fallback.Content))
-            {
-                yield return new LLMStreamChunk
-                {
-                    DeltaContent = fallback.Content,
-                };
-            }
-
-            if (fallback.ContentParts is { Count: > 0 })
-            {
-                foreach (var contentPart in fallback.ContentParts)
-                {
-                    yield return new LLMStreamChunk
-                    {
-                        DeltaContentPart = contentPart,
-                    };
-                }
-            }
-
-            if (fallback.ToolCalls is { Count: > 0 })
-            {
-                foreach (var toolCall in fallback.ToolCalls)
-                {
-                    yield return new LLMStreamChunk
-                    {
-                        DeltaToolCall = toolCall,
-                    };
-                }
-            }
-
-            yield return new LLMStreamChunk
-            {
-                IsLast = true,
-                Usage = fallback.Usage,
-                FinishReason = fallback.FinishReason,
-            };
+            foreach (var fallbackChunk in MapResponseToStreamChunks(fallback))
+                yield return fallbackChunk;
             yield break;
         }
 
         // The final chunk marks the end
         yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason };
+    }
+
+    private static bool TryExtractOpenAIReasoningDelta(
+        ChatResponseUpdate update,
+        out string reasoningDelta)
+    {
+        reasoningDelta = string.Empty;
+        if (update.RawRepresentation is not OpenAI.Chat.StreamingChatCompletionUpdate rawUpdate)
+            return false;
+
+#pragma warning disable SCME0001
+        return TryGetStringFromPatch(rawUpdate.Patch, "$.choices[0].delta.reasoning_content"u8, out reasoningDelta) ||
+               TryGetStringFromPatch(rawUpdate.Patch, "$.delta.reasoning_content"u8, out reasoningDelta);
+#pragma warning restore SCME0001
+    }
+
+#pragma warning disable SCME0001
+    private static bool TryGetStringFromPatch(
+        System.ClientModel.Primitives.JsonPatch patch,
+        ReadOnlySpan<byte> path,
+        out string value)
+#pragma warning restore SCME0001
+    {
+        try
+        {
+            if (patch.TryGetValue(path, out string? patchValue) &&
+                !string.IsNullOrEmpty(patchValue))
+            {
+                value = patchValue;
+                return true;
+            }
+
+            value = string.Empty;
+            return false;
+        }
+        catch (Exception)
+        {
+            value = string.Empty;
+            return false;
+        }
+    }
+
+    private static IEnumerable<LLMStreamChunk> MapResponseToStreamChunks(LLMResponse fallback)
+    {
+        // Refactor (iter18/cluster-001):
+        //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+        //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
+        if (!string.IsNullOrEmpty(fallback.Content))
+            yield return new LLMStreamChunk { DeltaContent = fallback.Content };
+
+        if (fallback.ContentParts is { Count: > 0 })
+        {
+            foreach (var contentPart in fallback.ContentParts)
+                yield return new LLMStreamChunk { DeltaContentPart = contentPart };
+        }
+
+        if (fallback.ToolCalls is { Count: > 0 })
+        {
+            foreach (var toolCall in fallback.ToolCalls)
+                yield return new LLMStreamChunk { DeltaToolCall = toolCall };
+        }
+
+        yield return new LLMStreamChunk
+        {
+            IsLast = true,
+            Usage = fallback.Usage,
+            FinishReason = fallback.FinishReason,
+        };
     }
 
     // ─── Conversion: Aevatar -> MEAI ───
@@ -242,10 +278,15 @@ public sealed class MEAILLMProvider : ILLMProvider
                 meaiMsg.Contents.Add(new FunctionResultContent(msg.ToolCallId, BuildToolResultPayload(msg)));
             }
 
+            if (msg.Role == "assistant" && !string.IsNullOrEmpty(msg.ReasoningContent))
+                meaiMsg.Contents.Add(new TextReasoningContent(msg.ReasoningContent));
+
             // Handle assistant tool calls
             if (msg.ToolCalls is { Count: > 0 })
             {
                 meaiMsg.Contents.Clear();
+                if (!string.IsNullOrEmpty(msg.ReasoningContent))
+                    meaiMsg.Contents.Add(new TextReasoningContent(msg.ReasoningContent));
                 if (msg.ContentParts is { Count: > 0 })
                     AppendContentParts(meaiMsg, msg.ContentParts);
                 else if (msg.Content != null)
@@ -268,10 +309,147 @@ public sealed class MEAILLMProvider : ILLMProvider
                 }
             }
 
+            AttachOpenAIRawRepresentationForReasoning(meaiMsg, msg);
             result.Add(meaiMsg);
         }
 
         return result;
+    }
+
+    private static void AttachOpenAIRawRepresentationForReasoning(
+        Microsoft.Extensions.AI.ChatMessage meaiMessage,
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        if (sourceMessage.Role != "assistant" || string.IsNullOrEmpty(sourceMessage.ReasoningContent))
+            return;
+        if (!HasOpenAIAssistantWireContent(sourceMessage))
+            return;
+
+        var rawMessage = BuildOpenAIAssistantMessage(sourceMessage);
+
+        // OpenAI SDK currently exposes no typed reasoning_content property for
+        // assistant history messages, so we fall back to its experimental Patch
+        // API to inject the field into the serialized payload. The Patch surface
+        // is marked SCME0001 (model serialization may evolve), and the
+        // reasoning_content field name is also undocumented — any future SDK
+        // bump that renames the field, drops Patch, or changes its serializer
+        // shape would silently strip reasoning context from request history.
+        //
+        // Mitigations layered here:
+        //   1. SDK version is pinned in Directory.Packages.props
+        //      (`OpenAI Version="2.9.1"`) so an unintentional minor/major bump
+        //      cannot land without an explicit dependency-bump PR.
+        //   2. AIComponentCoverageTests asserts the serialized JSON contains
+        //      `"reasoning_content":"..."` after ConvertMessages — that integration
+        //      test fails the build the moment the patch stops landing in the
+        //      payload, which is the only signal that survives an SDK bump.
+        //   3. The try/catch below degrades a wire-format break into "no
+        //      reasoning replay" rather than crashing the entire chat call.
+        //
+        // Long-term: when the OpenAI SDK exposes a typed reasoning_content
+        // property (tracked at github.com/openai/openai-dotnet — file an issue
+        // referencing this code path before bumping), retire the Patch hack
+        // and remove the SCME0001 suppression.
+        try
+        {
+#pragma warning disable SCME0001
+            rawMessage.Patch.Set("$.reasoning_content"u8, sourceMessage.ReasoningContent);
+#pragma warning restore SCME0001
+            meaiMessage.RawRepresentation = rawMessage;
+        }
+        catch (Exception)
+        {
+            // Reasoning continuity is best-effort; on a SDK contract break we
+            // proceed without it rather than throwing. The source message's
+            // ReasoningContent stays in our own state and can be re-rendered
+            // through other paths if needed.
+        }
+    }
+
+    private static OpenAIAssistantChatMessage BuildOpenAIAssistantMessage(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        var contentParts = BuildOpenAITextContentParts(sourceMessage);
+        var toolCalls = BuildOpenAIToolCalls(sourceMessage);
+
+        OpenAIAssistantChatMessage rawMessage;
+        if (contentParts.Count > 0)
+        {
+            rawMessage = new OpenAIAssistantChatMessage(contentParts);
+            foreach (var toolCall in toolCalls)
+                rawMessage.ToolCalls.Add(toolCall);
+            return rawMessage;
+        }
+
+        rawMessage = toolCalls.Count > 0
+            ? new OpenAIAssistantChatMessage(toolCalls)
+            : new OpenAIAssistantChatMessage(string.Empty);
+        return rawMessage;
+    }
+
+    private static List<OpenAIChatMessageContentPart> BuildOpenAITextContentParts(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        var contentParts = new List<OpenAIChatMessageContentPart>();
+        if (sourceMessage.ContentParts is { Count: > 0 })
+        {
+            foreach (var part in sourceMessage.ContentParts)
+            {
+                if (part.Kind == ContentPartKind.Text && !string.IsNullOrEmpty(part.Text))
+                    contentParts.Add(OpenAIChatMessageContentPart.CreateTextPart(part.Text));
+            }
+        }
+
+        if (contentParts.Count == 0 && !string.IsNullOrEmpty(sourceMessage.Content))
+            contentParts.Add(OpenAIChatMessageContentPart.CreateTextPart(sourceMessage.Content));
+
+        return contentParts;
+    }
+
+    private static bool HasOpenAIAssistantWireContent(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        if (sourceMessage.ToolCalls is { Count: > 0 })
+            return true;
+        if (!string.IsNullOrEmpty(sourceMessage.Content))
+            return true;
+        return sourceMessage.ContentParts is { Count: > 0 }
+               && sourceMessage.ContentParts.Any(static part =>
+                   part.Kind == ContentPartKind.Text && !string.IsNullOrEmpty(part.Text));
+    }
+
+    private static List<OpenAIChatToolCall> BuildOpenAIToolCalls(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        var toolCalls = new List<OpenAIChatToolCall>();
+        if (sourceMessage.ToolCalls is not { Count: > 0 })
+            return toolCalls;
+
+        foreach (var toolCall in sourceMessage.ToolCalls)
+        {
+            toolCalls.Add(OpenAIChatToolCall.CreateFunctionToolCall(
+                toolCall.Id,
+                toolCall.Name,
+                BinaryData.FromString(NormalizeToolArgumentsJson(toolCall.ArgumentsJson))));
+        }
+
+        return toolCalls;
+    }
+
+    private static string NormalizeToolArgumentsJson(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return "{}";
+
+        try
+        {
+            using var _ = JsonDocument.Parse(argumentsJson);
+            return argumentsJson;
+        }
+        catch (JsonException)
+        {
+            return "{}";
+        }
     }
 
     private static void AppendContentParts(
@@ -440,6 +618,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         // ChatResponse.Messages contains all reply messages
         var lastMessage = response.Messages.LastOrDefault();
         var content = ExtractMessageText(lastMessage);
+        var reasoningContent = ExtractReasoningContent(lastMessage);
         List<ToolCall>? toolCalls = null;
         List<ContentPart>? contentParts = null;
 
@@ -478,6 +657,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         return new LLMResponse
         {
             Content = content,
+            ReasoningContent = reasoningContent,
             ContentParts = contentParts,
             ToolCalls = toolCalls,
             Usage = usage,
@@ -505,6 +685,22 @@ public sealed class MEAILLMProvider : ILLMProvider
         return textParts.Count == 0
             ? message.Text
             : string.Concat(textParts);
+    }
+
+    private static string? ExtractReasoningContent(Microsoft.Extensions.AI.ChatMessage? message)
+    {
+        if (message?.Contents is not { Count: > 0 })
+            return null;
+
+        var reasoningParts = message.Contents
+            .OfType<TextReasoningContent>()
+            .Select(part => part.Text)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .ToList();
+
+        return reasoningParts.Count == 0
+            ? null
+            : string.Concat(reasoningParts);
     }
 
     private static ToolCall ConvertFunctionCall(FunctionCallContent functionCall)

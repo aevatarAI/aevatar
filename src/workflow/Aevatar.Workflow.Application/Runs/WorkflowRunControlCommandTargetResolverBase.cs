@@ -1,5 +1,4 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
@@ -8,14 +7,11 @@ internal abstract class WorkflowRunControlCommandTargetResolverBase<TCommand>
     : ICommandTargetResolver<TCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>
     where TCommand : IWorkflowRunControlCommand
 {
-    private readonly IActorRuntime _runtime;
     private readonly IWorkflowActorBindingReader _bindingReader;
 
     protected WorkflowRunControlCommandTargetResolverBase(
-        IActorRuntime runtime,
         IWorkflowActorBindingReader bindingReader)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _bindingReader = bindingReader ?? throw new ArgumentNullException(nameof(bindingReader));
     }
 
@@ -46,14 +42,13 @@ internal abstract class WorkflowRunControlCommandTargetResolverBase<TCommand>
                 validationError);
         }
 
-        var actor = await _runtime.GetAsync(actorId);
-        if (actor == null)
+        var binding = await _bindingReader.GetAsync(actorId, ct);
+        if (binding == null)
         {
             return CommandTargetResolution<WorkflowRunControlCommandTarget, WorkflowRunControlStartError>.Failure(
                 WorkflowRunControlStartError.ActorNotFound(actorId, runId));
         }
 
-        var binding = await _bindingReader.GetAsync(actorId, ct);
         if (binding?.ActorKind != WorkflowActorKind.Run)
         {
             return CommandTargetResolution<WorkflowRunControlCommandTarget, WorkflowRunControlStartError>.Failure(
@@ -74,7 +69,7 @@ internal abstract class WorkflowRunControlCommandTargetResolverBase<TCommand>
         }
 
         return CommandTargetResolution<WorkflowRunControlCommandTarget, WorkflowRunControlStartError>.Success(
-            new WorkflowRunControlCommandTarget(actor, boundRunId));
+            new WorkflowRunControlCommandTarget(actorId, boundRunId));
     }
 
     protected virtual WorkflowRunControlStartError? ValidateCommand(

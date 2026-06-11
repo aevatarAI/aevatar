@@ -69,8 +69,10 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
-            new InertScopeBindingCommandPort(),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
             lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
             commandPort);
 
         var contract = await service.GetEndpointContractAsync(ScopeId, MemberId, "chat", CancellationToken.None);
@@ -90,6 +92,57 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         contract.InvokePath.Should().Be($"/api/scopes/{ScopeId}/members/{MemberId}/invoke/chat:stream");
         contract.SupportsSse.Should().BeTrue();
         contract.StreamFrameFormat.Should().Be("workflow-run-event");
+        contract.InvocationReadiness.CanInvoke.Should().BeTrue();
+        contract.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
+    }
+
+    [Fact]
+    public async Task GetEndpointContractAsync_ShouldExposePreparedArtifactMissingReadiness()
+    {
+        var detail = NewDetail();
+        var queryPort = new InMemoryMemberQueryPort(detail);
+        var lifecycle = new InMemoryServiceLifecycleQueryPort
+        {
+            Service = NewService(
+                endpoints:
+                [
+                    new ServiceEndpointSnapshot(
+                        EndpointId: "chat",
+                        DisplayName: "Chat",
+                        Kind: "chat",
+                        RequestTypeUrl: "type.googleapis.com/x.Request",
+                        ResponseTypeUrl: "type.googleapis.com/x.Response",
+                        Description: string.Empty),
+                ]),
+            Revisions = NewRevisions(
+                implementationKind: ServiceImplementationKind.Workflow,
+                endpoints:
+                [
+                    new ServiceEndpointSnapshot(
+                        EndpointId: "chat",
+                        DisplayName: "Chat",
+                        Kind: "chat",
+                        RequestTypeUrl: "type.googleapis.com/x.Request",
+                        ResponseTypeUrl: "type.googleapis.com/x.Response",
+                        Description: string.Empty),
+                ]),
+        };
+
+        var service = new StudioMemberService(
+            new InertMemberCommandPort(),
+            queryPort,
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
+            lifecycle,
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.PreparedArtifactMissing, invokeReady: false),
+            new RecordingServiceCommandPort());
+
+        var contract = await service.GetEndpointContractAsync(ScopeId, MemberId, "chat", CancellationToken.None);
+
+        contract.Should().NotBeNull();
+        contract!.InvocationReadiness.CanInvoke.Should().BeFalse();
+        contract.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing);
+        contract.InvocationReadiness.ReasonCode.Should().Be(StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing);
     }
 
     [Fact]
@@ -106,8 +159,10 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
-            new InertScopeBindingCommandPort(),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
             lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
             new RecordingServiceCommandPort());
 
         var contract = await service.GetEndpointContractAsync(ScopeId, MemberId, "ghost", CancellationToken.None);
@@ -122,8 +177,10 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
-            new InertScopeBindingCommandPort(),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
             new InMemoryServiceLifecycleQueryPort(),
+            new ReadyScopeBindingReadinessQueryPort(),
             new RecordingServiceCommandPort());
 
         var act = () => service.GetEndpointContractAsync(ScopeId, "m-missing", "chat");
@@ -143,8 +200,10 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
-            new InertScopeBindingCommandPort(),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
             lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
             new RecordingServiceCommandPort());
 
         var act = () => service.GetEndpointContractAsync(ScopeId, MemberId, "chat");
@@ -172,8 +231,10 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
-            new InertScopeBindingCommandPort(),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
             lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
             commandPort);
 
         var response = await service.ActivateBindingRevisionAsync(
@@ -216,8 +277,10 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
-            new InertScopeBindingCommandPort(),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
             lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
             commandPort);
 
         var act = () => service.ActivateBindingRevisionAsync(ScopeId, MemberId, "rev-r");
@@ -247,8 +310,10 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
-            new InertScopeBindingCommandPort(),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
             lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
             commandPort);
 
         var act = () => service.ActivateBindingRevisionAsync(ScopeId, MemberId, "rev-missing");
@@ -276,8 +341,10 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
-            new InertScopeBindingCommandPort(),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
             lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
             commandPort);
 
         var response = await service.RetireBindingRevisionAsync(
@@ -312,8 +379,10 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
-            new InertScopeBindingCommandPort(),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
             lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
             commandPort);
 
         var act = () => service.RetireBindingRevisionAsync(ScopeId, MemberId, "rev-missing");
@@ -402,6 +471,16 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             Task.FromResult(_detail);
     }
 
+    private sealed class InertBindingRunQueryPort : IStudioMemberBindingRunQueryPort
+    {
+        public Task<StudioMemberBindingRunStatusResponse?> GetAsync(
+            string scopeId,
+            string memberId,
+            string bindingRunId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not query binding runs.");
+    }
+
     // Bind / impl-update commands are not exercised here; we route through
     // the member query port and platform service ports directly. Any
     // accidental fan-out into this surface should fail loudly.
@@ -416,10 +495,26 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not update implementation refs.");
 
-        public Task RecordBindingAsync(
-            string scopeId, string memberId, string publishedServiceId,
-            string revisionId, string implementationKindName, CancellationToken ct = default) =>
-            throw new InvalidOperationException("contract/activate/retire flows must not record new bindings.");
+        public Task StartBindingRunAsync(
+            StudioMemberBindingRunStartRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not start binding runs.");
+
+        public Task PatchTeamAssignmentAsync(
+            string scopeId, string memberId, string? targetTeamId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not reassign teams.");
+    }
+
+    private sealed class InertTeamQueryPort : IStudioTeamQueryPort
+    {
+        public Task<StudioTeamRosterResponse> ListAsync(
+            string scopeId, StudioTeamRosterPageRequest? page = null, CancellationToken ct = default) =>
+            Task.FromResult(new StudioTeamRosterResponse(scopeId, []));
+
+        public Task<StudioTeamSummaryResponse?> GetAsync(
+            string scopeId, string teamId, CancellationToken ct = default) =>
+            Task.FromResult<StudioTeamSummaryResponse?>(null);
     }
 
     private sealed class InertScopeBindingCommandPort : IScopeBindingCommandPort
@@ -427,6 +522,41 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         public Task<ScopeBindingUpsertResult> UpsertAsync(
             ScopeBindingUpsertRequest request, CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not invoke the scope binding port.");
+    }
+
+    private sealed class ReadyScopeBindingReadinessQueryPort : FixedScopeBindingReadinessQueryPort
+    {
+        public ReadyScopeBindingReadinessQueryPort()
+            : base(ScopeBindingReadinessStatus.Ready, invokeReady: true)
+        {
+        }
+    }
+
+    private class FixedScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    {
+        private readonly ScopeBindingReadinessStatus _status;
+        private readonly bool _invokeReady;
+
+        public FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus status, bool invokeReady)
+        {
+            _status = status;
+            _invokeReady = invokeReady;
+        }
+
+        public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
+            ScopeBindingReadinessRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ScopeBindingReadinessSnapshot(
+                request.ScopeId,
+                request.ServiceId,
+                _status,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: _invokeReady,
+                RevisionId: request.ExpectedRevisionId ?? "rev-1",
+                DeploymentId: "dep-1",
+                ObservedAtUtc: DateTimeOffset.UtcNow));
     }
 
     private sealed class InMemoryServiceLifecycleQueryPort : IServiceLifecycleQueryPort

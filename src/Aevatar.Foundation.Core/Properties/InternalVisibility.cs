@@ -10,3 +10,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Aevatar.Foundation.Runtime.Implementations.Orleans")]
 [assembly: InternalsVisibleTo("Aevatar.Foundation.Core.Tests")]
 [assembly: InternalsVisibleTo("Aevatar.Foundation.Runtime.Hosting.Tests")]
+[assembly: InternalsVisibleTo("Aevatar.Integration.Tests")]

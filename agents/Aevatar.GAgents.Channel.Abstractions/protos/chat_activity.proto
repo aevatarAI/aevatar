@@ -178,6 +178,42 @@ message ActionOption {
   string value = 2;
 }
 
+// Refactor (iter93/cluster-093):
+// Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+// New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+// extension data plus legacy callback JSON inbound compatibility.
+// Carries repository-owned workflow resume control semantics for one card action.
+message WorkflowResumeActionPayload {
+  // The workflow actor that owns the suspended run.
+  string actor_id = 1;
+  // The workflow run identifier.
+  string run_id = 2;
+  // The suspended step identifier.
+  string step_id = 3;
+  // The optional approval decision when the suspension is an approval request.
+  optional bool approved = 4;
+  // The submitted user input for generic human-input suspensions.
+  string user_input = 5;
+  // The edited content submitted with an approval action.
+  string edited_content = 6;
+  // The feedback submitted with an approval or rejection action.
+  string feedback = 7;
+}
+
+// Refactor (iter93/cluster-093):
+// Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+// New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+// extension data plus legacy callback JSON inbound compatibility.
+// Carries repository-owned LLM selection control semantics for one card action.
+message LlmSelectionActionPayload {
+  // The LLM selection action, such as selecting a service or applying a preset.
+  string action = 1;
+  // The target LLM service identifier when selecting a service.
+  string service_id = 2;
+  // The target preset identifier when applying a preset.
+  string preset_id = 3;
+}
+
 // Declares one interactive card element.
 message ActionElement {
   // The element kind.
@@ -199,9 +235,13 @@ message ActionElement {
   // Whether the element is disabled.
   bool is_disabled = 9;
   // Additional scalar arguments forwarded verbatim to the adapter so they surface on callback.
-  // Used to carry correlation keys like workflow actor_id / run_id / step_id that the outbound
-  // side needs the inbound handler to echo back without reinterpretation.
+  // This is an open extension boundary for third-party/platform-specific scalar values. Repository-owned
+  // workflow resume and LLM selection semantics must use the typed payload fields below.
   map<string, string> arguments = 10;
+  // Repository-owned workflow resume payload for this action.
+  WorkflowResumeActionPayload workflow_resume = 11;
+  // Repository-owned LLM selection payload for this action.
+  LlmSelectionActionPayload llm_selection = 12;
 }
 
 // Declares one title-text pair rendered inside a card.
@@ -244,6 +284,10 @@ message CardActionSubmission {
   map<string, string> form_fields = 4;
   // The platform-native source message identifier for the card being acted on.
   string source_message_id = 5;
+  // Repository-owned workflow resume payload submitted by this action.
+  WorkflowResumeActionPayload workflow_resume = 6;
+  // Repository-owned LLM selection payload submitted by this action.
+  LlmSelectionActionPayload llm_selection = 7;
 }
 
 // Carries the channel-agnostic message content used for send, update, and reply operations.
@@ -297,6 +341,25 @@ message TransportExtras {
   // chat can address it via `receive_id_type=chat_id`). For p2p DMs the chat_id is bot-specific
   // and not cross-app safe; downstream senders prefer `nyx_lark_union_id` for p2p targets.
   string nyx_lark_chat_id = 8;
+  // The Aevatar registration scope resolved at the relay ingress boundary. This typed field
+  // lets ConversationGAgent build the chat-routing caller scope before any turn runner metadata
+  // exists, without falling back to a generic metadata bag.
+  string nyx_registration_scope_id = 9;
+  // The sender's NyxID user id, resolved at the relay ingress boundary by calling NyxID `/me`
+  // with the relay-supplied user access token. Lets `ConversationGAgent` build a per-user
+  // owner scope for chat-route policy lookup (matching scope_id-only and per-user scopes
+  // alike) without re-resolving inside the actor turn. Empty when the relay payload did not
+  // surface a user access token or when `/me` resolution failed at ingress.
+  string nyx_sender_user_id = 10;
+  // The Lark operator `user_id` (`ou_*`) for card action callbacks. This identifies the user
+  // who clicked or submitted the card action. Empty for non-Lark traffic and ordinary messages.
+  string nyx_lark_operator_user_id = 11;
+  // The Lark operator `open_id` (`ou_*`) for card action callbacks when the event supplies it.
+  // Empty for non-Lark traffic and ordinary messages.
+  string nyx_lark_operator_open_id = 12;
+  // The Lark operator `union_id` (`on_*`) for card action callbacks. Kept separate from the
+  // sender union id so prompts can distinguish card operator facts from ordinary message senders.
+  string nyx_lark_operator_union_id = 13;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

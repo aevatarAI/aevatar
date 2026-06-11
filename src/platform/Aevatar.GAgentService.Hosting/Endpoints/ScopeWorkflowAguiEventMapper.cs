@@ -1,4 +1,4 @@
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;

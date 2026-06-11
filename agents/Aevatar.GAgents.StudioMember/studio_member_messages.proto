@@ -27,6 +27,24 @@ enum StudioMemberLifecycleStage {
   STUDIO_MEMBER_LIFECYCLE_STAGE_BIND_READY = 3;
 }
 
+enum StudioMemberBindingRunStatus {
+  STUDIO_MEMBER_BINDING_RUN_STATUS_UNSPECIFIED = 0;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_ACCEPTED = 1;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_ADMISSION_PENDING = 2;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_ADMITTED = 3;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_PLATFORM_BINDING_PENDING = 4;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_SUCCEEDED = 5;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_FAILED = 6;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_REJECTED = 7;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_MEMBER_NOTIFICATION_PENDING = 8;
+}
+
+enum StudioMemberGAgentEndpointKind {
+  STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_UNSPECIFIED = 0;
+  STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_COMMAND = 1;
+  STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_CHAT = 2;
+}
+
 // ─── Implementation refs ───
 //
 // Each implementation kind carries a typed sub-message rather than a generic
@@ -66,6 +84,91 @@ message StudioMemberBindingContract {
   google.protobuf.Timestamp bound_at_utc = 4;
 }
 
+message StudioMemberBindingFailure {
+  string code = 1;
+  string message = 2;
+  google.protobuf.Timestamp failed_at_utc = 3;
+}
+
+message StudioMemberBindingAuthorityState {
+  string current_binding_run_id = 1;
+  StudioMemberBindingRunStatus current_status = 2;
+  string last_terminal_binding_run_id = 3;
+  StudioMemberBindingFailure last_failure = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+}
+
+message StudioMemberWorkflowBindingRequest {
+  repeated string workflow_yamls = 1;
+  string workflow_id = 2;
+}
+
+message StudioMemberScriptBindingRequest {
+  string script_id = 1;
+  optional string script_revision = 2;
+}
+
+message StudioMemberGAgentEndpointBindingRequest {
+  string endpoint_id = 1;
+  string display_name = 2;
+  StudioMemberGAgentEndpointKind kind = 3;
+  string request_type_url = 4;
+  string response_type_url = 5;
+  string description = 6;
+}
+
+message StudioMemberGAgentBindingRequest {
+  string actor_type_name = 1;
+  repeated StudioMemberGAgentEndpointBindingRequest endpoints = 2;
+}
+
+message StudioMemberBindingRequest {
+  string binding_run_id = 1;
+  string scope_id = 2;
+  string member_id = 3;
+  string request_hash = 4;
+  optional string revision_id = 5;
+  oneof implementation {
+    StudioMemberWorkflowBindingRequest workflow = 10;
+    StudioMemberScriptBindingRequest script = 11;
+    StudioMemberGAgentBindingRequest gagent = 12;
+  }
+}
+
+message StudioMemberBindingAdmittedSnapshot {
+  string member_id = 1;
+  string scope_id = 2;
+  string published_service_id = 3;
+  StudioMemberImplementationKind implementation_kind = 4;
+  string display_name = 5;
+}
+
+message StudioMemberPlatformBindingResult {
+  string published_service_id = 1;
+  string revision_id = 2;
+  StudioMemberImplementationKind implementation_kind = 3;
+  string expected_actor_id = 4;
+  StudioMemberImplementationRef implementation_ref = 5;
+}
+
+message StudioMemberBindingRunState {
+  string binding_run_id = 1;
+  string scope_id = 2;
+  string member_id = 3;
+  string request_hash = 4;
+  StudioMemberBindingRunStatus status = 5;
+  StudioMemberBindingRequest request = 6;
+  StudioMemberBindingAdmittedSnapshot admitted = 7;
+  StudioMemberPlatformBindingResult platform_result = 8;
+  StudioMemberBindingFailure failure = 9;
+  google.protobuf.Timestamp accepted_at_utc = 10;
+  google.protobuf.Timestamp updated_at_utc = 11;
+  int32 attempt_count = 12;
+  string platform_binding_command_id = 13;
+  bool platform_execution_in_flight = 14;
+  google.protobuf.Timestamp platform_execution_started_at_utc = 15;
+}
+
 // ─── State ───
 //
 // State for a single StudioMember actor. Actor ID format:
@@ -87,6 +190,14 @@ message StudioMemberState {
   google.protobuf.Timestamp created_at_utc = 9;
   google.protobuf.Timestamp updated_at_utc = 10;
   StudioMemberBindingContract last_binding = 11;
+  // Async binding protocol state. `last_binding` remains the single source of
+  // truth for the last successful binding contract; this sub-state owns active
+  // run status, stale-run rejection, and failure details.
+  StudioMemberBindingAuthorityState binding = 12;
+  // Optional team membership (ADR-0017). Absent means "unassigned"; empty
+  // string is rejected at the application layer. Mutated only via committed
+  // StudioMemberReassignedEvent.
+  optional string team_id = 50;
 }
 
 // ─── Events ───
@@ -104,6 +215,19 @@ message StudioMemberCreatedEvent {
   google.protobuf.Timestamp created_at_utc = 7;
 }
 
+// Refactor (iter1345/cluster-519-draft-member-authority):
+//   Old pattern: draft member authority could be implied by API/query-side
+//   orchestration instead of an explicit actor-owned command.
+//   New principle: projection fanout sends this typed command through the
+//   existing dispatch envelope so StudioMemberGAgent remains the authority.
+message EnsureStudioMember {
+  string member_id = 1;
+  string scope_id = 2;
+  string display_name = 3;
+  string description = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+}
+
 message StudioMemberRenamedEvent {
   string display_name = 1;
   string description = 2;
@@ -116,9 +240,139 @@ message StudioMemberImplementationUpdatedEvent {
   google.protobuf.Timestamp updated_at_utc = 3;
 }
 
-message StudioMemberBoundEvent {
-  string published_service_id = 1;
-  string revision_id = 2;
-  StudioMemberImplementationKind implementation_kind = 3;
-  google.protobuf.Timestamp bound_at_utc = 4;
+message StudioMemberBindingPlatformPendingEvent {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  google.protobuf.Timestamp pending_at_utc = 3;
+}
+
+message StudioMemberBindingCompletedEvent {
+  string binding_run_id = 1;
+  string published_service_id = 2;
+  string revision_id = 3;
+  StudioMemberImplementationKind implementation_kind = 4;
+  StudioMemberImplementationRef implementation_ref = 5;
+  google.protobuf.Timestamp completed_at_utc = 6;
+}
+
+message StudioMemberBindingFailedEvent {
+  string binding_run_id = 1;
+  StudioMemberBindingFailure failure = 2;
+}
+
+message StudioMemberBindingRunRequested {
+  StudioMemberBindingRequest request = 1;
+  google.protobuf.Timestamp requested_at_utc = 2;
+}
+
+message StudioMemberBindAdmissionRequested {
+  string binding_run_id = 1;
+  string scope_id = 2;
+  string member_id = 3;
+  string request_hash = 4;
+  StudioMemberBindingRequest request = 5;
+  google.protobuf.Timestamp requested_at_utc = 6;
+}
+
+message StudioMemberBindingAdmittedEvent {
+  string binding_run_id = 1;
+  string member_id = 2;
+  string scope_id = 3;
+  string published_service_id = 4;
+  StudioMemberImplementationKind implementation_kind = 5;
+  string display_name = 6;
+  google.protobuf.Timestamp admitted_at_utc = 7;
+}
+
+message StudioMemberBindingRejectedEvent {
+  string binding_run_id = 1;
+  string scope_id = 2;
+  string member_id = 3;
+  StudioMemberBindingFailure failure = 4;
+}
+
+message StudioMemberPlatformBindingStartRequested {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberBindingRequest request = 3;
+  StudioMemberBindingAdmittedSnapshot admitted = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+}
+
+message StudioMemberPlatformBindingAccepted {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  google.protobuf.Timestamp accepted_at_utc = 3;
+}
+
+message StudioMemberPlatformBindingExecuteRequested {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  bool recovery_execution = 3;
+}
+
+message StudioMemberPlatformBindingWatchdogFired {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+}
+
+message StudioMemberPlatformBindingExecutionStarted {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  google.protobuf.Timestamp started_at_utc = 3;
+}
+
+message StudioMemberPlatformBindingSucceeded {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberPlatformBindingResult result = 3;
+  google.protobuf.Timestamp completed_at_utc = 4;
+}
+
+message StudioMemberPlatformBindingFailed {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberBindingFailure failure = 3;
+}
+
+message StudioMemberBindingTerminalAcknowledged {
+  string binding_run_id = 1;
+  StudioMemberBindingRunStatus status = 2;
+  google.protobuf.Timestamp acknowledged_at_utc = 3;
+}
+
+// Actor-owned PATCH intent for a member's team assignment. The HTTP /
+// application layer dispatches this only when PATCH includes `teamId`.
+// target_team_id absent means explicit unassign; a present value means assign
+// or move to that team. No from_team_id is supplied by callers: the
+// StudioMember actor derives it from its own authoritative state.
+message StudioMemberTeamAssignmentPatchRequested {
+  string member_id = 1;
+  string scope_id = 2;
+  optional string target_team_id = 3;
+  google.protobuf.Timestamp requested_at_utc = 4;
+}
+
+// Single reassignment event covers assign / unassign / move (ADR-0017).
+// A durable committed-state consumer dispatches this committed event to the
+// source and destination StudioTeamGAgents. Each TeamGAgent applies
+// idempotent set operations against this event.
+//
+// from_team_id and to_team_id are `optional` so absence carries the
+// "unassigned" intent; empty-string sentinels are not used.
+//   pure assign:   from_team_id absent,    to_team_id = "T2"
+//   pure unassign: from_team_id = "T1",    to_team_id absent
+//   move:          from_team_id = "T1",    to_team_id = "T2"
+// Constraints (enforced by `StudioMemberGAgent` member actor + materializer fanout 自动到 team(s)):
+//   - At least one of from_team_id / to_team_id must be present.
+//   - from_team_id == to_team_id (both present and equal) is rejected.
+//   - The teams identified by from_team_id / to_team_id (when present) must be
+//     in the same scope as the member (i.e. TeamGAgent.State.ScopeId must equal
+//     the member's scope_id).
+message StudioMemberReassignedEvent {
+  string member_id              = 1;
+  string scope_id               = 2;
+  optional string from_team_id  = 3;
+  optional string to_team_id    = 4;
+  google.protobuf.Timestamp reassigned_at_utc = 5;
 }

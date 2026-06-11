@@ -1,5 +1,4 @@
-using Aevatar.AI.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
@@ -133,7 +132,10 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             CommandId = state.LastCommandId ?? string.Empty,
             ReportVersion = "3.0",
             ProjectionScope = WorkflowExecutionProjectionScope.RunIsolated,
-            TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot,
+            // Refactor (iter33/cluster-035-workflow-report-runtime-topology-sideread):
+            //   Old pattern: Workflow report 用 IActorRuntime.GetAsync(...).GetChildrenIdsAsync() 读 runtime children 当 topology 事实,违反 runtime-shape-not-fact + side-read
+            //   New principle: 删 IWorkflowExecutionTopologyResolver + ActorRuntimeWorkflowExecutionTopologyResolver;topology 从 committed event projection 来(WorkflowRoleActorLinkedEvent + SubWorkflowBindingUpsertedEvent 已 materialize);enum 值 RuntimeSnapshot 改 CommittedProjection;无 proto 改
+            TopologySource = WorkflowExecutionTopologySource.CommittedProjection,
             CreatedAt = observedAt,
         };
         ApplyReportBase(readModel, context, state, stateEvent, observedAt);
@@ -219,7 +221,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         step.StepType = evt.StepType ?? string.Empty;
         step.TargetRole = evt.TargetRole ?? string.Empty;
         step.RequestedAt = observedAt;
-        ReplaceMap(step.RequestParameters, evt.Parameters);
+        var parameters = WorkflowStepParameterProjectionSource.From(evt);
+        ReplaceMap(step.RequestParameters, parameters);
         AddTimeline(
             readModel.Timeline,
             observedAt,
@@ -229,7 +232,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             evt.StepId,
             evt.StepType,
             eventType,
-            evt.Parameters);
+            parameters);
     }
 
     private static void ApplyStepCompleted(
@@ -274,6 +277,10 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
         step.RequestedVariableName = evt.VariableName ?? string.Empty;
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
+        // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
+        //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
+        //   New principle: typed suspension fields are the single source; Metadata is open extension data only.
+        var timelineMetadata = BuildWorkflowSuspendedTimelineMetadata(evt);
         AddTimeline(
             readModel.Timeline,
             observedAt,
@@ -283,7 +290,38 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             evt.StepId,
             step.StepType,
             eventType,
-            evt.Metadata);
+            timelineMetadata);
+    }
+
+    private static Dictionary<string, string> BuildWorkflowSuspendedTimelineMetadata(WorkflowSuspendedEvent evt)
+    {
+        var metadata = FilterOpenExtensionMetadata(evt.Metadata);
+        var variableName = !string.IsNullOrWhiteSpace(evt.VariableName) ? evt.VariableName : string.Empty;
+        var secure = evt.Secure;
+        var redactedOutput = !string.IsNullOrWhiteSpace(evt.RedactedOutput) ? evt.RedactedOutput : string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(variableName))
+            metadata["variable"] = variableName;
+        if (secure)
+            metadata["secure"] = "true";
+        if (!string.IsNullOrWhiteSpace(redactedOutput))
+            metadata["redacted_output"] = redactedOutput;
+
+        return metadata;
+    }
+
+    private static Dictionary<string, string> FilterOpenExtensionMetadata(IDictionary<string, string> metadata)
+    {
+        var filtered = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
+        {
+            if (key is "variable" or "secure" or "input_mode" or "redacted_output")
+                continue;
+
+            filtered[key] = value;
+        }
+
+        return filtered;
     }
 
     private static void ApplyWaitingForSignal(
@@ -334,6 +372,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         WorkflowRunInsightReportDocument readModel,
         WorkflowRoleActorLinkedEvent evt)
     {
+        // Topology is materialized from committed link events, not runtime children.
         UpsertTopology(readModel.Topology, readModel.RootActorId, evt.ChildActorId);
     }
 
@@ -341,6 +380,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         WorkflowRunInsightReportDocument readModel,
         SubWorkflowBindingUpsertedEvent evt)
     {
+        // Topology is materialized from committed link events, not runtime children.
         UpsertTopology(readModel.Topology, readModel.RootActorId, evt.ChildActorId);
     }
 
@@ -462,41 +502,6 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             null,
             eventType,
             null);
-    }
-
-    public static WorkflowRunTimelineDocument BuildTimelineDocument(WorkflowRunInsightReportDocument report)
-    {
-        ArgumentNullException.ThrowIfNull(report);
-
-        return new WorkflowRunTimelineDocument
-        {
-            Id = report.Id,
-            RootActorId = report.RootActorId,
-            CommandId = report.CommandId,
-            StateVersion = report.StateVersion,
-            LastEventId = report.LastEventId,
-            UpdatedAt = report.UpdatedAt,
-            Timeline = report.Timeline.Select(CloneTimelineEvent).ToList(),
-        };
-    }
-
-    public static WorkflowRunGraphArtifactDocument BuildGraphDocument(WorkflowRunInsightReportDocument report)
-    {
-        ArgumentNullException.ThrowIfNull(report);
-
-        return new WorkflowRunGraphArtifactDocument
-        {
-            Id = report.Id,
-            RootActorId = report.RootActorId,
-            CommandId = report.CommandId,
-            WorkflowName = report.WorkflowName,
-            Input = report.Input,
-            StateVersion = report.StateVersion,
-            LastEventId = report.LastEventId,
-            UpdatedAt = report.UpdatedAt,
-            Topology = report.Topology.Select(edge => new WorkflowExecutionTopologyEdge(edge.Parent, edge.Child)).ToList(),
-            Steps = report.Steps.Select(CloneStepTrace).ToList(),
-        };
     }
 
     private static WorkflowExecutionStepTrace GetOrCreateStep(

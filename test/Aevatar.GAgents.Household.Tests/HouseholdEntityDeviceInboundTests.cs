@@ -15,11 +15,12 @@ namespace Aevatar.GAgents.Household.Tests;
 
 /// <summary>
 /// Tests for <see cref="HouseholdEntity.HandleDeviceInbound"/> — validates that
-/// inbound device events are correctly dispatched, parsed, and applied to state.
+/// typed inbound device events are correctly dispatched and applied to state.
 /// </summary>
 public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
 {
     private HouseholdEntity _entity = null!;
+    private RecordingLLMProvider _llmProvider = null!;
     private ServiceProvider _serviceProvider = null!;
 
     public async Task InitializeAsync()
@@ -33,7 +34,8 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
 
         _serviceProvider = services.BuildServiceProvider();
 
-        _entity = new HouseholdEntity(new StubLLMProviderFactory())
+        _llmProvider = new RecordingLLMProvider("default");
+        _entity = new HouseholdEntity(new StubLLMProviderFactory(_llmProvider))
         {
             Services = _serviceProvider,
             EventSourcingBehaviorFactory =
@@ -50,14 +52,19 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_TemperatureChange_UpdatesEnvironment()
+    public async Task HandleDeviceInbound_TypedTemperature_UpdatesEnvironment()
     {
         var evt = new DeviceInbound
         {
             EventId = "evt-1",
             Source = "temperature-sensor",
             EventType = "temperature_change",
-            PayloadJson = """{"temperature": 28.5, "humidity": 65.0, "light_level": 70.0}""",
+            Sensor = new SensorDeviceInboundPayload
+            {
+                Temperature = 28.5,
+                Humidity = 65.0,
+                LightLevel = 70.0,
+            },
         };
 
         await _entity.HandleDeviceInbound(evt);
@@ -69,14 +76,17 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_PersonDetected_UpdatesSceneDescription()
+    public async Task HandleDeviceInbound_TypedCamera_UpdatesSceneDescription()
     {
         var evt = new DeviceInbound
         {
             EventId = "evt-2",
             Source = "camera-analyzer",
             EventType = "person_detected",
-            PayloadJson = """{"description": "Two people sitting in the living room"}""",
+            Camera = new CameraDeviceInboundPayload
+            {
+                SceneDescription = "Two people sitting in the living room",
+            },
         };
 
         await _entity.HandleDeviceInbound(evt);
@@ -86,14 +96,14 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_MotionDetected_UpdatesMotionFlag()
+    public async Task HandleDeviceInbound_TypedMotion_UpdatesMotionFlag()
     {
         var evt = new DeviceInbound
         {
             EventId = "evt-3",
             Source = "motion-sensor",
             EventType = "motion_detected",
-            PayloadJson = "{}",
+            Motion = new MotionDeviceInboundPayload { Detected = true },
         };
 
         await _entity.HandleDeviceInbound(evt);
@@ -103,7 +113,7 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_UnknownEventType_NoStateChange()
+    public async Task HandleDeviceInbound_NoTypedPayload_NoStateChange()
     {
         // Capture baseline state after activation
         var prevTemp = _entity.State.Environment?.Temperature ?? 0;
@@ -115,7 +125,6 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
             EventId = "evt-4",
             Source = "unknown-device",
             EventType = "unknown_type",
-            PayloadJson = """{"foo": "bar"}""",
         };
 
         // Should not throw and should not change state
@@ -128,41 +137,64 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_MalformedPayloadJson_NoStateChange()
+    public async Task HandleDeviceInbound_TypedSpeech_ForwardsTextToReasoning()
     {
-        var prevTemp = _entity.State.Environment?.Temperature ?? 0;
+        var previousReasoningCount = _entity.State.ReasoningCountToday;
+        var previousLastReasoningTs = _entity.State.LastReasoningTs;
 
-        var evt = new DeviceInbound
-        {
-            EventId = "evt-5",
-            Source = "temperature-sensor",
-            EventType = "temperature_change",
-            PayloadJson = "not valid json",
-        };
-
-        // Should not throw — the handler catches JsonException
-        var act = () => _entity.HandleDeviceInbound(evt);
-        await act.Should().NotThrowAsync();
-
-        _entity.State.Environment!.Temperature.Should().Be(prevTemp);
-    }
-
-    [Fact]
-    public async Task HandleDeviceInbound_SpeechDetected_DoesNotThrow()
-    {
         var evt = new DeviceInbound
         {
             EventId = "evt-6",
             Source = "microphone",
             EventType = "speech_detected",
-            PayloadJson = """{"text": "Turn on the lights"}""",
+            Speech = new SpeechDeviceInboundPayload { Text = "Turn on the lights" },
         };
 
-        // speech_detected triggers HandleChat -> RunReasoningAsync -> ChatAsync.
-        // With the stub LLM provider, ChatAsync returns "ok" (no tool calls).
-        // The handler should complete without throwing.
-        var act = () => _entity.HandleDeviceInbound(evt);
-        await act.Should().NotThrowAsync();
+        await _entity.HandleDeviceInbound(evt);
+
+        _llmProvider.CallCount.Should().Be(1);
+        _llmProvider.LastRequest.Should().NotBeNull();
+        _llmProvider.LastRequest!.Messages.Should().Contain(message =>
+            string.Equals(message.Role, "user", StringComparison.Ordinal) &&
+            message.Content != null &&
+            message.Content.Contains("Message from user: Turn on the lights", StringComparison.Ordinal));
+        _entity.State.ReasoningCountToday.Should().Be(previousReasoningCount + 1);
+        _entity.State.LastReasoningTs.Should().BeGreaterThan(previousLastReasoningTs);
+    }
+
+    [Fact]
+    public async Task HandleDeviceInbound_TypedSpeech_WhenTextBlank_SkipsReasoning()
+    {
+        var previousReasoningCount = _entity.State.ReasoningCountToday;
+        var previousLastReasoningTs = _entity.State.LastReasoningTs;
+
+        var evt = new DeviceInbound
+        {
+            EventId = "evt-7",
+            Source = "microphone",
+            EventType = "speech_detected",
+            Speech = new SpeechDeviceInboundPayload { Text = "   " },
+        };
+
+        await _entity.HandleDeviceInbound(evt);
+
+        _llmProvider.CallCount.Should().Be(0);
+        _llmProvider.LastRequest.Should().BeNull();
+        _entity.State.ReasoningCountToday.Should().Be(previousReasoningCount);
+        _entity.State.LastReasoningTs.Should().Be(previousLastReasoningTs);
+    }
+
+    [Fact]
+    public void HouseholdEntity_DeviceInboundHandler_ShouldConsumeTypedPayloadsOnly()
+    {
+        var sourcePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../../agents/Aevatar.GAgents.Household/HouseholdEntity.cs"));
+        var source = File.ReadAllText(sourcePath);
+
+        source.Should().NotContain("JsonDocument.Parse");
+        source.Should().NotContain("evt.PayloadJson");
+        source.Should().Contain("switch (evt.PayloadCase)");
     }
 
     // ─── Test doubles ───
@@ -170,6 +202,15 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     private sealed class InMemoryEventStoreForHouseholdTests : IEventStore
     {
         private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);
+
+        public IReadOnlyList<StateEvent> SnapshotEvents()
+        {
+            return _events.Values
+                .SelectMany(x => x)
+                .OrderBy(x => x.Version)
+                .Select(x => x.Clone())
+                .ToList();
+        }
 
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId,
@@ -235,30 +276,29 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
         }
     }
 
-    private sealed class StubLLMProviderFactory : ILLMProviderFactory
+    private sealed class StubLLMProviderFactory(RecordingLLMProvider provider) : ILLMProviderFactory
     {
-        public ILLMProvider GetProvider(string name) => new StubLLMProvider(name);
-        public ILLMProvider GetDefault() => new StubLLMProvider("default");
+        public ILLMProvider GetProvider(string name) => provider;
+        public ILLMProvider GetDefault() => provider;
         public IReadOnlyList<string> GetAvailableProviders() => ["default"];
     }
 
-    private sealed class StubLLMProvider(string name) : ILLMProvider
+    private sealed class RecordingLLMProvider(string name) : ILLMProvider
     {
         public string Name => name;
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse { Content = "NO_ACTION — no intervention needed." });
-        }
+        public int CallCount { get; private set; }
+        public LLMRequest? LastRequest { get; private set; }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            CallCount++;
+            LastRequest = request;
             await Task.CompletedTask;
-            yield break;
+            yield return new LLMStreamChunk { DeltaContent = "NO_ACTION — no intervention needed." };
+            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
         }
     }
 }

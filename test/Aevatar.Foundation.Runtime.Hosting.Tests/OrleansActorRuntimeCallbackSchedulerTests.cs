@@ -59,7 +59,7 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             },
         });
 
-        var scheduled = EventEnvelope.Parser.ParseFrom(dedicatedGrain.LastTimeoutEnvelopeBytes);
+        var scheduled = dedicatedGrain.LastTimeoutTriggerEnvelope;
         dedicatedGrain.LastDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
         scheduled.Id.Should().Be("retry-envelope-1");
         scheduled.Route!.PublisherActorId.Should().Be("child-run");
@@ -103,6 +103,36 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
 
         dedicatedGrain.CancelCalls.Should().Be(1);
         dedicatedGrain.LastCancelExpectedGeneration.Should().Be(5);
+        dedicatedGrain.LastCancelExpectedSlotEpoch.Should().Be(RuntimeCallbackSlotEpoch.Unspecified);
+    }
+
+    [Fact]
+    public async Task DurableScheduleAndCancelAsync_ShouldFenceGenerationWithSlotEpoch()
+    {
+        var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 1 };
+        var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
+        var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
+        grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
+        var scheduler = new OrleansActorRuntimeDurableCallbackScheduler(grainFactory);
+
+        var newLease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = "actor-1",
+            CallbackId = "cb-1",
+            DueTime = TimeSpan.FromSeconds(2),
+            TriggerEnvelope = CreateEnvelope(),
+        });
+
+        newLease.Generation.Should().Be(1);
+        newLease.SlotEpoch.Should().Be(RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
+
+        await scheduler.CancelAsync(new RuntimeCallbackLease("actor-1", "cb-1", 1, RuntimeCallbackBackend.Dedicated));
+        dedicatedGrain.LastCancelExpectedGeneration.Should().Be(1);
+        dedicatedGrain.LastCancelExpectedSlotEpoch.Should().Be(RuntimeCallbackSlotEpoch.Unspecified);
+
+        await scheduler.CancelAsync(newLease);
+        dedicatedGrain.LastCancelExpectedGeneration.Should().Be(1);
+        dedicatedGrain.LastCancelExpectedSlotEpoch.Should().Be(RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
     }
 
     [Fact]
@@ -212,33 +242,35 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
 
         public long LastCancelExpectedGeneration { get; private set; }
 
-        public byte[] LastTimeoutEnvelopeBytes { get; private set; } = [];
+        public int LastCancelExpectedSlotEpoch { get; private set; }
+
+        public EventEnvelope LastTimeoutTriggerEnvelope { get; private set; } = new();
 
         public RuntimeCallbackDeliveryMode LastDeliveryMode { get; private set; } = RuntimeCallbackDeliveryMode.FiredSelfEvent;
 
         public Task<long> ScheduleTimeoutAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
             _ = dueTimeMs;
             LastDeliveryMode = deliveryMode;
-            LastTimeoutEnvelopeBytes = envelopeBytes;
+            LastTimeoutTriggerEnvelope = triggerEnvelope.Clone();
             ScheduleTimeoutCalls++;
             return Task.FromResult(NextGeneration);
         }
 
         public Task<long> ScheduleTimerAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             int periodMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
+            _ = triggerEnvelope;
             _ = dueTimeMs;
             LastTimerPeriodMs = periodMs;
             LastDeliveryMode = deliveryMode;
@@ -246,10 +278,14 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             return Task.FromResult(NextGeneration);
         }
 
-        public Task CancelAsync(string callbackId, long expectedGeneration = 0)
+        public Task CancelAsync(
+            string callbackId,
+            long expectedGeneration = 0,
+            int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
         {
             _ = callbackId;
             LastCancelExpectedGeneration = expectedGeneration;
+            LastCancelExpectedSlotEpoch = expectedSlotEpoch;
             CancelCalls++;
             return Task.CompletedTask;
         }

@@ -12,6 +12,9 @@ namespace Aevatar.Workflow.Sdk;
 
 public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
 {
+    // Refactor (iter82/cluster-082-workflow-sdk-library-await-cancellation):
+    //   Old pattern: SDK awaits without library-safe ConfigureAwait/WithCancellation; OperationCanceledException wrapped as Transport failure
+    //   New principle: library awaits ConfigureAwait(false), async-enumerable WithCancellation, preserve OperationCanceledException
     private readonly HttpClient _httpClient;
     private readonly IWorkflowChatTransport _chatTransport;
     private readonly JsonSerializerOptions _jsonOptions;
@@ -67,7 +70,9 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         var events = new List<WorkflowEvent>();
         AevatarWorkflowException? runError = null;
 
-        await foreach (var evt in StartRunStreamAsync(request, cancellationToken))
+        await foreach (var evt in StartRunStreamAsync(request, cancellationToken)
+                           .WithCancellation(cancellationToken)
+                           .ConfigureAwait(false))
         {
             events.Add(evt);
             if (evt.IsRunError && runError == null)
@@ -103,7 +108,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
                 feedback = NormalizeOptional(request.Feedback),
                 metadata = request.Metadata,
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<WorkflowSignalResponse> SignalAsync(
@@ -126,15 +131,15 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
                 commandId = NormalizeOptional(request.CommandId),
                 payload = NormalizeOptional(request.Payload),
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<JsonElement>> GetWorkflowCatalogAsync(
         CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/workflow-catalog");
-        using var response = await SendAsync(request, cancellationToken);
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -172,11 +177,11 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/capabilities");
-        using var response = await SendAsync(request, cancellationToken);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
 
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw WorkflowSdkJson.BuildHttpException(
@@ -211,11 +216,11 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             $"/api/workflows/{Uri.EscapeDataString(workflowName)}");
-        using var response = await SendAsync(request, cancellationToken);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
 
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw WorkflowSdkJson.BuildHttpException(
@@ -241,7 +246,10 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         }
     }
 
-    public async Task<JsonElement?> GetActorSnapshotAsync(
+    // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
+    //   Old pattern: SDK called /api/actors/{actorId} and named the result an actor snapshot.
+    //   New principle: SDK calls the workflow actor current-state readmodel endpoint by actorId.
+    public async Task<JsonElement?> GetWorkflowActorCurrentStateAsync(
         string actorId,
         CancellationToken cancellationToken = default)
     {
@@ -249,18 +257,18 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
 
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"/api/actors/{Uri.EscapeDataString(actorId)}");
-        using var response = await SendAsync(request, cancellationToken);
+            $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state");
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
 
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw WorkflowSdkJson.BuildHttpException(
                 response.StatusCode,
                 rawPayload,
-                $"Actor snapshot request failed with HTTP {(int)response.StatusCode}.");
+                $"Workflow actor current-state request failed with HTTP {(int)response.StatusCode}.");
         }
 
         if (string.IsNullOrWhiteSpace(rawPayload))
@@ -274,33 +282,37 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         catch (JsonException ex)
         {
             throw AevatarWorkflowException.StreamPayload(
-                "Failed to parse actor snapshot response payload.",
+                "Failed to parse workflow actor current-state response payload.",
                 rawPayload,
                 ex);
         }
     }
 
-    public async Task<IReadOnlyList<JsonElement>> GetActorTimelineAsync(
-        string actorId,
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: workflow history / report / graph are treated as current-state readmodels (current-state query path enriches actor snapshots by reading report artifacts; duplicate WorkflowRunTimelineDocument and WorkflowRunGraphArtifactDocument shells copy WorkflowRunInsightReportDocument; public application/query/tool/HTTP surfaces expose them as actor current-state queries instead of workflow-run artifacts)
+    //   New principle: Workflow history / report / graph are workflow-run artifacts (or aggregate-owned views), NOT actor current-state readmodels: keep existing WorkflowRunInsightReportDocument adapter/name workflow-local as the single report artifact source; delete duplicate WorkflowRunTimelineDocument / WorkflowRunGraphArtifactDocument shells (timeline derived from report artifact, graph materialization derived from report artifact); stop current-state query paths from reading report/history artifacts to enrich actor snapshots; rename public application/query/tool/HTTP surfaces so report/timeline/graph are explicit workflow-run artifact / export, not current-state readmodel surfaces; WorkflowExecutionCurrentStateDocument remains the only workflow actor-scoped current-state readmodel; NO CLAUDE.md change, NO new core abstraction, NO generic CQRS Projection artifact storage seam, NO new actor type
+    //   New pattern: workflow history/report/graph are artifacts or aggregate-owned views, not current-state readmodels.
+    public async Task<IReadOnlyList<JsonElement>> GetWorkflowRunTimelineExportAsync(
+        string workflowRunId,
         int take = 200,
         CancellationToken cancellationToken = default)
     {
-        EnsureNotBlank(actorId, nameof(actorId));
+        EnsureNotBlank(workflowRunId, nameof(workflowRunId));
         if (take <= 0)
             throw AevatarWorkflowException.InvalidRequest("Parameter 'take' must be greater than zero.");
 
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"/api/actors/{Uri.EscapeDataString(actorId)}/timeline?take={take}");
-        using var response = await SendAsync(request, cancellationToken);
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+            $"/api/workflow-runs/{Uri.EscapeDataString(workflowRunId)}/timeline-export?take={take}");
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
             throw WorkflowSdkJson.BuildHttpException(
                 response.StatusCode,
                 rawPayload,
-                $"Actor timeline request failed with HTTP {(int)response.StatusCode}.");
+                $"Workflow run timeline export request failed with HTTP {(int)response.StatusCode}.");
         }
 
         if (string.IsNullOrWhiteSpace(rawPayload))
@@ -312,7 +324,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
             if (document.RootElement.ValueKind != JsonValueKind.Array)
             {
                 throw AevatarWorkflowException.StreamPayload(
-                    "Timeline response is not a JSON array.",
+                    "Workflow run timeline export response is not a JSON array.",
                     rawPayload);
             }
 
@@ -321,7 +333,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         catch (JsonException ex)
         {
             throw AevatarWorkflowException.StreamPayload(
-                "Failed to parse actor timeline response payload.",
+                "Failed to parse workflow run timeline export response payload.",
                 rawPayload,
                 ex);
         }
@@ -336,8 +348,8 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         {
             Content = JsonContent.Create(requestPayload, options: _jsonOptions),
         };
-        using var response = await SendAsync(request, cancellationToken);
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -377,7 +389,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
             return await _httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

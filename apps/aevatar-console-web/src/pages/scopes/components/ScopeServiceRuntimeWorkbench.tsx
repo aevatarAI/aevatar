@@ -47,6 +47,7 @@ import {
   AevatarPanel,
   AevatarStatusTag,
 } from "@/shared/ui/aevatarPageShells";
+import { t } from "@/shared/i18n/messages";
 
 type ScopeServiceRuntimeWorkbenchProps = {
   readonly scopeId: string;
@@ -510,10 +511,10 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
             />
           </Space>
           <Typography.Text type="secondary">
-            Target {describeScopeServiceBindingTarget(binding)}
+            {t("pages.scopes.scopeserviceruntimeworkbench.target", "Target")}{describeScopeServiceBindingTarget(binding)}
           </Typography.Text>
           <Typography.Text type="secondary">
-            Policies{" "}
+            {t("pages.scopes.scopeserviceruntimeworkbench.policies", "Policies")}{" "}
             {binding.policyIds.length > 0 ? binding.policyIds.join(", ") : "none"}
           </Typography.Text>
           <Space wrap>
@@ -528,8 +529,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 });
               }}
             >
-              Edit binding
-            </Button>
+              {t("pages.scopes.scopeserviceruntimeworkbench.edit.binding", "Edit binding")}</Button>
             <Button
               danger
               disabled={binding.retired}
@@ -564,15 +564,14 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 }
               }}
             >
-              Retire
-            </Button>
+              {t("pages.scopes.scopeserviceruntimeworkbench.retire", "Retire")}</Button>
           </Space>
         </div>
       ))}
     </div>
   ) : (
     <Empty
-      description="No scope-specific bindings are published for this service yet."
+      description={t("pages.scopes.scopeserviceruntimeworkbench.no.workspace.bindings.are.published", "No workspace bindings are published for this service yet.")}
       image={Empty.PRESENTED_IMAGE_SIMPLE}
     />
   );
@@ -604,16 +603,29 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   revision.implementationKind,
                 )}
               />
-              {revision.isDefaultServing ? <AevatarStatusTag domain="governance" status="active" label="default" /> : null}
-              {revision.isActiveServing ? <AevatarStatusTag domain="run" status="running" label="active" /> : null}
+              {revision.isDefaultServing ? (
+                <AevatarStatusTag
+                  domain="governance"
+                  status="active"
+                  label={t("pages.scopes.scopeserviceruntimeworkbench.default", "default")}
+                />
+              ) : null}
+              {revision.isActiveServing ? (
+                <AevatarStatusTag
+                  domain="run"
+                  status="running"
+                  label={t("pages.scopes.scopeserviceruntimeworkbench.active", "active")}
+                />
+              ) : null}
               {revision.retiredAt ? <AevatarStatusTag domain="governance" status="retired" /> : null}
             </Space>
             <Typography.Text type="secondary">
               {describeStudioMemberBindingRevisionTarget(revision)} ·{" "}
-              {describeStudioMemberBindingRevisionContext(revision) || "No detail"}
+              {describeStudioMemberBindingRevisionContext(revision) ||
+                t("pages.scopes.scopeserviceruntimeworkbench.no.detail", "No detail")}
             </Typography.Text>
             <Typography.Text type="secondary">
-              Serving {revision.servingState || revision.status} · Published{" "}
+              {t("pages.scopes.scopeserviceruntimeworkbench.serving", "Serving")}{revision.servingState || revision.status} {t("pages.scopes.scopeserviceruntimeworkbench.published", "· Published")}{" "}
               {formatDateTime(revision.publishedAt)}
             </Typography.Text>
             <Space wrap>
@@ -622,7 +634,9 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 onClick={() => setSelectedRevisionId(revision.revisionId)}
                 type={isSelected ? "primary" : "default"}
               >
-                {isSelected ? "Inspecting" : "Inspect"}
+                {isSelected
+                  ? t("pages.scopes.scopeserviceruntimeworkbench.inspecting", "Inspecting")
+                  : t("pages.scopes.scopeserviceruntimeworkbench.inspect", "Inspect")}
               </Button>
               <Button
                 danger
@@ -633,8 +647,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 }
                 onClick={() => retireRevisionMutation.mutate(revision.revisionId)}
               >
-                Retire revision
-              </Button>
+                {t("pages.scopes.scopeserviceruntimeworkbench.retire.revision", "Retire revision")}</Button>
             </Space>
           </div>
         );
@@ -642,7 +655,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
     </div>
   ) : (
     <Empty
-      description="No published revisions are available for this service."
+      description={t("pages.scopes.scopeserviceruntimeworkbench.no.published.revisions.are.available", "No published revisions are available for this service.")}
       image={Empty.PRESENTED_IMAGE_SIMPLE}
     />
   );
@@ -687,7 +700,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
     </div>
   ) : (
     <Empty
-      description="No recent scope runs were found for this service."
+      description={t("pages.scopes.scopeserviceruntimeworkbench.no.recent.scope.runs.were", "No recent scope runs were found for this service.")}
       image={Empty.PRESENTED_IMAGE_SIMPLE}
     />
   );
@@ -699,8 +712,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
       children: selectedService ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <AevatarPanel
-            title="Runtime Posture"
-            titleHelp="This service-level posture is the fastest way to confirm what the selected project service is actually serving right now."
+            title={t("pages.scopes.scopeserviceruntimeworkbench.runtime.posture", "Runtime Posture")}
+            titleHelp={t("pages.scopes.scopeserviceruntimeworkbench.this.service.level.posture.is", "This service-level posture is the fastest way to confirm what the selected project service is actually serving right now.")}
           >
             <div
               style={{
@@ -710,11 +723,11 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
               }}
             >
               <RuntimeMetricCard
-                label="Service key"
+                label={t("pages.scopes.scopeserviceruntimeworkbench.service.key", "Service key")}
                 value={selectedService.serviceKey}
               />
               <RuntimeMetricCard
-                label="Serving revision"
+                label={t("pages.scopes.scopeserviceruntimeworkbench.serving.revision", "Serving revision")}
                 value={
                   selectedService.activeServingRevisionId ||
                   selectedService.defaultServingRevisionId ||
@@ -726,7 +739,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 value={selectedService.deploymentStatus || "draft"}
               />
               <RuntimeMetricCard
-                label="Primary actor"
+                label={t("pages.scopes.scopeserviceruntimeworkbench.primary.actor", "Primary actor")}
                 value={selectedService.primaryActorId || "n/a"}
               />
             </div>
@@ -739,27 +752,24 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   )
                 }
               >
-                Open Services
-              </Button>
+                {t("pages.scopes.scopeserviceruntimeworkbench.open.services", "Open Services")}</Button>
               <Button
                 icon={<DeploymentUnitOutlined />}
                 onClick={() => setActiveTab("runs")}
                 type="primary"
               >
-                Review runs
-              </Button>
+                {t("pages.scopes.scopeserviceruntimeworkbench.review.runs", "Review runs")}</Button>
               <Button
                 icon={<SafetyCertificateOutlined />}
                 onClick={() => setActiveTab("bindings")}
               >
-                Review bindings
-              </Button>
+                {t("pages.scopes.scopeserviceruntimeworkbench.review.bindings", "Review bindings")}</Button>
             </Space>
           </AevatarPanel>
 
           <AevatarPanel
-            title="Endpoint Surface"
-            titleHelp="Operators can switch endpoints from here without losing the current scope and service context."
+            title={t("pages.scopes.scopeserviceruntimeworkbench.endpoint.surface", "Endpoint Surface")}
+            titleHelp={t("pages.scopes.scopeserviceruntimeworkbench.operators.can.switch.endpoints.from", "Operators can switch endpoints from here without losing the current workspace and service context.")}
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {selectedService.endpoints.length > 0 ? (
@@ -790,10 +800,14 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                       />
                     </Space>
                     <Typography.Text type="secondary">
-                      {endpoint.description || "No endpoint description."}
+                      {endpoint.description ||
+                        t(
+                          "pages.scopes.scopeserviceruntimeworkbench.no.endpoint.description",
+                          "No endpoint description."
+                        )}
                     </Typography.Text>
                     <Typography.Text type="secondary">
-                      Request {endpoint.requestTypeUrl || "n/a"}
+                      {t("pages.scopes.scopeserviceruntimeworkbench.request", "Request")}{endpoint.requestTypeUrl || "n/a"}
                     </Typography.Text>
                     <Space wrap>
                       <Button
@@ -810,15 +824,15 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                         }
                       >
                         {endpoint.endpointId === resolvedSelectedEndpointId
-                          ? "Selected"
-                          : "Use endpoint"}
+                          ? t("pages.scopes.scopeserviceruntimeworkbench.selected", "Selected")
+                          : t("pages.scopes.scopeserviceruntimeworkbench.use.endpoint", "Use endpoint")}
                       </Button>
                     </Space>
                   </div>
                 ))
               ) : (
                 <Empty
-                  description="No endpoint catalog is available for this service."
+                  description={t("pages.scopes.scopeserviceruntimeworkbench.no.endpoint.catalog.is.available", "No endpoint catalog is available for this service.")}
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               )}
@@ -826,12 +840,14 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
           </AevatarPanel>
         </div>
       ) : (
-        <AevatarInspectorEmpty description="Choose a published service to inspect runtime posture, bindings, revisions, and recent runs." />
+        <AevatarInspectorEmpty description={t("pages.scopes.scopeserviceruntimeworkbench.choose.published.service.to.inspect", "Choose a published service to inspect runtime posture, bindings, revisions, and recent runs.")} />
       ),
     },
     {
       key: "bindings",
-      label: `Bindings (${bindingList.length})`,
+      label: t("pages.scopes.scopeserviceruntimeworkbench.bindings.count", "Bindings ({count})", {
+        count: bindingList.length,
+      }),
       children: selectedService ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <AevatarPanel
@@ -844,11 +860,10 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 }}
                 type="primary"
               >
-                Add binding
-              </Button>
+                {t("pages.scopes.scopeserviceruntimeworkbench.add.binding", "Add binding")}</Button>
             }
-            title="Dependency Surface"
-            titleHelp="Scope-specific bindings describe which services, connectors, or secrets this published service is allowed to depend on inside the project."
+            title={t("pages.scopes.scopeserviceruntimeworkbench.dependency.surface", "Dependency Surface")}
+            titleHelp={t("pages.scopes.scopeserviceruntimeworkbench.workspace.bindings.describe.which.services", "Workspace bindings describe which services, connectors, or secrets this published service is allowed to depend on inside the project.")}
           >
             {bindingsQuery.error ? (
               <Alert
@@ -861,24 +876,26 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 type="error"
               />
             ) : bindingsQuery.isLoading ? (
-              <AevatarInspectorEmpty description="Loading default route revisions." />
+              <AevatarInspectorEmpty description={t("pages.scopes.scopeserviceruntimeworkbench.loading.default.route.revisions", "Loading default route revisions.")} />
             ) : (
               bindingCards
             )}
           </AevatarPanel>
         </div>
       ) : (
-        <AevatarInspectorEmpty description="Choose a service first." />
+        <AevatarInspectorEmpty description={t("pages.scopes.scopeserviceruntimeworkbench.choose.service.first", "Choose a service first.")} />
       ),
     },
     {
       key: "revisions",
-      label: `Revisions (${revisionList.length})`,
+      label: t("pages.scopes.scopeserviceruntimeworkbench.revisions.count", "Revisions ({count})", {
+        count: revisionList.length,
+      }),
       children: selectedService ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <AevatarPanel
-            title="Revision Catalog"
-            titleHelp="Revisions tell you which artifact is serving now and which historical versions are still available or ready to retire."
+            title={t("pages.scopes.scopeserviceruntimeworkbench.revision.catalog", "Revision Catalog")}
+            titleHelp={t("pages.scopes.scopeserviceruntimeworkbench.revisions.tell.you.which.artifact", "Revisions tell you which artifact is serving now and which historical versions are still available or ready to retire.")}
           >
             {revisionsQuery.error ? (
               <Alert
@@ -891,7 +908,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 type="error"
               />
             ) : revisionsQuery.isLoading ? (
-              <AevatarInspectorEmpty description="Loading service revisions." />
+              <AevatarInspectorEmpty description={t("pages.scopes.scopeserviceruntimeworkbench.loading.service.revisions", "Loading service revisions.")} />
             ) : (
               revisionCards
             )}
@@ -899,8 +916,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
 
           {currentRevision ? (
             <AevatarPanel
-              title="Selected Revision"
-              titleHelp="The selected revision stays expanded here so operators can compare implementation target, serving posture, and actor assignment without leaving the tab."
+              title={t("pages.scopes.scopeserviceruntimeworkbench.selected.revision", "Selected Revision")}
+              titleHelp={t("pages.scopes.scopeserviceruntimeworkbench.the.selected.revision.stays.expanded", "The selected revision stays expanded here so operators can compare implementation target, serving posture, and actor assignment without leaving the tab.")}
             >
               <div
                 style={{
@@ -934,7 +951,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     currentRevision,
                   )}
                   showIcon
-                  title="Revision detail"
+                  title={t("pages.scopes.scopeserviceruntimeworkbench.revision.detail", "Revision detail")}
                   type="info"
                 />
               ) : null}
@@ -942,17 +959,19 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
           ) : null}
         </div>
       ) : (
-        <AevatarInspectorEmpty description="Choose a service first." />
+        <AevatarInspectorEmpty description={t("pages.scopes.scopeserviceruntimeworkbench.choose.service.first.2", "Choose a service first.")} />
       ),
     },
     {
       key: "runs",
-      label: `Runs (${recentRuns.length})`,
+      label: t("pages.scopes.scopeserviceruntimeworkbench.runs.count", "Runs ({count})", {
+        count: recentRuns.length,
+      }),
       children: selectedService ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <AevatarPanel
-            title="Recent Runs"
-            titleHelp="Recent runs are the shortest path from a published service to a traceable execution posture."
+            title={t("pages.scopes.scopeserviceruntimeworkbench.recent.runs", "Recent Runs")}
+            titleHelp={t("pages.scopes.scopeserviceruntimeworkbench.recent.runs.are.the.shortest", "Recent runs are the shortest path from a published service to a traceable execution posture.")}
           >
             {runsQuery.error ? (
               <Alert
@@ -965,7 +984,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 type="error"
               />
             ) : runsQuery.isLoading ? (
-              <AevatarInspectorEmpty description="Loading recent runs." />
+              <AevatarInspectorEmpty description={t("pages.scopes.scopeserviceruntimeworkbench.loading.recent.runs", "Loading recent runs.")} />
             ) : (
               runCards
             )}
@@ -973,8 +992,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
 
           {selectedRunAuditTarget ? (
             <AevatarPanel
-              title="Run Audit"
-              titleHelp="Audit detail keeps the latest selected run in view so operators can understand failure posture or completion depth before opening full Runs."
+              title={t("pages.scopes.scopeserviceruntimeworkbench.run.audit", "Run Audit")}
+              titleHelp={t("pages.scopes.scopeserviceruntimeworkbench.audit.detail.keeps.the.latest", "Audit detail keeps the latest selected run in view so operators can understand failure posture or completion depth before opening full Runs.")}
             >
               {selectedRunAuditQuery.error ? (
                 <Alert
@@ -987,7 +1006,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   type="error"
                 />
               ) : selectedRunAuditQuery.isLoading ? (
-                <AevatarInspectorEmpty description="Loading run audit." />
+                <AevatarInspectorEmpty description={t("pages.scopes.scopeserviceruntimeworkbench.loading.run.audit", "Loading run audit.")} />
               ) : selectedRunAuditQuery.data ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                   <div
@@ -1010,7 +1029,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                       value={`${auditSummary?.completedSteps ?? 0}/${auditSummary?.totalSteps ?? 0}`}
                     />
                     <RuntimeMetricCard
-                      label="Role replies"
+                      label={t("pages.scopes.scopeserviceruntimeworkbench.role.replies", "Role replies")}
                       value={auditSummary?.roleReplyCount ?? 0}
                     />
                   </div>
@@ -1018,7 +1037,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     <Alert
                       description={selectedRunAuditQuery.data.audit.finalOutput}
                       showIcon
-                      title="Final output"
+                      title={t("pages.scopes.scopeserviceruntimeworkbench.final.output", "Final output")}
                       type="success"
                     />
                   ) : null}
@@ -1026,7 +1045,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     <Alert
                       description={selectedRunAuditQuery.data.audit.finalError}
                       showIcon
-                      title="Final error"
+                      title={t("pages.scopes.scopeserviceruntimeworkbench.final.error", "Final error")}
                       type="error"
                     />
                   ) : null}
@@ -1037,7 +1056,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                       gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
                     }}
                   >
-                    <AevatarPanel title="Timeline Highlights">
+                    <AevatarPanel title={t("pages.scopes.scopeserviceruntimeworkbench.timeline.highlights", "Timeline Highlights")}>
                       {auditTimeline.length > 0 ? (
                         <div
                           style={{
@@ -1062,7 +1081,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                                 {event.stage || event.eventType || "event"}
                               </Typography.Text>
                               <Typography.Text type="secondary">
-                                {event.message || "No message"}
+                                {event.message ||
+                                  t("pages.scopes.scopeserviceruntimeworkbench.no.message", "No message")}
                               </Typography.Text>
                               <Typography.Text type="secondary">
                                 {formatDateTime(event.timestamp)}
@@ -1072,12 +1092,12 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                         </div>
                       ) : (
                         <Empty
-                          description="No timeline events were captured."
+                          description={t("pages.scopes.scopeserviceruntimeworkbench.no.timeline.events.were.captured", "No timeline events were captured.")}
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
                         />
                       )}
                     </AevatarPanel>
-                    <AevatarPanel title="Step Highlights">
+                    <AevatarPanel title={t("pages.scopes.scopeserviceruntimeworkbench.step.highlights", "Step Highlights")}>
                       {auditSteps.length > 0 ? (
                         <div
                           style={{
@@ -1106,14 +1126,19 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                                 {step.targetRole || "unassigned"}
                               </Typography.Text>
                               <Typography.Text type="secondary">
-                                {step.outputPreview || step.error || "No step preview."}
+                                {step.outputPreview ||
+                                  step.error ||
+                                  t(
+                                    "pages.scopes.scopeserviceruntimeworkbench.no.step.preview",
+                                    "No step preview."
+                                  )}
                               </Typography.Text>
                             </div>
                           ))}
                         </div>
                       ) : (
                         <Empty
-                          description="No step traces were captured."
+                          description={t("pages.scopes.scopeserviceruntimeworkbench.no.step.traces.were.captured", "No step traces were captured.")}
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
                         />
                       )}
@@ -1125,7 +1150,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
           ) : null}
         </div>
       ) : (
-        <AevatarInspectorEmpty description="Choose a service first." />
+        <AevatarInspectorEmpty description={t("pages.scopes.scopeserviceruntimeworkbench.choose.service.first.3", "Choose a service first.")} />
       ),
     },
   ];
@@ -1135,8 +1160,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
       {messageContextHolder}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <AevatarPanel
-          title="Published Services"
-          titleHelp="Operators stay in the same drawer while switching between published services in the current project."
+          title={t("pages.scopes.scopeserviceruntimeworkbench.published.services", "Published Services")}
+          titleHelp={t("pages.scopes.scopeserviceruntimeworkbench.operators.stay.in.the.same", "Operators stay in the same drawer while switching between published services in the current project.")}
         >
           {services.length > 0 ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1165,7 +1190,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     />
                   </Space>
                   <Typography.Text type="secondary">
-                    {service.endpoints.length} endpoints · Revision{" "}
+                    {service.endpoints.length} {t("pages.scopes.scopeserviceruntimeworkbench.endpoints.revision", "endpoints · Revision")}{" "}
                     {service.activeServingRevisionId ||
                       service.defaultServingRevisionId ||
                       "n/a"}
@@ -1180,8 +1205,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                       }
                     >
                       {service.serviceId === resolvedSelectedServiceId
-                        ? "Selected"
-                        : "Inspect service"}
+                        ? t("pages.scopes.scopeserviceruntimeworkbench.selected", "Selected")
+                        : t("pages.scopes.scopeserviceruntimeworkbench.inspect.service", "Inspect service")}
                     </Button>
                     <Button
                       icon={<LinkOutlined />}
@@ -1191,15 +1216,14 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                         )
                       }
                     >
-                      Open Services
-                    </Button>
+                      {t("pages.scopes.scopeserviceruntimeworkbench.open.services.2", "Open Services")}</Button>
                   </Space>
                 </div>
               ))}
             </div>
           ) : (
             <Empty
-              description="No published services were discovered for this project."
+              description={t("pages.scopes.scopeserviceruntimeworkbench.no.published.services.were.discovered", "No published services were discovered for this project.")}
               image={Empty.PRESENTED_IMAGE_SIMPLE}
             />
           )}
@@ -1308,7 +1332,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 bindingId: event.target.value,
               }))
             }
-            placeholder="binding id"
+            placeholder={t("pages.scopes.scopeserviceruntimeworkbench.binding.id", "binding id")}
             value={bindingEditorDraft.bindingId}
           />
           <Input
@@ -1318,7 +1342,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 displayName: event.target.value,
               }))
             }
-            placeholder="display name"
+            placeholder={t("pages.scopes.scopeserviceruntimeworkbench.display.name", "display name")}
             value={bindingEditorDraft.displayName}
           />
           <Select
@@ -1354,7 +1378,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     label: service.displayName || service.serviceId,
                     value: service.serviceId,
                   }))}
-                placeholder="target service"
+                placeholder={t("pages.scopes.scopeserviceruntimeworkbench.target.service", "target service")}
                 value={bindingEditorDraft.targetServiceId || undefined}
               />
               <Select
@@ -1366,7 +1390,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   }))
                 }
                 options={bindingTargetEndpointOptions}
-                placeholder="target endpoint (optional)"
+                placeholder={t("pages.scopes.scopeserviceruntimeworkbench.target.endpoint.optional", "target endpoint (optional)")}
                 value={bindingEditorDraft.targetEndpointId || undefined}
               />
             </>
@@ -1380,7 +1404,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     connectorType: event.target.value,
                   }))
                 }
-                placeholder="connector type"
+                placeholder={t("pages.scopes.scopeserviceruntimeworkbench.connector.type", "connector type")}
                 value={bindingEditorDraft.connectorType}
               />
               <Input
@@ -1390,7 +1414,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     connectorId: event.target.value,
                   }))
                 }
-                placeholder="connector id"
+                placeholder={t("pages.scopes.scopeserviceruntimeworkbench.connector.id", "connector id")}
                 value={bindingEditorDraft.connectorId}
               />
             </>
@@ -1403,7 +1427,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   secretName: event.target.value,
                 }))
               }
-              placeholder="secret name"
+              placeholder={t("pages.scopes.scopeserviceruntimeworkbench.secret.name", "secret name")}
               value={bindingEditorDraft.secretName}
             />
           ) : null}
@@ -1414,7 +1438,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 policyIdsText: event.target.value,
               }))
             }
-            placeholder="policy ids, separated by commas"
+            placeholder={t("pages.scopes.scopeserviceruntimeworkbench.policy.ids.separated.by.commas", "policy ids, separated by commas")}
             rows={3}
             value={bindingEditorDraft.policyIdsText}
           />
@@ -1448,28 +1472,45 @@ const RunSummaryCard: React.FC<{
       <AevatarStatusTag
         domain="run"
         status={run.completionStatus || "unknown"}
-        label={run.completionStatus || "unknown"}
+        label={
+          run.completionStatus ||
+          t("pages.scopes.scopeserviceruntimeworkbench.unknown", "unknown")
+        }
       />
     </Space>
     <Typography.Text type="secondary">
-      Workflow {run.workflowName || "n/a"} · Revision {run.revisionId || "n/a"}
+      {t("pages.scopes.scopeserviceruntimeworkbench.workflow", "Workflow")}
+      {run.workflowName ||
+        t("pages.scopes.scopeserviceruntimeworkbench.not.available", "n/a")}{" "}
+      {t("pages.scopes.scopeserviceruntimeworkbench.revision", "· Revision")}
+      {run.revisionId ||
+        t("pages.scopes.scopeserviceruntimeworkbench.not.available", "n/a")}
     </Typography.Text>
     <Typography.Text type="secondary">
-      Updated {formatDateTime(run.lastUpdatedAt)} · Actor {run.actorId || "n/a"}
+      {t("pages.scopes.scopeserviceruntimeworkbench.updated", "Updated")}
+      {formatDateTime(run.lastUpdatedAt)}{" "}
+      {t("pages.scopes.scopeserviceruntimeworkbench.actor", "· Actor")}
+      {run.actorId ||
+        t("pages.scopes.scopeserviceruntimeworkbench.not.available", "n/a")}
     </Typography.Text>
     <Typography.Text type="secondary">
-      {run.lastError || run.lastOutput || "No output snapshot has been captured yet."}
+      {run.lastError ||
+        run.lastOutput ||
+        t(
+          "pages.scopes.scopeserviceruntimeworkbench.no.output.snapshot.captured",
+          "No output snapshot has been captured yet."
+        )}
     </Typography.Text>
     <Space wrap>
       <Button icon={<EyeOutlined />} onClick={onInspectAudit} type={selected ? "primary" : "default"}>
-        {selected ? "Inspecting" : "Load audit"}
+        {selected
+          ? t("pages.scopes.scopeserviceruntimeworkbench.inspecting", "Inspecting")
+          : t("pages.scopes.scopeserviceruntimeworkbench.load.audit", "Load audit")}
       </Button>
       <Button icon={<BranchesOutlined />} onClick={onOpenExplorer}>
-        Runtime
-      </Button>
+        {t("pages.scopes.scopeserviceruntimeworkbench.runtime", "Runtime")}</Button>
       <Button icon={<RetweetOutlined />} onClick={onOpenRuns}>
-        Open Runs
-      </Button>
+        {t("pages.scopes.scopeserviceruntimeworkbench.open.runs", "Open Runs")}</Button>
     </Space>
   </div>
 );

@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
@@ -610,9 +610,39 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
 
         var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in evt.Metadata)
-            metadata[key] = value;
+        if (evt.SuspensionType == "tool_approval")
+        {
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    Custom = new WorkflowCustomEventPayload
+                    {
+                        Name = "aevatar.tool_approval.pending",
+                        Payload = Any.Pack(new WorkflowToolApprovalSuspensionCustomPayload
+                        {
+                            RunId = evt.RunId,
+                            StepId = evt.StepId,
+                            ExecutionId = evt.ToolApproval?.ExecutionId ?? string.Empty,
+                            ToolName = evt.ToolApproval?.ToolName ?? string.Empty,
+                            ToolCallId = evt.ToolApproval?.ToolCallId ?? string.Empty,
+                            ApprovalRequestId = evt.ToolApproval?.ApprovalRequestId ?? string.Empty,
+                            ArgumentsJson = evt.ToolApproval?.ArgumentsJson ?? string.Empty,
+                        }),
+                    },
+                },
+            ];
+            return true;
+        }
+
+        // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
+        //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
+        //   New principle: typed suspension fields are the single source; Metadata is open extension data only.
+        var metadata = WorkflowSuspendedSecureInputMetadata.FilterOpenExtensionMetadata(evt.Metadata);
+        var variableName = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.VariableName);
+        var secure = evt.Secure;
+        var redactedOutput = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.RedactedOutput);
 
         events =
         [
@@ -629,9 +659,11 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
                         SuspensionType = evt.SuspensionType,
                         Prompt = evt.Prompt,
                         TimeoutSeconds = evt.TimeoutSeconds,
-                        VariableName = evt.VariableName,
+                        VariableName = variableName,
                         Content = evt.Content,
                         DeliveryTargetId = evt.DeliveryTargetId,
+                        Secure = secure,
+                        RedactedOutput = redactedOutput,
                         Metadata = { metadata },
                     }),
                 },
@@ -639,6 +671,35 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
         ];
         return true;
     }
+}
+
+internal static class WorkflowSuspendedSecureInputMetadata
+{
+    private static readonly HashSet<string> ReservedLegacyKeys =
+    [
+        "variable",
+        "secure",
+        "input_mode",
+        "redacted_output",
+    ];
+
+    public static Dictionary<string, string> FilterOpenExtensionMetadata(
+        IDictionary<string, string> metadata)
+    {
+        var filtered = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
+        {
+            if (!ReservedLegacyKeys.Contains(key))
+                filtered[key] = value;
+        }
+
+        return filtered;
+    }
+
+    public static string ResolveTypedString(string? typedValue) =>
+        !string.IsNullOrWhiteSpace(typedValue)
+            ? typedValue
+            : string.Empty;
 }
 
 public sealed class WorkflowWaitingSignalRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
@@ -654,10 +715,13 @@ public sealed class WorkflowWaitingSignalRunEventEnvelopeMappingHandler : IWorkf
         }
 
         var evt = envelope.Payload.Unpack<WaitingForSignalEvent>();
+        if (string.IsNullOrWhiteSpace(evt.RunId))
+        {
+            events = [];
+            return true;
+        }
+
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
-        var runId = string.IsNullOrWhiteSpace(evt.RunId)
-            ? AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, string.Empty)
-            : evt.RunId;
 
         events =
         [
@@ -669,7 +733,7 @@ public sealed class WorkflowWaitingSignalRunEventEnvelopeMappingHandler : IWorkf
                     Name = "aevatar.workflow.waiting_signal",
                     Payload = Any.Pack(new WorkflowWaitingSignalCustomPayload
                     {
-                        RunId = runId,
+                        RunId = evt.RunId,
                         StepId = evt.StepId,
                         SignalName = evt.SignalName,
                         Prompt = evt.Prompt,

@@ -51,7 +51,7 @@ public sealed class BindingStatusTool : IAgentTool
             if (string.IsNullOrWhiteSpace(serviceId))
                 return JsonDefaults.Error("'service_id' is required");
 
-            var scopeId = AgentToolRequestContext.TryGet("scope_id");
+            var scopeId = AgentToolRequestContext.ScopeId;
             if (string.IsNullOrWhiteSpace(scopeId))
                 return JsonDefaults.Error("scope_id not available in request context");
 

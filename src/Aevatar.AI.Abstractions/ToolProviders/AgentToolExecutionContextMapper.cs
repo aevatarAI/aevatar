@@ -1,0 +1,251 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+
+namespace Aevatar.AI.Abstractions.ToolProviders;
+
+// Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+//   Old pattern: any tool could parse control keys from Metadata directly.
+//   New principle: Metadata contributes only external annotations; tool control flow uses typed context.
+public static class AgentToolExecutionContextMapper
+{
+    private static readonly HashSet<string> OwnedControlKeys = new(StringComparer.Ordinal)
+    {
+        LLMRequestMetadataKeys.RequestId,
+        LLMRequestMetadataKeys.CallId,
+        LLMRequestMetadataKeys.ScopeId,
+        "scope_id",
+        LLMRequestMetadataKeys.OwnerSubject,
+        LLMRequestMetadataKeys.ResponseId,
+        LLMRequestMetadataKeys.NyxIdAccessToken,
+        LLMRequestMetadataKeys.NyxIdOrgToken,
+        LLMRequestMetadataKeys.NyxIdRoutePreference,
+        LLMRequestMetadataKeys.ModelOverride,
+        LLMRequestMetadataKeys.MaxToolRoundsOverride,
+        LLMRequestMetadataKeys.UserMemoryPrompt,
+        LLMRequestMetadataKeys.ConnectedServicesContext,
+        LLMRequestMetadataKeys.SenderBindingId,
+        LLMRequestMetadataKeys.SenderNyxIdAccessToken,
+        "platform",
+        "channel.platform",
+        "sender_id",
+        "channel.sender_id",
+        "registration_scope_id",
+        "message_id",
+        "channel.message_id",
+        "platform_message_id",
+        "channel.platform_message_id",
+        "lark.message_id",
+        "lark.open_id",
+        "lark.receive_id",
+        "telegram.chat_id",
+    };
+
+    public static AgentToolExecutionContext FromRequest(LLMRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (request.ToolContext is { } typedContext)
+        {
+            var mergedContext = MergeExternalMetadata(typedContext, request.Metadata);
+            return request.LlmControl?.ToToolContext(mergedContext) ?? mergedContext;
+        }
+
+        // Refactor (issue1574): Old pattern: core request mapping promoted owned control keys from Metadata.
+        // New principle: core LLMRequest control is typed; Metadata contributes only scrubbed annotations.
+        var mapped = AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = StripOwnedControlKeys(request.Metadata),
+        };
+        mapped = request.LlmControl?.ToToolContext(mapped) ?? mapped;
+        var caller = request.CallerContext;
+        return mapped with
+        {
+            Request = new AgentToolRequestIdentity(
+                AgentToolExecutionContext.Normalize(request.RequestId) ?? mapped.Request.RequestId,
+                mapped.Request.CallId),
+            Caller = caller == null
+                ? mapped.Caller
+                : new AgentToolCallerContext(
+                    AgentToolExecutionContext.Normalize(caller.ScopeId) ?? mapped.Caller.ScopeId,
+                    AgentToolExecutionContext.Normalize(caller.OwnerSubject) ?? mapped.Caller.OwnerSubject,
+                    AgentToolExecutionContext.Normalize(caller.ResponseId) ?? mapped.Caller.ResponseId),
+            Credentials = caller?.Credentials == null
+                ? mapped.Credentials
+                : mapped.Credentials with
+                {
+                    NyxIdAccessToken = AgentToolExecutionContext.Normalize(caller.Credentials.NyxIdBearer)
+                        ?? mapped.Credentials.NyxIdAccessToken,
+                },
+            Routing = request.RoutingContext ?? mapped.Routing,
+            ExternalMetadata = StripOwnedControlKeys(request.Metadata),
+        };
+    }
+
+    public static AgentToolExecutionContext FromRequestWithCallId(LLMRequest request, string? callId)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return FromRequest(request).WithCallId(callId);
+    }
+
+    public static AgentToolExecutionContext MergeExternalMetadata(
+        AgentToolExecutionContext context,
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var incoming = StripOwnedControlKeys(metadata);
+        if (incoming.Count == 0)
+            return context;
+
+        var merged = new Dictionary<string, string>(incoming, StringComparer.Ordinal);
+        foreach (var pair in context.ExternalMetadata)
+            merged[pair.Key] = pair.Value;
+
+        return context with { ExternalMetadata = merged };
+    }
+
+    public static AgentToolExecutionContext FromPayload(AgentToolExecutionContextPayload? payload)
+    {
+        if (payload == null)
+            return AgentToolExecutionContext.Empty;
+
+        return new AgentToolExecutionContext(
+            new AgentToolRequestIdentity(
+                AgentToolExecutionContext.Normalize(payload.Request?.RequestId),
+                AgentToolExecutionContext.Normalize(payload.Request?.CallId)),
+            new AgentToolCredentials(
+                AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.SenderNyxIdAccessToken)),
+            new AgentToolCallerContext(
+                AgentToolExecutionContext.Normalize(payload.Caller?.ScopeId),
+                AgentToolExecutionContext.Normalize(payload.Caller?.OwnerSubject),
+                AgentToolExecutionContext.Normalize(payload.Caller?.ResponseId)),
+            new AgentToolChannelContext(
+                AgentToolExecutionContext.Normalize(payload.Channel?.Platform),
+                AgentToolExecutionContext.Normalize(payload.Channel?.SenderId),
+                AgentToolExecutionContext.Normalize(payload.Channel?.RegistrationScopeId),
+                AgentToolExecutionContext.Normalize(payload.Channel?.MessageId),
+                AgentToolExecutionContext.Normalize(payload.Channel?.PlatformMessageId)),
+            new AgentToolSenderBindingContext(AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId)),
+            new LLMRequestRoutingContext(
+                AgentToolExecutionContext.Normalize(payload.Routing?.ModelOverride),
+                AgentToolExecutionContext.Normalize(payload.Routing?.NyxIdRoutePreference),
+                payload.Routing?.HasMaxToolRoundsOverride == true ? payload.Routing.MaxToolRoundsOverride : null,
+                AgentToolExecutionContext.Normalize(payload.Routing?.UserMemoryPrompt)),
+            new AgentToolConnectedServicesContext(AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
+            FromSkillRecoveryPayload(payload.SkillRecovery),
+            StripOwnedControlKeys(payload.ExternalMetadata));
+    }
+
+    public static AgentToolExecutionContextPayload ToPayload(this AgentToolExecutionContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var payload = new AgentToolExecutionContextPayload
+        {
+            Request = new AgentToolRequestIdentityPayload
+            {
+                RequestId = context.Request.RequestId ?? string.Empty,
+                CallId = context.Request.CallId ?? string.Empty,
+            },
+            Credentials = new AgentToolCredentialsPayload
+            {
+                NyxIdAccessToken = context.Credentials.NyxIdAccessToken ?? string.Empty,
+                NyxIdOrgToken = context.Credentials.NyxIdOrgToken ?? string.Empty,
+                SenderNyxIdAccessToken = context.Credentials.SenderNyxIdAccessToken ?? string.Empty,
+            },
+            Caller = new AgentToolCallerContextPayload
+            {
+                ScopeId = context.Caller.ScopeId ?? string.Empty,
+                OwnerSubject = context.Caller.OwnerSubject ?? string.Empty,
+                ResponseId = context.Caller.ResponseId ?? string.Empty,
+            },
+            Channel = new AgentToolChannelContextPayload
+            {
+                Platform = context.Channel.Platform ?? string.Empty,
+                SenderId = context.Channel.SenderId ?? string.Empty,
+                RegistrationScopeId = context.Channel.RegistrationScopeId ?? string.Empty,
+                MessageId = context.Channel.MessageId ?? string.Empty,
+                PlatformMessageId = context.Channel.PlatformMessageId ?? string.Empty,
+            },
+            SenderBinding = new AgentToolSenderBindingContextPayload
+            {
+                BindingId = context.SenderBinding.BindingId ?? string.Empty,
+            },
+            Routing = new LLMRequestRoutingContextPayload
+            {
+                ModelOverride = context.Routing.ModelOverride ?? string.Empty,
+                NyxIdRoutePreference = context.Routing.NyxIdRoutePreference ?? string.Empty,
+                UserMemoryPrompt = context.Routing.UserMemoryPrompt ?? string.Empty,
+            },
+            ConnectedServices = new AgentToolConnectedServicesContextPayload
+            {
+                ContextJson = context.ConnectedServices.ContextJson ?? string.Empty,
+            },
+            SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
+        };
+
+        if (context.Routing.MaxToolRoundsOverride.HasValue)
+            payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;
+
+        foreach (var pair in StripOwnedControlKeys(context.ExternalMetadata))
+            payload.ExternalMetadata[pair.Key] = pair.Value;
+
+        return payload;
+    }
+
+    public static AgentToolExecutionContext FromMetadata(IReadOnlyDictionary<string, string>? metadata)
+    {
+        if (metadata == null || metadata.Count == 0)
+            return AgentToolExecutionContext.Empty;
+
+        return AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = StripOwnedControlKeys(metadata),
+        };
+    }
+
+    private static AgentSkillRecoveryContext FromSkillRecoveryPayload(AgentSkillRecoveryContextPayload? payload)
+    {
+        if (payload == null)
+            return AgentSkillRecoveryContext.Empty;
+
+        return new AgentSkillRecoveryContext(
+            payload.RequireInitialOrnnSearch,
+            payload.RequireOrnnSearchOnBlocker,
+            AgentToolExecutionContext.Normalize(payload.CommandName),
+            AgentToolExecutionContext.Normalize(payload.OriginalCommand),
+            AgentToolExecutionContext.Normalize(payload.PrimarySkillName),
+            payload.MaxOrnnSearchAttempts);
+    }
+
+    private static AgentSkillRecoveryContextPayload ToSkillRecoveryPayload(AgentSkillRecoveryContext context) =>
+        new()
+        {
+            RequireInitialOrnnSearch = context.RequireInitialOrnnSearch,
+            RequireOrnnSearchOnBlocker = context.RequireOrnnSearchOnBlocker,
+            CommandName = context.CommandName ?? string.Empty,
+            OriginalCommand = context.OriginalCommand ?? string.Empty,
+            PrimarySkillName = context.PrimarySkillName ?? string.Empty,
+            MaxOrnnSearchAttempts = context.MaxOrnnSearchAttempts,
+        };
+
+    public static IReadOnlyDictionary<string, string> StripOwnedControlKeys(IReadOnlyDictionary<string, string>? metadata)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (metadata == null)
+            return result;
+
+        foreach (var (key, value) in metadata)
+        {
+            if (OwnedControlKeys.Contains(key))
+                continue;
+
+            result[key] = value;
+        }
+
+        return result;
+    }
+
+}

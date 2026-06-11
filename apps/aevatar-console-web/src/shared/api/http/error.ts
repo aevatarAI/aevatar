@@ -1,3 +1,4 @@
+import { t } from "@/shared/i18n/messages";
 function normalizeWhitespace(value: string | null | undefined): string {
   return String(value ?? "")
     .replace(/\s+/g, " ")
@@ -46,59 +47,88 @@ function readJsonErrorText(value: unknown): string | null {
   return normalized || null;
 }
 
-export async function readResponseError(response: Pick<Response, "status" | "statusText" | "text">): Promise<string> {
+export type ResponseErrorPayload = {
+  readonly code?: string;
+  readonly detail?: string;
+  readonly error?: string;
+  readonly message?: string;
+  readonly status?: number;
+  readonly title?: string;
+};
+
+export type ResponseErrorDetails = {
+  readonly code?: string;
+  readonly message: string;
+  readonly status: number;
+};
+
+function readResponseErrorFromPayload(
+  payload: ResponseErrorPayload,
+  response: Pick<Response, "status" | "statusText">
+): string {
+  const message = readJsonErrorText(payload.message);
+  if (message) {
+    return message;
+  }
+
+  const error = readJsonErrorText(payload.error);
+  if (error) {
+    return error;
+  }
+
+  const detail = readJsonErrorText(payload.detail);
+  const title = readJsonErrorText(payload.title);
+  if (detail && title) {
+    return `${title}: ${detail}`;
+  }
+
+  if (detail) {
+    return detail;
+  }
+
+  if (title) {
+    return title;
+  }
+
+  const code = readJsonErrorText(payload.code);
+  if (code) {
+    return code;
+  }
+
+  if (typeof payload.status === "number" && Number.isFinite(payload.status)) {
+    return formatHttpError(payload.status, response.statusText);
+  }
+
+  return "";
+}
+
+export async function readResponseErrorDetails(
+  response: Pick<Response, "status" | "statusText" | "text">
+): Promise<ResponseErrorDetails> {
   const text = await response.text();
   if (!text) {
-    return formatHttpError(response.status, response.statusText);
+    return {
+      message: formatHttpError(response.status, response.statusText),
+      status: response.status,
+    };
   }
 
   try {
-    const payload = JSON.parse(text) as {
-      code?: string;
-      detail?: string;
-      error?: string;
-      message?: string;
-      status?: number;
-      title?: string;
+    const payload = JSON.parse(text) as ResponseErrorPayload;
+    const message =
+      readResponseErrorFromPayload(payload, response) || normalizeWhitespace(text);
+    return {
+      code: readJsonErrorText(payload.code) ?? undefined,
+      message,
+      status: response.status,
     };
-    const message = readJsonErrorText(payload.message);
-    if (message) {
-      return message;
-    }
-
-    const error = readJsonErrorText(payload.error);
-    if (error) {
-      return error;
-    }
-
-    const detail = readJsonErrorText(payload.detail);
-    const title = readJsonErrorText(payload.title);
-    if (detail && title) {
-      return `${title}: ${detail}`;
-    }
-
-    if (detail) {
-      return detail;
-    }
-
-    if (title) {
-      return title;
-    }
-
-    const code = readJsonErrorText(payload.code);
-    if (code) {
-      return code;
-    }
-
-    if (typeof payload.status === "number" && Number.isFinite(payload.status)) {
-      return formatHttpError(payload.status, response.statusText);
-    }
-
-    return normalizeWhitespace(text);
   } catch {
     const htmlSummary = extractHtmlErrorSummary(text);
     if (!htmlSummary) {
-      return normalizeWhitespace(text);
+      return {
+        message: normalizeWhitespace(text),
+        status: response.status,
+      };
     }
 
     const httpError = formatHttpError(response.status, response.statusText);
@@ -110,9 +140,21 @@ export async function readResponseError(response: Pick<Response, "status" | "sta
       normalizedHttpError.includes(normalizedHtmlSummary) ||
       normalizedHtmlSummary.includes(normalizedStatusText)
     ) {
-      return httpError;
+      return {
+        message: httpError,
+        status: response.status,
+      };
     }
 
-    return `${httpError}: ${htmlSummary}`;
+    return {
+      message: t("shared.api.http.error.copy", "{value1}: {value2}", { value1: httpError, value2: htmlSummary }),
+      status: response.status,
+    };
   }
+}
+
+export async function readResponseError(
+  response: Pick<Response, "status" | "statusText" | "text">
+): Promise<string> {
+  return (await readResponseErrorDetails(response)).message;
 }

@@ -41,7 +41,6 @@ public sealed class ScriptDefinitionSnapshotProjectorTests
                 {
                     ScriptId = "script-1",
                     Revision = "rev-3",
-                    SourceText = "source",
                     SourceHash = "hash-3",
                     StateTypeUrl = Any.Pack(new Empty()).TypeUrl,
                     ReadModelTypeUrl = Any.Pack(new Empty()).TypeUrl,
@@ -63,7 +62,7 @@ public sealed class ScriptDefinitionSnapshotProjectorTests
         document.DefinitionActorId.Should().Be("definition-1");
         document.ScriptId.Should().Be("script-1");
         document.Revision.Should().Be("rev-3");
-        document.SourceText.Should().Be("source");
+        document.ScriptPackage.GetPrimaryCSharpSource().Should().Be("source");
         document.SourceHash.Should().Be("hash-3");
         document.ReadModelSchemaVersion.Should().Be("3");
         document.ReadModelSchemaHash.Should().Be("schema-hash-3");

@@ -39,4 +39,7 @@
     <Using Include="Xunit" />
     <Using Include="Aevatar.Scripting.Abstractions" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\ProjectionActivationPlanProviderTestBase.cs" Link="Shared\ProjectionActivationPlanProviderTestBase.cs" />
+  </ItemGroup>
 </Project>

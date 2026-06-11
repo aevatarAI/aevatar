@@ -2,35 +2,28 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Core.Execution;
 
+// Refactor (iter115/cluster-3):
+//   Old pattern: WorkflowRunGAgent exposed only a process-local runtime context,
+//                so durable control/security facts could not survive replay.
+//   New principle: execution facades keep their names but read/write typed
+//                  WorkflowRunState execution context owned by the actor.
 internal interface IWorkflowExecutionStateHost
 {
     string RunId { get; }
 
+    WorkflowExecutionRuntimeContext RuntimeContext { get; }
+
+    WorkflowRunExecutionContextState ExecutionContextSnapshot { get; }
+
+    Task UpdateExecutionContextAsync(
+        WorkflowRunExecutionContextDelta delta,
+        CancellationToken ct = default);
+
+    Task ClearExecutionContextAsync(CancellationToken ct = default);
+
     Any? GetExecutionState(string scopeKey);
 
     IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates();
-
-    bool TryGetExecutionItem(
-        string itemKey,
-        out object? value)
-    {
-        value = null;
-        return false;
-    }
-
-    void SetExecutionItem(
-        string itemKey,
-        object? value)
-    {
-        _ = itemKey;
-        _ = value;
-    }
-
-    bool RemoveExecutionItem(string itemKey)
-    {
-        _ = itemKey;
-        return false;
-    }
 
     Task UpsertExecutionStateAsync(
         string scopeKey,
@@ -40,4 +33,9 @@ internal interface IWorkflowExecutionStateHost
     Task ClearExecutionStateAsync(
         string scopeKey,
         CancellationToken ct = default);
+}
+
+internal interface IWorkflowExecutionStateHostAccessor
+{
+    IWorkflowExecutionStateHost StateHost { get; }
 }

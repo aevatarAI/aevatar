@@ -21,7 +21,7 @@ describe('StudioShell', () => {
       key: 'script:risk-review',
       label: 'risk-review',
       description: 'definition-1',
-      meta: 'rev-2 · Scope script',
+      meta: 'rev-2 · Workspace script',
       kind: 'script',
       tone: 'draft',
     },
@@ -102,6 +102,10 @@ describe('StudioShell', () => {
       width: '100%',
     });
     expect(screen.getByLabelText('Team members')).toBeInTheDocument();
+    expect(screen.getByLabelText('Team members')).toHaveStyle({
+      flexShrink: '0',
+      width: '276px',
+    });
     expect(screen.getByText('Member inventory')).toBeInTheDocument();
     expect(screen.getByLabelText('Search team members')).toBeInTheDocument();
     expect(screen.getByLabelText('Create member')).toBeInTheDocument();
@@ -183,6 +187,60 @@ describe('StudioShell', () => {
     });
   });
 
+  it('can hide the member rail and lifecycle for focused launchpad empty states', () => {
+    render(
+      <StudioShell
+        currentLifecycleStep="build"
+        lifecycleSteps={lifecycleSteps}
+        members={members}
+        onSelectLifecycleStep={jest.fn()}
+        onSelectMember={jest.fn()}
+        pageTitle="Studio page"
+        selectedMemberKey="workflow:workspace-demo"
+        showLifecycle={false}
+        showMemberRail={false}
+      >
+        <div>Script launchpad</div>
+      </StudioShell>,
+    );
+
+    expect(screen.queryByLabelText('Team members')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('studio-lifecycle-section')).not.toBeInTheDocument();
+    expect(screen.getByText('Script launchpad')).toBeInTheDocument();
+  });
+
+  it('lets page-scroll mode grow content in document flow while the main pane scrolls', () => {
+    render(
+      <StudioShell
+        contentScrollMode="page"
+        currentLifecycleStep="invoke"
+        lifecycleSteps={lifecycleSteps}
+        members={members}
+        onSelectLifecycleStep={jest.fn()}
+        onSelectMember={jest.fn()}
+        pageTitle="Studio page"
+        selectedMemberKey="workflow:workspace-demo"
+      >
+        <div>Invoke content</div>
+      </StudioShell>,
+    );
+
+    expect(screen.getByTestId('studio-shell-main')).toHaveStyle({
+      overflowX: 'hidden',
+      overflowY: 'auto',
+    });
+    expect(screen.getByTestId('studio-shell-content')).toHaveStyle({
+      flex: '0 0 auto',
+      overflow: 'visible',
+    });
+    expect(screen.getByText('Invoke content').parentElement).toHaveStyle({
+      display: 'flex',
+      flex: '0 0 auto',
+      flexDirection: 'column',
+      overflow: 'visible',
+    });
+  });
+
   it('keeps the shell content as a flex column so the studio editor can stretch', () => {
     render(
       <StudioShell
@@ -203,6 +261,10 @@ describe('StudioShell', () => {
       flex: '1',
       flexDirection: 'column',
       minHeight: '0',
+      minWidth: '0',
+      overflow: 'hidden',
+    });
+    expect(screen.getByTestId('studio-shell-content').parentElement).toHaveStyle({
       minWidth: '0',
       overflow: 'hidden',
     });

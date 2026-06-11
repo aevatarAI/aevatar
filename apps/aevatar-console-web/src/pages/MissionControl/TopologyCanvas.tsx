@@ -15,7 +15,7 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Tooltip, Typography, theme } from 'antd';
+import { Tag, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
 import type {
   MissionControlSnapshot,
@@ -26,12 +26,15 @@ import type {
 import {
   formatMissionLabel,
   formatConnectionLabel,
+  formatHandoffSeverityLabel,
   renderMissionKindIcon,
   resolveConnectionTagColor,
+  resolveHandoffTagColor,
   resolveMissionStatusTone,
   resolveObservationTone,
   type MissionThemeToken,
 } from './presentation';
+import { t } from "@/shared/i18n/messages";
 
 type TopologyCanvasProps = {
   activeNodeId?: string;
@@ -231,6 +234,39 @@ function TopologyNodeCard({
       >
         {node.summary}
       </Typography.Paragraph>
+      <Tooltip title={node.handoff.nextStep}>
+        <div
+          aria-label={t("pages.missioncontrol.topologycanvas.mission.control.node.handoff", "Mission Control node handoff")}
+          style={{
+            background: token.colorFillQuaternary,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: 4,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            marginBottom: 12,
+            padding: '8px 10px',
+          }}
+        >
+          <Typography.Text
+            style={{
+              color: token.colorTextHeading,
+              display: 'block',
+              fontSize: 12,
+              fontWeight: 700,
+              lineHeight: 1.25,
+            }}
+          >
+            {node.handoff.title}
+          </Typography.Text>
+          <Typography.Text
+            ellipsis
+            style={{ color: token.colorTextTertiary, fontSize: 11 }}
+          >
+            {node.handoff.evidence}
+          </Typography.Text>
+        </div>
+      </Tooltip>
       <div
         style={{
           borderTop: `1px solid ${token.colorBorderSecondary}`,
@@ -242,8 +278,7 @@ function TopologyNodeCard({
       >
         <div>
           <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
-            Status
-          </Typography.Text>
+            {t("pages.missioncontrol.topologycanvas.status", "Status")}</Typography.Text>
           <Typography.Text
             style={{
               color: statusTone,
@@ -257,8 +292,7 @@ function TopologyNodeCard({
         </div>
         <div>
           <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
-            Freshness
-          </Typography.Text>
+            {t("pages.missioncontrol.topologycanvas.freshness", "Freshness")}</Typography.Text>
           <Typography.Text
             style={{
               color: observationTone,
@@ -269,6 +303,16 @@ function TopologyNodeCard({
           >
             {node.freshnessLabel}
           </Typography.Text>
+        </div>
+        <div>
+          <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
+            {t("pages.missioncontrol.topologycanvas.handoff", "Handoff")}</Typography.Text>
+          <Tag
+            color={resolveHandoffTagColor(node.handoff.severity)}
+            style={{ display: 'block', fontSize: 11, marginInlineEnd: 0, marginTop: 2 }}
+          >
+            {formatHandoffSeverityLabel(node.handoff.severity)}
+          </Tag>
         </div>
       </div>
       <Handle
@@ -531,10 +575,12 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
         >
           <Typography.Text strong style={{ color: token.colorTextLightSolid }}>
             {connectionStatus === 'idle'
-              ? 'Attach a live run first'
+              ? t("pages.missioncontrol.topologycanvas.attach.live.run.first", "Attach a live run first")
               : snapshot.nodes.length === 0
-                ? 'Waiting for runtime topology...'
-                : `Runtime: ${formatConnectionLabel(connectionStatus)}`}
+                ? t("pages.missioncontrol.topologycanvas.waiting.runtime.topology", "Waiting for runtime topology...")
+                : t("pages.missioncontrol.topologycanvas.runtime.connection", "Runtime: {connection}", {
+                    connection: formatConnectionLabel(connectionStatus),
+                  })}
           </Typography.Text>
           <Typography.Text
             style={{
@@ -543,7 +589,8 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
               opacity: 0.86,
             }}
           >
-            {connectionMessage || 'Synchronizing runtime state, topology, and key events.'}
+            {connectionMessage ||
+              t("pages.missioncontrol.topologycanvas.synchronizing.runtime.state", "Synchronizing runtime state, topology, and key events.")}
           </Typography.Text>
           <Typography.Text
             style={{
@@ -560,9 +607,9 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
             }}
           >
             {connectionStatus === 'idle'
-              ? 'Live Run Context Required'
+              ? t("pages.missioncontrol.topologycanvas.live.run.context.required", "Live Run Context Required")
               : snapshot.nodes.length === 0
-                ? 'Topology Pending'
+                ? t("pages.missioncontrol.topologycanvas.topology.pending", "Topology Pending")
                 : formatConnectionLabel(connectionStatus)}
           </Typography.Text>
         </div>

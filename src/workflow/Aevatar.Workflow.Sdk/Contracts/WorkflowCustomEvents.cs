@@ -1,6 +1,6 @@
 using System.Collections.Generic;
-using System.Text.Json;
-using Aevatar.Workflow.Sdk.Internal;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Google.Protobuf;
 
 namespace Aevatar.Workflow.Sdk.Contracts;
 
@@ -55,6 +55,8 @@ public sealed record WorkflowHumanInputRequestEventData
     public string? VariableName { get; init; }
     public string? Content { get; init; }
     public string? DeliveryTargetId { get; init; }
+    public bool? Secure { get; init; }
+    public string? RedactedOutput { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
 }
 
@@ -84,256 +86,183 @@ public sealed record WorkflowSignalBufferedEventData
 
 public static class WorkflowCustomEventParser
 {
-    public static bool TryParseRunContext(WorkflowOutputFrame frame, out WorkflowRunContextEventData data) =>
-        TryParseRunContext(frame.Name, frame.Value, out data);
-
-    public static bool TryParseRunContext(string? customEventName, JsonElement? value, out WorkflowRunContextEventData data)
+    public static bool TryParseRunContext(WorkflowRunEventEnvelope frame, out WorkflowRunContextEventData data)
     {
-        if (!Is(customEventName, WorkflowCustomEventNames.RunContext) || !TryGetObject(value, out var obj))
+        if (TryUnpackCustomPayload<WorkflowRunContextPayload>(frame, WorkflowCustomEventNames.RunContext, out var payload))
         {
-            data = default!;
-            return false;
+            data = new WorkflowRunContextEventData
+            {
+                ActorId = payload.ActorId,
+                WorkflowName = payload.WorkflowName,
+                CommandId = payload.CommandId,
+            };
+            return true;
         }
 
-        data = new WorkflowRunContextEventData
-        {
-            ActorId = WorkflowSdkJson.TryReadString(obj, "actorId", "ActorId"),
-            WorkflowName = WorkflowSdkJson.TryReadString(obj, "workflowName", "WorkflowName"),
-            CommandId = WorkflowSdkJson.TryReadString(obj, "commandId", "CommandId"),
-        };
-        return true;
+        data = default!;
+        return false;
     }
 
-    public static bool TryParseStepRequest(WorkflowOutputFrame frame, out WorkflowStepRequestEventData data) =>
-        TryParseStepRequest(frame.Name, frame.Value, out data);
-
-    public static bool TryParseStepRequest(string? customEventName, JsonElement? value, out WorkflowStepRequestEventData data)
+    public static bool TryParseStepRequest(WorkflowRunEventEnvelope frame, out WorkflowStepRequestEventData data)
     {
-        if (!Is(customEventName, WorkflowCustomEventNames.StepRequest) || !TryGetObject(value, out var obj))
+        if (TryUnpackCustomPayload<WorkflowStepRequestCustomPayload>(frame, WorkflowCustomEventNames.StepRequest, out var payload))
         {
-            data = default!;
-            return false;
+            data = new WorkflowStepRequestEventData
+            {
+                RunId = payload.RunId,
+                StepId = payload.StepId,
+                StepType = payload.StepType,
+                Input = payload.Input,
+                TargetRole = payload.TargetRole,
+            };
+            return true;
         }
 
-        data = new WorkflowStepRequestEventData
-        {
-            RunId = WorkflowSdkJson.TryReadString(obj, "runId", "RunId"),
-            StepId = WorkflowSdkJson.TryReadString(obj, "stepId", "StepId"),
-            StepType = WorkflowSdkJson.TryReadString(obj, "stepType", "StepType"),
-            Input = WorkflowSdkJson.TryReadString(obj, "input", "Input"),
-            TargetRole = WorkflowSdkJson.TryReadString(obj, "targetRole", "TargetRole"),
-        };
-        return true;
+        data = default!;
+        return false;
     }
 
-    public static bool TryParseStepCompleted(WorkflowOutputFrame frame, out WorkflowStepCompletedEventData data) =>
-        TryParseStepCompleted(frame.Name, frame.Value, out data);
-
-    public static bool TryParseStepCompleted(string? customEventName, JsonElement? value, out WorkflowStepCompletedEventData data)
+    public static bool TryParseStepCompleted(WorkflowRunEventEnvelope frame, out WorkflowStepCompletedEventData data)
     {
-        if (!Is(customEventName, WorkflowCustomEventNames.StepCompleted) || !TryGetObject(value, out var obj))
+        if (TryUnpackCustomPayload<WorkflowStepCompletedCustomPayload>(frame, WorkflowCustomEventNames.StepCompleted, out var payload))
         {
-            data = default!;
-            return false;
+            data = new WorkflowStepCompletedEventData
+            {
+                RunId = payload.RunId,
+                StepId = payload.StepId,
+                Success = payload.Success,
+                Output = payload.Output,
+                Error = payload.Error,
+                Annotations = new Dictionary<string, string>(payload.Annotations),
+                NextStepId = payload.NextStepId,
+                BranchKey = payload.BranchKey,
+                AssignedVariable = payload.AssignedVariable,
+                AssignedValue = payload.AssignedValue,
+            };
+            return true;
         }
 
-        data = new WorkflowStepCompletedEventData
-        {
-            RunId = WorkflowSdkJson.TryReadString(obj, "runId", "RunId"),
-            StepId = WorkflowSdkJson.TryReadString(obj, "stepId", "StepId"),
-            Success = TryReadBoolean(obj, "success", "Success"),
-            Output = WorkflowSdkJson.TryReadString(obj, "output", "Output"),
-            Error = WorkflowSdkJson.TryReadString(obj, "error", "Error"),
-            Annotations = TryReadStringMap(obj, "annotations", "Annotations"),
-            NextStepId = WorkflowSdkJson.TryReadString(obj, "nextStepId", "NextStepId"),
-            BranchKey = WorkflowSdkJson.TryReadString(obj, "branchKey", "BranchKey"),
-            AssignedVariable = WorkflowSdkJson.TryReadString(obj, "assignedVariable", "AssignedVariable"),
-            AssignedValue = WorkflowSdkJson.TryReadString(obj, "assignedValue", "AssignedValue"),
-        };
-        return true;
+        data = default!;
+        return false;
     }
 
-    public static bool TryParseHumanInputRequest(WorkflowOutputFrame frame, out WorkflowHumanInputRequestEventData data) =>
-        TryParseHumanInputRequest(frame.Name, frame.Value, out data);
-
-    public static bool TryParseHumanInputRequest(string? customEventName, JsonElement? value, out WorkflowHumanInputRequestEventData data)
+    public static bool TryParseHumanInputRequest(WorkflowRunEventEnvelope frame, out WorkflowHumanInputRequestEventData data)
     {
-        if (!Is(customEventName, WorkflowCustomEventNames.HumanInputRequest) || !TryGetObject(value, out var obj))
+        if (TryUnpackCustomPayload<WorkflowHumanInputRequestCustomPayload>(frame, WorkflowCustomEventNames.HumanInputRequest, out var payload))
         {
-            data = default!;
-            return false;
+            data = new WorkflowHumanInputRequestEventData
+            {
+                RunId = payload.RunId,
+                StepId = payload.StepId,
+                SuspensionType = payload.SuspensionType,
+                Prompt = payload.Prompt,
+                TimeoutSeconds = payload.TimeoutSeconds,
+                VariableName = payload.VariableName,
+                Content = payload.Content,
+                DeliveryTargetId = payload.DeliveryTargetId,
+                Secure = payload.Secure,
+                RedactedOutput = payload.RedactedOutput,
+                Metadata = FilterReservedHumanInputMetadata(payload.Metadata),
+            };
+            return true;
         }
 
-        data = new WorkflowHumanInputRequestEventData
-        {
-            RunId = WorkflowSdkJson.TryReadString(obj, "runId", "RunId"),
-            StepId = WorkflowSdkJson.TryReadString(obj, "stepId", "StepId"),
-            SuspensionType = WorkflowSdkJson.TryReadString(obj, "suspensionType", "SuspensionType"),
-            Prompt = WorkflowSdkJson.TryReadString(obj, "prompt", "Prompt"),
-            TimeoutSeconds = TryReadInt(obj, "timeoutSeconds", "TimeoutSeconds"),
-            VariableName = WorkflowSdkJson.TryReadString(obj, "variableName", "VariableName"),
-            Content = WorkflowSdkJson.TryReadString(obj, "content", "Content"),
-            DeliveryTargetId = WorkflowSdkJson.TryReadString(obj, "deliveryTargetId", "DeliveryTargetId"),
-            Metadata = TryReadStringMap(obj, "metadata", "Metadata"),
-        };
-        return true;
+        data = default!;
+        return false;
     }
 
-    public static bool TryParseWaitingSignal(WorkflowOutputFrame frame, out WorkflowWaitingSignalEventData data) =>
-        TryParseWaitingSignal(frame.Name, frame.Value, out data);
-
-    public static bool TryParseWaitingSignal(string? customEventName, JsonElement? value, out WorkflowWaitingSignalEventData data)
+    private static Dictionary<string, string>? FilterReservedHumanInputMetadata(IDictionary<string, string>? metadata)
     {
-        if (!Is(customEventName, WorkflowCustomEventNames.WaitingSignal) || !TryGetObject(value, out var obj))
+        if (metadata == null)
+            return null;
+
+        var filtered = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
         {
-            data = default!;
-            return false;
+            if (key is "variable" or "secure" or "input_mode" or "redacted_output")
+                continue;
+
+            filtered[key] = value;
         }
 
-        data = new WorkflowWaitingSignalEventData
-        {
-            RunId = WorkflowSdkJson.TryReadString(obj, "runId", "RunId"),
-            StepId = WorkflowSdkJson.TryReadString(obj, "stepId", "StepId"),
-            SignalName = WorkflowSdkJson.TryReadString(obj, "signalName", "SignalName"),
-            Prompt = WorkflowSdkJson.TryReadString(obj, "prompt", "Prompt"),
-            TimeoutMs = TryReadInt(obj, "timeoutMs", "TimeoutMs"),
-        };
-        return true;
+        return filtered;
     }
 
-    public static bool TryParseSignalBuffered(WorkflowOutputFrame frame, out WorkflowSignalBufferedEventData data) =>
-        TryParseSignalBuffered(frame.Name, frame.Value, out data);
-
-    public static bool TryParseSignalBuffered(string? customEventName, JsonElement? value, out WorkflowSignalBufferedEventData data)
+    public static bool TryParseWaitingSignal(WorkflowRunEventEnvelope frame, out WorkflowWaitingSignalEventData data)
     {
-        if (!Is(customEventName, WorkflowCustomEventNames.SignalBuffered) || !TryGetObject(value, out var obj))
+        if (TryUnpackCustomPayload<WorkflowWaitingSignalCustomPayload>(frame, WorkflowCustomEventNames.WaitingSignal, out var payload))
         {
-            data = default!;
-            return false;
+            data = new WorkflowWaitingSignalEventData
+            {
+                RunId = payload.RunId,
+                StepId = payload.StepId,
+                SignalName = payload.SignalName,
+                Prompt = payload.Prompt,
+                TimeoutMs = payload.TimeoutMs,
+            };
+            return true;
         }
 
-        data = new WorkflowSignalBufferedEventData
-        {
-            RunId = WorkflowSdkJson.TryReadString(obj, "runId", "RunId"),
-            StepId = WorkflowSdkJson.TryReadString(obj, "stepId", "StepId"),
-            SignalName = WorkflowSdkJson.TryReadString(obj, "signalName", "SignalName"),
-            Payload = WorkflowSdkJson.TryReadString(obj, "payload", "Payload"),
-            ReceivedAtUnixTimeMs = TryReadLong(obj, "receivedAtUnixTimeMs", "ReceivedAtUnixTimeMs"),
-        };
-        return true;
+        data = default!;
+        return false;
     }
 
-    public static bool TryParseLlmReasoning(WorkflowOutputFrame frame, out WorkflowLlmReasoningEventData data) =>
-        TryParseLlmReasoning(frame.Name, frame.Value, out data);
-
-    public static bool TryParseLlmReasoning(string? customEventName, JsonElement? value, out WorkflowLlmReasoningEventData data)
+    public static bool TryParseSignalBuffered(WorkflowRunEventEnvelope frame, out WorkflowSignalBufferedEventData data)
     {
-        if (!Is(customEventName, WorkflowCustomEventNames.LlmReasoning) || !TryGetObject(value, out var obj))
+        if (TryUnpackCustomPayload<WorkflowSignalBufferedCustomPayload>(frame, WorkflowCustomEventNames.SignalBuffered, out var payload))
         {
-            data = default!;
+            data = new WorkflowSignalBufferedEventData
+            {
+                RunId = payload.RunId,
+                StepId = payload.StepId,
+                SignalName = payload.SignalName,
+                Payload = payload.Payload,
+                ReceivedAtUnixTimeMs = payload.ReceivedAtUnixTimeMs,
+            };
+            return true;
+        }
+
+        data = default!;
+        return false;
+    }
+
+    public static bool TryParseLlmReasoning(WorkflowRunEventEnvelope frame, out WorkflowLlmReasoningEventData data)
+    {
+        if (TryUnpackCustomPayload<WorkflowReasoningCustomPayload>(frame, WorkflowCustomEventNames.LlmReasoning, out var payload))
+        {
+            data = new WorkflowLlmReasoningEventData
+            {
+                Role = payload.Role,
+                Delta = payload.Delta,
+            };
+            return true;
+        }
+
+        data = default!;
+        return false;
+    }
+
+    private static bool TryUnpackCustomPayload<TPayload>(
+        WorkflowRunEventEnvelope frame,
+        string customEventName,
+        out TPayload payload)
+        where TPayload : class, IMessage<TPayload>, new()
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        var custom = frame.Custom;
+        if (frame.EventCase != WorkflowRunEventEnvelope.EventOneofCase.Custom ||
+            custom == null ||
+            !Is(custom.Name, customEventName) ||
+            custom.Payload?.Is(new TPayload().Descriptor) != true)
+        {
+            payload = default!;
             return false;
         }
 
-        data = new WorkflowLlmReasoningEventData
-        {
-            Role = WorkflowSdkJson.TryReadString(obj, "role", "Role"),
-            Delta = WorkflowSdkJson.TryReadString(obj, "delta", "Delta"),
-        };
+        payload = custom.Payload.Unpack<TPayload>();
         return true;
     }
 
     private static bool Is(string? left, string right) =>
         string.Equals(left, right, StringComparison.Ordinal);
-
-    private static bool TryGetObject(JsonElement? value, out JsonElement obj)
-    {
-        if (value.HasValue && value.Value.ValueKind == JsonValueKind.Object)
-        {
-            obj = value.Value;
-            return true;
-        }
-
-        obj = default;
-        return false;
-    }
-
-    private static Dictionary<string, string>? TryReadStringMap(JsonElement obj, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!obj.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Object)
-                continue;
-
-            var result = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var property in value.EnumerateObject())
-            {
-                result[property.Name] = property.Value.ValueKind == JsonValueKind.String
-                    ? property.Value.GetString() ?? string.Empty
-                    : property.Value.ToString();
-            }
-
-            return result;
-        }
-
-        return null;
-    }
-
-    private static bool? TryReadBoolean(JsonElement obj, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!obj.TryGetProperty(name, out var value))
-                continue;
-
-            if (value.ValueKind == JsonValueKind.True)
-                return true;
-            if (value.ValueKind == JsonValueKind.False)
-                return false;
-            if (value.ValueKind == JsonValueKind.String &&
-                bool.TryParse(value.GetString(), out var parsed))
-            {
-                return parsed;
-            }
-        }
-
-        return null;
-    }
-
-    private static int? TryReadInt(JsonElement obj, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!obj.TryGetProperty(name, out var value))
-                continue;
-
-            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n))
-                return n;
-            if (value.ValueKind == JsonValueKind.String &&
-                int.TryParse(value.GetString(), out var parsed))
-            {
-                return parsed;
-            }
-        }
-
-        return null;
-    }
-
-    private static long? TryReadLong(JsonElement obj, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!obj.TryGetProperty(name, out var value))
-                continue;
-
-            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var n))
-                return n;
-            if (value.ValueKind == JsonValueKind.String &&
-                long.TryParse(value.GetString(), out var parsed))
-            {
-                return parsed;
-            }
-        }
-
-        return null;
-    }
 }

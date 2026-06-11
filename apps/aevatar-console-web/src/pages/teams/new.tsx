@@ -1,13 +1,21 @@
-import { BuildOutlined, RocketOutlined } from '@ant-design/icons';
-import { Button, Input, Space, Typography, message } from 'antd';
+import { TeamOutlined } from '@ant-design/icons';
+import { Alert, Button, Input, Space, Typography, message } from 'antd';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import React from 'react';
+import { loadRestorableAuthSession } from '@/shared/auth/session';
 import { history } from '@/shared/navigation/history';
-import { buildTeamCreateHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
+import { buildTeamDetailHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
 import { studioApi } from '@/shared/studio/api';
-import { buildStudioRoute } from '@/shared/studio/navigation';
+import { describeError } from '@/shared/ui/errorText';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
-import ConsoleMetricCard from '@/shared/ui/ConsoleMetricCard';
 import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
+import { rememberPendingTeamRosterSummary } from './pendingTeamRoster';
+import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
+import {
+  buildScopeHref,
+  readScopeQueryDraft,
+} from '../scopes/components/scopeQuery';
+import { t } from "@/shared/i18n/messages";
 
 const primaryActionButtonStyle: React.CSSProperties = {
   background: '#6c5ce7',
@@ -20,307 +28,225 @@ const primaryActionButtonStyle: React.CSSProperties = {
   paddingInline: 18,
 };
 
-const secondaryActionButtonStyle: React.CSSProperties = {
-  borderRadius: 10,
-  fontSize: 14,
-  fontWeight: 500,
-  height: 44,
-  paddingInline: 18,
-};
-
-const stageChipStyle: React.CSSProperties = {
-  alignItems: 'center',
-  background: '#f6f0ff',
-  borderRadius: 20,
-  color: '#6c5ce7',
-  display: 'inline-flex',
-  fontSize: 12,
-  fontWeight: 500,
-  padding: '6px 12px',
-};
+function trimOptional(value: string | null | undefined): string {
+  return value?.trim() ?? '';
+}
 
 function readCreateTeamDraftFromLocation(): {
   readonly teamName: string;
-  readonly entryName: string;
-  readonly teamDraftWorkflowId: string;
-  readonly teamDraftWorkflowName: string;
 } {
   if (typeof window === 'undefined') {
     return {
       teamName: '',
-      entryName: '',
-      teamDraftWorkflowId: '',
-      teamDraftWorkflowName: '',
     };
   }
 
   const params = new URLSearchParams(window.location.search);
   return {
     teamName: params.get('teamName')?.trim() ?? '',
-    entryName: params.get('entryName')?.trim() ?? '',
-    teamDraftWorkflowId: params.get('teamDraftWorkflowId')?.trim() ?? '',
-    teamDraftWorkflowName: params.get('teamDraftWorkflowName')?.trim() ?? '',
   };
 }
 
 const TeamCreatePage: React.FC = () => {
+  const queryClient = useQueryClient();
   const initialDraft = React.useMemo(readCreateTeamDraftFromLocation, []);
+  const [routeScopeId, setRouteScopeId] = React.useState(
+    () => readScopeQueryDraft().scopeId.trim(),
+  );
   const [teamName, setTeamName] = React.useState(initialDraft.teamName);
-  const [entryName, setEntryName] = React.useState(initialDraft.entryName);
-  const [teamDraftWorkflowId, setTeamDraftWorkflowId] = React.useState(
-    initialDraft.teamDraftWorkflowId,
+  const [teamDescription, setTeamDescription] = React.useState('');
+  const [isCreatingTeam, setIsCreatingTeam] = React.useState(false);
+  const hasInitializedScopeFromResolvedSession = React.useRef(false);
+  const authSessionQuery = useQuery({
+    queryKey: ['scopes', 'auth-session'],
+    queryFn: () => studioApi.getAuthSession(),
+    retry: false,
+  });
+  const localScopeId = trimOptional(loadRestorableAuthSession()?.user.sub);
+  const locallyResolvedScope = React.useMemo(() => {
+    if (!localScopeId) {
+      return null;
+    }
+
+    return {
+      scopeId: localScopeId,
+      scopeSource: 'local-session',
+    };
+  }, [localScopeId]);
+  const resolvedScope = React.useMemo(
+    () => resolveStudioScopeContext(authSessionQuery.data) ?? locallyResolvedScope,
+    [authSessionQuery.data, locallyResolvedScope],
   );
-  const [teamDraftWorkflowName, setTeamDraftWorkflowName] = React.useState(
-    initialDraft.teamDraftWorkflowName,
-  );
-  const [isDeletingDraft, setIsDeletingDraft] = React.useState(false);
-  const resolvedEntryName = entryName.trim() || teamName.trim();
-  const resolvedDraftWorkflowId = teamDraftWorkflowId.trim();
-  const resolvedDraftWorkflowName =
-    teamDraftWorkflowName.trim() || resolvedDraftWorkflowId;
-  const hasSavedDraft = Boolean(resolvedDraftWorkflowId);
-  const canOpenBuilder = Boolean(teamName.trim());
-  const openBuilder = () =>
-    history.push(
-      buildStudioRoute({
-        teamMode: 'create',
-        teamName: teamName.trim() || undefined,
-        entryName: resolvedEntryName || undefined,
-        teamDraftWorkflowId: resolvedDraftWorkflowId || undefined,
-        teamDraftWorkflowName: resolvedDraftWorkflowName || undefined,
-        focus: resolvedDraftWorkflowId
-          ? `workflow:${resolvedDraftWorkflowId}`
-          : undefined,
-        tab: 'studio',
-      }),
-    );
-  const openBehaviors = () =>
-    history.push(
-      buildStudioRoute({
-        tab: 'workflows',
-      }),
-    );
-  const handleDeleteDraft = async () => {
-    if (!resolvedDraftWorkflowId || isDeletingDraft) {
+  React.useEffect(() => {
+    if (!resolvedScope?.scopeId) {
+      return;
+    }
+    if (hasInitializedScopeFromResolvedSession.current) {
       return;
     }
 
-    setIsDeletingDraft(true);
+    hasInitializedScopeFromResolvedSession.current = true;
+    setRouteScopeId((currentScopeId) =>
+      currentScopeId.trim() ? currentScopeId : resolvedScope.scopeId,
+    );
+  }, [resolvedScope?.scopeId]);
+  const scopeId = routeScopeId || resolvedScope?.scopeId?.trim() || '';
+  const routeParams = React.useMemo(
+    () => ({
+      teamName: teamName.trim() || undefined,
+    }),
+    [teamName],
+  );
+  React.useEffect(() => {
+    const nextPath = buildScopeHref(
+      '/teams/new',
+      { scopeId },
+      routeParams,
+    );
+    const currentPath =
+      typeof window === 'undefined'
+        ? ''
+        : `${window.location.pathname}${window.location.search}`;
+    if (nextPath !== currentPath) {
+      history.replace(nextPath);
+    }
+  }, [routeParams, scopeId]);
+  const authSessionIssue = React.useMemo(() => {
+    if (!authSessionQuery.isError) {
+      return '';
+    }
+
+    return describeError(
+      authSessionQuery.error,
+      t("pages.teams.new.the.login.status.is", "The login status is temporarily unavailable, please refresh and try again."),
+    );
+  }, [authSessionQuery.error, authSessionQuery.isError]);
+  const canCreateTeam = Boolean(scopeId && teamName.trim());
+  const handleCreateTeam = async () => {
+    if (!canCreateTeam || isCreatingTeam) {
+      return;
+    }
+
+    setIsCreatingTeam(true);
     try {
-      await studioApi.deleteWorkflow(resolvedDraftWorkflowId);
-      setTeamDraftWorkflowId('');
-      setTeamDraftWorkflowName('');
-      history.replace(
-        buildTeamCreateHref({
-          teamName: teamName.trim() || undefined,
-          entryName: entryName.trim() || undefined,
+      const team = await studioApi.createTeam({
+        scopeId,
+        displayName: teamName.trim(),
+        description: teamDescription.trim() || undefined,
+      });
+      queryClient.setQueryData(
+        ['teams', 'team-summary', team.scopeId, team.teamId],
+        team,
+      );
+      rememberPendingTeamRosterSummary(team);
+      await queryClient.invalidateQueries({
+        queryKey: ['teams', 'roster', team.scopeId],
+      });
+      void message.success(t("pages.teams.new.team.created", "team created."));
+      history.push(
+        buildTeamDetailHref({
+          scopeId: team.scopeId,
+          teamId: team.teamId,
         }),
       );
-      void message.success('已删除当前团队草稿。');
     } catch (error) {
       const errorMessage =
         error instanceof Error && error.message.trim()
           ? error.message
-          : '删除草稿失败。';
+          : t("pages.teams.new.failed.to.create.team", "Failed to create team.");
       void message.error(errorMessage);
     } finally {
-      setIsDeletingDraft(false);
+      setIsCreatingTeam(false);
     }
   };
-
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Teams"
+      breadcrumb={t("pages.teams.new.aevatar.teams", "Aevatar / Teams")}
       extra={
-        <Button
-          disabled={!canOpenBuilder}
-          onClick={openBuilder}
-          style={primaryActionButtonStyle}
-        >
-          Continue in Studio
-        </Button>
+        <Space wrap>
+          <Button
+            disabled={!canCreateTeam}
+            loading={isCreatingTeam}
+            onClick={() => void handleCreateTeam()}
+            style={primaryActionButtonStyle}
+          >
+            {t("pages.teams.new.create.team", "Create Team")}</Button>
+        </Space>
       }
-      title="Saved Draft Recovery"
+      title={t("pages.teams.new.create.team.2", "Create Team")}
     >
-      <div
-        style={{
-          display: 'grid',
-          gap: 16,
-          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-          marginBottom: 20,
-        }}
-      >
-        <ConsoleMetricCard label="用途" tone="purple" value="旧链接恢复" />
-        <ConsoleMetricCard label="恢复对象" value="初始 member 草稿" />
-        <ConsoleMetricCard label="继续位置" value="Studio" />
-        <ConsoleMetricCard label="新增后端事实" tone="green" value="0" />
-      </div>
+      {authSessionIssue ? (
+        <Alert
+          description={
+            resolvedScope?.scopeId
+              ? t("pages.teams.new.has.continued.creating.team", "{value1} has continued creating team using local login information.", { value1: authSessionIssue })
+              : authSessionIssue
+          }
+          showIcon
+          style={{ marginBottom: 20 }}
+          title={
+            resolvedScope?.scopeId
+              ? t("pages.teams.new.the.current.login.status", "The current login status verification failed, local login information has been used")
+              : t("pages.teams.new.current.login.status.verification", "Current login status verification failed")
+          }
+          type="warning"
+        />
+      ) : null}
+
+      {!scopeId ? (
+        <Alert
+          showIcon
+          style={{ marginBottom: 20 }}
+          title={t("pages.teams.new.the.current.login.status.2", "The current login status has not resolved the available team scope, please refresh and try again.")}
+          type="info"
+        />
+      ) : null}
 
       <AevatarPanel
         layoutMode="document"
         padding={20}
-        title="Continue initial member draft"
+        title={t("pages.teams.new.team.information", "team information")}
       >
         <div
           style={{
-            alignItems: 'center',
-            display: 'grid',
-            gap: 20,
-            gridTemplateColumns: 'minmax(0, 1fr) auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 18,
+            maxWidth: 760,
           }}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Typography.Title
-              level={3}
-              style={{
-                color: '#1d2129',
-                fontSize: 28,
-                fontWeight: 600,
-                lineHeight: 1.2,
-                margin: 0,
-              }}
-            >
-              Saved draft recovery
-            </Typography.Title>
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: 8,
-              }}
-            >
-              {['旧链接兼容', '草稿恢复', '显式进入 Studio', '不创建团队事实'].map((item) => (
-                <span key={item} style={stageChipStyle}>
-                  {item}
-                </span>
-              ))}
-            </div>
-            <div
-              style={{
-                display: 'grid',
-                gap: 12,
-                gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                maxWidth: 720,
-              }}
-            >
-              <div style={{ display: 'grid', gap: 8 }}>
-                <Typography.Text strong>Legacy team label</Typography.Text>
-                <Input
-                  aria-label="Legacy team label"
-                  placeholder="例如：订单助手团队"
-                  value={teamName}
-                  onChange={(event) => setTeamName(event.target.value)}
-                />
-              </div>
-              <div style={{ display: 'grid', gap: 8 }}>
-                <Typography.Text strong>Initial member label</Typography.Text>
-                <Input
-                  aria-label="Initial member label"
-                  placeholder="默认复用团队名称"
-                  value={entryName}
-                  onChange={(event) => setEntryName(event.target.value)}
-                />
-              </div>
-              <Typography.Text
-                type="secondary"
-                style={{ gridColumn: '1 / -1', lineHeight: 1.6 }}
-              >
-                This compatibility page preserves old Create Team links and saved
-                draft recovery. New team creation now starts in Studio by creating
-                the first member.
-                {hasSavedDraft
-                  ? ' Continue in Studio to edit the linked initial member draft.'
-                  : ''}
-              </Typography.Text>
-            </div>
-            <Space wrap size={[8, 8]}>
-              <Button
-                icon={<BuildOutlined />}
-                disabled={!canOpenBuilder}
-                onClick={openBuilder}
-                style={primaryActionButtonStyle}
-              >
-                Continue in Studio
-              </Button>
-              <Button
-                icon={<RocketOutlined />}
-                onClick={openBehaviors}
-                style={secondaryActionButtonStyle}
-              >
-                View Behaviors
-              </Button>
-              <Button
-                onClick={() => history.push(buildTeamsHref())}
-                style={secondaryActionButtonStyle}
-              >
-                Back to My Teams
-              </Button>
-            </Space>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <Typography.Text strong>{t("pages.teams.new.team.name", "Team name")}</Typography.Text>
+            <Input
+              aria-label={t("pages.teams.new.team.name.2", "Team name")}
+              placeholder={t("pages.teams.new.for.example.order.assistant", "For example: Order Assistant team")}
+              value={teamName}
+              onChange={(event) => setTeamName(event.target.value)}
+            />
           </div>
-          <div
-            style={{
-              alignItems: 'flex-end',
-              display: 'flex',
-              justifyContent: 'flex-end',
-            }}
-          >
-            <Typography.Text
-              style={{
-                color: '#8c8c8c',
-                fontSize: 12,
-                fontWeight: 500,
-              }}
-            >
-              {teamName.trim()
-                ? `Legacy label: ${teamName.trim()}`
-                : 'Use this page only for old links or saved drafts'}
-            </Typography.Text>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <Typography.Text strong>{t("pages.teams.new.description", "Description")}</Typography.Text>
+            <Input
+              aria-label={t("pages.teams.new.team.description", "Team description")}
+              placeholder={t("pages.teams.new.what.is.this.team", "What is this team responsible for?")}
+              value={teamDescription}
+              onChange={(event) => setTeamDescription(event.target.value)}
+            />
           </div>
+          <Space wrap size={[8, 8]}>
+            <Button
+              icon={<TeamOutlined />}
+              disabled={!canCreateTeam}
+              loading={isCreatingTeam}
+              onClick={() => void handleCreateTeam()}
+              style={primaryActionButtonStyle}
+            >
+              {t("pages.teams.new.create.team.3", "Create Team")}</Button>
+            <Button onClick={() => history.push(buildTeamsHref())}>
+              {t("pages.teams.new.back.to.my.teams", "Back to My Teams")}</Button>
+          </Space>
         </div>
       </AevatarPanel>
-
-      {hasSavedDraft ? (
-        <AevatarPanel
-          layoutMode="document"
-          padding={20}
-          title="Saved Draft"
-        >
-          <div
-            style={{
-              display: 'grid',
-              gap: 12,
-            }}
-          >
-            <Typography.Text strong>已保存草稿</Typography.Text>
-            <Typography.Text>{resolvedDraftWorkflowName}</Typography.Text>
-            <Typography.Text type="secondary" style={{ lineHeight: 1.6 }}>
-              This workflow draft is linked from an old Create Team flow. Continue
-              in Studio to edit the initial member draft.
-            </Typography.Text>
-            <Space wrap size={[8, 8]}>
-              <Button
-                icon={<BuildOutlined />}
-                disabled={isDeletingDraft}
-                onClick={openBuilder}
-                style={primaryActionButtonStyle}
-              >
-                Continue Draft
-              </Button>
-              <Button
-                loading={isDeletingDraft}
-                onClick={() => void handleDeleteDraft()}
-                style={secondaryActionButtonStyle}
-              >
-                Delete Draft
-              </Button>
-            </Space>
-            <Typography.Text type="secondary" style={{ lineHeight: 1.6 }}>
-              Delete Draft removes the linked workflow draft. Legacy labels stay
-              in the URL so old links remain understandable.
-            </Typography.Text>
-          </div>
-        </AevatarPanel>
-      ) : null}
     </ConsoleMenuPageShell>
   );
 };

@@ -59,6 +59,28 @@ public class ServiceInvokeAgentToolSourceTests
     }
 
     [Fact]
+    public async Task DiscoverToolsAsync_PropagatesInvokeApprovalBypass()
+    {
+        var source = new ServiceInvokeAgentToolSource(
+            new ServiceInvokeOptions
+            {
+                TenantId = "t1",
+                AppId = "a1",
+                Namespace = "ns1",
+                BypassInvokeApproval = true,
+            },
+            new NullCatalogReader(),
+            new NullInvocationPort());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        var invoke = tools.Should().ContainSingle(t => t is InvokeServiceTool).Subject;
+        invoke.RequiresApproval("""{"service_id":"svc1","endpoint_id":"cmd1"}""")
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
     public async Task DiscoverToolsAsync_ReturnsOnlyListWhenInvokeDisabled()
     {
         var source = new ServiceInvokeAgentToolSource(

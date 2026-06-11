@@ -9,73 +9,60 @@ using Aevatar.Studio.Application.Studio.Contracts;
 namespace Aevatar.Studio.Application.Studio.Services;
 
 /// <summary>
-/// Member-first Studio facade. Owns the orchestration that turns a
-/// member-scoped request into the existing scope binding pipeline:
-///
-///   1. resolve the StudioMember authority (read model)
-///   2. build a <see cref="ScopeBindingUpsertRequest"/> with
-///      <c>ServiceId = publishedServiceId</c> — never the scope default
-///   3. delegate to <see cref="IScopeBindingCommandPort"/>
-///   4. derive the resolved <c>implementation_ref</c> from the binding
-///      result and persist it on the member authority
-///   5. record the resulting revision back on the member actor
-///
-/// Steps 4 + 5 are what populate <c>StudioMemberState.ImplementationRef</c>
-/// and traverse the lifecycle <c>Created → BuildReady → BindReady</c> the
-/// issue specifies. Endpoints depend on this facade and never reach for the
-/// platform binding port directly, which is what kept Studio's old surface
-/// in scope-default fallback mode.
+/// Member-first Studio facade. Bind commands now return an honest accepted
+/// receipt and hand the request to actor-owned admission, so a stale
+/// StudioMember read model cannot reject a member that the actor already
+/// owns.
 /// </summary>
 public sealed class StudioMemberService : IStudioMemberService
 {
-    // Mirrors the values pinned in ScopeWorkflowCapabilityOptions
-    // (FixedServiceAppId / FixedServiceNamespace). Adding a runtime options
-    // dependency here would force every Studio.Application consumer to wire
-    // the platform Application layer just to read two const strings; copying
-    // the constants keeps the layer boundary clean and matches what
-    // AppScopedWorkflowService already does for the same reason.
-    private const string ServiceAppId = "default";
-    private const string ServiceNamespace = "default";
     private const string DefaultSmokePrompt = "Hello from Studio Bind.";
 
     private readonly IStudioMemberCommandPort _memberCommandPort;
     private readonly IStudioMemberQueryPort _memberQueryPort;
-    private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
+    private readonly IStudioMemberBindingRunQueryPort _bindingRunQueryPort;
+    private readonly IStudioTeamQueryPort _teamQueryPort;
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
+    private readonly IScopeBindingReadinessQueryPort _readinessQueryPort;
     private readonly IServiceCommandPort _serviceCommandPort;
 
     public StudioMemberService(
         IStudioMemberCommandPort memberCommandPort,
         IStudioMemberQueryPort memberQueryPort,
-        IScopeBindingCommandPort scopeBindingCommandPort,
+        IStudioMemberBindingRunQueryPort bindingRunQueryPort,
+        IStudioTeamQueryPort teamQueryPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
+        IScopeBindingReadinessQueryPort readinessQueryPort,
         IServiceCommandPort serviceCommandPort)
     {
         _memberCommandPort = memberCommandPort ?? throw new ArgumentNullException(nameof(memberCommandPort));
         _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
-        _scopeBindingCommandPort = scopeBindingCommandPort
-            ?? throw new ArgumentNullException(nameof(scopeBindingCommandPort));
+        _bindingRunQueryPort = bindingRunQueryPort ?? throw new ArgumentNullException(nameof(bindingRunQueryPort));
+        _teamQueryPort = teamQueryPort ?? throw new ArgumentNullException(nameof(teamQueryPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort
             ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
+        _readinessQueryPort = readinessQueryPort ?? throw new ArgumentNullException(nameof(readinessQueryPort));
         _serviceCommandPort = serviceCommandPort
             ?? throw new ArgumentNullException(nameof(serviceCommandPort));
     }
 
-    public Task<StudioMemberSummaryResponse> CreateAsync(
+    public async Task<StudioMemberSummaryResponse> CreateAsync(
         string scopeId,
         CreateStudioMemberRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // Validation lives at this Application boundary (CLAUDE.md
-        // `严格分层 / 上层依赖抽象`). The Projection-layer command port is
-        // an interchangeable transport; if it ever swaps, the bounds must
-        // not silently disappear with it. Callers receive a single typed
-        // error path here regardless of which command port is wired in.
         StudioMemberCreateRequestValidator.Validate(request);
 
-        return _memberCommandPort.CreateAsync(scopeId, request, ct);
+        if (!string.IsNullOrEmpty(request.TeamId))
+        {
+            var team = await _teamQueryPort.GetAsync(scopeId, request.TeamId, ct);
+            if (team == null)
+                throw new StudioTeamNotFoundException(scopeId, request.TeamId);
+        }
+
+        return await _memberCommandPort.CreateAsync(scopeId, request, ct);
     }
 
     public Task<StudioMemberRosterResponse> ListAsync(
@@ -96,47 +83,10 @@ public sealed class StudioMemberService : IStudioMemberService
         // every member-centric endpoint.
         var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
             ?? throw new StudioMemberNotFoundException(scopeId, memberId);
-        return detail;
+        return await HydrateCurrentBindingRunAsync(detail, ct);
     }
 
-    public async Task<StudioMemberDetailResponse> PatchAsync(
-        string scopeId,
-        string memberId,
-        PatchStudioMemberRequest request,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
-            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
-
-        if (request.ImplementationRef != null)
-        {
-            var implementation = NormalizePatchImplementationRef(
-                memberId,
-                detail.Summary.ImplementationKind,
-                request.ImplementationRef);
-
-            await _memberCommandPort.UpdateImplementationAsync(
-                scopeId,
-                memberId,
-                implementation,
-                ct);
-
-            return detail with
-            {
-                ImplementationRef = implementation,
-                Summary = detail.Summary with
-                {
-                    LifecycleStage = MemberLifecycleStageNames.BuildReady,
-                },
-            };
-        }
-
-        return detail;
-    }
-
-    public async Task<StudioMemberBindingResponse> BindAsync(
+    public async Task<StudioMemberBindingAcceptedResponse> BindAsync(
         string scopeId,
         string memberId,
         UpdateStudioMemberBindingRequest request,
@@ -144,68 +94,82 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
-            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedMemberId = NormalizeRequired(memberId, nameof(memberId));
+        var implementationKindWire = ResolveBindingImplementationKind(normalizedMemberId, request);
+        var bindingRunId = GenerateBindingRunId();
 
-        var publishedServiceId = detail.Summary.PublishedServiceId;
-        if (string.IsNullOrWhiteSpace(publishedServiceId))
-        {
-            throw new InvalidOperationException(
-                $"member '{memberId}' has no publishedServiceId; this is a backend invariant violation.");
-        }
-
-        var implementationKindWire = detail.Summary.ImplementationKind;
-        var bindingRequest = BuildScopeBindingRequest(
-            scopeId,
-            memberId,
-            publishedServiceId,
-            implementationKindWire,
-            detail.Summary.DisplayName,
-            request);
-
-        // Two-phase write: scope binding first, then update the member
-        // authority. This is intentionally last-write-wins — if step 2 or
-        // step 3 fails, the platform side has a fresh revision but the
-        // member doesn't yet observe it; the next bind will create another
-        // upstream revision and only that one will be recorded. We accept
-        // this drift over a distributed transaction because the member's
-        // last_binding is a query convenience, not the source of truth —
-        // the platform read model is.
-        var bindingResult = await _scopeBindingCommandPort.UpsertAsync(bindingRequest, ct);
-
-        var resolvedImplementationRef = BuildResolvedImplementationRef(
-            implementationKindWire, bindingResult, request);
-        if (resolvedImplementationRef != null)
-        {
-            await _memberCommandPort.UpdateImplementationAsync(
-                scopeId, memberId, resolvedImplementationRef, ct);
-        }
-
-        await _memberCommandPort.RecordBindingAsync(
-            scopeId,
-            memberId,
-            bindingResult.ServiceId,
-            bindingResult.RevisionId,
-            implementationKindWire,
+        await _memberCommandPort.StartBindingRunAsync(
+            new StudioMemberBindingRunStartRequest(
+                BindingRunId: bindingRunId,
+                ScopeId: normalizedScopeId,
+                MemberId: normalizedMemberId,
+                ImplementationKind: implementationKindWire,
+                Binding: request),
             ct);
 
-        return new StudioMemberBindingResponse(
-            MemberId: memberId,
-            PublishedServiceId: bindingResult.ServiceId,
-            RevisionId: bindingResult.RevisionId,
-            ImplementationKind: implementationKindWire,
-            ScopeId: scopeId,
-            ExpectedActorId: bindingResult.ExpectedActorId);
+        return new StudioMemberBindingAcceptedResponse(
+            Status: StudioMemberBindingRunStatusNames.Accepted,
+            BindingRunId: bindingRunId,
+            ScopeId: normalizedScopeId,
+            MemberId: normalizedMemberId);
     }
 
-    public async Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+    public async Task<StudioMemberBindingViewResponse> GetBindingAsync(
         string scopeId,
         string memberId,
         CancellationToken ct = default)
     {
         var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
             ?? throw new StudioMemberNotFoundException(scopeId, memberId);
-        return detail.LastBinding;
+
+        var currentBindingRun = await ResolveCurrentBindingRunAsync(detail, ct);
+        return new StudioMemberBindingViewResponse(detail.LastBinding)
+        {
+            CurrentBindingRun = currentBindingRun,
+        };
+    }
+
+    public async Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
+        string scopeId,
+        string memberId,
+        string bindingRunId,
+        CancellationToken ct = default)
+    {
+        var normalizedBindingRunId = NormalizeRequired(bindingRunId, nameof(bindingRunId));
+        var run = await _bindingRunQueryPort.GetAsync(scopeId, memberId, normalizedBindingRunId, ct);
+        if (run == null)
+            throw new StudioMemberBindingRunNotFoundException(scopeId, memberId, normalizedBindingRunId);
+
+        return run;
+    }
+
+    private async Task<StudioMemberDetailResponse> HydrateCurrentBindingRunAsync(
+        StudioMemberDetailResponse detail,
+        CancellationToken ct)
+    {
+        var currentBindingRun = await ResolveCurrentBindingRunAsync(detail, ct);
+        return detail with
+        {
+            CurrentBindingRun = currentBindingRun,
+        };
+    }
+
+    private async Task<StudioMemberBindingRunStatusResponse?> ResolveCurrentBindingRunAsync(
+        StudioMemberDetailResponse detail,
+        CancellationToken ct)
+    {
+        var memberCurrentRun = detail.CurrentBindingRun;
+        if (memberCurrentRun == null || string.IsNullOrEmpty(memberCurrentRun.BindingRunId))
+            return null;
+
+        var run = await _bindingRunQueryPort.GetAsync(
+            memberCurrentRun.ScopeId,
+            memberCurrentRun.MemberId,
+            memberCurrentRun.BindingRunId,
+            ct);
+
+        return run ?? memberCurrentRun;
     }
 
     public async Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
@@ -216,13 +180,28 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         var normalizedEndpointId = NormalizeRequired(endpointId, nameof(endpointId));
         var context = await ResolveBoundServiceContextAsync(scopeId, memberId, ct);
-        return BuildMemberEndpointContractResponse(
+        var contract = BuildMemberEndpointContractResponse(
             context.ScopeId,
             context.MemberId,
             context.PublishedServiceId,
             normalizedEndpointId,
             context.Service,
-            context.Revisions);
+            context.Revisions,
+            StudioMemberInvocationReadinessUnknown(
+                revisionId: ServiceEndpointContractMath.ResolveCurrentContractRevision(
+                    context.Service,
+                    context.Revisions,
+                    normalizedEndpointId)?.RevisionId));
+        if (contract == null)
+            return null;
+
+        var readiness = await ResolveInvocationReadinessAsync(
+            context.ScopeId,
+            context.PublishedServiceId,
+            contract.RevisionId,
+            endpointId: normalizedEndpointId,
+            ct);
+        return contract with { InvocationReadiness = readiness };
     }
 
     public async Task<StudioMemberBindingActivationResponse> ActivateBindingRevisionAsync(
@@ -307,6 +286,140 @@ public sealed class StudioMemberService : IStudioMemberService
             Status: MemberRevisionLifecycleStatusNames.Retired);
     }
 
+    public async Task<StudioMemberDetailResponse> UpdateAsync(
+        string scopeId,
+        string memberId,
+        UpdateStudioMemberRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (request.TeamId.HasValue)
+        {
+            var requested = request.TeamId.Value;
+
+            // Application-layer guard: empty / whitespace strings on the wire
+            // are rejected before reaching the actor protocol (ADR-0017 §Q6).
+            if (requested != null && string.IsNullOrWhiteSpace(requested))
+            {
+                throw new InvalidOperationException(
+                    "teamId must not be empty when present " +
+                    "(use null in JSON body to mean 'unassign').");
+            }
+
+            // Refactor (iter96/cluster-545):
+            //   Old: service/application layer interpreted current membership and reassignment fanout.
+            //   New: service forwards PATCH intent only; StudioMemberGAgent owns the decision and materializer fans out committed facts.
+            await _memberCommandPort.PatchTeamAssignmentAsync(
+                scopeId,
+                memberId,
+                targetTeamId: requested?.Trim(),
+                ct);
+        }
+
+        if (request.ImplementationRef.HasValue)
+        {
+            var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
+                ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+            var implementation = NormalizePatchImplementationRef(
+                memberId,
+                detail.Summary.ImplementationKind,
+                request.ImplementationRef.Value
+                    ?? throw new InvalidOperationException("implementationRef must not be null when present."));
+
+            await _memberCommandPort.UpdateImplementationAsync(
+                scopeId,
+                memberId,
+                implementation,
+                ct);
+        }
+
+        // Re-read the member detail so callers see the post-update state.
+        return await GetAsync(scopeId, memberId, ct);
+    }
+
+    private async Task<StudioMemberInvocationReadinessResponse> ResolveInvocationReadinessAsync(
+        string scopeId,
+        string? publishedServiceId,
+        string? expectedRevisionId,
+        string? endpointId,
+        CancellationToken ct)
+    {
+        var normalizedServiceId = publishedServiceId?.Trim() ?? string.Empty;
+        if (normalizedServiceId.Length == 0)
+        {
+            return StudioMemberInvocationReadinessUnknown(
+                expectedRevisionId,
+                "Member has no published service yet; bind the member before invoking it.");
+        }
+
+        var request = new ScopeBindingReadinessRequest(
+            ScopeId: scopeId,
+            ServiceId: normalizedServiceId,
+            ExpectedRevisionId: NormalizeOptional(expectedRevisionId),
+            ExpectedEndpointIds: string.IsNullOrWhiteSpace(endpointId) ? null : [endpointId.Trim()]);
+        var snapshot = await _readinessQueryPort.GetReadinessAsync(request, ct);
+        return MapInvocationReadiness(snapshot);
+    }
+
+    private static StudioMemberInvocationReadinessResponse MapInvocationReadiness(
+        ScopeBindingReadinessSnapshot snapshot)
+    {
+        var status = MapInvocationReadinessStatus(snapshot.Status);
+        var canInvoke = snapshot.Status == ScopeBindingReadinessStatus.Ready && snapshot.InvokeReady;
+        return new StudioMemberInvocationReadinessResponse(
+            CanInvoke: canInvoke,
+            Status: status,
+            ReasonCode: canInvoke ? StudioMemberInvocationReadinessStatusNames.Ready : status,
+            Message: BuildInvocationReadinessMessage(status, canInvoke),
+            RevisionId: snapshot.RevisionId,
+            DeploymentId: snapshot.DeploymentId,
+            ObservedAtUtc: snapshot.ObservedAtUtc);
+    }
+
+    private static StudioMemberInvocationReadinessResponse StudioMemberInvocationReadinessUnknown(
+        string? revisionId,
+        string message = "Invocation readiness is not available yet.") =>
+        new(
+            CanInvoke: false,
+            Status: StudioMemberInvocationReadinessStatusNames.Unknown,
+            ReasonCode: StudioMemberInvocationReadinessStatusNames.Unknown,
+            Message: message,
+            RevisionId: NormalizeOptional(revisionId));
+
+    private static string MapInvocationReadinessStatus(ScopeBindingReadinessStatus status) =>
+        status switch
+        {
+            ScopeBindingReadinessStatus.Ready => StudioMemberInvocationReadinessStatusNames.Ready,
+            ScopeBindingReadinessStatus.ServiceCatalogMissing => StudioMemberInvocationReadinessStatusNames.ServiceCatalogMissing,
+            ScopeBindingReadinessStatus.ServingSetMissing => StudioMemberInvocationReadinessStatusNames.ServingSetMissing,
+            ScopeBindingReadinessStatus.EligibleServingTargetMissing => StudioMemberInvocationReadinessStatusNames.EligibleServingTargetMissing,
+            ScopeBindingReadinessStatus.ServiceCatalogTargetMissing => StudioMemberInvocationReadinessStatusNames.ServiceCatalogTargetMissing,
+            ScopeBindingReadinessStatus.TrafficViewTargetMissing => StudioMemberInvocationReadinessStatusNames.TrafficViewTargetMissing,
+            ScopeBindingReadinessStatus.PreparedArtifactMissing => StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing,
+            _ => StudioMemberInvocationReadinessStatusNames.Unknown,
+        };
+
+    private static string BuildInvocationReadinessMessage(string status, bool canInvoke) =>
+        canInvoke
+            ? "Member endpoint is ready for invocation."
+            : status switch
+            {
+                StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing =>
+                    "Binding is complete, but the runtime artifact is not prepared for invocation yet.",
+                StudioMemberInvocationReadinessStatusNames.ServiceCatalogMissing =>
+                    "Published service is not visible in the service catalog yet.",
+                StudioMemberInvocationReadinessStatusNames.ServingSetMissing =>
+                    "Serving target is not visible yet.",
+                StudioMemberInvocationReadinessStatusNames.EligibleServingTargetMissing =>
+                    "No active serving target is eligible for invocation yet.",
+                StudioMemberInvocationReadinessStatusNames.ServiceCatalogTargetMissing =>
+                    "The selected endpoint is not visible in the service catalog yet.",
+                StudioMemberInvocationReadinessStatusNames.TrafficViewTargetMissing =>
+                    "Runtime traffic view has not observed the serving target yet.",
+                _ => "Invocation readiness is not available yet.",
+            };
+
     /// <summary>
     /// Resolves the published service the member is currently bound to in
     /// one round-trip: member authority → service catalog → revisions.
@@ -339,8 +452,8 @@ public sealed class StudioMemberService : IStudioMemberService
         var identity = new ServiceIdentity
         {
             TenantId = normalizedScopeId,
-            AppId = ServiceAppId,
-            Namespace = ServiceNamespace,
+            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
             ServiceId = publishedServiceId,
         };
 
@@ -449,8 +562,8 @@ public sealed class StudioMemberService : IStudioMemberService
 
     private static string? NormalizeOptional(string? value)
     {
-        var normalized = value?.Trim();
-        return string.IsNullOrEmpty(normalized) ? null : normalized;
+        var normalized = value?.Trim() ?? string.Empty;
+        return normalized.Length == 0 ? null : normalized;
     }
 
     private static void RejectPresent(string? value, string fieldName, string implementationKind)
@@ -460,6 +573,65 @@ public sealed class StudioMemberService : IStudioMemberService
             throw new InvalidOperationException(
                 $"{fieldName} is not allowed when implementationRef.implementationKind is '{implementationKind}'.");
         }
+    }
+
+    private static string GenerateBindingRunId() =>
+        $"bind-{Guid.NewGuid():N}";
+
+    private static string ResolveBindingImplementationKind(
+        string memberId,
+        UpdateStudioMemberBindingRequest request)
+    {
+        var count = 0;
+        string? implementationKind = null;
+
+        if (request.Workflow != null)
+        {
+            count++;
+            implementationKind = MemberImplementationKindNames.Workflow;
+            if (string.IsNullOrWhiteSpace(request.Workflow.WorkflowId))
+            {
+                throw new InvalidOperationException(
+                    $"member '{memberId}' bind: workflowId is required for workflow members.");
+            }
+
+            if (request.Workflow.WorkflowYamls.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"member '{memberId}' bind: workflow yamls are required for workflow members.");
+            }
+        }
+
+        if (request.Script != null)
+        {
+            count++;
+            implementationKind = MemberImplementationKindNames.Script;
+            if (string.IsNullOrWhiteSpace(request.Script.ScriptId))
+            {
+                throw new InvalidOperationException(
+                    $"member '{memberId}' bind: scriptId is required for script members.");
+            }
+        }
+
+        if (request.GAgent != null)
+        {
+            count++;
+            implementationKind = MemberImplementationKindNames.GAgent;
+            if (string.IsNullOrWhiteSpace(request.GAgent.ActorTypeName))
+            {
+                throw new InvalidOperationException(
+                    $"member '{memberId}' bind: actorTypeName is required for gagent members.");
+            }
+        }
+
+        return count switch
+        {
+            1 => implementationKind!,
+            0 => throw new InvalidOperationException(
+                $"member '{memberId}' bind: exactly one binding implementation is required."),
+            _ => throw new InvalidOperationException(
+                $"member '{memberId}' bind: only one binding implementation may be supplied."),
+        };
     }
 
     private static InvalidOperationException BuildMemberNotBoundException(string memberId) =>
@@ -479,7 +651,8 @@ public sealed class StudioMemberService : IStudioMemberService
         string publishedServiceId,
         string normalizedEndpointId,
         ServiceCatalogSnapshot service,
-        ServiceRevisionCatalogSnapshot? revisions)
+        ServiceRevisionCatalogSnapshot? revisions,
+        StudioMemberInvocationReadinessResponse invocationReadiness)
     {
         var currentRevision = ServiceEndpointContractMath.ResolveCurrentContractRevision(
             service, revisions, normalizedEndpointId);
@@ -534,6 +707,7 @@ public sealed class StudioMemberService : IStudioMemberService
                 ?? ServiceEndpointContractMath.NullIfEmpty(service.DefaultServingRevisionId)
                 ?? ServiceEndpointContractMath.NullIfEmpty(service.ActiveServingRevisionId)
                 ?? string.Empty,
+            InvocationReadiness: invocationReadiness,
             CurlExample: smokeTestSupported
                 ? BuildCurlExample(invokePath, supportsSse, endpoint.RequestTypeUrl)
                 : null,
@@ -612,151 +786,4 @@ const response = await fetch("{{invokePath}}", {
 """;
     }
 
-    private static ScopeBindingUpsertRequest BuildScopeBindingRequest(
-        string scopeId,
-        string memberId,
-        string publishedServiceId,
-        string implementationKindWire,
-        string displayName,
-        UpdateStudioMemberBindingRequest request)
-    {
-        return implementationKindWire switch
-        {
-            MemberImplementationKindNames.Workflow => new ScopeBindingUpsertRequest(
-                ScopeId: scopeId,
-                ImplementationKind: ScopeBindingImplementationKind.Workflow,
-                Workflow: BuildWorkflowSpec(memberId, request),
-                DisplayName: displayName,
-                RevisionId: request.RevisionId,
-                ServiceId: publishedServiceId),
-
-            MemberImplementationKindNames.Script => new ScopeBindingUpsertRequest(
-                ScopeId: scopeId,
-                ImplementationKind: ScopeBindingImplementationKind.Scripting,
-                Script: BuildScriptSpec(memberId, request),
-                DisplayName: displayName,
-                RevisionId: request.RevisionId,
-                ServiceId: publishedServiceId),
-
-            MemberImplementationKindNames.GAgent => new ScopeBindingUpsertRequest(
-                ScopeId: scopeId,
-                ImplementationKind: ScopeBindingImplementationKind.GAgent,
-                GAgent: BuildGAgentSpec(memberId, request),
-                DisplayName: displayName,
-                RevisionId: request.RevisionId,
-                ServiceId: publishedServiceId),
-
-            _ => throw new InvalidOperationException(
-                $"member '{memberId}' has unsupported implementationKind '{implementationKindWire}'."),
-        };
-    }
-
-    private static StudioMemberImplementationRefResponse? BuildResolvedImplementationRef(
-        string implementationKindWire,
-        ScopeBindingUpsertResult bindingResult,
-        UpdateStudioMemberBindingRequest request)
-    {
-        switch (implementationKindWire)
-        {
-            case MemberImplementationKindNames.Workflow:
-                if (bindingResult.Workflow == null
-                    || string.IsNullOrEmpty(bindingResult.Workflow.WorkflowName))
-                {
-                    return null;
-                }
-                return new StudioMemberImplementationRefResponse(
-                    ImplementationKind: MemberImplementationKindNames.Workflow,
-                    WorkflowId: bindingResult.Workflow.WorkflowName,
-                    WorkflowRevision: bindingResult.RevisionId);
-
-            case MemberImplementationKindNames.Script:
-                var scriptId = bindingResult.Script?.ScriptId
-                    ?? request.Script?.ScriptId
-                    ?? string.Empty;
-                if (string.IsNullOrEmpty(scriptId))
-                    return null;
-                return new StudioMemberImplementationRefResponse(
-                    ImplementationKind: MemberImplementationKindNames.Script,
-                    ScriptId: scriptId,
-                    ScriptRevision: bindingResult.Script?.ScriptRevision
-                        ?? request.Script?.ScriptRevision);
-
-            case MemberImplementationKindNames.GAgent:
-                var actorTypeName = bindingResult.GAgent?.ActorTypeName
-                    ?? request.GAgent?.ActorTypeName
-                    ?? string.Empty;
-                if (string.IsNullOrEmpty(actorTypeName))
-                    return null;
-                return new StudioMemberImplementationRefResponse(
-                    ImplementationKind: MemberImplementationKindNames.GAgent,
-                    ActorTypeName: actorTypeName);
-
-            default:
-                return null;
-        }
-    }
-
-    private static ScopeBindingWorkflowSpec BuildWorkflowSpec(
-        string memberId,
-        UpdateStudioMemberBindingRequest request)
-    {
-        if (request.Workflow == null || request.Workflow.WorkflowYamls.Count == 0)
-        {
-            throw new InvalidOperationException(
-                $"member '{memberId}' bind: workflow yamls are required for workflow members.");
-        }
-
-        return new ScopeBindingWorkflowSpec(request.Workflow.WorkflowYamls);
-    }
-
-    private static ScopeBindingScriptSpec BuildScriptSpec(
-        string memberId,
-        UpdateStudioMemberBindingRequest request)
-    {
-        if (request.Script == null || string.IsNullOrWhiteSpace(request.Script.ScriptId))
-        {
-            throw new InvalidOperationException(
-                $"member '{memberId}' bind: scriptId is required for script members.");
-        }
-
-        return new ScopeBindingScriptSpec(
-            ScriptId: request.Script.ScriptId,
-            ScriptRevision: request.Script.ScriptRevision);
-    }
-
-    private static ScopeBindingGAgentSpec BuildGAgentSpec(
-        string memberId,
-        UpdateStudioMemberBindingRequest request)
-    {
-        if (request.GAgent == null || string.IsNullOrWhiteSpace(request.GAgent.ActorTypeName))
-        {
-            throw new InvalidOperationException(
-                $"member '{memberId}' bind: actorTypeName is required for gagent members.");
-        }
-
-        var endpoints = (request.GAgent.Endpoints ?? [])
-            .Select(static e => new ScopeBindingGAgentEndpoint(
-                EndpointId: e.EndpointId,
-                DisplayName: e.DisplayName,
-                Kind: ParseEndpointKind(e.Kind),
-                RequestTypeUrl: e.RequestTypeUrl,
-                ResponseTypeUrl: e.ResponseTypeUrl,
-                Description: e.Description ?? string.Empty))
-            .ToList();
-
-        return new ScopeBindingGAgentSpec(
-            ActorTypeName: request.GAgent.ActorTypeName,
-            Endpoints: endpoints);
-    }
-
-    private static ServiceEndpointKind ParseEndpointKind(string? kind)
-    {
-        var normalized = kind?.Trim().ToLowerInvariant();
-        return normalized switch
-        {
-            "command" => ServiceEndpointKind.Command,
-            "chat" => ServiceEndpointKind.Chat,
-            _ => ServiceEndpointKind.Unspecified,
-        };
-    }
 }

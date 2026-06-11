@@ -68,6 +68,69 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void Compose_WhenPlainTextExceedsLegacyTwoThousandChars_DoesNotSilentlyTruncate()
+    {
+        var text = new string('a', 2_500);
+
+        var payload = CreateComposer().Compose(
+            new MessageContent
+            {
+                Text = text,
+            },
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        payload.PlainText.ShouldBe(text);
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        document.RootElement.GetProperty("text").GetString().ShouldBe(text);
+    }
+
+    [Fact]
+    public void BuildCloseStreamingSettingsJson_ShouldUseNestedCardKitSettingsShape()
+    {
+        var json = LarkStreamingCardShell.BuildCloseStreamingSettingsJson();
+
+        json.ShouldBe("""{"config":{"streaming_mode":false}}""");
+        using var document = JsonDocument.Parse(json);
+        document.RootElement.TryGetProperty("streaming_mode", out _).ShouldBeFalse();
+        document.RootElement.GetProperty("config").GetProperty("streaming_mode").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Compose_WhenTextExceedsConfiguredLimit_AppendsTruncationMarker()
+    {
+        var payload = CreateComposer().Compose(
+            new MessageContent
+            {
+                Text = "0123456789ABCDEFGHIJ",
+            },
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = new ChannelCapabilities
+                {
+                    MaxMessageLength = 18,
+                },
+            });
+
+        payload.PlainText.Length.ShouldBeLessThanOrEqualTo(18);
+        payload.PlainText.ShouldEndWith("...[truncated]");
+    }
+
+    [Fact]
     public void Compose_WhenRenderingInteractiveCard_UsesLarkV2BodyElements()
     {
         var intent = new MessageContent
@@ -115,6 +178,54 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var behavior = button.GetProperty("behaviors")[0];
         behavior.GetProperty("type").GetString().ShouldBe("callback");
         behavior.GetProperty("value").GetProperty("action_id").GetString().ShouldBe("status");
+    }
+
+    [Fact]
+    public void Compose_WhenSingleCardSuppliesTitle_DoesNotDuplicateInBody()
+    {
+        // The first card's Title is consumed by the Lark card header (see ResolveHeaderTitle).
+        // Form mode already skipped the title in the body markdown, but non-form mode used to
+        // re-emit it as `**Title**` right under the header — every single-card response (e.g.
+        // /agent-status, /agents in its post-fix unified shape) ended up with a redundant bold
+        // title row. Pin the no-duplicate contract here so a refactor cannot regress it.
+        var intent = new MessageContent();
+        intent.Cards.Add(new CardBlock
+        {
+            BlockId = "agents_list",
+            Title = "Your Agents (1)",
+            Text = "1. `summary` · running",
+        });
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "list_agents",
+            Label = "Refresh",
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        // Header title appears exactly once (in the header element).
+        document.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .ShouldBe("Your Agents (1)");
+        var bodyElements = document.RootElement.GetProperty("body").GetProperty("elements");
+        // Two body elements: the card body markdown (without the duplicated title) and the button.
+        bodyElements.GetArrayLength().ShouldBe(2);
+        var cardMarkdown = bodyElements[0].GetProperty("content").GetString();
+        cardMarkdown.ShouldNotBeNull();
+        cardMarkdown.ShouldNotContain("**Your Agents (1)**");
+        cardMarkdown.ShouldContain("summary");
     }
 
     [Fact]
@@ -224,11 +335,11 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var submit = new ActionElement
         {
             Kind = ActionElementKind.FormSubmit,
-            ActionId = "submit_daily_report",
+            ActionId = "submit_daily",
             Label = "Create",
             IsPrimary = true,
         };
-        submit.Arguments["agent_builder_action"] = "create_daily_report";
+        submit.Arguments["agent_builder_action"] = "create_daily";
         intent.Actions.Add(submit);
 
         var payload = CreateComposer().Compose(
@@ -255,13 +366,13 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
             .EnumerateArray()
             .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "button");
 
-        submitButton.GetProperty("name").GetString().ShouldBe("submit_daily_report");
+        submitButton.GetProperty("name").GetString().ShouldBe("submit_daily");
         submitButton.GetProperty("form_action_type").GetString().ShouldBe("submit");
         submitButton.TryGetProperty("value", out _).ShouldBeFalse();
         var behavior = submitButton.GetProperty("behaviors")[0];
         behavior.GetProperty("type").GetString().ShouldBe("callback");
         var value = behavior.GetProperty("value");
-        value.GetProperty("action_id").GetString().ShouldBe("submit_daily_report");
-        value.GetProperty("agent_builder_action").GetString().ShouldBe("create_daily_report");
+        value.GetProperty("action_id").GetString().ShouldBe("submit_daily");
+        value.GetProperty("agent_builder_action").GetString().ShouldBe("create_daily");
     }
 }

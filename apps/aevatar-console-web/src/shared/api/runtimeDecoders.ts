@@ -249,10 +249,6 @@ function decodeWorkflowPrimitiveCapability(
     aliases: expectStringArray(record.aliases, `${label}.aliases`),
     category: expectString(record.category, `${label}.category`),
     description: expectString(record.description, `${label}.description`),
-    closedWorldBlocked: expectBoolean(
-      record.closedWorldBlocked,
-      `${label}.closedWorldBlocked`
-    ),
     runtimeModule: expectString(record.runtimeModule, `${label}.runtimeModule`),
     parameters: expectArray(
       record.parameters,

@@ -1,11 +1,8 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
-using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.AI.ToolProviders.ChannelAdmin;
 
@@ -16,23 +13,37 @@ namespace Aevatar.AI.ToolProviders.ChannelAdmin;
 /// </summary>
 public sealed class ChannelRegistrationTool : IAgentTool
 {
+    // Refactor (iter83/cluster-083-agent-tool-source-root-provider-locator):
+    //   Old pattern: tool source captures root IServiceProvider; tools resolve business ports via service locator in ExecuteAsync
+    //   New principle: tool source + tools constructor-inject typed contracts; no root provider lookup
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual readmodel rematerialization path, new=startup-owned projection refresh
+    // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+    //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
+    //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
     private const string DefaultNyxProviderSlug = "api-lark-bot";
-    private readonly IServiceProvider _serviceProvider;
+    private readonly IChannelBotRegistrationQueryPort _queryPort;
+    private readonly ChannelRegistrationCommandFacade _commandFacade;
+    private readonly INyxLarkProvisioningService _provisioningService;
 
-    public ChannelRegistrationTool(IServiceProvider serviceProvider)
+    public ChannelRegistrationTool(
+        IChannelBotRegistrationQueryPort queryPort,
+        ChannelRegistrationCommandFacade commandFacade,
+        INyxLarkProvisioningService provisioningService)
     {
-        _serviceProvider = serviceProvider;
+        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+        _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
+        _provisioningService = provisioningService ?? throw new ArgumentNullException(nameof(provisioningService));
     }
 
     public string Name => "channel_registrations";
 
     public string Description =>
         "Manage Aevatar ChannelRuntime registrations for the supported Nyx-backed Lark relay flow. " +
-        "Actions: list, register_lark_via_nyx, rebuild_projection, repair_lark_mirror, delete. " +
-        "Use register_lark_via_nyx for first-time provisioning, rebuild_projection to re-materialize the local registration read model from the authoritative actor state, and repair_lark_mirror when Nyx relay resources already exist but the local Aevatar mirror is missing. " +
+        "Actions: list, register_lark_via_nyx, delete. " +
+        "Use register_lark_via_nyx for provisioning. " +
         "Legacy direct callback registration and update_token flows are retired because ChannelRuntime no longer stores channel credentials. " +
-        "Do not ask the user for scope_id; it is resolved from the current NyxID request context and should only be supplied explicitly for diagnostics. " +
-        "Repair requires verified Nyx bot/api-key state plus an existing relay credential reference that still resolves in the local secrets store.";
+        "Do not ask the user for scope_id; it is resolved from the current NyxID request context and should only be supplied explicitly for diagnostics.";
 
     public string ParametersSchema => """
         {
@@ -40,7 +51,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "register_lark_via_nyx", "rebuild_projection", "repair_lark_mirror", "delete"],
+              "enum": ["list", "register_lark_via_nyx", "delete"],
               "description": "Action to perform (default: list)."
             },
             "nyx_provider_slug": {
@@ -49,7 +60,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             },
             "scope_id": {
               "type": "string",
-              "description": "Scope ID for multi-tenant isolation. Normally supplied from the current NyxID request context; only pass explicitly for repair/backfill diagnostics."
+              "description": "Scope ID for multi-tenant isolation. Normally supplied from the current NyxID request context; only pass explicitly for diagnostics."
             },
             "webhook_base_url": {
               "type": "string",
@@ -71,29 +82,9 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Human-readable label for the Nyx channel bot (optional)"
             },
-            "nyx_channel_bot_id": {
-              "type": "string",
-              "description": "Existing Nyx channel bot ID (required for repair_lark_mirror)"
-            },
-            "nyx_agent_api_key_id": {
-              "type": "string",
-              "description": "Existing Nyx relay API key ID whose callback points at Aevatar (required for repair_lark_mirror)"
-            },
-            "nyx_conversation_route_id": {
-              "type": "string",
-              "description": "Existing Nyx conversation route ID (optional for repair_lark_mirror, but strongly recommended)"
-            },
-            "reason": {
-              "type": "string",
-              "description": "Optional operator reason for rebuild_projection"
-            },
-            "force": {
-              "type": "boolean",
-              "description": "For rebuild_projection only: when registration_id or nyx_agent_api_key_id matches multiple empty-scope registrations, deliberately repair all matched registrations after NyxID ownership verification."
-            },
             "registration_id": {
               "type": "string",
-              "description": "Registration ID (for delete, or optional requested ID for repair_lark_mirror)"
+              "description": "Registration ID for delete"
             },
             "confirm": {
               "type": "boolean",
@@ -105,57 +96,29 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
         using var document = JsonDocument.Parse(argumentsJson);
         var root = document.RootElement;
-        var action = GetStr(root, "action") ?? "list";
+        var action = NormalizeOptional(GetStr(root, "action")) ?? "list";
 
         return action switch
         {
-            "list" => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
+            "list" => await ListAsync(_queryPort, ct),
             "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(token, root, ct),
-            "rebuild_projection" => await ExecuteWithStoreAsync((queryPort, actorRuntime, dispatchPort) => RebuildProjectionAsync(queryPort, actorRuntime, dispatchPort, token, root, ct)),
-            "repair_lark_mirror" => await RepairLarkMirrorAsync(root, ct),
-            "delete" => await ExecuteWithStoreAsync((queryPort, actorRuntime, dispatchPort) => DeleteAsync(queryPort, actorRuntime, dispatchPort, root, ct)),
+            "delete" => await DeleteAsync(_queryPort, _commandFacade, root, ct),
             "register" => RetiredActionError("Direct callback registration is retired. Use action=register_lark_via_nyx."),
             "update_token" => RetiredActionError("update_token is retired. ChannelRuntime no longer stores or refreshes channel credentials."),
-            _ => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
+            _ => SerializeError($"Unsupported channel registration action '{action}'."),
         };
-    }
-
-    private async Task<string> ExecuteWithQueryAsync(Func<IChannelBotRegistrationQueryPort, Task<string>> operation)
-    {
-        var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
-        if (queryPort is null)
-            return """{"error":"Channel runtime not available. IChannelBotRegistrationQueryPort is not registered in DI."}""";
-
-        return await operation(queryPort);
-    }
-
-    private async Task<string> ExecuteWithStoreAsync(
-        Func<IChannelBotRegistrationQueryPort, IActorRuntime, IActorDispatchPort, Task<string>> operation)
-    {
-        var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
-        var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
-        var dispatchPort = _serviceProvider.GetService<IActorDispatchPort>();
-        if (queryPort is null || actorRuntime is null || dispatchPort is null)
-        {
-            return """{"error":"Channel runtime not available. IChannelBotRegistrationQueryPort, IActorRuntime, or IActorDispatchPort is not registered in DI."}""";
-        }
-
-        return await operation(queryPort, actorRuntime, dispatchPort);
     }
 
     private static string? GetStr(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
-
-    private static bool GetBool(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.True;
 
     private static string ResolveNyxProviderSlug(JsonElement args)
     {
@@ -166,7 +129,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
     private static ToolScopeResolution ResolveToolScopeId(JsonElement args, bool required)
     {
         var explicitScopeId = NormalizeOptional(GetStr(args, "scope_id"));
-        var contextScopeId = NormalizeOptional(AgentToolRequestContext.TryGet("scope_id"));
+        var contextScopeId = NormalizeOptional(AgentToolRequestContext.ScopeId);
         if (explicitScopeId is not null &&
             contextScopeId is not null &&
             !string.Equals(explicitScopeId, contextScopeId, StringComparison.Ordinal))
@@ -252,15 +215,11 @@ public sealed class ChannelRegistrationTool : IAgentTool
         JsonElement args,
         CancellationToken ct)
     {
-        var provisioningService = _serviceProvider.GetService<INyxLarkProvisioningService>();
-        if (provisioningService is null)
-            return """{"error":"Nyx-backed Lark provisioning service is not registered."}""";
-
         var scopeResolution = ResolveToolScopeId(args, required: true);
         if (scopeResolution.Error is not null)
             return SerializeError(scopeResolution.Error);
 
-        var result = await provisioningService.ProvisionAsync(
+        var result = await _provisioningService.ProvisionAsync(
             new NyxLarkProvisioningRequest(
                 AccessToken: accessToken,
                 AppId: GetStr(args, "app_id")?.Trim() ?? string.Empty,
@@ -285,194 +244,15 @@ public sealed class ChannelRegistrationTool : IAgentTool
             note: result.Note ?? string.Empty);
     }
 
-    private async Task<string> RepairLarkMirrorAsync(JsonElement args, CancellationToken ct)
-    {
-        var provisioningService = _serviceProvider.GetService<INyxLarkProvisioningService>();
-        if (provisioningService is null)
-            return """{"error":"Nyx-backed Lark provisioning service is not registered."}""";
-
-        var nyxChannelBotId = GetStr(args, "nyx_channel_bot_id")?.Trim() ?? string.Empty;
-        var nyxAgentApiKeyId = GetStr(args, "nyx_agent_api_key_id")?.Trim() ?? string.Empty;
-        var nyxConversationRouteId = GetStr(args, "nyx_conversation_route_id")?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(nyxChannelBotId))
-            return """{"error":"'nyx_channel_bot_id' is required for repair_lark_mirror"}""";
-        if (string.IsNullOrWhiteSpace(nyxAgentApiKeyId))
-            return """{"error":"'nyx_agent_api_key_id' is required for repair_lark_mirror"}""";
-
-        var scopeResolution = ResolveToolScopeId(args, required: true);
-        if (scopeResolution.Error is not null)
-            return SerializeError(scopeResolution.Error);
-
-        ChannelBotRegistrationEntry? existing = null;
-        var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
-        if (queryPort is not null)
-        {
-            try
-            {
-                var registrations = await queryPort.QueryAllAsync(ct);
-                existing = registrations.FirstOrDefault(entry =>
-                    string.Equals(entry.Platform, "lark", StringComparison.OrdinalIgnoreCase) &&
-                    MatchesNyxIdentity(entry, nyxChannelBotId, nyxAgentApiKeyId, nyxConversationRouteId));
-                if (existing is not null)
-                {
-                    var existingScopeId = NormalizeOptional(existing.ScopeId);
-                    if (existingScopeId is not null)
-                    {
-                        if (!string.Equals(existingScopeId, scopeResolution.ScopeId, StringComparison.Ordinal))
-                            return SerializeError("matching local Aevatar mirror belongs to a different scope_id");
-
-                        return SerializeLarkRegistrationPayload(
-                            status: "already_registered",
-                            registrationId: existing.Id,
-                            nyxProviderSlug: string.IsNullOrWhiteSpace(existing.NyxProviderSlug)
-                                ? DefaultNyxProviderSlug
-                                : existing.NyxProviderSlug,
-                            nyxChannelBotId: existing.NyxChannelBotId,
-                            nyxAgentApiKeyId: existing.NyxAgentApiKeyId,
-                            nyxConversationRouteId: existing.NyxConversationRouteId,
-                            relayCallbackUrl: string.Empty,
-                            webhookUrl: existing.WebhookUrl,
-                            error: string.Empty,
-                            note: "Matching local Aevatar mirror already exists.");
-                    }
-                }
-            }
-            catch
-            {
-                // Repair must remain usable even when the query-side projection is degraded.
-            }
-        }
-
-        var requestedRegistrationId = GetStr(args, "registration_id")?.Trim();
-        if (string.IsNullOrWhiteSpace(requestedRegistrationId) && existing is not null)
-            requestedRegistrationId = existing.Id;
-
-        var result = await provisioningService.RepairLocalMirrorAsync(
-            new NyxLarkMirrorRepairRequest(
-                AccessToken: AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken) ?? string.Empty,
-                RequestedRegistrationId: requestedRegistrationId?.Trim() ?? string.Empty,
-                ScopeId: scopeResolution.ScopeId!,
-                NyxProviderSlug: ResolveNyxProviderSlug(args),
-                WebhookBaseUrl: GetStr(args, "webhook_base_url")?.Trim() ?? string.Empty,
-                NyxChannelBotId: nyxChannelBotId,
-                NyxAgentApiKeyId: nyxAgentApiKeyId,
-                NyxConversationRouteId: nyxConversationRouteId),
-            ct);
-
-        return SerializeLarkRegistrationPayload(
-            status: result.Status,
-            registrationId: result.RegistrationId ?? string.Empty,
-            nyxProviderSlug: ResolveNyxProviderSlug(args),
-            nyxChannelBotId: result.NyxChannelBotId ?? string.Empty,
-            nyxAgentApiKeyId: result.NyxAgentApiKeyId ?? string.Empty,
-            nyxConversationRouteId: result.NyxConversationRouteId ?? string.Empty,
-            relayCallbackUrl: string.Empty,
-            webhookUrl: result.WebhookUrl ?? string.Empty,
-            error: result.Error ?? string.Empty,
-            note: result.Note ?? string.Empty);
-    }
-
-    private async Task<string> RebuildProjectionAsync(
-        IChannelBotRegistrationQueryPort queryPort,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
-        string accessToken,
-        JsonElement args,
-        CancellationToken ct)
-    {
-        var scopeResolution = ResolveToolScopeId(args, required: false);
-        if (scopeResolution.Error is not null)
-            return SerializeError(scopeResolution.Error);
-
-        int? observedRegistrationsBeforeRebuild = null;
-        ChannelBotRegistrationScopeBackfillResult? backfill = null;
-        var note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.";
-        try
-        {
-            var registrations = await queryPort.QueryAllAsync(ct);
-            observedRegistrationsBeforeRebuild = registrations.Count;
-            backfill = await ChannelBotRegistrationScopeBackfill.BackfillAsync(
-                registrations,
-                scopeResolution.ScopeId,
-                new ChannelBotRegistrationScopeBackfillSelection(
-                    GetStr(args, "registration_id"),
-                    GetStr(args, "nyx_agent_api_key_id"),
-                    GetBool(args, "force")),
-                actorRuntime,
-                dispatchPort,
-                new ChannelBotRegistrationScopeBackfillAuthorization(
-                    accessToken,
-                    _serviceProvider.GetService<INyxRelayApiKeyOwnershipVerifier>()),
-                ct);
-            if (backfill.EmptyScopeRegistrationsObserved > 0)
-                note = $"{note} {backfill.Note}";
-        }
-        catch (Exception ex)
-        {
-            // Mirror the HTTP endpoint catch path so tool callers always receive
-            // a non-null backfill_status enum value (issue #391 review).
-            backfill = ChannelBotRegistrationScopeBackfill.Unavailable(ex.Message);
-            note = $"Projection rebuild dispatched from authoritative channel-bot-registration-store state. {backfill.Note}";
-        }
-
-        await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
-            actorRuntime,
-            dispatchPort,
-            GetStr(args, "reason")?.Trim() ?? "tool_manual_rebuild",
-            ct);
-
-        return JsonSerializer.Serialize(new
-        {
-            status = "accepted",
-            actor_id = ChannelBotRegistrationGAgent.WellKnownId,
-            observed_registrations_before_rebuild = observedRegistrationsBeforeRebuild,
-            empty_scope_registrations_observed = backfill?.EmptyScopeRegistrationsObserved,
-            empty_scope_registrations_backfilled = backfill?.RepairCommandsDispatched,
-            // Machine-readable backfill outcome + warnings (issue #391); CLI/UI
-            // callers should branch on backfill_status, not infer success from
-            // the 202 rebuild dispatch alone. The catch path guarantees a
-            // non-null value even when the read side throws.
-            backfill_status = backfill?.Status.ToWireString(),
-            warnings = backfill?.Warnings ?? Array.Empty<string>(),
-            note,
-        });
-    }
-
-    private static bool MatchesNyxIdentity(
-        ChannelBotRegistrationEntry entry,
-        string nyxChannelBotId,
-        string nyxAgentApiKeyId,
-        string nyxConversationRouteId)
-    {
-        var hasConstraint = false;
-
-        if (!MatchesIfProvided(entry.NyxChannelBotId, nyxChannelBotId, ref hasConstraint))
-            return false;
-        if (!MatchesIfProvided(entry.NyxAgentApiKeyId, nyxAgentApiKeyId, ref hasConstraint))
-            return false;
-        if (!MatchesIfProvided(entry.NyxConversationRouteId, nyxConversationRouteId, ref hasConstraint))
-            return false;
-
-        return hasConstraint;
-    }
-
-    private static bool MatchesIfProvided(string actual, string expected, ref bool hasConstraint)
-    {
-        if (string.IsNullOrWhiteSpace(expected))
-            return true;
-
-        hasConstraint = true;
-        return !string.IsNullOrWhiteSpace(actual) &&
-               string.Equals(actual, expected, StringComparison.Ordinal);
-    }
-
     private async Task<string> DeleteAsync(
         IChannelBotRegistrationQueryPort queryPort,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
+        ChannelRegistrationCommandFacade commandFacade,
         JsonElement args,
         CancellationToken ct)
     {
+        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+        //   Old pattern: tool queried then dispatched unregister through raw runtime helper.
+        //   New principle: query is only existence/confirmation; write enters command facade.
         var registrationId = GetStr(args, "registration_id") ?? GetStr(args, "id");
         if (string.IsNullOrWhiteSpace(registrationId))
             return """{"error":"'registration_id' is required for delete"}""";
@@ -499,30 +279,16 @@ public sealed class ChannelRegistrationTool : IAgentTool
             });
         }
 
-        await ChannelBotRegistrationStoreCommands.DispatchUnregisterAsync(
-            actorRuntime,
-            dispatchPort,
-            registrationId,
-            ct);
+        await commandFacade.UnregisterAsync(registrationId, ct);
 
-        var confirmed = false;
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            if (attempt > 0)
-                await Task.Delay(500, ct);
-
-            if (await queryPort.GetAsync(registrationId, ct) == null)
-            {
-                confirmed = true;
-                break;
-            }
-        }
-
+        // Refactor (iter6/cluster-014):
+        //   Old pattern: Delete slept and re-read the projection to upgrade accepted into deleted.
+        //   New principle: Unregister ACK is accepted-only; deletion visibility is observed by follow-up query.
         return JsonSerializer.Serialize(new
         {
-            status = confirmed ? "deleted" : "accepted",
+            status = "accepted",
             registration_id = registrationId,
-            note = confirmed ? string.Empty : "Delete submitted but projection not yet confirmed. Try 'list' after a few seconds.",
+            note = "Unregister accepted. Projection is propagating; try 'list' in a few seconds to confirm the registration is gone.",
         });
     }
 }

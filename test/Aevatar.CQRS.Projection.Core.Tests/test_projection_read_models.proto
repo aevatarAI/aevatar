@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.CQRS.Projection.Core.Tests";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
+import "google/protobuf/any.proto";
 
 message TestStoreReadModel {
   string id = 1;
@@ -43,4 +44,12 @@ message TestRecursiveWellKnownReadModel {
   google.protobuf.Timestamp updated_at_utc_value = 5;
   google.protobuf.Struct fields_value = 6;
   string value = 7;
+  google.protobuf.Any open_payload = 8;
+  map<string, string> labels = 9;
+  repeated TestOpenPayloadEntry entries = 10;
+  repeated string tags = 11;
+}
+
+message TestOpenPayloadEntry {
+  string entry_id = 1;
 }

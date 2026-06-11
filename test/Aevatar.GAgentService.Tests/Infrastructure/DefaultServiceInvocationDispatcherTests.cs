@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -121,7 +122,51 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowPort.RunActor.Envelopes.Should().BeEmpty();
         dispatchPort.Calls.Should().ContainSingle();
         dispatchPort.Calls[0].actorId.Should().Be("workflow-run");
-        dispatchPort.Calls[0].envelope.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("hello");
+        dispatchPort.Calls[0].envelope.Payload.Unpack<WorkflowChatRequestEvent>().Prompt.Should().Be("hello");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldMapChatLlmControlToWorkflowChatRequest()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-llm-control",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                LlmControl = new LLMControlContextPayload
+                {
+                    ModelOverride = "sonnet",
+                    UserMemoryPrompt = "memory",
+                    SenderNyxIdAccessToken = "sender-token",
+                },
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.LlmControl.ModelOverride.Should().Be("sonnet");
+        workflowRequest.LlmControl.UserMemoryPrompt.Should().Be("memory");
+        workflowRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
     }
 
     [Fact]
@@ -165,7 +210,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldResolveScopeIdFromRequestScopeBeforeMetadataFallbacks()
+    public async Task DispatchAsync_ShouldResolveScopeIdFromTypedPayloadBeforeScopeAnnotations()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -190,6 +235,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
             {
                 Prompt = "hello",
                 ScopeId = "request-scope",
+                Headers =
+                {
+                    [WorkflowRunCommandMetadataKeys.ScopeId] = "workflow-header-scope",
+                    ["scope_id"] = "legacy-header-scope",
+                },
                 Metadata =
                 {
                     [WorkflowRunCommandMetadataKeys.ScopeId] = "workflow-metadata-scope",
@@ -205,7 +255,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldResolveScopeIdFromWorkflowMetadataKey_WhenRequestScopeIsBlank()
+    public async Task DispatchAsync_ShouldIgnoreWorkflowScopeAnnotations_WhenTypedScopeIsBlank()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -230,6 +280,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
             Payload = Any.Pack(new ChatRequestEvent
             {
                 Prompt = "hello",
+                Headers =
+                {
+                    [WorkflowRunCommandMetadataKeys.ScopeId] = "workflow-header-scope",
+                    ["scope_id"] = "legacy-header-scope",
+                },
                 Metadata =
                 {
                     [WorkflowRunCommandMetadataKeys.ScopeId] = "workflow-metadata-scope",
@@ -239,11 +294,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         });
 
         workflowPort.CreateRunCalls.Should().ContainSingle();
-        workflowPort.CreateRunCalls[0].ScopeId.Should().Be("workflow-metadata-scope");
+        workflowPort.CreateRunCalls[0].ScopeId.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldResolveScopeIdFromLegacyMetadataKey_WhenOtherSourcesAreBlank()
+    public async Task DispatchAsync_ShouldIgnoreLegacyScopeMetadata_WhenTypedScopeIsBlank()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -276,7 +331,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         });
 
         workflowPort.CreateRunCalls.Should().ContainSingle();
-        workflowPort.CreateRunCalls[0].ScopeId.Should().Be("legacy-scope");
+        workflowPort.CreateRunCalls[0].ScopeId.Should().BeEmpty();
     }
 
     [Fact]
@@ -582,10 +637,10 @@ public sealed class DefaultServiceInvocationDispatcherTests
     {
         public List<(string actorId, EventEnvelope envelope)> Calls { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Calls.Add((actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
@@ -621,19 +676,19 @@ public sealed class DefaultServiceInvocationDispatcherTests
         }
     }
 
-    private sealed class RecordingWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class RecordingWorkflowRunActorPort : IWorkflowDefinitionProvisioningPort, IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public List<WorkflowDefinitionBinding> CreateRunCalls { get; } = [];
 
         public RecordingActor RunActor { get; } = new("workflow-run");
 
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            Task.FromResult<IActor>(new RecordingActor(actorId ?? "workflow-definition"));
+        public Task<WorkflowDefinitionProvisioningReceipt> EnsureDefinitionAsync(WorkflowDefinitionBinding definition, string? preferredActorId = null, CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowDefinitionProvisioningReceipt(preferredActorId ?? definition.DefinitionActorId, CreatedNow: true));
 
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
         {
             CreateRunCalls.Add(definition);
-            return Task.FromResult(new WorkflowRunCreationResult(RunActor, definition.DefinitionActorId, [RunActor.Id]));
+            return Task.FromResult(new WorkflowRunCreationReceipt(RunActor.Id, definition.DefinitionActorId, [RunActor.Id]));
         }
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
@@ -642,7 +697,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             Task.CompletedTask;
 
         public Task BindWorkflowDefinitionAsync(
-            IActor actor,
+            string actorId,
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,

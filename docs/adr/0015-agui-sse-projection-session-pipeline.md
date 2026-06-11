@@ -6,6 +6,14 @@ owner: liyingpei
 
 # ADR-0015: AGUI / SSE Projection Session Pipeline
 
+> 2026-06-03 update: the pipeline is the common projection-backed realtime
+> control stream shape, not only AGUI/SSE. Text AGUI frames and voice
+> control/transcript frames share the same session lifecycle contract through
+> `IRealtimeSession`; raw voice PCM remains outside projection through a
+> volatile media stream port.
+
+> 2026-05-25 update: `StreamingProxy` remains in this ADR only as a retained compatibility surface. The `/api/scopes/{scopeId}/streaming-proxy/...` Host route is deprecated and sends `Deprecation: true`, `Sunset: Wed, 25 Nov 2026 00:00:00 GMT`, and a successor `Link` to `/v1/responses`. Direct model streaming should migrate to `/v1/responses`; room CRUD, participant management, and room fan-out are separate semantics and are not replaced one-for-one by `/v1/responses`.
+
 ## Context
 
 Issue #204 收敛的是同一类架构问题：多个用户可见 streaming 入口各自维护一套 host-owned orchestration。
@@ -22,7 +30,7 @@ Issue #204 收敛的是同一类架构问题：多个用户可见 streaming 入�
 
 ## Decision
 
-### 1. 用户可见 streaming 入口统一走 Projection Session Pipeline
+### 1. 用户可见 streaming / realtime control 入口统一走 Projection Session Pipeline
 
 以下入口统一回到 interaction service 或等价 projection-session subscription port：
 
@@ -38,6 +46,12 @@ Host 只负责：
 3. 提供 `emitAsync` 或 SSE writer
 
 Host 不再拥有 observation lifecycle、completion 判定、runtime lease 状态或 raw stream subscription。
+
+The application-facing lifecycle contract is
+`IRealtimeSession<TInbound,TReceipt,TStartError,TOutboundFrame,TCompletion>`.
+`ICommandInteractionService` is the text/AGUI specialization of that contract;
+voice control/transcript uses the same lifecycle and emits `VoiceRealtimeFrame`
+through the projection-backed realtime stream.
 
 ### 2. Projection session 分为两类权威键语义
 
@@ -60,6 +74,8 @@ Host 不再拥有 observation lifecycle、completion 判定、runtime lease 状�
 - Host 不得手搓 `aevatar.run.context` payload
 - Host 不得直接把 raw `EventEnvelope` 映射成用户可见 SSE
 - typed custom event payload 必须在 abstraction / adapter 边界建模，不得回退成匿名 bag
+- voice raw PCM is not an AGUI/control frame. It must stay on the volatile media
+  transport port and must not be stored, projected, or replayed.
 
 ### 4. StreamingProxy durable completion 必须落到 committed terminal fact
 

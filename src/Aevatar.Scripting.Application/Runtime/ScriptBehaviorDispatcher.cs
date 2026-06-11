@@ -3,7 +3,6 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
-using Aevatar.Scripting.Core.Materialization;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -11,20 +10,17 @@ namespace Aevatar.Scripting.Application.Runtime;
 
 public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
 {
+    // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
+    //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
+    //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
-    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
-    private readonly IScriptNativeProjectionBuilder _nativeProjectionBuilder;
     private readonly IProtobufMessageCodec _codec;
 
     public ScriptBehaviorDispatcher(
         IScriptBehaviorArtifactResolver artifactResolver,
-        IScriptReadModelMaterializationCompiler materializationCompiler,
-        IScriptNativeProjectionBuilder nativeProjectionBuilder,
         IProtobufMessageCodec codec)
     {
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
-        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
-        _nativeProjectionBuilder = nativeProjectionBuilder ?? throw new ArgumentNullException(nameof(nativeProjectionBuilder));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
     }
 
@@ -90,11 +86,6 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
             ValidateDomainEventContract(request, artifact.Descriptor, domainEvents);
 
             var occurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var materializationPlan = request.CachedMaterializationPlan
-                ?? _materializationCompiler.Compile(
-                    artifact,
-                    request.ReadModelSchemaHash,
-                    request.ReadModelSchemaVersion);
             var committed = new List<ScriptDomainFactCommitted>(domainEvents.Count);
             var projectedState = currentState;
             for (var i = 0; i < domainEvents.Count; i++)
@@ -128,22 +119,6 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                     projectedState,
                     domainEvent,
                     CreateFactContext(request, fact, eventTypeUrl));
-
-                var factContext = CreateFactContext(request, fact, fact.EventType ?? string.Empty);
-                var semanticReadModel = behavior.BuildReadModel(
-                    projectedState,
-                    factContext);
-                fact.ReadModelPayload = _codec.Pack(semanticReadModel)?.Clone();
-                fact.NativeDocument = _nativeProjectionBuilder.BuildDocument(
-                    semanticReadModel,
-                    materializationPlan);
-                fact.NativeGraph = _nativeProjectionBuilder.BuildGraph(
-                    fact.ActorId ?? request.ActorId,
-                    fact.ScriptId ?? request.ScriptId,
-                    fact.DefinitionActorId ?? request.DefinitionActorId,
-                    fact.Revision ?? request.Revision,
-                    semanticReadModel,
-                    materializationPlan);
 
                 committed.Add(fact);
             }

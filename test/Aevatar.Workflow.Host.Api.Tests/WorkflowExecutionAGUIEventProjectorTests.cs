@@ -1,7 +1,11 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Projection;
@@ -13,6 +17,57 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowExecutionAGUIEventProjectorTests
 {
+    [Fact]
+    public async Task ProjectAsync_ShouldEmitWorkflowRunActivity_WhenRunEventsArePublished()
+    {
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var streams = new InMemoryStreamProvider();
+        var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
+            streams,
+            new WorkflowRunEventSessionCodec());
+        var projector = new WorkflowExecutionRunEventProjector(
+            new StaticMapper(
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    StepStarted = new WorkflowStepStartedEventPayload { StepName = "step-a" },
+                },
+            ]),
+            streamHub);
+
+        await projector.ProjectAsync(BuildContext(), new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "cmd-1",
+            },
+            Payload = Any.Pack(new StartWorkflowEvent
+            {
+                WorkflowName = "workflow-a",
+                RunId = "run-1",
+            }),
+        });
+
+        var activity = stopped
+            .Where(x => x.DisplayName == AevatarActivitySource.WorkflowRunActivityName)
+            .Should()
+            .ContainSingle()
+            .Which;
+        activity.GetTagItem(AevatarActivitySource.WorkflowRunIdTag).Should().Be("actor-1");
+        activity.GetTagItem(AevatarActivitySource.WorkflowNameTag).Should().Be("workflow-a");
+        activity.GetTagItem(AevatarActivitySource.WorkflowStepTag).Should().Be("step-a");
+    }
+
     [Fact]
     public async Task ProjectAsync_ShouldPublishToContextCommandStream_WhenEnvelopeCorrelationDiffers()
     {
@@ -120,7 +175,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_WhenContextCommandIdMissing_ShouldFallbackToEnvelopeCorrelationId()
+    public async Task ProjectAsync_WhenContextSessionIdMissing_ShouldNotPublish()
     {
         var streams = new InMemoryStreamProvider();
         var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
@@ -145,8 +200,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             },
         });
 
-        await sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
-        sink.SnapshotEvents().Should().ContainSingle();
+        sink.SnapshotEvents().Should().BeEmpty();
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -42,15 +43,10 @@ public sealed class OrleansDistributedCoverageTests
     }
 
     [Fact]
-    public void RuntimeEnvelopeRetryPolicy_ShouldBuildRetryEnvelope_WhenAttemptWithinLimit()
+    public void RuntimeEnvelopeRetryPolicy_ShouldBuildRetryEnvelope_ForExplicitPolicy_WhenAttemptWithinLimit()
     {
         var policy = RuntimeEnvelopeRetryPolicy.FromValues("2", "10");
-        var envelope = new EventEnvelope
-        {
-            Id = "evt-1",
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
-        };
+        var envelope = CreateRetryPolicyEnvelope("evt-1");
 
         var built = policy.TryBuildRetryEnvelope(
             envelope,
@@ -70,12 +66,7 @@ public sealed class OrleansDistributedCoverageTests
     public void RuntimeEnvelopeRetryPolicy_ShouldKeepRootOriginEventIdAcrossRetries()
     {
         var policy = RuntimeEnvelopeRetryPolicy.FromValues("2", "10");
-        var envelope = new EventEnvelope
-        {
-            Id = "evt-retry-2",
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
-        };
+        var envelope = CreateRetryPolicyEnvelope("evt-retry-2");
         envelope.Runtime = new EnvelopeRuntime
         {
             Retry = new EnvelopeRetryContext
@@ -98,12 +89,100 @@ public sealed class OrleansDistributedCoverageTests
     }
 
     [Fact]
-    public void RuntimeEnvelopeRetryPolicy_ShouldBeDisabledByDefault_WhenEnvironmentNotConfigured()
+    public void RuntimeEnvelopeRetryPolicy_ShouldRetryOccByDefault_WhenEnvironmentNotConfigured()
     {
         var policy = RuntimeEnvelopeRetryPolicy.FromValues(null, null);
+        var envelope = CreateRetryPolicyEnvelope("evt-default-occ");
 
-        policy.Enabled.Should().BeFalse();
-        policy.MaxAttempts.Should().Be(0);
+        policy.Enabled.Should().BeTrue();
+        policy.MaxAttempts.Should().Be(3);
+        policy.RetryDelayMs.Should().Be(1000);
+        policy.RetryOnlyRecoverableConcurrencyFailures.Should().BeTrue();
+
+        var built = policy.TryBuildRetryEnvelope(
+            envelope,
+            new EventStoreOptimisticConcurrencyException("actor-1", expectedVersion: 4, actualVersion: 5),
+            out var retryEnvelope,
+            out var nextAttempt);
+
+        built.Should().BeTrue();
+        nextAttempt.Should().Be(1);
+        retryEnvelope.Runtime!.Retry!.Attempt.Should().Be(1);
+        retryEnvelope.Runtime.Retry.LastErrorType.Should().Be(nameof(EventStoreOptimisticConcurrencyException));
+    }
+
+    [Fact]
+    public void RuntimeEnvelopeRetryPolicy_ShouldRetryWrappedOccByDefault_WhenEnvironmentNotConfigured()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues(null, null);
+        var envelope = CreateRetryPolicyEnvelope("evt-default-wrapped-occ");
+
+        var built = policy.TryBuildRetryEnvelope(
+            envelope,
+            new InvalidOperationException(
+                "wrapped",
+                new EventStoreOptimisticConcurrencyException("actor-1", expectedVersion: 4, actualVersion: 5)),
+            out var retryEnvelope,
+            out var nextAttempt);
+
+        built.Should().BeTrue();
+        nextAttempt.Should().Be(1);
+        retryEnvelope.Runtime!.Retry!.Attempt.Should().Be(1);
+    }
+
+    [Fact]
+    public void RuntimeEnvelopeRetryPolicy_ShouldNotRetryNonOccByDefault_WhenEnvironmentNotConfigured()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues(null, null);
+        var envelope = CreateRetryPolicyEnvelope("evt-default-non-occ");
+
+        var built = policy.TryBuildRetryEnvelope(
+            envelope,
+            new InvalidOperationException("boom"),
+            out _,
+            out var nextAttempt);
+
+        policy.Enabled.Should().BeTrue();
+        policy.RetryOnlyRecoverableConcurrencyFailures.Should().BeTrue();
+        built.Should().BeFalse();
+        nextAttempt.Should().Be(1);
+    }
+
+    [Fact]
+    public void RuntimeEnvelopeRetryPolicy_ShouldRetryNonOcc_WhenAttemptsExplicitlyConfigured()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("2", null);
+        var envelope = CreateRetryPolicyEnvelope("evt-explicit-non-occ");
+
+        var built = policy.TryBuildRetryEnvelope(
+            envelope,
+            new InvalidOperationException("boom"),
+            out var retryEnvelope,
+            out var nextAttempt);
+
+        policy.RetryOnlyRecoverableConcurrencyFailures.Should().BeFalse();
+        built.Should().BeTrue();
+        nextAttempt.Should().Be(1);
+        retryEnvelope.Runtime!.Retry!.Attempt.Should().Be(1);
+    }
+
+    [Fact]
+    public void RuntimeEnvelopeRetryPolicy_ShouldKeepDefaultClassifier_WhenAttemptsConfigurationIsInvalid()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("not-a-number", null);
+        var envelope = CreateRetryPolicyEnvelope("evt-invalid-config-non-occ");
+
+        var built = policy.TryBuildRetryEnvelope(
+            envelope,
+            new InvalidOperationException("boom"),
+            out _,
+            out var nextAttempt);
+
+        policy.Enabled.Should().BeTrue();
+        policy.MaxAttempts.Should().Be(3);
+        policy.RetryOnlyRecoverableConcurrencyFailures.Should().BeTrue();
+        built.Should().BeFalse();
+        nextAttempt.Should().Be(1);
     }
 
     [Fact]
@@ -114,6 +193,7 @@ public sealed class OrleansDistributedCoverageTests
         policy.Enabled.Should().BeTrue();
         policy.MaxAttempts.Should().Be(2);
         policy.RetryDelayMs.Should().Be(1000);
+        policy.RetryOnlyRecoverableConcurrencyFailures.Should().BeFalse();
     }
 
     [Fact]
@@ -143,6 +223,14 @@ public sealed class OrleansDistributedCoverageTests
         built.Should().BeFalse();
         nextAttempt.Should().Be(2);
     }
+
+    private static EventEnvelope CreateRetryPolicyEnvelope(string id) =>
+        new()
+        {
+            Id = id,
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
+        };
 
     [Fact]
     public async Task OrleansActorTypeProbe_ShouldResolveAndNormalizeTypeName()
@@ -531,7 +619,7 @@ public sealed class OrleansDistributedCoverageTests
         stateProxy.State.Children.Should().BeEmpty();
         stateProxy.State.AgentStateTypeName.Should().BeNull();
         stateProxy.State.AgentStateSnapshot.Should().BeNull();
-        stateProxy.WriteCount.Should().BeGreaterThan(0);
+        stateProxy.ClearCount.Should().BeGreaterThan(0);
     }
 
     [Fact]
@@ -615,10 +703,17 @@ public sealed class OrleansDistributedCoverageTests
     private sealed class RuntimeActorGrainStub : IRuntimeActorGrain
     {
         public string AgentTypeName { get; set; } = string.Empty;
+        public string AgentKind { get; set; } = string.Empty;
 
         public Task<bool> InitializeAgentAsync(string agentTypeName)
         {
             AgentTypeName = agentTypeName;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> InitializeAgentByKindAsync(string kind)
+        {
+            AgentKind = kind;
             return Task.FromResult(true);
         }
 
@@ -657,6 +752,8 @@ public sealed class OrleansDistributedCoverageTests
         public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
 
         public Task<string> GetAgentTypeNameAsync() => Task.FromResult(AgentTypeName);
+
+        public Task<string> GetAgentKindAsync() => Task.FromResult(AgentKind);
 
         public Task DeactivateAsync() => Task.CompletedTask;
 
@@ -768,6 +865,8 @@ public sealed class OrleansDistributedCoverageTests
 
         public int WriteCount { get; private set; }
 
+        public int ClearCount { get; private set; }
+
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             var name = targetMethod?.Name;
@@ -783,7 +882,12 @@ public sealed class OrleansDistributedCoverageTests
                 WriteCount++;
                 return Task.CompletedTask;
             }
-            if (name == "ReadStateAsync" || name == "ClearStateAsync")
+            if (name == "ClearStateAsync")
+            {
+                ClearCount++;
+                return Task.CompletedTask;
+            }
+            if (name == "ReadStateAsync")
                 return Task.CompletedTask;
             if (name == "get_RecordExists")
                 return true;

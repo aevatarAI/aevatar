@@ -503,11 +503,10 @@ agents/
 | `Aevatar.AI.LLMProviders.*` | LLM 提供者 |
 | `Aevatar.AI.ToolProviders.*` | 工具提供者 |
 | `Aevatar.Workflow.Sdk` | SDK |
-| `Aevatar.Workflow.Extensions.Bridge` | 桥接扩展 |
 | `Aevatar.Workflow.Presentation.AGUIAdapter` | AGUI 适配器 |
 | `Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet` | Garnet 持久化 |
 
-**风险**: 这 12 个项目可以 0% 覆盖率而门禁仍通过。
+**风险**: 这 11 个项目可以 0% 覆盖率而门禁仍通过。
 
 ### 12.5 风险评估
 

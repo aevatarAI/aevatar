@@ -26,7 +26,7 @@ target_repo: aevatarAI/aevatar
 
 **消息形态**：Lark 卡片 / Telegram inline keyboard / Slack Block Kit / Discord Embed + Components / WeChat 富文本。能力也不对齐——Ephemeral / Thread / Modal / Action Buttons 各有支持/不支持。
 
-**当前受支持生产契约**：post-ADR-0012 / issue `#308` 的 ChannelRuntime 已收敛到 Nyx-backed Lark relay。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**，不是当前生产契约。
+**当前受支持生产契约**：post-ADR-0012 / issue `#308` 的 ChannelRuntime 已收敛到 Nyx-backed Lark relay。Lark inbound 的唯一活跃入口是 `Aevatar.GAgents.NyxidChat` 映射的 `/api/webhooks/nyxid-relay`，并由 `ConversationGAgent` 承接权威会话事实；`Aevatar.GAgents.Platform.Lark` 只保留 HTTP client、message composer、native message producer、payload redactor 等 outbound/rendering 能力，不拥有 inbound runtime state。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**，不是当前生产契约。
 
 直接在这个大包里继续加 channel 会让边界进一步模糊。需要引入 **channel-agnostic 抽象层**，把业务逻辑和 channel 细节隔离，并把 ChannelRuntime 的多职责按概念拆成独立包。
 
@@ -148,15 +148,14 @@ sequenceDiagram
 │  │                                                                │  │
 │  │  Middleware Pipeline (logging / tracing / resolver)           │  │
 │  │                  ↑                                             │  │
-│  │  Orleans Streams subscription (durable inbox consumer)        │  │
+│  │  NyxID relay webhook endpoint (current Lark ingress)          │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────┘
                                                  ▲
                                  ┌───────────────┴──────────────┐
-                                 │  Durable inbox (§9.5)         │
-                                 │  Orleans Streams w/ persistent│
-                                 │  provider (EventHubs default, │
-                                 │  Kafka future / table dev)    │
+                                 │  Durable/actor-owned ingress  │
+                                 │  boundary (§9.5 for direct    │
+                                 │  adapters)                    │
                                  └───────────────▲──────────────┘
                                                  │ commit → then ack
                                                  │
@@ -164,14 +163,14 @@ sequenceDiagram
 │  IChannelTransport + IChannelOutboundPort + IMessageComposer        │
 │  Lark / Telegram / Slack / Discord      intent → native payload     │
 │                                                                      │
-│  Inbound:  webhook/gateway → verify → commit to durable inbox → ack │
+│  Inbound:  NyxID relay webhook → verify → ConversationGAgent        │
 │  Outbound: ConversationReference + MessageContent + AuthContext →   │
 │            native send                                               │
 │  Capabilities: 声明可兑现/需降级/不支持                               │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-**关键流向澄清**（和 §9.5 / §5.6.1 对齐）：adapter 的 inbound 路径是 `verify → commit to durable inbox → ack`；adapter 公共 surface 上**没有** `ChannelReader<T>` / `InboundStream` 契约（Codex v11 收窄，见 §5.4）；pipeline consumer 通过 Orleans Streams 订阅 durable inbox 消费。`ConversationGAgent` 只做权威顺序 + dedup + completion commit，**不在 grain turn 内跑 LLM / 外部 IO**——那些放在 run-scoped runner actor 里，防止 group 场景热点化。durability 由 durable inbox + `processed_message_ids` 两条 state 承担。
+**关键流向澄清**（和 §9.5 / §5.6.1 对齐）：当前 Lark inbound 不由 `Aevatar.GAgents.Platform.Lark` 启动本地 durable inbox consumer；NyxID relay webhook 是唯一活跃入口，完成 verify/normalize 后把事实交给 `ConversationGAgent`。adapter 公共 surface 上**没有** `ChannelReader<T>` / `InboundStream` 契约（Codex v11 收窄，见 §5.4）。`ConversationGAgent` 只做权威顺序 + dedup + completion commit，**不在 grain turn 内跑 LLM / 外部 IO**——那些放在 run-scoped runner actor 里，防止 group 场景热点化。对未来 direct adapter，committed ingress facts 仍必须先到 durable 或 actor-owned boundary，再进入 pipeline/read-side observation。
 
 核心思想：**`ChatActivity` 是跨 channel 的统一消息表达，`IMessageComposer` 负责把 intent 翻译成各 channel 的 native payload，`ChannelCapabilities` 声明能力矩阵让业务层按能力降级**。
 
@@ -488,6 +487,8 @@ public record MessageContent(
 
 **核心原则**：`MessageContent` 描述 "要表达什么"，不描述 "长什么样"。`IMessageComposer` 把它翻译成 channel-native 的具体 payload。
 
+**Card action typed payload rule**：workflow resume 与 LLM selection 是仓库内可控的控制语义，必须通过 `WorkflowResumeActionPayload` / `LlmSelectionActionPayload` 挂在 `ActionElement` 与 `CardActionSubmission` 上。`ActionElement.arguments` / `CardActionSubmission.Arguments` 只作为第三方或平台扩展 map，以及旧 callback JSON 的入站兼容边界；进入 `ChannelConversationTurnRunner`、`ChannelCardActionRouting` 或 LLM selection handoff 后，不得把这些字段当成权威事实源。
+
 **为什么不做 universal card schema（Adaptive Cards 路线）**：universal schema 是 Level-3 抽象——为了一致性牺牲 native 表达力。Slack Block Kit 的嵌套 / Discord Embed 的字段限制 / Lark 卡片的交互模型各自有自己最自然的表达方式，强行统一会得到"处处一致但处处不好用"的结果。我们选 Level-2：intent 层统一，表达层 native，能力缺失就显式降级。
 
 ### 5.4 `IChannelTransport` + `IChannelOutboundPort` + `IMessageComposer`
@@ -510,7 +511,7 @@ public interface IChannelTransport {
 
 **早期草稿（v10 之前）把 `ChannelReader<ChatActivity> InboundStream { get; }` 放在 `IChannelTransport` 上**——Codex v11 HIGH 抓出：这和 §9.5.2 "durable inbox 是唯一权威 ingress，`ChannelReader` 只是 consumer 内部 working buffer" 的定义直接冲突。公共契约同时暴露 "transport 层职责"（lifecycle + inbound 观察）和 "runtime 消费缓冲"（ChannelReader），边界不干净。**修正**：
 
-- `IChannelTransport` 只负责 lifecycle + `Capabilities` 声明；adapter 实现在 `StartReceivingAsync` 之后负责把 inbound 事件**直接 commit 到 durable inbox**（Orleans persistent stream，见 §9.5.2），不再 publish 给 adapter 公共 surface 上的 `ChannelReader`
+- `IChannelTransport` 只负责 lifecycle + `Capabilities` 声明；direct adapter 实现在 `StartReceivingAsync` 之后负责把 inbound 事件**直接 commit 到 durable 或 actor-owned ingress boundary**（见 §9.5.2），不再 publish 给 adapter 公共 surface 上的 `ChannelReader`
 - 真正的 inbound 消费是 **pipeline consumer 订阅 durable inbox stream**（`IAsyncStream<ChatActivity>.SubscribeAsync`）；adapter 和 pipeline 之间**没有**跨抽象边界的 queue 契约
 - `ChannelReader<ChatActivity>` 沦为 **pipeline consumer 内部实现细节**（`OnNextAsync` 入 bounded buffer → bot turn dispatcher 从 buffer 消费），**不出现在任何公共 interface**
 
@@ -886,14 +887,15 @@ public interface IChannelMiddleware {
 - `IChannelTransport.InitializeAsync` MUST 在 `StartReceivingAsync` 之前**恰好 call 一次**；再次调用抛 `InvalidOperationException`
 - `StartReceivingAsync` / `StopReceivingAsync` pair 各恰好一次；`Start` 之前调 `IChannelOutboundPort.SendAsync` / `UpdateAsync` / `DeleteAsync` / `ContinueConversationAsync` 抛 `InvalidOperationException`（adapter 实现类通常同时持两个 interface，共享 init 状态）
 - adapter 实现类生命周期和宿主 `IHostedService` 对齐：host 启动时 `Initialize` + `Start`，shutdown 时 `Stop`
-- `Stop` MUST 同步完成 in-flight outbound + close transport；durable inbox 上未被 pipeline consumer 消费的事件由 Orleans Streams 持久保留，下次启动继续消费
+- `Stop` MUST 同步完成 in-flight outbound + close transport；direct adapter 的 durable/actor-owned ingress boundary 上未被消费的事件必须保留到下次启动继续消费。当前 Lark relay 路径不由 `Aevatar.GAgents.Platform.Lark` 启动 inbound hosted service。
 
 #### Inbound 通路（adapter → durable inbox → pipeline consumer）
 
 Codex v11 HIGH 收窄后，**adapter 公共 surface 上不再有 `InboundStream` 或 `ChannelReader<T>` 契约**（见 §5.4）。契约分三段：
 
-1. **Adapter 实现 → durable inbox**：adapter 在 webhook handler / gateway supervisor 收到事件后，verify → normalize 成 `ChatActivity` → **commit 到 Orleans persistent stream（channel inbox stream）** → 再回 platform ack（详见 §9.5.2 / §9.5.2.1）。这段是 adapter 内部实现，不穿越公共 interface。
-2. **Pipeline consumer → durable inbox**：middleware pipeline 在 host 启动时 `inbox.SubscribeAsync(OnNextAsync, OnErrorAsync)`（Orleans Streams pub-sub），per-conversation partition by `CanonicalKey`。
+1. **Current Lark relay → ConversationGAgent**：NyxID relay webhook 在 host 边界 verify/normalize 后调度到 `ConversationGAgent`，不经过 `Aevatar.GAgents.Platform.Lark` 的本地 durable inbox runtime。
+2. **Direct adapter → durable/actor-owned ingress boundary**：future webhook handler / gateway supervisor 收到事件后，verify → normalize 成 `ChatActivity` → commit 到 durable 或 actor-owned ingress boundary → 再回 platform ack（详见 §9.5.2 / §9.5.2.1）。这段是 adapter 内部实现，不穿越公共 interface。
+3. **Pipeline consumer → ingress boundary**：middleware pipeline 只消费已提交 ingress facts，per-conversation partition by `CanonicalKey`。
 3. **Pipeline consumer 内部 working buffer**（实现细节，**不是公共契约**）：`OnNextAsync` 内部可用 `Channel<ChatActivity>`（bounded 1000，`FullMode = Wait`，producer 500ms timeout 升级成 `BackpressureException` → 不推进 checkpoint → provider redeliver）把 inbound 分发给 bot turn dispatcher。这个 `Channel<T>` **活在 pipeline consumer 内**，不出现在 `IChannelTransport` 或任何跨组件 interface 上。
 
 **durable 来源**是 Orleans persistent stream（§9.5.6），**不是 `Channel<T>`**。`Channel<T>` 只是 consumer 内部的背压 buffer，adapter 看不见它，也不依赖它做 durability。
@@ -1092,7 +1094,7 @@ adapter 在构造 `ChatActivity` 时**必须**：
 - `Aevatar.GAgents.ChatHistory` —— 独立 GAgent（`ChatConversationGAgent` / `ChatHistoryIndexGAgent`）。**但当前 ChannelRuntime 未集成它**；对话历史实际上是 `AIGAgentBase` 里的进程内 `ChatHistory`（见 `src/Aevatar.AI.Core/AIGAgentBase.cs`）。`ConversationGAgent` 要集成它是**新工作**，不是"复用现有集成"
 - `Aevatar.GAgents.UserMemory` —— 同样独立 GAgent 存在，但当前无集成。`ConversationGAgent` 的 long-term memory 集成是新工作
 - `Aevatar.GAgents.ChatbotClassifier` —— 按需包成 `ClassificationMiddleware`
-- `Aevatar.GAgents.StreamingProxy` / `StreamingProxyParticipant` —— LLM streaming 底层可复用
+- `Aevatar.GAgents.StreamingProxy` / `StreamingProxyParticipant` —— deprecated compatibility surface only. It is not reusable LLM streaming infrastructure for new channel work; direct model streaming should use `/v1/responses`, while room/fan-out semantics require a named room contract.
 - `Aevatar.GAgents.Registry` —— 平台级 GAgent registry，和拟改名的 `UserAgentCatalog` 各司其职（platform actor routing vs user agent metadata）
 
 **诚实承认**：早期 RFC 版本措辞是 "必须调用 ChatHistory / UserMemory，不重复存"——暗示已有集成。实际上这些是**未来集成目标**，不是现状复用。本 RFC 实施时需要把这层集成**新建**出来，不要误以为是捡现成。
@@ -1202,7 +1204,7 @@ public enum ProjectionVerdict { Project, Skip, Tombstone }
 
 硬契约：
 
-- **每个 projector 维护自己的 watermark**：已成功对哪些 state event sequence number 执行过 Project/Tombstone verdict。watermark 写在 projector 自己的 state（grain persistence）里，和 projection dispatcher 的 `UpsertAsync`/`DeleteAsync` 在**同一个 atomic commit** 里推进——保证"projection 已更新"和"watermark 已推进"不会漂移
+- **每个 projector 维护自己的 watermark**：已成功对哪些 state event sequence number 执行过 Project/Tombstone verdict。watermark 由 projection scope actor 提交后物化到 `ProjectionScopeStatusDocument` readmodel；compaction 只读这个状态 readmodel，不在查询路径读取或重放 event store。
 - **Housekeeping 只清 `min(所有 projector watermarks)` 之前的 tombstoned entries**：如果系统里有 N 个 projector 订阅同一 state，housekeeping 取它们 watermark 的最小值作为安全清理边界。一个 projector lag 2 天，housekeeping 就停在 2 天前；一个 projector 坏死不推进，housekeeping 停——触发告警，不静默继续
 - **全量 replay 场景**：新加一个 projector（或现有 projector 重建），watermark 从 0 开始。Housekeeping 此时的 min watermark 也退到 0 → 不清任何 tombstone → 新 projector replay 时能看到所有 tombstoned entries、广播完 DeleteAsync。replay 完成后 watermark 追上，housekeeping 恢复正常
 - **Projector 永久坏死**：operator 显式从 "active projector set" 移除它，housekeeping 的 min 计算就不再等它。这是 **人工决策**——不能让代码自动"等太久就忽略"（会变成静默丢一致性）
@@ -1512,8 +1514,7 @@ agents/                                ← production code
 ├── Aevatar.GAgents.NyxidChat/
 ├── Aevatar.GAgents.Registry/          ← 平台级 registry
 ├── Aevatar.GAgents.RoleCatalog/
-├── Aevatar.GAgents.StreamingProxy/
-├── Aevatar.GAgents.StreamingProxyParticipant/
+├── Aevatar.GAgents.StreamingProxy/    ← deprecated compatibility surface; no new channel consumer
 ├── Aevatar.GAgents.UserConfig/
 └── Aevatar.GAgents.UserMemory/        ← ConversationGAgent 与其集成
 
@@ -2150,9 +2151,8 @@ v1 cutover step 2 细化为：
 
 | Modality | 入口 | 为什么不纳入 |
 |---|---|---|
-| **Voice Presence** | `VoicePresenceGAgent` | 语音是独立 modality：wake word / AEC / VAD / ASR / LLM / TTS 链路完全不同于 IM webhook 模型。Voice ↔ Chat 互通接口见 §15.5 open question |
+| **Voice Presence** | `VoicePresence` EventModule capability on a target actor; `/ws/voice` policy-aware Host entry; `/ws/voice/{actorId}` dev/admin bypass | 语音是独立 modality：wake word / AEC / VAD / ASR / LLM / TTS 链路完全不同于 IM webhook 模型。VoicePresence 不是独立 router/session GAgent，Voice ↔ Chat 互通接口见 §15.5 open question |
 | **Aevatar Console Web chat 框** | `apps/aevatar-console-web/` | Console 是 aevatar 自有前端 UI，直接调 HTTP API，不走外部 IM channel 链路 |
-| **CLI** (`aevatar chat`, `aevatar invoke`) | `tools/Aevatar.Tools.Cli/` | 同上，CLI 直接调 HTTP API |
 | **Direct HTTP API** | `/api/scopes/{scopeId}/...` | 同上 |
 | **DeviceRegistration / HouseholdEntity 设备事件** | `Aevatar.GAgents.Device` + `Aevatar.GAgents.Household` | 设备事件是 sensor push，业务语义和对话无关。transport 虽然也是 webhook，但强行套 channel adapter 抽象会让 `IChannelTransport` / `IChannelOutboundPort` 失焦 |
 | **WeChat 个人 bot** | — | transport + capability gap 差异过大，单独 RFC 承接，继承本 RFC 的 `IChannelTransport` + `IChannelOutboundPort` 契约 |
@@ -2305,7 +2305,7 @@ v1 cutover step 2 细化为：
 1. ~~`IProjectionWriteDispatcher<T>` + `IProjectionWriteSink<T>` 加 `DeleteAsync`~~ — **已完成**（Codex v11 校对）
 2. Per-entry current-state base class **继承已有 `ICurrentStateProjectionMaterializer<TContext>`**（不另起 `TState→TDocument` 宇宙——那会脱离 projection runtime，违背"贴已有抽象"原则）
 3. Read model 继续用 `IProjectionReadModel`（`src/Aevatar.CQRS.Projection.Stores.Abstractions/.../IProjectionReadModel.cs:5-15`，带 `Id / ActorId / StateVersion`）
-4. **Tombstone 清理不引入新 watermark**——复用 `ProjectionScopeWatermarkAdvancedEvent` + `last_observed_version` / `last_successful_version`（`src/Aevatar.CQRS.Projection.Core/projection_scope_messages.proto:14-26,71-79` + `ProjectionScopeGAgentBase.cs:168-174`）。物理清理条件：scope watermark **跨过 state 版本** AND **超过 projector lag + safety margin**
+4. **Tombstone 清理不引入新 watermark**——复用 `ProjectionScopeWatermarkAdvancedEvent` + `last_observed_version` / `last_successful_version`，并通过 `ProjectionScopeStatusDocument` readmodel 提供 compaction 查询入口。物理清理条件：scope status readmodel 的 watermark **跨过 state 版本** AND **超过 projector lag + safety margin**；查询端口不得回读或重放 event store。
 
 **Phase 0 前置（修正）**：`DeleteAsync` 已合入，Phase 0 实际 delta = **§7.1 `PerEntryDocumentProjector` 基类抽取 + 3 个 existing projector（ChannelBotRegistration / DeviceRegistration / UserAgentCatalog）refactor 到基类**。预估 ~150 行（比原 200 行估值下调，因接口改动已不在范围内），**不再是独立 PR 前置**，可随本 RFC §7.1 实现一起落地。
 
@@ -2420,7 +2420,7 @@ public interface ICredentialProvider {
 
 ### 17.5 Orleans grain-based cluster-singleton primitive（P2 — 第二 long-conn 场景触发）
 
-**缺口**：aevatar 缺"**集群唯一持有某个外部长连接/会话所有权**"的通用做法。现有"well-known singleton actor" 模式（`RoleCatalogGAgent.cs:14` / `ConnectorCatalogGAgent.cs:14` / `StreamingProxyParticipantGAgent.cs:13` / `ChannelBotRegistrationGAgent.cs:15` / `DeviceRegistrationGAgent.cs:15`）是**被动 actor**——只要 grain id 固定就行，没有 lease / epoch fencing / failover ownership 语义。
+**缺口**：aevatar 缺"**集群唯一持有某个外部长连接/会话所有权**"的通用做法。现有"well-known singleton actor" 模式（`RoleCatalogGAgent.cs:14` / `ConnectorCatalogGAgent.cs:14` / `ChannelBotRegistrationGAgent.cs:15` / `DeviceRegistrationGAgent.cs:15`）是**被动 actor**——只要 grain id 固定就行，没有 lease / epoch fencing / failover ownership 语义。
 
 现有 hosted service（`UserAgentCatalogStartupService.cs:22-60` / `ChannelBotRegistrationStartupService.cs:33-72`）是 **node-local startup/warmup**——host 启动时 poke 一下 grain 让它 activate，不是 cluster-wide supervisor。
 
@@ -2501,7 +2501,7 @@ VoicePresence 里（`src/Aevatar.Foundation.VoicePresence/VoicePresenceStateMach
 | **PR-Core-B** | `IErrorRedactor` + tracing dimension contract + `NyxIdLLMProvider` / `HttpConnector` 活跃泄露修复 | 无 | platform + AI team |
 | **PR-Proto**（已完成：#268） | 7 proto schema 定义 | 无 | schema review |
 | **PR-Abstractions**（已完成：#272） | `Aevatar.GAgents.Channel.Abstractions` package（窄契约） | PR-Core-A | channel team |
-| **PR-Runtime**（已完成：#279） | `ConversationGAgent` 骨架 / `ChannelUserBindingGAgent` / middleware pipeline / durable inbox 订阅 | PR-Abstractions | channel team |
+| **PR-Runtime**（已完成：#279） | `ConversationGAgent` 骨架 / `ChannelUserBindingGAgent` / middleware pipeline / committed ingress boundary | PR-Abstractions | channel team |
 | **PR-Runner**（新增 — §5.6.1 要求） | 把 `ConversationGAgent` inline `IConversationTurnRunner` call 切成 "dispatch → run-scoped runner actor → completion command 回写" | PR-Runtime | channel team |
 | **PR-Projector** | §7.1 `PerEntryDocumentProjector` 基类 + 3 个 existing projector refactor | 无 | projection team |
 | **PR-Credential-Migration** | Channel proto raw token → `credential_ref`；admin surface / LLM metadata key 迁移 | PR-Core-A | channel + AI team |

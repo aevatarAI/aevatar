@@ -1,6 +1,6 @@
 ---
 title: "Workflow 调度 Actor 化 & 多智能体协作演进方案"
-status: active
+status: superseded
 owner: eanzhao
 ---
 
@@ -9,6 +9,14 @@ owner: eanzhao
 > 日期：2026-04-01
 > 状态：RFC（Request for Comments）
 > 评审：Claude Opus 架构分析 + Codex 独立交叉评审
+
+> Superseded by issue #643 / Phase 9 consensus
+> (`META_JUDGE_DONE:consensus:delete-multi-agent-and-demote-studio-generators`).
+> The Foundation MultiAgent production surface (`TaskBoardGAgent`,
+> `TeamManagerGAgent`, and `aevatar.multiagent` protos) has been retired as
+> dead experimental code. Studio empty-state generation is retained only as
+> Application-layer authoring preview helpers, not as `*GenerateGAgent`
+> production actors.
 
 ---
 

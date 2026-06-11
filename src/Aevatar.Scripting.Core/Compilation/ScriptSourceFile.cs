@@ -11,6 +11,8 @@ public sealed record ScriptSourceFile(
         var normalized = (path ?? string.Empty)
             .Replace('\\', '/')
             .Trim();
+        while (normalized.StartsWith("./", StringComparison.Ordinal))
+            normalized = normalized[2..];
         return string.IsNullOrWhiteSpace(normalized)
             ? "file"
             : normalized.TrimStart('/');

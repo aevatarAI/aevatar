@@ -12,6 +12,7 @@ import {
   type ExplorerScriptFile,
 } from "./explorerContent";
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
+import { t } from "@/shared/i18n/messages";
 
 type ExplorerContentViewProps = {
   content: string | null;
@@ -69,7 +70,7 @@ export default function ExplorerContentView({
   );
 
   if (content === null) {
-    return <div style={emptyPanelStyle}>Could not load file.</div>;
+    return <div style={emptyPanelStyle}>{t("pages.studio.explorer.explorercontentview.could.not.load.file", "Could not load file.")}</div>;
   }
 
   if (model.kind === "chat-history") {
@@ -81,12 +82,12 @@ export default function ExplorerContentView({
   }
 
   if (!model.formattedText.trim()) {
-    return <div style={emptyPanelStyle}>Empty file.</div>;
+    return <div style={emptyPanelStyle}>{t("pages.studio.explorer.explorercontentview.empty.file", "Empty file.")}</div>;
   }
 
   return (
     <div style={scrollAreaStyle}>
-      <pre aria-label="Explorer file preview" style={preStyle}>
+      <pre aria-label={t("pages.studio.explorer.explorercontentview.explorer.file.preview", "Explorer file preview")} style={preStyle}>
         {model.formattedText}
       </pre>
     </div>
@@ -99,20 +100,19 @@ function ChatHistoryPreview({
   messages: ExplorerChatMessage[];
 }): React.ReactElement {
   return (
-    <div aria-label="Explorer chat history preview" style={scrollAreaStyle}>
+    <div aria-label={t("pages.studio.explorer.explorercontentview.explorer.chat.history.preview", "Explorer chat history preview")} style={scrollAreaStyle}>
       <div style={infoCardStyle}>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          Conversation
-        </Typography.Text>
+          {t("pages.studio.explorer.explorercontentview.conversation", "Conversation")}</Typography.Text>
         <div style={{ marginTop: 6 }}>
           <Typography.Text strong>
-            {messages.length} message{messages.length === 1 ? "" : "s"}
+            {messages.length} {t("pages.studio.explorer.explorercontentview.message", "message")}{messages.length === 1 ? "" : "s"}
           </Typography.Text>
         </div>
       </div>
 
       {messages.length === 0 ? (
-        <div style={emptyPanelStyle}>Empty conversation.</div>
+        <div style={emptyPanelStyle}>{t("pages.studio.explorer.explorercontentview.empty.conversation", "Empty conversation.")}</div>
       ) : (
         messages.map((message, index) => (
           <ChatHistoryBubble
@@ -220,8 +220,7 @@ function ThinkingBlock({ text }: { text: string }): React.ReactElement {
           padding: 0,
         }}
       >
-        Thinking
-      </button>
+        {t("pages.studio.explorer.explorercontentview.thinking", "Thinking")}</button>
       {open ? (
         <div
           style={{
@@ -257,14 +256,13 @@ function ScriptPackagePreview({
   ];
 
   return (
-    <div aria-label="Explorer script package preview" style={scrollAreaStyle}>
+    <div aria-label={t("pages.studio.explorer.explorercontentview.explorer.script.package.preview", "Explorer script package preview")} style={scrollAreaStyle}>
       <div style={infoCardStyle}>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          Script package
-        </Typography.Text>
+          {t("pages.studio.explorer.explorercontentview.script.package", "Script package")}</Typography.Text>
         <div style={{ marginTop: 8 }}>
           <Typography.Text>
-            {files.length} file{files.length === 1 ? "" : "s"}
+            {files.length} {t("pages.studio.explorer.explorercontentview.file", "file")}{files.length === 1 ? "" : "s"}
           </Typography.Text>
         </div>
         {scriptPackage.entrySourcePath ? (
@@ -277,7 +275,7 @@ function ScriptPackagePreview({
       </div>
 
       {files.length === 0 ? (
-        <div style={emptyPanelStyle}>No files in package.</div>
+        <div style={emptyPanelStyle}>{t("pages.studio.explorer.explorercontentview.no.files.in.package", "No files in package.")}</div>
       ) : (
         files.map((file) => (
           <div
@@ -317,8 +315,7 @@ function ScriptPackagePreview({
                     padding: "2px 8px",
                   }}
                 >
-                  Entry
-                </span>
+                  {t("pages.studio.explorer.explorercontentview.entry", "Entry")}</span>
               ) : null}
             </div>
             <pre style={{ ...preStyle, border: "none", borderRadius: 0, minHeight: 0 }}>

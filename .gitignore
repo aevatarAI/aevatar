@@ -24,6 +24,8 @@ mono_crash.*
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
+!docs/release/
+!docs/release/**
 [Rr]eleases/
 x64/
 x86/
@@ -504,3 +506,20 @@ docs/.triage/
 mempalace.yaml
 entities.json
 .mempalace/
+
+# Paseo agent run-continuation state
+.sisyphus/
+
+# codex-refactor-loop runtime state (worktrees, logs, per-iter prompts, state.json)
+.refactor-loop/
+
+.vmap/
+
+.antigravitycli/
+FIX_REPORT.md
+.implement-loop/
+
+# codex-refactor-loop ephemeral review artifacts (per-PR/per-cluster, regenerated)
+runs/
+# misrouted per-PR quality reviewer artifacts (should land in runs/, not docs/audit-scorecard/)
+/docs/audit-scorecard/[0-9]*-*.md

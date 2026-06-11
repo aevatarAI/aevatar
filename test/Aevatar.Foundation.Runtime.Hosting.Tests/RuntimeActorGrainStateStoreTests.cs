@@ -79,7 +79,7 @@ public sealed class RuntimeActorGrainStateStoreTests
                 {
                     AgentId = "agent-compat-1",
                     AgentType = "skill_runner",
-                    TemplateName = "daily_report",
+                    TemplateName = "summary",
                 },
             },
         };

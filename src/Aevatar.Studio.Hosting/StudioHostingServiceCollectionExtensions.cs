@@ -4,11 +4,14 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Studio.Hosting.Controllers;
 using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Studio.Hosting.NyxId;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Studio.Infrastructure.ScopeResolution; // DefaultAppScopeResolver
 using Aevatar.Studio.Projection.DependencyInjection;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Studio.Hosting;
 
@@ -19,6 +22,7 @@ internal static class StudioHostingServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
+        services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()
             .AddApplicationPart(typeof(EditorController).Assembly)
             .AddJsonOptions(json =>
@@ -30,8 +34,17 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddHttpContextAccessor();
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
+        services.Configure<NyxIdLlmCatalogCacheOptions>(
+            configuration.GetSection(NyxIdLlmCatalogCacheOptions.SectionName));
+        services.TryAddSingleton<NyxIdLlmCatalogHttpClient>();
+        services.TryAddSingleton<IUserLlmCatalogPort>(sp => new CachedNyxIdLlmCatalogPort(
+            sp.GetRequiredService<NyxIdLlmCatalogHttpClient>(),
+            configuration,
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<NyxIdLlmCatalogCacheOptions>>(),
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CachedNyxIdLlmCatalogPort>>()));
         services.AddStudioInfrastructure(configuration);
-        services.AddStudioProjectionComponents();
+        services.AddStudioProjectionComponents(configuration);
         services.AddStudioProjectionReadModelProviders(configuration);
         return services;
     }
@@ -39,13 +52,10 @@ internal static class StudioHostingServiceCollectionExtensions
     internal static IServiceCollection AddStudioBridgeServices(this IServiceCollection services)
     {
         services.AddSingleton(sp => new AppScopedWorkflowService(
-            sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetRequiredService<IWorkflowYamlDocumentService>(),
-            sp.GetService<IScopeWorkflowQueryPort>(),
-            sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowActorBindingReader>(),
-            sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceRevisionArtifactStore>(),
-            sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceLifecycleQueryPort>(),
-            sp.GetService<IWorkflowDraftStore>(),
+            sp.GetRequiredService<IWorkflowDefinitionParser>(),
+            sp.GetService<IStudioWorkspaceQueryPort>(),
+            sp.GetService<IStudioWorkspaceCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
         services.AddSingleton(sp => new AppScopedScriptService(
             sp.GetRequiredService<IHttpClientFactory>(),
@@ -57,20 +67,15 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptCatalogQueryPort>(),
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptEvolutionDecisionReadPort>(),
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptingActorAddressResolver>(),
-            sp.GetService<Aevatar.Scripting.Application.Queries.IScriptReadModelQueryApplicationService>(),
-            sp.GetService<IScriptStoragePort>()));
+            sp.GetService<IScriptRuntimeActivityQueryPort>()));
         return services;
     }
 
     internal static IServiceCollection AddStudioAuthoringServices(this IServiceCollection services)
     {
-        services.AddSingleton<AppAuthoringChatSessionFactory>();
-        services.AddSingleton<WorkflowGeneratePromptCatalog>();
-        services.AddSingleton<WorkflowGenerateOrchestrator>();
-        services.AddSingleton<WorkflowGenerateActorService>();
-        services.AddSingleton<ScriptGeneratePromptCatalog>();
-        services.AddSingleton<ScriptGenerateOrchestrator>();
-        services.AddSingleton<ScriptGenerateActorService>();
+        // Refactor (iter21/cluster-001):
+        //   Old pattern: Host registered fake authoring actors, process gates, and ChatRuntime factories.
+        //   New principle: Host keeps only protocol helpers; Application/Infrastructure own authoring preview behavior.
         services.AddSingleton<ScriptEditorValidationService>();
         return services;
     }

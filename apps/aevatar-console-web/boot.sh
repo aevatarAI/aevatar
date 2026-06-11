@@ -4,9 +4,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_JSON="${SCRIPT_DIR}/package.json"
+ENV_FILE="${SCRIPT_DIR}/.env.local"
+
+if [[ -f "${ENV_FILE}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  set +a
+fi
+
 FRONTEND_PORT="${AEVATAR_CONSOLE_FRONTEND_PORT:-5173}"
 API_TARGET="${AEVATAR_API_TARGET:-http://127.0.0.1:5080}"
 STUDIO_API_TARGET="${AEVATAR_STUDIO_API_TARGET:-${API_TARGET}}"
+PRESERVE_AUTH_HOST="${AEVATAR_PROXY_PRESERVE_AUTH_HOST:-true}"
 LOG_FILE="${SCRIPT_DIR}/boot.log"
 PID_FILE="${SCRIPT_DIR}/boot.pid"
 
@@ -24,6 +34,7 @@ Environment:
   AEVATAR_CONSOLE_FRONTEND_PORT   dev server port, default: 5173
   AEVATAR_API_TARGET              proxy target for /api/*, default: http://127.0.0.1:5080
   AEVATAR_STUDIO_API_TARGET       proxy target for Studio endpoints, default: AEVATAR_API_TARGET
+  AEVATAR_PROXY_PRESERVE_AUTH_HOST keep original Host for /api/auth, default: true
 
 Files:
   boot.log    runtime output
@@ -159,14 +170,9 @@ clean_generated_artifacts() {
 }
 
 wait_for_port_ready() {
-  local pid="$1"
   local frontend_url="http://127.0.0.1:${FRONTEND_PORT}"
 
   for _ in $(seq 1 120); do
-    if ! kill -0 "${pid}" 2>/dev/null; then
-      return 1
-    fi
-
     if curl -sf -o /dev/null "${frontend_url}/"; then
       return 0
     fi
@@ -175,6 +181,17 @@ wait_for_port_ready() {
   done
 
   return 1
+}
+
+write_listening_pid_file() {
+  local pids
+  pids="$(list_listening_pids "${FRONTEND_PORT}")"
+
+  if [[ -z "${pids}" ]]; then
+    return 1
+  fi
+
+  echo "${pids}" | head -n 1 > "${PID_FILE}"
 }
 
 kill_existing_processes
@@ -189,6 +206,7 @@ echo "==> Starting aevatar-console-web"
 echo "==> Frontend: http://127.0.0.1:${FRONTEND_PORT}"
 echo "==> API target: ${API_TARGET}"
 echo "==> Studio API target: ${STUDIO_API_TARGET}"
+echo "==> Preserve auth Host: ${PRESERVE_AUTH_HOST}"
 echo "==> Log: ${LOG_FILE}"
 
 (
@@ -197,16 +215,17 @@ echo "==> Log: ${LOG_FILE}"
   export AEVATAR_CONSOLE_FRONTEND_PORT="${FRONTEND_PORT}"
   export AEVATAR_API_TARGET="${API_TARGET}"
   export AEVATAR_STUDIO_API_TARGET="${STUDIO_API_TARGET}"
+  export AEVATAR_PROXY_PRESERVE_AUTH_HOST="${PRESERVE_AUTH_HOST}"
   nohup pnpm start:dev > "${LOG_FILE}" 2>&1 &
   echo $! > "${PID_FILE}"
 )
 
-NEW_PID="$(cat "${PID_FILE}")"
-
-if ! wait_for_port_ready "${NEW_PID}"; then
+if ! wait_for_port_ready; then
   echo "aevatar-console-web failed to start. Last log lines:" >&2
   tail -n 40 "${LOG_FILE}" >&2 || true
   exit 1
 fi
 
+write_listening_pid_file
+NEW_PID="$(cat "${PID_FILE}")"
 echo "==> Started aevatar-console-web (pid ${NEW_PID})"

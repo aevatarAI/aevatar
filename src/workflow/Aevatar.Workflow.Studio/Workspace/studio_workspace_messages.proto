@@ -1,0 +1,87 @@
+syntax = "proto3";
+package aevatar.gagents.studio_workspace;
+option csharp_namespace = "Aevatar.Studio.Workspace";
+
+import "google/protobuf/timestamp.proto";
+
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
+
+message StudioWorkspaceState {
+  string workspace_id = 1;
+  string scope_id = 2;
+  StudioWorkspaceSettings settings = 3;
+  repeated StudioWorkspaceDirectory directories = 4;
+  map<string, StudioWorkflowDraft> drafts = 5;
+  google.protobuf.Timestamp updated_at_utc = 6;
+  int64 last_applied_event_version = 7;
+}
+
+message StudioWorkspaceSettings {
+  reserved 3, 4;
+  reserved "appearance_theme", "color_mode";
+  string name = 1;
+  string runtime_base_url = 2;
+}
+
+message StudioWorkspaceDirectory {
+  string directory_id = 1;
+  string label = 2;
+  string path = 3;
+  bool is_built_in = 4;
+}
+
+message StudioWorkflowDraft {
+  reserved 7;
+  reserved "layout";
+  string workflow_id = 1;
+  string name = 2;
+  string file_name = 3;
+  string directory_id = 4;
+  string directory_label = 5;
+  string yaml = 6;
+  google.protobuf.Timestamp created_at_utc = 8;
+  google.protobuf.Timestamp updated_at_utc = 9;
+  int64 version = 10;
+}
+
+message StudioWorkspaceSettingsUpdated {
+  string workspace_id = 1;
+  string scope_id = 2;
+  StudioWorkspaceSettings settings = 3;
+  int64 expected_version = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+}
+
+message StudioWorkspaceDirectoryAdded {
+  string workspace_id = 1;
+  string scope_id = 2;
+  StudioWorkspaceDirectory directory = 3;
+  int64 expected_version = 4;
+  google.protobuf.Timestamp added_at_utc = 5;
+}
+
+message StudioWorkspaceDirectoryRemoved {
+  string workspace_id = 1;
+  string scope_id = 2;
+  string directory_id = 3;
+  int64 expected_version = 4;
+  google.protobuf.Timestamp removed_at_utc = 5;
+}
+
+message StudioWorkflowDraftSaved {
+  string workspace_id = 1;
+  string scope_id = 2;
+  StudioWorkflowDraft draft = 3;
+  int64 expected_version = 4;
+  google.protobuf.Timestamp saved_at_utc = 5;
+}
+
+message StudioWorkflowDraftDeleted {
+  string workspace_id = 1;
+  string scope_id = 2;
+  string workflow_id = 3;
+  int64 expected_version = 4;
+  google.protobuf.Timestamp deleted_at_utc = 5;
+}

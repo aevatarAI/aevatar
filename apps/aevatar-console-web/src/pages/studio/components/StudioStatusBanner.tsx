@@ -1,6 +1,7 @@
 import { Tag, Typography } from 'antd';
 import React from 'react';
 import { embeddedPanelStyle } from '@/shared/ui/proComponents';
+import { t } from "@/shared/i18n/messages";
 
 type StudioStatusBannerType = 'info' | 'warning' | 'error' | 'success';
 
@@ -54,25 +55,25 @@ function getStudioStatusBannerAccent(
       return {
         background: 'rgba(246, 255, 237, 0.96)',
         borderColor: 'rgba(82, 196, 26, 0.28)',
-        label: '完成',
+        label: t("pages.studio.studiostatusbanner.finish", "Finish"),
       };
     case 'warning':
       return {
         background: 'rgba(255, 251, 230, 0.96)',
         borderColor: 'rgba(250, 173, 20, 0.28)',
-        label: '提醒',
+        label: t("pages.studio.studiostatusbanner.remind", "remind"),
       };
     case 'error':
       return {
         background: 'rgba(255, 241, 240, 0.96)',
         borderColor: 'rgba(255, 77, 79, 0.28)',
-        label: '异常',
+        label: t("pages.studio.studiostatusbanner.abnormal", "abnormal"),
       };
     default:
       return {
         background: 'rgba(240, 245, 255, 0.96)',
         borderColor: 'rgba(22, 119, 255, 0.24)',
-        label: '信息',
+        label: t("pages.studio.studiostatusbanner.information", "information"),
       };
   }
 }

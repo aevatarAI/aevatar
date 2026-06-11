@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 
@@ -7,18 +6,21 @@ namespace Aevatar.Workflow.Application.Runs;
 public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 {
     private readonly IWorkflowActorBindingReader _bindingReader;
-    private readonly IWorkflowRunActorPort _actorPort;
+    private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
+    private readonly IWorkflowDefinitionParser _definitionParser;
     private readonly IWorkflowDefinitionCatalog _workflowRegistry;
     private readonly WorkflowRunBehaviorOptions _behaviorOptions;
 
     public WorkflowRunActorResolver(
         IWorkflowActorBindingReader bindingReader,
-        IWorkflowRunActorPort actorPort,
+        IWorkflowRunProvisioningPort runProvisioningPort,
+        IWorkflowDefinitionParser definitionParser,
         IWorkflowDefinitionCatalog workflowRegistry,
         WorkflowRunBehaviorOptions? behaviorOptions = null)
     {
         _bindingReader = bindingReader ?? throw new ArgumentNullException(nameof(bindingReader));
-        _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
+        _definitionParser = definitionParser ?? throw new ArgumentNullException(nameof(definitionParser));
         _workflowRegistry = workflowRegistry ?? throw new ArgumentNullException(nameof(workflowRegistry));
         _behaviorOptions = behaviorOptions ?? new WorkflowRunBehaviorOptions();
     }
@@ -27,9 +29,13 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         WorkflowChatRunRequest request,
         CancellationToken ct = default)
     {
-        var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(request.WorkflowName);
-        var inlineWorkflowYamls = request.WorkflowYamls?.ToList() ?? [];
-        var hasInlineWorkflowYamls = inlineWorkflowYamls.Count > 0;
+        // Refactor (iter112/cluster-3): Old pattern: resolver rebuilt source from legacy request mirrors. New principle: Application consumes the typed WorkflowChatSource as the single command source.
+        var source = request.Source;
+        var requestedWorkflowName = ResolveRequestedWorkflowName(source);
+        var sourceActorId = ResolveSourceActorId(source);
+        var inlineBundleSource = source.InlineBundle;
+        var inlineWorkflowDocuments = inlineBundleSource?.YamlDocuments ?? [];
+        var hasInlineWorkflowYamls = inlineWorkflowDocuments.Count > 0;
         var hasRequestedWorkflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName);
         var workflowNameForRun = hasInlineWorkflowYamls
             ? string.Empty
@@ -44,7 +50,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
         if (hasInlineWorkflowYamls)
         {
-            var inlineBundle = await BuildInlineWorkflowBundleAsync(inlineWorkflowYamls, ct);
+            var inlineBundle = await BuildInlineWorkflowBundleAsync(inlineWorkflowDocuments, ct);
             if (!inlineBundle.Succeeded)
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.InvalidWorkflowYaml);
 
@@ -62,10 +68,10 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(request.ActorId))
+        if (!string.IsNullOrWhiteSpace(sourceActorId))
         {
             return await ResolveFromSourceActorAsync(
-                request.ActorId,
+                sourceActorId,
                 hasInlineWorkflowYamls,
                 hasRequestedWorkflowName,
                 requestedWorkflowName,
@@ -96,10 +102,9 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             ct);
 
         return new WorkflowActorResolutionResult(
-            createdRun.Actor,
+            createdRun,
             workflowNameForRun,
-            WorkflowChatRunStartError.None,
-            createdRun.CreatedActorIds);
+            WorkflowChatRunStartError.None);
     }
 
     private async Task<WorkflowActorResolutionResult> ResolveFromSourceActorAsync(
@@ -143,10 +148,9 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 wrapAsFallbackTrigger: false,
                 ct);
             return new WorkflowActorResolutionResult(
-                inlineRunActor.Actor,
+                inlineRunActor,
                 workflowNameForRun,
-                WorkflowChatRunStartError.None,
-                inlineRunActor.CreatedActorIds);
+                WorkflowChatRunStartError.None);
         }
 
         if (string.IsNullOrWhiteSpace(boundWorkflowName))
@@ -187,10 +191,9 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             ct);
 
         return new WorkflowActorResolutionResult(
-            runActor.Actor,
+            runActor,
             boundWorkflowName,
-            WorkflowChatRunStartError.None,
-            runActor.CreatedActorIds);
+            WorkflowChatRunStartError.None);
     }
 
     private string ResolveDefaultWorkflowName()
@@ -204,30 +207,65 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             : configuredDefault;
     }
 
+    private static string ResolveRequestedWorkflowName(WorkflowChatSource source)
+    {
+        return source.Kind switch
+        {
+            WorkflowChatSourceKind.CatalogWorkflow =>
+                WorkflowRunNameNormalizer.NormalizeWorkflowName(source.CatalogName?.WorkflowName),
+            WorkflowChatSourceKind.DefinitionActor =>
+                WorkflowRunNameNormalizer.NormalizeWorkflowName(source.DefinitionActorSource?.WorkflowName),
+            WorkflowChatSourceKind.InlineYamlBundle =>
+                WorkflowRunNameNormalizer.NormalizeWorkflowName(source.InlineBundle?.EntryName),
+            _ => string.Empty,
+        };
+    }
+
+    private static string? ResolveSourceActorId(WorkflowChatSource source)
+    {
+        // Refactor (phase9/cluster-349):
+        //   Old pattern: Direct source could resolve a source actor binding through DefinitionActorSource.
+        //   New principle: only actor-addressed source variants participate in binding lookup.
+        return source.Kind switch
+        {
+            WorkflowChatSourceKind.DefinitionActor => source.DefinitionActorSource?.ActorId,
+            WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.ActorId,
+            _ => null,
+        };
+    }
+
     private async Task<InlineWorkflowBundle> BuildInlineWorkflowBundleAsync(
-        IReadOnlyList<string> inlineWorkflowYamls,
+        IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
         CancellationToken ct)
     {
-        if (inlineWorkflowYamls.Count == 0)
+        if (inlineWorkflowDocuments.Count == 0)
             return InlineWorkflowBundle.Invalid;
 
         var workflowByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         string entryWorkflowName = string.Empty;
         string entryWorkflowYaml = string.Empty;
 
-        for (var i = 0; i < inlineWorkflowYamls.Count; i++)
+        for (var i = 0; i < inlineWorkflowDocuments.Count; i++)
         {
-            var yaml = inlineWorkflowYamls[i];
+            var document = inlineWorkflowDocuments[i];
+            var yaml = document.Yaml;
             if (string.IsNullOrWhiteSpace(yaml))
                 return InlineWorkflowBundle.Invalid;
 
-            var parseResult = await _actorPort.ParseWorkflowYamlAsync(yaml, ct);
+            var parseResult = await _definitionParser.ParseWorkflowYamlAsync(yaml, ct);
             if (!parseResult.Succeeded)
                 return InlineWorkflowBundle.Invalid;
 
             var workflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(parseResult.WorkflowName);
             if (string.IsNullOrWhiteSpace(workflowName))
                 return InlineWorkflowBundle.Invalid;
+            var documentName = WorkflowRunNameNormalizer.NormalizeWorkflowName(document.Name);
+            if (!string.IsNullOrWhiteSpace(documentName) &&
+                !string.Equals(documentName, workflowName, StringComparison.OrdinalIgnoreCase))
+            {
+                return InlineWorkflowBundle.Invalid;
+            }
+
             if (!workflowByName.TryAdd(workflowName, yaml))
                 return InlineWorkflowBundle.Invalid;
 
@@ -248,14 +286,14 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             workflowByName);
     }
 
-    private async Task<WorkflowRunCreationResult> CreateRunActorAsync(
+    private async Task<WorkflowRunCreationReceipt> CreateRunActorAsync(
         WorkflowDefinitionBinding definitionBinding,
         bool wrapAsFallbackTrigger,
         CancellationToken ct)
     {
         try
         {
-            return await _actorPort.CreateRunAsync(definitionBinding, ct);
+            return await _runProvisioningPort.CreateRunAsync(definitionBinding, ct);
         }
         catch (Exception ex) when (wrapAsFallbackTrigger && ex is InvalidOperationException or NotSupportedException)
         {

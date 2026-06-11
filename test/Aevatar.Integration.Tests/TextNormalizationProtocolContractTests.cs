@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Integration.Tests.TestDoubles.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -33,15 +34,14 @@ public sealed class TextNormalizationProtocolContractTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "text-normalization",
             scriptRevision: "rev-1",
-            sourceText: TextNormalizationProtocolSampleActors.Source,
-            sourceHash: TextNormalizationProtocolSampleActors.SourceHash,
+            scriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(TextNormalizationProtocolSampleActors.Source),
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
         await provisioningPort.EnsureRuntimeAsync(definitionActorId, "rev-1", runtimeActorId, definition.Snapshot, CancellationToken.None);
-        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);
+        var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, CancellationToken.None);
         lease.Should().NotBeNull();
         await using var sink = new EventChannel<Aevatar.Foundation.Abstractions.EventEnvelope>(capacity: 32);
-        await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
 
         try
         {
@@ -78,7 +78,7 @@ public sealed class TextNormalizationProtocolContractTests
         }
         finally
         {
-            await projectionPort.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+            await projectionPort.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
             await projectionPort.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
         }
     }

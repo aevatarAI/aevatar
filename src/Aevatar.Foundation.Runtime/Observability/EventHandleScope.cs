@@ -34,13 +34,13 @@ public struct EventHandleScope : IDisposable
         _disposed = false;
     }
 
-    public static EventHandleScope Begin(ILogger logger, string actorId, EventEnvelope envelope)
+    public static EventHandleScope Begin(ILogger logger, string actorId, EventEnvelope envelope, string? agentType = null)
     {
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var activity = AevatarActivitySource.StartHandleEvent(actorId, envelope);
+        var activity = AevatarActivitySource.StartHandleEvent(actorId, envelope, agentType);
         var logScope = logger.BeginScope(TracingContextHelpers.CreateLogScopeState(envelope));
         return new EventHandleScope(
             Stopwatch.StartNew(),

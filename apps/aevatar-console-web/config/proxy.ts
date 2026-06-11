@@ -12,6 +12,7 @@
 const apiTarget = process.env.AEVATAR_API_TARGET || 'http://127.0.0.1:5080';
 const studioApiTarget =
   process.env.AEVATAR_STUDIO_API_TARGET || apiTarget;
+const preserveAuthHost = process.env.AEVATAR_PROXY_PRESERVE_AUTH_HOST;
 
 const buildProxyTarget = (target: string) => ({
   target,
@@ -25,6 +26,18 @@ const buildHostPreservingProxyTarget = (target: string) => ({
   ws: true,
 });
 
+const shouldPreserveHost = (target: string) =>
+  /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(target);
+
+const buildAuthProxyTarget = (target: string) =>
+  preserveAuthHost !== undefined
+    ? preserveAuthHost !== 'false'
+      ? buildHostPreservingProxyTarget(target)
+      : buildProxyTarget(target)
+    : shouldPreserveHost(target)
+    ? buildHostPreservingProxyTarget(target)
+    : buildProxyTarget(target);
+
 const studioProxyEntries = [
   '/api/app',
   '/api/auth',
@@ -37,7 +50,7 @@ const studioProxyEntries = [
   '/api/workspace',
 ].reduce<Record<string, ReturnType<typeof buildProxyTarget>>>((entries, path) => {
   const proxyFactory = path === '/api/auth'
-    ? buildHostPreservingProxyTarget
+    ? buildAuthProxyTarget
     : buildProxyTarget;
   entries[`^${path}$`] = proxyFactory(studioApiTarget);
   entries[`${path}/`] = proxyFactory(studioApiTarget);
@@ -45,6 +58,16 @@ const studioProxyEntries = [
 }, {});
 
 const studioScopeProxyEntries = {
+  '^/api/scopes/[^/]+/teams/[^/]+/invoke(?:/.*)?$':
+    buildProxyTarget(apiTarget),
+  '^/api/scopes/[^/]+/teams(?:/.*)?$':
+    buildProxyTarget(studioApiTarget),
+  '^/api/scopes/[^/]+/members$':
+    buildProxyTarget(studioApiTarget),
+  '^/api/scopes/[^/]+/members/[^/]+$':
+    buildProxyTarget(studioApiTarget),
+  '^/api/scopes/[^/]+/members/[^/]+/(?:binding(?:/.*)?|binding-runs(?:/.*)?|endpoints/[^/]+/contract)$':
+    buildProxyTarget(studioApiTarget),
   '^/api/scopes/[^/]+/scripts/draft-run$':
     buildProxyTarget(studioApiTarget),
   '^/api/scripts/validate$': buildProxyTarget(studioApiTarget),

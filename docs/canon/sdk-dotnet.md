@@ -45,7 +45,7 @@ await foreach (var evt in client.StartRunStreamWithTrackingAsync(new ChatRunRequ
 {
     if (evt.Type == WorkflowEventTypes.TextMessageContent)
     {
-        Console.Write(evt.Frame.Delta);
+        Console.Write(evt.Frame.TextMessageContent.Delta);
     }
 }
 ```
@@ -88,7 +88,7 @@ The SDK now provides typed parsers for common `CUSTOM` payloads:
 - `WorkflowCustomEventParser.TryParseWaitingSignal(...)`
 - `WorkflowCustomEventParser.TryParseLlmReasoning(...)`
 
-These parsers handle both camelCase and PascalCase payload keys.
+These parsers read the typed `WorkflowRunEventEnvelope` custom payloads exposed by the SDK.
 
 ## 6. Contract alignment notes
 
@@ -96,4 +96,4 @@ These parsers handle both camelCase and PascalCase payload keys.
 - `workflow` is file-backed name lookup only.
 - `workflowYamls` is inline YAML bundle only (index 0 is entry workflow).
 - Session correlation should use `aevatar.run.context` and custom step events, not ad-hoc local IDs.
-- `WorkflowOutputFrame` keeps unknown frame fields in `AdditionalProperties` for forward compatibility.
+- Refactor (iter104/cluster-2): Old pattern: SDK exposed WorkflowOutputFrame as JSON semantic contract (internal serialization not protobuf). New principle: SDK uses WorkflowRunEventEnvelope proto; JSON only at external wire boundary adapter.

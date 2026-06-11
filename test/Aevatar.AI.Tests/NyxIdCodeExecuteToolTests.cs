@@ -28,7 +28,7 @@ public class NyxIdCodeExecuteToolTests
         var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
 
         // No AgentToolRequestContext set → no token
-        AgentToolRequestContext.CurrentMetadata = null;
+        AgentToolRequestContext.Current = null;
         var result = await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
 
         result.Should().Contain("No NyxID access token");
@@ -107,11 +107,11 @@ public class NyxIdCodeExecuteToolTests
         };
         if (servicesContext is not null)
             metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = servicesContext;
-        AgentToolRequestContext.CurrentMetadata = metadata;
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
     }
 
     private static void ClearMetadata()
     {
-        AgentToolRequestContext.CurrentMetadata = null;
+        AgentToolRequestContext.Current = null;
     }
 }

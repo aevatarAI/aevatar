@@ -37,7 +37,7 @@ public class ScriptEvolutionSessionCompletedEventProjectorTests
             CancellationToken.None);
 
         hub.Published.Should().ContainSingle();
-        hub.Published[0].ScopeId.Should().Be("script-evolution-session:proposal-1");
+        hub.Published[0].RootActorId.Should().Be("script-evolution-session:proposal-1");
         hub.Published[0].SessionId.Should().Be("proposal-1");
         hub.Published[0].Event.ProposalId.Should().Be("proposal-1");
         hub.Published[0].Event.Accepted.Should().BeTrue();
@@ -74,23 +74,23 @@ public class ScriptEvolutionSessionCompletedEventProjectorTests
         public List<PublishedMessage> Published { get; } = [];
 
         public Task PublishAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             ScriptEvolutionSessionCompletedEvent evt,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Published.Add(new PublishedMessage(scopeId, sessionId, evt.Clone()));
+            Published.Add(new PublishedMessage(rootActorId, sessionId, evt.Clone()));
             return Task.CompletedTask;
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<ScriptEvolutionSessionCompletedEvent, ValueTask> handler,
             CancellationToken ct = default)
         {
-            _ = scopeId;
+            _ = rootActorId;
             _ = sessionId;
             _ = handler;
             _ = ct;
@@ -99,7 +99,7 @@ public class ScriptEvolutionSessionCompletedEventProjectorTests
     }
 
     private sealed record PublishedMessage(
-        string ScopeId,
+        string RootActorId,
         string SessionId,
         ScriptEvolutionSessionCompletedEvent Event);
 

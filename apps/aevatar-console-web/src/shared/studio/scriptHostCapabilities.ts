@@ -1,25 +1,26 @@
 import type { StudioAppContext } from './models';
+import { t } from "@/shared/i18n/messages";
 
 export type EmbeddedOnlyCapability = 'ask-ai' | 'draft-run';
 
 export function formatStudioHostModeLabel(mode: StudioAppContext['mode']): string {
-  return mode === 'embedded' ? '嵌入式 Host' : '代理 Host';
+  return mode === 'embedded' ? t("shared.studio.scripthostcapabilities.embedded.host", "Embedded Host") : t("shared.studio.scripthostcapabilities.proxy.host", "Proxy Host");
 }
 
 export function getStudioHostModeTooltip(mode: StudioAppContext['mode']): string {
   if (mode === 'embedded') {
-    return '当前 Studio 会话运行在嵌入式 Host 中，可以直接测试运行，也可以使用 AI 辅助生成脚本修改。';
+    return t("shared.studio.scripthostcapabilities.the.current.studio.session", "The current Studio session runs in the embedded Host and can be tested and run directly or modified using AI-assisted generation scripts.");
   }
 
-  return '当前 Studio 会话运行在代理 Host 中。这里可以继续校验、保存和发布，但测试运行与 AI 辅助需要切换到嵌入式 Host。';
+  return t("shared.studio.scripthostcapabilities.the.current.studio.session.2", "The current Studio session is running on the proxy Host. You can continue to verify, save and publish here, but test running and AI assistance need to switch to the embedded Host.");
 }
 
 export function getEmbeddedOnlyUnavailableMessage(
   capability: EmbeddedOnlyCapability,
 ): string {
   if (capability === 'draft-run') {
-    return '测试运行需要嵌入式 Host。请把当前 Studio 会话从代理模式切换到嵌入式模式后，再运行这个草稿。';
+    return t("shared.studio.scripthostcapabilities.test.running.requires.an", "Test running requires an embedded host. Please switch the current Studio session from proxy mode to embedded mode before running this draft.");
   }
 
-  return 'AI 辅助需要嵌入式 Host。请把当前 Studio 会话从代理模式切换到嵌入式模式后，再生成脚本修改。';
+  return t("shared.studio.scripthostcapabilities.ai.assistance.requires.an", "AI assistance requires an embedded host. Please switch the current Studio session from proxy mode to embedded mode before generating script modifications.");
 }

@@ -77,6 +77,7 @@ import {
   readScopeQueryDraft,
   type ScopeQueryDraft,
 } from "./components/scopeQuery";
+import { t } from "@/shared/i18n/messages";
 
 type AssetTab = "scripts" | "workflows";
 
@@ -256,8 +257,11 @@ function buildScriptWorkspaceItems(
       primaryMetaValue: script.activeRevision || "n/a",
       secondaryMetaLabel: "Updated",
       secondaryMetaValue: formatDateTime(script.updatedAt),
-      subtitle: "Script capability",
-      summary: "Governed script asset ready for Studio and catalog inspection.",
+      subtitle: t("pages.scopes.assets.script.capability", "Script capability"),
+      summary: t(
+        "pages.scopes.assets.governed.script.asset.ready",
+        "Governed script asset ready for Studio and catalog inspection.",
+      ),
       tertiaryMetaLabel: "Source hash",
       tertiaryMetaValue: script.activeSourceHash || "n/a",
       title: script.scriptId,
@@ -479,8 +483,7 @@ const TeamAssetsPage: React.FC = () => {
               setSelectedWorkflowId(record.assetId);
             }}
           >
-            Inspect
-          </Button>,
+            {t("pages.scopes.assets.inspect", "Inspect")}</Button>,
           <Button
             key={`studio-${record.assetId}`}
             type="link"
@@ -493,8 +496,7 @@ const TeamAssetsPage: React.FC = () => {
               )
             }
           >
-            Edit in Team Builder
-          </Button>,
+            {t("pages.scopes.assets.edit.in.team.builder", "Edit in Team Builder")}</Button>,
         ],
       },
       avatar: {
@@ -580,7 +582,7 @@ const TeamAssetsPage: React.FC = () => {
               {record.title}
             </Typography.Text>
             <Typography.Text style={{ color: surfaceToken.colorTextTertiary }}>
-              Last synced {record.updatedAtLabel}
+              {t("pages.scopes.assets.last.synced", "Last synced")}{record.updatedAtLabel}
             </Typography.Text>
           </Space>
         ),
@@ -602,8 +604,7 @@ const TeamAssetsPage: React.FC = () => {
               setSelectedScriptId(record.assetId);
             }}
           >
-            Inspect
-          </Button>,
+            {t("pages.scopes.assets.inspect.2", "Inspect")}</Button>,
           <Button
             key={`studio-${record.assetId}`}
             type="link"
@@ -616,8 +617,7 @@ const TeamAssetsPage: React.FC = () => {
               )
             }
           >
-            Edit in Team Builder
-          </Button>,
+            {t("pages.scopes.assets.edit.in.team.builder.2", "Edit in Team Builder")}</Button>,
         ],
       },
       avatar: {
@@ -696,7 +696,7 @@ const TeamAssetsPage: React.FC = () => {
               {record.title}
             </Typography.Text>
             <Typography.Text style={{ color: surfaceToken.colorTextTertiary }}>
-              Last synced {record.updatedAtLabel}
+              {t("pages.scopes.assets.last.synced.2", "Last synced")}{record.updatedAtLabel}
             </Typography.Text>
           </Space>
         ),
@@ -725,14 +725,12 @@ const TeamAssetsPage: React.FC = () => {
             )
           }
         >
-          Open Team Builder
-        </Button>,
+          {t("pages.scopes.assets.open.team.builder", "Open Team Builder")}</Button>,
         <Button
           key="open-overview"
           onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
         >
-          Open Team Home
-        </Button>,
+          {t("pages.scopes.assets.open.team.home", "Open Team Home")}</Button>,
         <Button
           key="open-gagents"
           disabled={!activeDraft.scopeId.trim()}
@@ -747,14 +745,13 @@ const TeamAssetsPage: React.FC = () => {
             )
           }
         >
-          Open Member Runtime
-        </Button>,
+          {t("pages.scopes.assets.open.member.runtime", "Open Member Runtime")}</Button>,
       ]}
       onBack={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
       title={
         <AevatarTitleWithHelp
           help="This is the legacy deep-link asset workspace. Use it for source inspection and catalog detail, but go back to team home for the main team narrative."
-          title="Legacy Team Assets"
+          title={t("pages.scopes.assets.legacy.team.assets", "Legacy Team Assets")}
         />
       }
     >
@@ -768,7 +765,7 @@ const TeamAssetsPage: React.FC = () => {
       >
         <ScopeQueryCard
           draft={draft}
-          loadLabel="Load legacy assets"
+          loadLabel={t("pages.scopes.assets.load.legacy.assets", "Load legacy assets")}
           onChange={setDraft}
           onLoad={() => {
             const nextDraft = normalizeScopeDraft(draft);
@@ -808,20 +805,20 @@ const TeamAssetsPage: React.FC = () => {
         {!activeDraft.scopeId.trim() ? (
           <Alert
             showIcon
-            message="Select a team to inspect workflow and script assets in the legacy workspace."
+            message={t("pages.scopes.assets.select.team.to.inspect.workflow", "Select a team to inspect workflow and script assets in the legacy workspace.")}
             type="info"
           />
         ) : (
           <>
             <Alert
-              description="Team home is now the primary surface. Use this legacy asset workspace when you need source inspection, catalog state, or older deep links."
+              description={t("pages.scopes.assets.team.home.is.now.the", "Team home is now the primary surface. Use this legacy asset workspace when you need source inspection, catalog state, or older deep links.")}
               showIcon
               type="warning"
             />
             <ProCard
               bodyStyle={{ padding: 18 }}
               style={buildAevatarPanelStyle(surfaceToken)}
-              title="Legacy asset summary"
+              title={t("pages.scopes.assets.legacy.asset.summary", "Legacy asset summary")}
             >
               <div
                 style={{
@@ -832,20 +829,20 @@ const TeamAssetsPage: React.FC = () => {
               >
                 <SummaryMetric label="Team" value={activeDraft.scopeId} />
                 <SummaryMetric
-                  label="Default route"
+                  label={t("pages.scopes.assets.default.route", "Default route")}
                   value={currentDefaultRouteLabel}
                 />
                 <SummaryMetric
-                  label="Route kind"
+                  label={t("pages.scopes.assets.route.kind", "Route kind")}
                   value={currentDefaultRouteKind}
                 />
                 <SummaryMetric
-                  label="Live capabilities"
+                  label={t("pages.scopes.assets.live.capabilities", "Live capabilities")}
                   tone="success"
                   value={activeCapabilityCount}
                 />
                 <SummaryMetric
-                  label="Draft capabilities"
+                  label={t("pages.scopes.assets.draft.capabilities", "Draft capabilities")}
                   tone="warning"
                   value={draftCapabilityCount}
                 />
@@ -861,11 +858,14 @@ const TeamAssetsPage: React.FC = () => {
               >
                 <div style={summaryFieldGridStyle}>
                   <SummaryField
-                    label="Focus"
-                    value="Stage capability posture first. Open the inspector only when you need source, schema, or catalog detail."
+                    label={t("pages.scopes.assets.focus", "Focus")}
+                    value={t(
+                      "pages.scopes.assets.stage.capability.posture.first",
+                      "Stage capability posture first. Open the inspector only when you need source, schema, or catalog detail.",
+                    )}
                   />
                   <SummaryField
-                    label="Route detail"
+                    label={t("pages.scopes.assets.route.detail", "Route detail")}
                     value={
                       currentDefaultRouteContext ||
                       defaultRouteQuery.data?.serviceKey ||
@@ -873,7 +873,7 @@ const TeamAssetsPage: React.FC = () => {
                     }
                   />
                   <SummaryField
-                    label="Serving actor"
+                    label={t("pages.scopes.assets.serving.actor", "Serving actor")}
                     value={currentDefaultRouteActor || "n/a"}
                   />
                   <SummaryField
@@ -907,11 +907,9 @@ const TeamAssetsPage: React.FC = () => {
                     strong
                     style={{ color: surfaceToken.colorTextHeading, fontSize: 16 }}
                   >
-                    Capability inventory
-                  </Typography.Text>
+                    {t("pages.scopes.assets.capability.inventory", "Capability inventory")}</Typography.Text>
                   <Typography.Text style={{ color: surfaceToken.colorTextTertiary }}>
-                    Keep older asset deep links and detailed inspection here. Team home stays the primary narrative surface.
-                  </Typography.Text>
+                    {t("pages.scopes.assets.keep.older.asset.deep.links", "Keep older asset deep links and detailed inspection here. Team home stays the primary narrative surface.")}</Typography.Text>
                 </Space>
                 <StatusTag
                   domain="asset"
@@ -948,7 +946,7 @@ const TeamAssetsPage: React.FC = () => {
                           },
                         }}
                         locale={{
-                          emptyText: "No workflow assets were found for this team.",
+                          emptyText: t("pages.scopes.assets.no.workflow.assets.were.found", "No workflow assets were found for this team."),
                         }}
                         metas={workflowListMetas}
                         pagination={{ pageSize: 6, showSizeChanger: false }}
@@ -960,7 +958,9 @@ const TeamAssetsPage: React.FC = () => {
                       />
                     ),
                     key: "workflows",
-                    label: `Workflows (${workflowCount})`,
+                    label: t("pages.scopes.assets.workflows.count", "Workflows ({count})", {
+                      count: workflowCount,
+                    }),
                   },
                   {
                     children: (
@@ -977,7 +977,7 @@ const TeamAssetsPage: React.FC = () => {
                           },
                         }}
                         locale={{
-                          emptyText: "No script assets were found for this team.",
+                          emptyText: t("pages.scopes.assets.no.script.assets.were.found", "No script assets were found for this team."),
                         }}
                         metas={scriptListMetas}
                         pagination={{ pageSize: 6, showSizeChanger: false }}
@@ -989,7 +989,9 @@ const TeamAssetsPage: React.FC = () => {
                       />
                     ),
                     key: "scripts",
-                    label: `Scripts (${scriptCount})`,
+                    label: t("pages.scopes.assets.scripts.count", "Scripts ({count})", {
+                      count: scriptCount,
+                    }),
                   },
                 ]}
               />
@@ -1042,7 +1044,7 @@ const TeamAssetsPage: React.FC = () => {
                   </Space>
                   <div style={summaryFieldGridStyle}>
                     <SummaryField
-                      label="Display name"
+                      label={t("pages.scopes.assets.display.name", "Display name")}
                       value={workflowDetailQuery.data.workflow?.displayName || "n/a"}
                     />
                     <SummaryField
@@ -1050,7 +1052,7 @@ const TeamAssetsPage: React.FC = () => {
                       value={selectedWorkflow?.activeRevisionId || "n/a"}
                     />
                     <SummaryField
-                      label="Service key"
+                      label={t("pages.scopes.assets.service.key", "Service key")}
                       value={
                         <Typography.Text copyable>
                           {workflowDetailQuery.data.workflow?.serviceKey || "n/a"}
@@ -1058,7 +1060,7 @@ const TeamAssetsPage: React.FC = () => {
                       }
                     />
                     <SummaryField
-                      label="Definition actor"
+                      label={t("pages.scopes.assets.definition.actor", "Definition actor")}
                       value={
                         <Typography.Text copyable>
                           {workflowDetailQuery.data.source?.definitionActorId || "n/a"}
@@ -1070,7 +1072,7 @@ const TeamAssetsPage: React.FC = () => {
                 <ProCard
                   bodyStyle={{ padding: 16 }}
                   style={buildAevatarPanelStyle(surfaceToken)}
-                  title="Workflow YAML"
+                  title={t("pages.scopes.assets.workflow.yaml", "Workflow YAML")}
                 >
                   {renderMultilineText(workflowDetailQuery.data.source?.workflowYaml)}
                 </ProCard>
@@ -1085,13 +1087,12 @@ const TeamAssetsPage: React.FC = () => {
                     )
                   }
                 >
-                  Edit in Team Builder
-                </Button>
+                  {t("pages.scopes.assets.edit.in.team.builder.3", "Edit in Team Builder")}</Button>
               </>
             ) : (
               <Alert
                 showIcon
-                message="Select a workflow asset to inspect its source."
+                message={t("pages.scopes.assets.select.workflow.asset.to.inspect", "Select a workflow asset to inspect its source.")}
                 type="info"
               />
             )
@@ -1120,7 +1121,7 @@ const TeamAssetsPage: React.FC = () => {
                     value={scriptDetailQuery.data.script?.activeRevision || "n/a"}
                   />
                   <SummaryField
-                    label="Definition actor"
+                    label={t("pages.scopes.assets.definition.actor.2", "Definition actor")}
                     value={
                       <Typography.Text copyable>
                         {scriptDetailQuery.data.script?.definitionActorId || "n/a"}
@@ -1128,7 +1129,7 @@ const TeamAssetsPage: React.FC = () => {
                     }
                   />
                   <SummaryField
-                    label="Catalog actor"
+                    label={t("pages.scopes.assets.catalog.actor", "Catalog actor")}
                     value={
                       <Typography.Text copyable>
                         {scriptDetailQuery.data.script?.catalogActorId || "n/a"}
@@ -1140,20 +1141,19 @@ const TeamAssetsPage: React.FC = () => {
               <ProCard
                 bodyStyle={{ padding: 16 }}
                 style={buildAevatarPanelStyle(surfaceToken)}
-                title="Catalog state"
+                title={t("pages.scopes.assets.catalog.state", "Catalog state")}
               >
                 {scriptCatalogQuery.data ? (
                   <ScopeScriptCatalogSummary catalog={scriptCatalogQuery.data} />
                 ) : (
                   <Typography.Text type="secondary">
-                    Catalog snapshot unavailable.
-                  </Typography.Text>
+                    {t("pages.scopes.assets.catalog.snapshot.unavailable", "Catalog snapshot unavailable.")}</Typography.Text>
                 )}
               </ProCard>
               <ProCard
                 bodyStyle={{ padding: 16 }}
                 style={buildAevatarPanelStyle(surfaceToken)}
-                title="Source text"
+                title={t("pages.scopes.assets.source.text", "Source text")}
               >
                 {renderMultilineText(scriptDetailQuery.data.source?.sourceText)}
               </ProCard>
@@ -1168,13 +1168,12 @@ const TeamAssetsPage: React.FC = () => {
                   )
                 }
               >
-                Edit in Team Builder
-              </Button>
+                {t("pages.scopes.assets.edit.in.team.builder.4", "Edit in Team Builder")}</Button>
             </>
           ) : (
             <Alert
               showIcon
-              message="Select a script asset to inspect its source."
+              message={t("pages.scopes.assets.select.script.asset.to.inspect", "Select a script asset to inspect its source.")}
               type="info"
             />
           )}
@@ -1209,16 +1208,16 @@ const ScopeScriptCatalogSummary: React.FC<{ catalog: ScopeScriptCatalog }> = ({
   catalog,
 }) => (
   <div style={summaryFieldGridStyle}>
-    <SummaryField label="Active revision" value={catalog.activeRevision || "n/a"} />
+    <SummaryField label={t("pages.scopes.assets.active.revision", "Active revision")} value={catalog.activeRevision || "n/a"} />
     <SummaryField
-      label="Previous revision"
+      label={t("pages.scopes.assets.previous.revision", "Previous revision")}
       value={catalog.previousRevision || "n/a"}
     />
     <SummaryField
       label="History"
       value={catalog.revisionHistory.join(", ") || "n/a"}
     />
-    <SummaryField label="Last proposal" value={catalog.lastProposalId || "n/a"} />
+    <SummaryField label={t("pages.scopes.assets.last.proposal", "Last proposal")} value={catalog.lastProposalId || "n/a"} />
   </div>
 );
 

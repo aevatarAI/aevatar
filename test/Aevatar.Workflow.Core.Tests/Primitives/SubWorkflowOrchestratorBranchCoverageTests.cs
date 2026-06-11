@@ -178,4 +178,79 @@ public sealed class SubWorkflowOrchestratorBranchCoverageTests
         next.PendingChildRunIdsByParentRunId.Should().NotContainKey("parent-1");
         next.PendingChildRunIdsByParentRunId.Should().NotContainKey("parent-2");
     }
+
+    // Refactor (v1/issue1463-first):
+    //   Old: workflow run/session topology persistence 无 regression test,行为可能被改而无人察觉
+    //   New: 锁定 existing workflow topology persistence 行为不变
+    [Fact]
+    public void ApplySubWorkflowEvents_ShouldPersistExistingRunSessionTopologyInWorkflowRunState()
+    {
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+            WorkflowName = "parent-workflow"
+        };
+
+        state = SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted(
+            state,
+            new SubWorkflowBindingUpsertedEvent
+            {
+                WorkflowName = " child-workflow ",
+                ChildActorId = " child-actor-1 ",
+                Lifecycle = "scope",
+                DefinitionActorId = " definition-1 ",
+                DefinitionVersion = 4
+            });
+
+        state = SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered(
+            state,
+            new SubWorkflowInvocationRegisteredEvent
+            {
+                InvocationId = " invocation-1 ",
+                ParentRunId = " parent-run ",
+                ParentStepId = " step-call-child ",
+                WorkflowName = " child-workflow ",
+                ChildActorId = " child-actor-1 ",
+                ChildRunId = " child-run-1 ",
+                Lifecycle = "scope",
+                DefinitionActorId = " definition-1 ",
+                DefinitionVersion = 4,
+                HandoffPhase = (int)SubWorkflowInvocationHandoffPhase.Linked,
+                Input = "input-1",
+                DefinitionYaml = "name: child-workflow",
+                ScopeId = "scope-1",
+                InlineWorkflowYamls =
+                {
+                    ["grandchild"] = "name: grandchild"
+                }
+            });
+
+        state.SubWorkflowBindings.Should().ContainSingle();
+        state.SubWorkflowBindings[0].WorkflowName.Should().Be("child-workflow");
+        state.SubWorkflowBindings[0].ChildActorId.Should().Be("child-actor-1");
+        state.SubWorkflowBindings[0].Lifecycle.Should().Be("scope");
+        state.SubWorkflowBindings[0].DefinitionActorId.Should().Be("definition-1");
+        state.SubWorkflowBindings[0].DefinitionVersion.Should().Be(4);
+
+        state.PendingSubWorkflowInvocations.Should().ContainSingle();
+        var pending = state.PendingSubWorkflowInvocations[0];
+        pending.InvocationId.Should().Be("invocation-1");
+        pending.ParentRunId.Should().Be("parent-run");
+        pending.ParentStepId.Should().Be("step-call-child");
+        pending.WorkflowName.Should().Be("child-workflow");
+        pending.ChildActorId.Should().Be("child-actor-1");
+        pending.ChildRunId.Should().Be("child-run-1");
+        pending.Lifecycle.Should().Be("scope");
+        pending.DefinitionActorId.Should().Be("definition-1");
+        pending.DefinitionVersion.Should().Be(4);
+        pending.HandoffPhase.Should().Be(SubWorkflowInvocationHandoffPhase.Linked);
+        pending.Input.Should().Be("input-1");
+        pending.DefinitionYaml.Should().Be("name: child-workflow");
+        pending.ScopeId.Should().Be("scope-1");
+        pending.InlineWorkflowYamls.Should().Contain("grandchild", "name: grandchild");
+
+        state.PendingSubWorkflowInvocationIndexByChildRunId.Should().Contain("child-run-1", 0);
+        state.PendingChildRunIdsByParentRunId.Should().ContainKey("parent-run");
+        state.PendingChildRunIdsByParentRunId["parent-run"].ChildRunIds.Should().ContainSingle().Which.Should().Be("child-run-1");
+    }
 }

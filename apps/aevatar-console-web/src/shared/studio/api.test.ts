@@ -1,4 +1,4 @@
-import { studioApi } from './api';
+import { StudioApiError, studioApi } from './api';
 import { persistAuthSession } from '@/shared/auth/session';
 
 describe('studioApi host-session requests', () => {
@@ -153,7 +153,7 @@ describe('studioApi host-session requests', () => {
     );
   });
 
-  it('decodes NyxID model metadata from snake_case response fields', async () => {
+  it('decodes canonical LLM settings from the Studio host', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -169,39 +169,104 @@ describe('studioApi host-session requests', () => {
       ok: true,
       status: 200,
       json: async () => ({
-        providers: [
+        savedRoute: '',
+        savedRouteLabel: 'Company LLM Gateway',
+        effectiveRoute: '',
+        effectiveRouteLabel: 'Company LLM Gateway',
+        routeFallbackActive: false,
+        fallbackReason: null,
+        catalogStatus: 'ready',
+        defaultModel: 'gpt-5.4-mini',
+        capabilities: {
+          canEditRoute: true,
+          canEditModel: true,
+          canSave: true,
+          canRetryCatalog: false,
+        },
+        routeOptions: [
           {
-            provider_slug: 'openai',
-            provider_name: 'OpenAI',
+            routeValue: '',
+            label: 'Company LLM Gateway',
+            source: 'gateway_provider',
+            status: 'ready',
+            allowed: true,
+            ready: true,
+            serviceId: null,
+            serviceSlug: null,
+            description: null,
+          },
+          {
+            routeValue: '/api/v1/proxy/s/openai',
+            label: 'OpenAI',
             source: 'user_service',
             status: 'ready',
-            proxy_url: 'https://nyx.example/proxy/openai',
+            allowed: true,
+            ready: true,
+            serviceId: 'svc-openai',
+            serviceSlug: 'openai',
+            description: null,
           },
         ],
-        gateway_url: 'https://nyx.example/gateway',
-        models_by_provider: {
-          openai: ['gpt-5.4-mini'],
-        },
-        supported_models: ['gpt-5.4-mini'],
+        modelGroupsByRoute: [
+          {
+            routeValue: '',
+            groupId: 'openai',
+            label: 'OpenAI',
+            models: ['gpt-5.4-mini'],
+          },
+        ],
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(studioApi.getUserConfigModels()).resolves.toEqual({
-      providers: [
+    await expect(studioApi.getUserLlmSettings()).resolves.toEqual({
+      savedRoute: '',
+      savedRouteLabel: 'Company LLM Gateway',
+      effectiveRoute: '',
+      effectiveRouteLabel: 'Company LLM Gateway',
+      routeFallbackActive: false,
+      fallbackReason: null,
+      catalogStatus: 'ready',
+      defaultModel: 'gpt-5.4-mini',
+      capabilities: {
+        canEditRoute: true,
+        canEditModel: true,
+        canSave: true,
+        canRetryCatalog: false,
+      },
+      routeOptions: [
         {
-          providerSlug: 'openai',
-          providerName: 'OpenAI',
+          routeValue: '',
+          label: 'Company LLM Gateway',
+          source: 'gateway_provider',
+          status: 'ready',
+          allowed: true,
+          ready: true,
+          serviceId: null,
+          serviceSlug: null,
+          description: null,
+        },
+        {
+          routeValue: '/api/v1/proxy/s/openai',
+          label: 'OpenAI',
           source: 'user_service',
           status: 'ready',
-          proxyUrl: 'https://nyx.example/proxy/openai',
+          allowed: true,
+          ready: true,
+          serviceId: 'svc-openai',
+          serviceSlug: 'openai',
+          description: null,
         },
       ],
-      gatewayUrl: 'https://nyx.example/gateway',
-      modelsByProvider: {
-        openai: ['gpt-5.4-mini'],
-      },
-      supportedModels: ['gpt-5.4-mini'],
+      modelGroupsByRoute: [
+        {
+          routeValue: '',
+          groupId: 'openai',
+          label: 'OpenAI',
+          models: ['gpt-5.4-mini'],
+        },
+      ],
+      setupHint: undefined,
     });
   });
 
@@ -290,8 +355,12 @@ describe('studioApi host-session requests', () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(studioApi.getWorkflow('missing-workflow')).rejects.toThrow(
-      'Not Found',
+    await expect(studioApi.getWorkflow('missing-workflow')).rejects.toMatchObject({
+      message: 'Not Found',
+      status: 404,
+    });
+    await expect(studioApi.getWorkflow('missing-workflow')).rejects.toBeInstanceOf(
+      StudioApiError,
     );
   });
 
@@ -740,9 +809,9 @@ describe('studioApi host-session requests', () => {
     const result = await studioApi.bindScopeScript({
       scopeId: 'scope-1',
       displayName: 'script-1',
+      serviceId: 'script-1',
       scriptId: 'script-1',
       scriptRevision: 'rev-1',
-      revisionId: 'rev-1',
     });
 
     expect(result.implementationKind).toBe('script');
@@ -766,11 +835,11 @@ describe('studioApi host-session requests', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       implementationKind: 'script',
       displayName: 'script-1',
+      serviceId: 'script-1',
       script: {
         scriptId: 'script-1',
         scriptRevision: 'rev-1',
       },
-      revisionId: 'rev-1',
     });
   });
 
@@ -789,17 +858,12 @@ describe('studioApi host-session requests', () => {
 
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      status: 200,
+      status: 202,
       json: async () => ({
+        status: 'accepted',
+        bindingRunId: 'bind-1',
         scopeId: 'scope-1',
-        publishedServiceId: 'joker',
-        displayName: 'joker',
-        revisionId: 'rev-1',
-        implementationKind: 'workflow',
-        workflow: {
-          workflowName: 'joker',
-          definitionActorIdPrefix: 'scope-workflow:scope-1:joker',
-        },
+        memberId: 'joker',
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -812,12 +876,11 @@ describe('studioApi host-session requests', () => {
       revisionId: 'rev-1',
     });
 
-    expect(result.serviceId).toBe('joker');
-    expect(result.implementationKind).toBe('workflow');
-    expect(result.targetKind).toBe('workflow');
-    expect(result.workflow).toEqual({
-      workflowName: 'joker',
-      definitionActorIdPrefix: 'scope-workflow:scope-1:joker',
+    expect(result).toEqual({
+      status: 'accepted',
+      bindingRunId: 'bind-1',
+      scopeId: 'scope-1',
+      memberId: 'joker',
     });
 
     const [input, init] = fetchMock.mock.calls[0] as [
@@ -993,32 +1056,85 @@ describe('studioApi host-session requests', () => {
       ok: true,
       status: 200,
       json: async () => ({
-        available: true,
-        scopeId: 'scope-1',
-        publishedServiceId: 'joker',
-        displayName: 'joker',
-        publishedServiceKey: 'scope-1:default:joker',
-        defaultServingRevisionId: 'rev-2',
-        activeServingRevisionId: 'rev-2',
-        deploymentId: 'deploy-2',
-        deploymentStatus: 'Active',
-        primaryActorId: 'actor://scope/joker',
-        updatedAt: '2026-03-26T08:00:00Z',
-        revisions: [],
+        lastBinding: {
+          publishedServiceId: 'member-joker',
+          revisionId: 'rev-2',
+          implementationKind: 'workflow',
+          boundAt: '2026-03-26T08:00:00Z',
+        },
+        currentBindingRun: {
+          bindingRunId: 'bind-1',
+          status: 'platform_binding_pending',
+          scopeId: 'scope-1',
+          memberId: 'joker',
+          stateVersion: 7,
+          updatedAt: '2026-03-26T08:01:00Z',
+        },
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
     await expect(studioApi.getMemberBinding('scope-1', 'joker')).resolves.toEqual(
       expect.objectContaining({
-        serviceId: 'joker',
-        serviceKey: 'scope-1:default:joker',
-        displayName: 'joker',
+        lastBinding: expect.objectContaining({
+          publishedServiceId: 'member-joker',
+          revisionId: 'rev-2',
+        }),
+        currentBindingRun: expect.objectContaining({
+          bindingRunId: 'bind-1',
+          status: 'platform_binding_pending',
+          stateVersion: 7,
+        }),
       }),
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/scopes/scope-1/members/joker/binding',
+      expect.objectContaining({
+        credentials: 'same-origin',
+      }),
+    );
+  });
+
+  it('loads member binding run status with readmodel state version freshness', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        BindingRunId: 'bind-1',
+        Status: 'platform_binding_pending',
+        ScopeId: 'scope-1',
+        MemberId: 'joker',
+        StateVersion: 9,
+        UpdatedAt: '2026-03-26T08:01:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.getMemberBindingRun('scope-1', 'joker', 'bind-1'),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        bindingRunId: 'bind-1',
+        status: 'platform_binding_pending',
+        stateVersion: 9,
+      }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members/joker/binding-runs/bind-1',
       expect.objectContaining({
         credentials: 'same-origin',
       }),
@@ -1053,6 +1169,7 @@ describe('studioApi host-session requests', () => {
             lifecycleStage: 'bind_ready',
             publishedServiceId: 'member-joker',
             lastBoundRevisionId: 'rev-2',
+            teamId: 't-alpha',
             createdAt: '2026-04-27T08:00:00Z',
             updatedAt: '2026-04-27T08:05:00Z',
           },
@@ -1074,6 +1191,7 @@ describe('studioApi host-session requests', () => {
           lifecycleStage: 'bind_ready',
           publishedServiceId: 'member-joker',
           lastBoundRevisionId: 'rev-2',
+          teamId: 't-alpha',
           createdAt: '2026-04-27T08:00:00Z',
           updatedAt: '2026-04-27T08:05:00Z',
         },
@@ -1085,6 +1203,410 @@ describe('studioApi host-session requests', () => {
       '/api/scopes/scope-1/members',
       expect.objectContaining({
         credentials: 'same-origin',
+      }),
+    );
+  });
+
+  it('lists studio teams from the team authority endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-1',
+        teams: [
+          {
+            teamId: 't-alpha',
+            scopeId: 'scope-1',
+            displayName: 'Alpha Team',
+            description: 'Owns support workflows',
+            lifecycleStage: 'active',
+            memberCount: 2,
+            createdAt: '2026-05-01T08:00:00Z',
+            updatedAt: '2026-05-01T08:05:00Z',
+            entryMemberId: 'member-team-alpha',
+          },
+        ],
+        nextPageToken: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.listTeams('scope-1')).resolves.toEqual({
+      scopeId: 'scope-1',
+      teams: [
+        {
+          teamId: 't-alpha',
+          scopeId: 'scope-1',
+          displayName: 'Alpha Team',
+          description: 'Owns support workflows',
+          lifecycleStage: 'active',
+          memberCount: 2,
+          createdAt: '2026-05-01T08:00:00Z',
+          updatedAt: '2026-05-01T08:05:00Z',
+          entryMemberId: 'member-team-alpha',
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/teams',
+      expect.objectContaining({
+        credentials: 'same-origin',
+      }),
+    );
+  });
+
+  it('gets a studio team summary from the team authority endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        teamId: 't-alpha',
+        scopeId: 'scope-1',
+        displayName: 'Alpha Team',
+        description: 'Owns support workflows',
+        lifecycleStage: 'active',
+        memberCount: 2,
+        createdAt: '2026-05-01T08:00:00Z',
+        updatedAt: '2026-05-01T08:05:00Z',
+        entryMemberId: 'member-team-alpha',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getTeam('scope-1', 't-alpha')).resolves.toEqual({
+      teamId: 't-alpha',
+      scopeId: 'scope-1',
+      displayName: 'Alpha Team',
+      description: 'Owns support workflows',
+      lifecycleStage: 'active',
+      memberCount: 2,
+      createdAt: '2026-05-01T08:00:00Z',
+      updatedAt: '2026-05-01T08:05:00Z',
+      entryMemberId: 'member-team-alpha',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/teams/t-alpha',
+      expect.objectContaining({
+        credentials: 'same-origin',
+      }),
+    );
+  });
+
+  it('creates, updates, archives, and lists members for studio teams', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const teamResponse = {
+      teamId: 't-alpha',
+      scopeId: 'scope-1',
+      displayName: 'Alpha Team',
+      description: 'Owns support workflows',
+      lifecycleStage: 'active',
+      memberCount: 1,
+      createdAt: '2026-05-01T08:00:00Z',
+      updatedAt: '2026-05-01T08:05:00Z',
+      entryMemberId: 'joker',
+    };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => teamResponse,
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ...teamResponse,
+          displayName: 'Alpha Ops',
+          description: '',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ...teamResponse,
+          lifecycleStage: 'archived',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          scopeId: 'scope-1',
+          members: [
+            {
+              memberId: 'joker',
+              scopeId: 'scope-1',
+              displayName: 'joker',
+              description: 'Support workflow member',
+              implementationKind: 'workflow',
+              lifecycleStage: 'bind_ready',
+              publishedServiceId: 'member-joker',
+              lastBoundRevisionId: 'rev-2',
+              teamId: 't-alpha',
+              createdAt: '2026-04-27T08:00:00Z',
+              updatedAt: '2026-04-27T08:05:00Z',
+            },
+          ],
+          nextPageToken: null,
+        }),
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.createTeam({
+        scopeId: 'scope-1',
+        displayName: 'Alpha Team',
+        description: 'Owns support workflows',
+        teamId: 't-alpha',
+      }),
+    ).resolves.toEqual(teamResponse);
+    await expect(
+      studioApi.updateTeam({
+        scopeId: 'scope-1',
+        teamId: 't-alpha',
+        displayName: 'Alpha Ops',
+        description: null,
+      }),
+    ).resolves.toEqual({
+      ...teamResponse,
+      displayName: 'Alpha Ops',
+      description: '',
+    });
+    await expect(studioApi.archiveTeam('scope-1', 't-alpha')).resolves.toEqual({
+      ...teamResponse,
+      lifecycleStage: 'archived',
+    });
+    await expect(studioApi.listTeamMembers('scope-1', 't-alpha')).resolves.toEqual({
+      scopeId: 'scope-1',
+      members: [
+        {
+          memberId: 'joker',
+          scopeId: 'scope-1',
+          displayName: 'joker',
+          description: 'Support workflow member',
+          implementationKind: 'workflow',
+          lifecycleStage: 'bind_ready',
+          publishedServiceId: 'member-joker',
+          lastBoundRevisionId: 'rev-2',
+          teamId: 't-alpha',
+          createdAt: '2026-04-27T08:00:00Z',
+          updatedAt: '2026-04-27T08:05:00Z',
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/scopes/scope-1/teams',
+      expect.objectContaining({
+        body: JSON.stringify({
+          displayName: 'Alpha Team',
+          description: 'Owns support workflows',
+          teamId: 't-alpha',
+        }),
+        credentials: 'same-origin',
+        method: 'POST',
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/scopes/scope-1/teams/t-alpha',
+      expect.objectContaining({
+        body: JSON.stringify({
+          displayName: 'Alpha Ops',
+          description: null,
+        }),
+        method: 'PATCH',
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/scopes/scope-1/teams/t-alpha/archive',
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      '/api/scopes/scope-1/teams/t-alpha/members',
+      expect.objectContaining({
+        credentials: 'same-origin',
+      }),
+    );
+  });
+
+  it('sets and clears a studio team entry member', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const teamResponse = {
+      teamId: 't-alpha',
+      scopeId: 'scope-1',
+      displayName: 'Alpha Team',
+      description: 'Owns support workflows',
+      entryMemberId: 'joker',
+      lifecycleStage: 'active',
+      memberCount: 1,
+      createdAt: '2026-05-01T08:00:00Z',
+      updatedAt: '2026-05-01T08:05:00Z',
+    };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => teamResponse,
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ...teamResponse,
+          entryMemberId: null,
+        }),
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.setTeamEntryMember('scope-1', 't-alpha', 'joker'),
+    ).resolves.toEqual(teamResponse);
+    await expect(
+      studioApi.clearTeamEntryMember('scope-1', 't-alpha'),
+    ).resolves.toEqual({
+      ...teamResponse,
+      entryMemberId: null,
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/scopes/scope-1/teams/t-alpha/entry-member',
+      expect.objectContaining({
+        body: JSON.stringify({
+          memberId: 'joker',
+        }),
+        credentials: 'same-origin',
+        method: 'PUT',
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/scopes/scope-1/teams/t-alpha/entry-member',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'DELETE',
+      }),
+    );
+  });
+
+  it('accepts asynchronous studio team entry member updates through the team authority endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.setTeamEntryMember(
+        ' scope-1 ',
+        ' t-alpha ',
+        ' member-team-alpha ',
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      studioApi.clearTeamEntryMember(' scope-1 ', ' t-alpha '),
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/scopes/scope-1/teams/t-alpha/entry-member',
+      expect.objectContaining({
+        body: JSON.stringify({
+          memberId: 'member-team-alpha',
+        }),
+        credentials: 'same-origin',
+        method: 'PUT',
+      }),
+    );
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Content-Type')).toBe(
+      'application/json',
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/scopes/scope-1/teams/t-alpha/entry-member',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'DELETE',
       }),
     );
   });
@@ -1143,6 +1665,7 @@ describe('studioApi host-session requests', () => {
         lifecycleStage: 'bind_ready',
         publishedServiceId: 'member-joker',
         lastBoundRevisionId: 'rev-2',
+        teamId: null,
         createdAt: '2026-04-27T08:00:00Z',
         updatedAt: '2026-04-27T08:05:00Z',
       },
@@ -1216,6 +1739,7 @@ describe('studioApi host-session requests', () => {
       lifecycleStage: 'created',
       publishedServiceId: 'member-orders-draft',
       lastBoundRevisionId: null,
+      teamId: null,
       createdAt: '2026-04-27T08:10:00Z',
       updatedAt: '2026-04-27T08:10:00Z',
     });

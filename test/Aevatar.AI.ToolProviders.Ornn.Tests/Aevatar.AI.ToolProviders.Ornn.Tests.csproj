@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>Aevatar.AI.ToolProviders.Ornn.Tests</AssemblyName>
+    <RootNamespace>Aevatar.AI.ToolProviders.Ornn.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Ornn\Aevatar.AI.ToolProviders.Ornn.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
+    <!--
+      Explicit reference: tests instantiate NyxIdApiClient / NyxIdToolOptions directly
+      (not just through OrnnSkillClient), so depending on transitive flow-through from
+      Ornn -> NyxId is fragile — if Ornn ever drops its NyxId dependency the test build
+      breaks confusingly. PR #562 review on Ornn.Tests.csproj.
+    -->
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\TestAgentToolContexts.cs" Link="TestAgentToolContexts.cs" />
+  </ItemGroup>
+</Project>

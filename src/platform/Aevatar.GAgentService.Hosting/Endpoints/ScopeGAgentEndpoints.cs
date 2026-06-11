@@ -1,26 +1,15 @@
-using System.Reflection;
-using System.Text;
 using System.Text.Json;
-using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.GAgentService.Application.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Hosting;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
+using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-using Type = System.Type;
-// AI Abstractions types (published by RoleGAgent) — aliased to avoid conflict with AGUI types
-using AiTextStart = Aevatar.AI.Abstractions.TextMessageStartEvent;
-using AiTextContent = Aevatar.AI.Abstractions.TextMessageContentEvent;
-using AiTextReasoning = Aevatar.AI.Abstractions.TextMessageReasoningEvent;
-using AiTextEnd = Aevatar.AI.Abstractions.TextMessageEndEvent;
-using AiToolCall = Aevatar.AI.Abstractions.ToolCallEvent;
-using AiToolResult = Aevatar.AI.Abstractions.ToolResultEvent;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -43,222 +32,103 @@ public static class ScopeGAgentEndpoints
         return app;
     }
 
-    // ─── List GAgent Types (reflection) ───
-
-    private static IResult HandleListGAgentTypesAsync()
+    // Refactor (iter39/cluster-039-gagent-reflection-catalog):
+    //   Old pattern: ScopeGAgentEndpoints 通过 AppDomain reflection + AIGAgentBase + [EventHandler] + protobuf descriptors 发现 GAgent 类型,把进程内加载的 CLR class 当成业务事实源。
+    //   New principle: GAgent type 列表必须来自 registered service revision catalog readmodel,不是反射偶然加载的 CLR class。保留 endpoint 路由,换实现为读 readmodel。
+    private static async Task<IResult> HandleListGAgentTypesAsync(
+        [FromServices] IServiceCatalogQueryReader catalogReader,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        CancellationToken ct)
     {
-        var aiGAgentBaseType = FindOpenGenericBaseType("Aevatar.AI.Core.AIGAgentBase`1");
-        if (aiGAgentBaseType is null)
-        {
-            return Results.Ok(Array.Empty<object>());
-        }
+        var services = await catalogReader.QueryAllAsync(ct: ct);
+        var gAgentTypes = new Dictionary<string, GAgentTypeCatalogHttpResponse>(StringComparer.Ordinal);
 
-        var types = new List<object>();
-
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        foreach (var service in services)
         {
-            if (assembly.IsDynamic)
+            var identity = BuildServiceIdentity(service);
+            var revisions = await revisionCatalogReader.GetAsync(identity, ct);
+            if (revisions == null)
                 continue;
 
-            Type[] exportedTypes;
-            try
+            foreach (var revision in revisions.Revisions)
             {
-                exportedTypes = assembly.GetTypes();
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                exportedTypes = ex.Types.Where(t => t is not null).ToArray()!;
-            }
-            catch
-            {
-                continue;
-            }
+                var actorTypeName = revision.Implementation?.Static?.ActorTypeName?.Trim() ?? string.Empty;
+                if (actorTypeName.Length == 0)
+                    continue;
 
-            foreach (var type in exportedTypes)
-            {
-                try
+                var endpoints = revision.Endpoints.Select(MapGAgentEndpoint).ToList();
+                if (gAgentTypes.TryGetValue(actorTypeName, out var existing))
                 {
-                    if (!type.IsClass || type.IsAbstract)
-                        continue;
-
-                    if (!DerivesFromOpenGeneric(type, aiGAgentBaseType))
-                        continue;
-
-                    types.Add(new
-                    {
-                        typeName = type.Name,
-                        fullName = type.FullName ?? type.Name,
-                        assemblyName = assembly.GetName().Name ?? assembly.FullName ?? string.Empty,
-                        endpoints = DiscoverEndpoints(type),
-                    });
+                    MergeEndpoints(existing.Endpoints, endpoints);
+                    continue;
                 }
-                catch
-                {
-                    // Skip individual types that fail to inspect — don't let one broken
-                    // GAgent type prevent the rest from being listed.
-                }
+
+                gAgentTypes[actorTypeName] = new GAgentTypeCatalogHttpResponse(
+                    ResolveTypeDisplayName(actorTypeName),
+                    actorTypeName,
+                    ResolveAssemblyName(actorTypeName),
+                    endpoints);
             }
         }
 
-        return Results.Ok(types);
+        return Results.Ok(gAgentTypes.Values
+            .OrderBy(x => x.TypeName, StringComparer.Ordinal)
+            .ThenBy(x => x.FullName, StringComparer.Ordinal)
+            .ToList());
     }
 
-    /// <summary>
-    /// Discovers available endpoints from a GAgent type by reflecting over [EventHandler] methods.
-    /// Any AIGAgentBase subclass always has a "chat" endpoint (ChatRequestEvent).
-    /// Additional endpoints are discovered from [EventHandler] methods whose parameter type
-    /// is NOT a base framework event (TextMessageStart/End/Content, ToolCall, etc.).
-    /// </summary>
-    private static object[] DiscoverEndpoints(Type gAgentType)
-    {
-        // Well-known base event types that are internal framework plumbing,
-        // not user-facing endpoints.
-        var frameworkEventTypes = new HashSet<Type>
+    private static ServiceIdentity BuildServiceIdentity(ServiceCatalogSnapshot service) =>
+        new()
         {
-            typeof(ChatRequestEvent),
-            typeof(ChatResponseEvent),
-            typeof(AiTextStart),
-            typeof(AiTextContent),
-            typeof(AiTextReasoning),
-            typeof(AiTextEnd),
-            typeof(AiToolCall),
-            typeof(ToolResultEvent),
-            typeof(InitializeRoleAgentEvent),
-            typeof(RoleChatSessionStartedEvent),
-            typeof(RoleChatSessionCompletedEvent),
+            TenantId = service.TenantId,
+            AppId = service.AppId,
+            Namespace = service.Namespace,
+            ServiceId = service.ServiceId,
         };
 
-        var endpoints = new List<object>();
+    private static GAgentEndpointCatalogHttpResponse MapGAgentEndpoint(ServiceEndpointSnapshot endpoint) =>
+        new(
+            endpoint.EndpointId,
+            string.IsNullOrWhiteSpace(endpoint.DisplayName) ? endpoint.EndpointId : endpoint.DisplayName,
+            NormalizeEndpointKind(endpoint.Kind),
+            endpoint.RequestTypeUrl,
+            endpoint.ResponseTypeUrl,
+            endpoint.Description,
+            Auto: false);
 
-        // Chat endpoint is always present for AIGAgentBase subclasses.
-        endpoints.Add(new
+    private static void MergeEndpoints(
+        List<GAgentEndpointCatalogHttpResponse> target,
+        IReadOnlyList<GAgentEndpointCatalogHttpResponse> source)
+    {
+        foreach (var endpoint in source)
         {
-            endpointId = "chat",
-            displayName = "chat",
-            kind = "chat",
-            requestTypeUrl = GetProtoTypeUrl(ChatRequestEvent.Descriptor),
-            description = "Default chat endpoint.",
-            auto = true,
-        });
-
-        // Walk the type hierarchy and discover [EventHandler] methods.
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        for (var current = gAgentType; current != null && current != typeof(object); current = current.BaseType)
-        {
-            MethodInfo[] methods;
-            try
-            {
-                methods = current.GetMethods(
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-            }
-            catch
-            {
-                // Type hierarchy reflection failed — skip this level.
+            if (target.Any(x => string.Equals(x.EndpointId, endpoint.EndpointId, StringComparison.Ordinal)))
                 continue;
-            }
 
-            foreach (var method in methods)
-            {
-                try
-                {
-                    var ehAttr = method.GetCustomAttribute<EventHandlerAttribute>();
-                    if (ehAttr is null)
-                        continue;
-
-                    var parameters = method.GetParameters();
-                    if (parameters.Length != 1)
-                        continue;
-
-                    var paramType = parameters[0].ParameterType;
-                    if (!typeof(IMessage).IsAssignableFrom(paramType) || paramType.IsAbstract)
-                        continue;
-
-                    // Skip framework/internal event types — they're not user-facing endpoints.
-                    if (frameworkEventTypes.Contains(paramType))
-                        continue;
-
-                    var typeUrl = TryGetProtoTypeUrl(paramType);
-                    var customName = ehAttr.EndpointName;
-                    var endpointId = !string.IsNullOrWhiteSpace(customName)
-                        ? customName
-                        : ToCamelCase(StripEventSuffix(paramType.Name));
-
-                    if (!seen.Add(endpointId))
-                        continue;
-
-                    endpoints.Add(new
-                    {
-                        endpointId,
-                        displayName = endpointId,
-                        kind = "command",
-                        requestTypeUrl = typeUrl ?? paramType.FullName ?? paramType.Name,
-                        description = $"Handles {paramType.Name}",
-                        auto = true,
-                    });
-                }
-                catch
-                {
-                    // Skip individual methods that fail — don't let one broken
-                    // handler prevent other endpoints from being discovered.
-                }
-            }
+            target.Add(endpoint);
         }
-
-        return endpoints.ToArray();
     }
 
-    private static string GetProtoTypeUrl(Google.Protobuf.Reflection.MessageDescriptor descriptor) =>
-        $"type.googleapis.com/{descriptor.FullName}";
-
-    private static string? TryGetProtoTypeUrl(Type messageType)
+    private static string ResolveTypeDisplayName(string actorTypeName)
     {
-        // Try to get the Protobuf Descriptor property to build the proper TypeUrl.
-        var descriptorProp = messageType.GetProperty(
-            "Descriptor",
-            BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy);
-        if (descriptorProp?.GetValue(null) is Google.Protobuf.Reflection.MessageDescriptor desc)
-            return $"type.googleapis.com/{desc.FullName}";
-        return null;
+        var typeName = actorTypeName.Split(',', 2)[0].Trim();
+        var lastDot = typeName.LastIndexOf('.');
+        return lastDot < 0 ? typeName : typeName[(lastDot + 1)..];
     }
 
-    private static string StripEventSuffix(string name) =>
-        name.EndsWith("Event", StringComparison.Ordinal) ? name[..^5] : name;
-
-    private static string ToCamelCase(string name) =>
-        string.IsNullOrEmpty(name) ? name : char.ToLowerInvariant(name[0]) + name[1..];
-
-    private static Type? FindOpenGenericBaseType(string fullName)
+    private static string ResolveAssemblyName(string actorTypeName)
     {
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        var separator = actorTypeName.IndexOf(',');
+        return separator < 0 ? string.Empty : actorTypeName[(separator + 1)..].Trim();
+    }
+
+    private static string NormalizeEndpointKind(string kind) =>
+        kind switch
         {
-            if (assembly.IsDynamic) continue;
-            try
-            {
-                var type = assembly.GetType(fullName);
-                if (type is not null)
-                    return type;
-            }
-            catch
-            {
-                // ignored
-            }
-        }
-
-        return null;
-    }
-
-    private static bool DerivesFromOpenGeneric(Type type, Type openGenericBase)
-    {
-        var current = type.BaseType;
-        while (current is not null)
-        {
-            if (current.IsGenericType && current.GetGenericTypeDefinition() == openGenericBase)
-                return true;
-            current = current.BaseType;
-        }
-
-        return false;
-    }
+            nameof(ServiceEndpointKind.Chat) => "chat",
+            nameof(ServiceEndpointKind.Command) => "command",
+            _ => kind?.Trim().ToLowerInvariant() ?? string.Empty,
+        };
 
     // ─── Draft Run ───
 
@@ -266,14 +136,12 @@ public static class ScopeGAgentEndpoints
         HttpContext http,
         string scopeId,
         GAgentDraftRunHttpRequest request,
-        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
-        [FromServices] IGAgentDraftRunActorPreparationPort actorPreparationPort,
+        [FromServices] IGAgentDraftRunInteractionPort interactionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints");
         var session = new DraftRunSseSession(http.Response);
-        GAgentDraftRunPreparedActor? preparedActor = null;
 
         try
         {
@@ -283,32 +151,34 @@ public static class ScopeGAgentEndpoints
             if (!TryValidateDraftRunRequest(http.Response, request))
                 return;
 
-            preparedActor = await TryPrepareDraftRunActorAsync(
-                actorPreparationPort,
-                http.Response,
-                scopeId,
-                request,
-                ct);
-            if (preparedActor is null)
-                return;
-            var command = await BuildDraftRunCommandAsync(http, scopeId, request, preparedActor, ct);
-
+            var (defaultModel, preferredRoute) = await TryGetUserLlmDefaultsAsync(http, ct);
             var timeoutMs = request.TimeoutMs > 0 ? request.TimeoutMs : 120_000;
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(timeoutMs);
 
-            var interaction = await interactionService.ExecuteAsync(
-                command,
+            // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
+            // Host keeps HTTP validation and SSE error mapping only.
+            // Application owns draft-run actor lifecycle and rollback around command interaction.
+            // This covers pre-dispatch observation failures without changing CQRS Core cleanup semantics.
+            var interaction = await interactionPort.ExecuteAsync(
+                new GAgentDraftRunInteractionRequest(
+                    ScopeId: scopeId,
+                    ActorTypeName: request.ActorTypeName,
+                    Prompt: request.Prompt,
+                    PreferredActorId: request.PreferredActorId,
+                    SessionId: request.SessionId,
+                    NyxIdAccessToken: ExtractBearerToken(http),
+                    ModelOverride: defaultModel,
+                    PreferredLlmRoute: preferredRoute),
                 session.EmitAsync,
                 session.WriteAcceptedAsync,
                 timeoutCts.Token);
 
             if (!interaction.Succeeded)
             {
-                await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
                 await WriteDraftRunStartErrorAsync(
                     http.Response,
-                    preparedActor,
+                    interaction.Receipt,
                     request.ActorTypeName,
                     request.PreferredActorId,
                     interaction.Error,
@@ -321,8 +191,6 @@ public static class ScopeGAgentEndpoints
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            await RollbackPreparedActorIfPendingAsync(actorPreparationPort, preparedActor, session.ResponseStarted);
-
             try
             {
                 await session.WriteTimeoutAsync(CancellationToken.None);
@@ -335,12 +203,9 @@ public static class ScopeGAgentEndpoints
         catch (OperationCanceledException)
         {
             // Client disconnected.
-            await RollbackPreparedActorIfPendingAsync(actorPreparationPort, preparedActor, session.ResponseStarted);
         }
         catch (Exception ex)
         {
-            await RollbackPreparedActorIfPendingAsync(actorPreparationPort, preparedActor, session.ResponseStarted);
-
             logger.LogError(ex, "GAgent draft-run failed for type {TypeName}", request.ActorTypeName);
             var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
 
@@ -386,53 +251,6 @@ public static class ScopeGAgentEndpoints
         return true;
     }
 
-    private static async Task<GAgentDraftRunPreparedActor?> TryPrepareDraftRunActorAsync(
-        IGAgentDraftRunActorPreparationPort actorPreparationPort,
-        HttpResponse response,
-        string scopeId,
-        GAgentDraftRunHttpRequest request,
-        CancellationToken ct)
-    {
-        var preparation = await actorPreparationPort.PrepareAsync(
-            new GAgentDraftRunPreparationRequest(
-                scopeId,
-                request.ActorTypeName,
-                request.PreferredActorId),
-            ct);
-        if (!preparation.Succeeded)
-        {
-            await WriteDraftRunStartErrorAsync(
-                response,
-                preparedActor: null,
-                request.ActorTypeName,
-                request.PreferredActorId,
-                preparation.Error,
-                ct);
-            return null;
-        }
-
-        return preparation.PreparedActor;
-    }
-
-    private static async Task<GAgentDraftRunCommand> BuildDraftRunCommandAsync(
-        HttpContext http,
-        string scopeId,
-        GAgentDraftRunHttpRequest request,
-        GAgentDraftRunPreparedActor preparedActor,
-        CancellationToken ct)
-    {
-        var (defaultModel, preferredRoute) = await TryGetUserLlmDefaultsAsync(http, ct);
-        return new GAgentDraftRunCommand(
-            ScopeId: scopeId,
-            ActorTypeName: preparedActor.ActorTypeName,
-            Prompt: request.Prompt.Trim(),
-            PreferredActorId: preparedActor.ActorId,
-            SessionId: string.IsNullOrWhiteSpace(request.SessionId) ? null : request.SessionId.Trim(),
-            NyxIdAccessToken: ExtractBearerToken(http),
-            ModelOverride: defaultModel,
-            PreferredLlmRoute: preferredRoute);
-    }
-
     private static async Task<(string? DefaultModel, string? PreferredRoute)> TryGetUserLlmDefaultsAsync(
         HttpContext http,
         CancellationToken ct)
@@ -444,9 +262,16 @@ public static class ScopeGAgentEndpoints
         try
         {
             var userConfig = await userConfigStore.GetAsync(ct);
-            return (
-                string.IsNullOrWhiteSpace(userConfig.DefaultModel) ? null : userConfig.DefaultModel.Trim(),
-                string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute) ? null : userConfig.PreferredLlmRoute.Trim());
+            var route = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
+                ? null
+                : userConfig.PreferredLlmRoute.Trim();
+            var model = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
+                ? null
+                : userConfig.DefaultModel.Trim();
+
+            return await UserLlmRouteModelResolver
+                .ResolveAsync(http, model, route, ct)
+                .ConfigureAwait(false);
         }
         catch
         {
@@ -456,7 +281,7 @@ public static class ScopeGAgentEndpoints
 
     private static async Task WriteDraftRunStartErrorAsync(
         HttpResponse response,
-        GAgentDraftRunPreparedActor? preparedActor,
+        GAgentDraftRunAcceptedReceipt? receipt,
         string requestedActorTypeName,
         string? requestedActorId,
         GAgentDraftRunStartError error,
@@ -473,12 +298,12 @@ public static class ScopeGAgentEndpoints
                     ct);
                 break;
             case GAgentDraftRunStartError.ActorTypeMismatch:
-                var actorId = string.IsNullOrWhiteSpace(preparedActor?.ActorId)
+                var actorId = string.IsNullOrWhiteSpace(receipt?.ActorId)
                     ? requestedActorId?.Trim()
-                    : preparedActor.ActorId;
-                var actorTypeName = string.IsNullOrWhiteSpace(preparedActor?.ActorTypeName)
+                    : receipt.ActorId;
+                var actorTypeName = string.IsNullOrWhiteSpace(receipt?.ActorTypeName)
                     ? requestedActorTypeName
-                    : preparedActor.ActorTypeName;
+                    : receipt.ActorTypeName;
                 response.StatusCode = StatusCodes.Status409Conflict;
                 await WriteJsonErrorAsync(
                     response,
@@ -488,26 +313,15 @@ public static class ScopeGAgentEndpoints
                         : $"Actor '{actorId}' is not compatible with requested type '{actorTypeName}'.",
                     ct);
                 break;
+            case GAgentDraftRunStartError.ProjectionUnavailable:
+                response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await WriteJsonErrorAsync(
+                    response,
+                    "GAGENT_PROJECTION_UNAVAILABLE",
+                    "GAgent projection is unavailable.",
+                    ct);
+                break;
         }
-    }
-
-    private static async Task RollbackPreparedActorAsync(
-        IGAgentDraftRunActorPreparationPort actorPreparationPort,
-        GAgentDraftRunPreparedActor? preparedActor)
-    {
-        if (preparedActor?.RequiresRollbackOnFailure == true)
-            await actorPreparationPort.RollbackAsync(preparedActor, CancellationToken.None);
-    }
-
-    private static async Task RollbackPreparedActorIfPendingAsync(
-        IGAgentDraftRunActorPreparationPort actorPreparationPort,
-        GAgentDraftRunPreparedActor? preparedActor,
-        bool responseStarted)
-    {
-        if (responseStarted)
-            return;
-
-        await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
     }
 
     private static async Task WriteDraftRunExceptionJsonAsync(
@@ -526,21 +340,9 @@ public static class ScopeGAgentEndpoints
             ct);
     }
 
-    /// <summary>
-    /// Maps an EventEnvelope payload to an AGUIEvent wrapper.
-    /// RoleGAgent publishes AI Abstractions event types (aevatar.ai.*);
-    /// this maps them to the AGUI presentation types for SSE streaming.
-    /// </summary>
-    internal static AGUIEvent? TryMapEnvelopeToAguiEvent(EventEnvelope envelope)
-        => ScopeGAgentAguiEventMapper.TryMap(envelope);
-
-    /// <summary>
-    /// Decode ToolApprovalRequestEvent from raw Any bytes into a google.protobuf.Struct
-    /// so the AGUI SSE JsonFormatter can serialize it without needing the AI.Abstractions
-    /// type registered in its TypeRegistry.
-    /// </summary>
-    private static Google.Protobuf.WellKnownTypes.Struct BuildToolApprovalStruct(Any payload)
-        => ScopeGAgentAguiEventMapper.BuildToolApprovalStruct(payload);
+    // Refactor (iter5/cluster-010):
+    //   Old: Host exposed EventEnvelope -> AGUI mapper wrappers for endpoint-local tests.
+    //   New: AGUI mapping lives behind ScopeGAgentAguiEventMapper and projection session projectors.
 
     // ─── GAgent Registry ───
 
@@ -751,6 +553,21 @@ public static class ScopeGAgentEndpoints
     }
 
     // ─── Request models ───
+
+    public sealed record GAgentTypeCatalogHttpResponse(
+        string TypeName,
+        string FullName,
+        string AssemblyName,
+        List<GAgentEndpointCatalogHttpResponse> Endpoints);
+
+    public sealed record GAgentEndpointCatalogHttpResponse(
+        string EndpointId,
+        string DisplayName,
+        string Kind,
+        string RequestTypeUrl,
+        string ResponseTypeUrl,
+        string Description,
+        bool Auto);
 
     public sealed record GAgentDraftRunHttpRequest(
         string ActorTypeName,

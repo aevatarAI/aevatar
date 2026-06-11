@@ -37,19 +37,34 @@ import {
 } from '@/shared/models/runtime/gagents';
 import type { WorkflowPrimitiveDescriptor } from '@/shared/models/runtime/query';
 import {
+  addPackageFile,
+  createSingleSourcePackage,
   deserializePersistedSource,
+  getPackageEntries,
   getSelectedPackageEntry,
+  removePackageFile,
+  renamePackageFile,
   serializePersistedSource,
+  setEntrySourcePath,
   updatePackageFileContent,
+  updateEntryBehaviorTypeName,
 } from '@/shared/studio/scriptPackage';
 import {
   createStepInspectorDraft,
+  readStepParameterValue,
+  resolveStepParameterName,
+  normalizeStepParametersForType,
   parseInspectorParameters,
   type StudioStepInspectorDraft,
 } from '@/shared/studio/document';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import type {
+  DraftRunResult,
   ScopedScriptDetail,
+  ScopedScriptSummary,
+  ScopeScriptAcceptedSummary,
+  ScopeScriptUpsertAcceptedResponse,
+  ScriptPromotionDecision,
   ScriptValidationDiagnostic,
   ScriptValidationResult,
 } from '@/shared/studio/scriptsModels';
@@ -61,13 +76,23 @@ import {
   joinInteractiveClassNames,
 } from '@/shared/ui/interactionStandards';
 import ScriptCodeEditor, {
+  type ScriptEditorFocusTarget,
   type ScriptEditorMarker,
 } from '@/modules/studio/scripts/ScriptCodeEditor';
+import { t } from "@/shared/i18n/messages";
 
 const buildWorkbenchGridStyle: React.CSSProperties = {
   display: 'grid',
   gap: 16,
   gridTemplateColumns: 'minmax(0, 1fr) minmax(340px, 380px)',
+  minHeight: 0,
+  minWidth: 0,
+};
+
+const scriptLaunchpadGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 16,
+  gridTemplateColumns: 'minmax(0, 1fr)',
   minHeight: 0,
   minWidth: 0,
 };
@@ -89,6 +114,66 @@ const workflowWorkbenchLayoutStyle: React.CSSProperties = {
 };
 
 const workflowEditingSurfaceHeight = 'clamp(560px, calc(100vh - 320px), 760px)';
+const SCRIPT_SAVE_OBSERVATION_POLL_DELAYS_MS = [
+  1000,
+  2000,
+  3000,
+  5000,
+  5000,
+  5000,
+] as const;
+
+const SCRIPT_STARTER_SOURCE = `using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Behaviors;
+using Aevatar.Studio.Application.Scripts.Contracts;
+
+public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScriptReadModel>
+{
+    protected override void Configure(IScriptBehaviorBuilder<AppScriptReadModel, AppScriptReadModel> builder)
+    {
+        builder
+            .OnCommand<AppScriptCommand>(HandleAsync)
+            .OnEvent<AppScriptUpdated>(
+                apply: static (_, evt, _) => evt.Current?.Clone() ?? new AppScriptReadModel())
+            .ProjectState(static (state, _) => state?.Clone() ?? new AppScriptReadModel());
+    }
+
+    private static Task HandleAsync(
+        AppScriptCommand input,
+        ScriptCommandContext<AppScriptReadModel> context,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var commandId = context.CommandId ?? input?.CommandId ?? string.Empty;
+        var rawInput = input?.Input ?? string.Empty;
+        var normalized = rawInput.Trim();
+        var current = new AppScriptReadModel
+        {
+            Input = rawInput,
+            Output = normalized.ToUpperInvariant(),
+            Status = normalized.Length == 0 ? "empty" : "ok",
+            LastCommandId = commandId,
+        };
+
+        current.Notes.Add(normalized.Length == 0 ? "no-input" : "trimmed");
+        current.Notes.Add("uppercased");
+
+        context.Emit(new AppScriptUpdated
+        {
+            Current = current,
+        });
+
+        return Task.CompletedTask;
+    }
+}`;
+
+function createScriptStarterPackage() {
+  return createSingleSourcePackage(SCRIPT_STARTER_SOURCE);
+}
 
 const workflowWorkspaceRowStyle: React.CSSProperties = {
   alignItems: 'stretch',
@@ -112,7 +197,7 @@ const sectionEyebrowStyle: React.CSSProperties = {
   color: '#8b7b63',
   fontSize: 11,
   fontWeight: 700,
-  letterSpacing: '0.08em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
 };
 
@@ -170,9 +255,31 @@ const workflowToolbarActionsStyle: React.CSSProperties = {
 const workflowViewSwitchStyle: React.CSSProperties = {
   background: '#f8f3e8',
   border: '1px solid #eadfcd',
-  borderRadius: 999,
+  borderRadius: 8,
   display: 'inline-flex',
-  padding: 4,
+  gap: 2,
+  padding: 3,
+};
+
+const workflowViewSwitchButtonStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 0,
+  borderRadius: 6,
+  color: '#2b3038',
+  cursor: 'pointer',
+  fontSize: 13,
+  fontWeight: 650,
+  lineHeight: '20px',
+  minHeight: 30,
+  minWidth: 76,
+  padding: '5px 14px',
+};
+
+const workflowViewSwitchButtonActiveStyle: React.CSSProperties = {
+  ...workflowViewSwitchButtonStyle,
+  background: '#1677ff',
+  boxShadow: '0 1px 3px rgba(22, 119, 255, 0.22)',
+  color: '#ffffff',
 };
 
 const workflowCanvasSurfaceStyle: React.CSSProperties = {
@@ -269,7 +376,7 @@ const workflowFieldLabelStyle: React.CSSProperties = {
   color: '#8b7b63',
   fontSize: 11,
   fontWeight: 700,
-  letterSpacing: '0.08em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
 };
 
@@ -410,6 +517,13 @@ const IDLE_DRAFT_RUN_STATE: DraftRunState = {
   status: 'idle',
 };
 
+const GAGENT_DRAFT_RUN_TIMEOUT_MS = 30_000;
+const GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS = GAGENT_DRAFT_RUN_TIMEOUT_MS + 5_000;
+
+function createGAgentDraftRunTimeoutError(): Error {
+  return new Error('GAgent draft run timed out before the backend returned any event.');
+}
+
 function getRunDebugLines(state: DraftRunState): string[] {
   return [
     state.runId.trim() ? `runId: ${state.runId.trim()}` : '',
@@ -433,18 +547,34 @@ function renderRunOutput(state: DraftRunState): string {
   }
 
   if (state.status === 'running') {
-    return 'Waiting for assistant output...';
+    return t("pages.studio.studiobuildpanels.waiting.for.assistant.output", "Waiting for assistant output...");
   }
 
   if (state.status === 'success' && getRunDebugLines(state).length > 0) {
-    return 'Run completed, but no assistant output was returned.';
+    return t("pages.studio.studiobuildpanels.run.completed.but.no", "Run completed, but no assistant output was returned.");
   }
 
-  return 'Run the current draft to inspect the assistant output here.';
+  return t("pages.studio.studiobuildpanels.run.the.current.draft", "Run the current draft to inspect the assistant output here.");
 }
 
 function renderRunSummary(state: DraftRunState): string {
   return getRunDebugLines(state).join('\n');
+}
+
+function getGAgentDraftRunRecoveryText(state: DraftRunState): string {
+  if (state.status === 'running') {
+    return t("pages.studio.studiobuildpanels.draft.run.waiting.backend.events", "Draft run is still waiting for backend events. Keep the Build definition visible while this request completes.");
+  }
+
+  if (state.status === 'error') {
+    return t("pages.studio.studiobuildpanels.build.dry.run.failed.recovery", "This only failed the Build dry-run. Adjust the prompt or tools and retry, or continue to Bind when the member definition is ready to publish.");
+  }
+
+  if (state.status === 'success') {
+    return t("pages.studio.studiobuildpanels.draft.run.finished.continue.bind", "Draft run finished. Continue to Bind when you are ready to publish the callable member contract.");
+  }
+
+  return '';
 }
 
 function extractRunFinishedOutput(result: unknown): string {
@@ -457,6 +587,7 @@ function extractRunFinishedOutput(result: unknown): string {
   }
 
   const record = result as Record<string, unknown>;
+  // Refactor (iter98/cluster-790): Old: UI relied on generic/fallback result shapes after backend missed-live synthesis. New: typed GAgentDraftRunResultPayload exposes result.output.
   const candidate = record.output ?? record.Output ?? record.message ?? record.text;
   return typeof candidate === 'string' ? candidate : '';
 }
@@ -469,6 +600,109 @@ function tryParseStepParameters(
   } catch {
     return null;
   }
+}
+
+function normalizePrimitiveParameterDescriptor(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): WorkflowPrimitiveDescriptor['parameters'][number] {
+  const resolvedName = resolveStepParameterName(stepType, parameter.name);
+  if (resolvedName === parameter.name) {
+    return parameter;
+  }
+
+  return {
+    ...parameter,
+    name: resolvedName,
+  };
+}
+
+function isLLMPromptInstructionParameter(
+  stepType: string,
+  parameterName: string,
+): boolean {
+  return (
+    stepType.trim().toLowerCase() === 'llm_call' &&
+    resolveStepParameterName(stepType, parameterName) === 'prompt_prefix'
+  );
+}
+
+function getParameterDisplayLabel(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): string {
+  return isLLMPromptInstructionParameter(stepType, parameter.name)
+    ? t("pages.studio.studiobuildpanels.prompt.instruction", "Prompt instruction")
+    : parameter.name;
+}
+
+function getParameterDisplayDescription(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): string {
+  if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
+    return t("pages.studio.studiobuildpanels.prompt.instruction.description", "Instruction added before each workflow run input reaches the LLM.");
+  }
+
+  return parameter.description || t("pages.studio.studiobuildpanels.type.parameter", "Type: {type}", { type: parameter.type });
+}
+
+function getParameterPlaceholder(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): string {
+  if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
+    return t("pages.studio.studiobuildpanels.prompt.instruction.placeholder", "e.g. Translate the user input to Japanese");
+  }
+
+  return parameter.default || parameter.type || t("pages.studio.studiobuildpanels.value.placeholder", "Value");
+}
+
+function shouldUseParameterDefault(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): boolean {
+  return !isLLMPromptInstructionParameter(stepType, parameter.name);
+}
+
+function normalizeParameterEditorSourceValue(
+  stepType: string,
+  parameterName: string,
+  value: unknown,
+): unknown {
+  if (
+    isLLMPromptInstructionParameter(stepType, parameterName) &&
+    value !== null &&
+    typeof value === 'object'
+  ) {
+    return '';
+  }
+
+  return value;
+}
+
+function normalizePrimitiveParameterDescriptors(
+  stepType: string,
+  parameters: readonly WorkflowPrimitiveDescriptor['parameters'][number][],
+): WorkflowPrimitiveDescriptor['parameters'][number][] {
+  const nextParameters: WorkflowPrimitiveDescriptor['parameters'][number][] = [];
+  const seenParameterNames = new Set<string>();
+
+  for (const parameter of parameters) {
+    const normalizedParameter = normalizePrimitiveParameterDescriptor(
+      stepType,
+      parameter,
+    );
+    const normalizedName = normalizedParameter.name.trim().toLowerCase();
+    if (!normalizedName || seenParameterNames.has(normalizedName)) {
+      continue;
+    }
+
+    seenParameterNames.add(normalizedName);
+    nextParameters.push(normalizedParameter);
+  }
+
+  return nextParameters;
 }
 
 function formatParameterEditorValue(value: unknown): string {
@@ -544,19 +778,44 @@ function updateStepDraftParameterValue(
   parameterType: string,
   rawValue: string,
 ): StudioStepInspectorDraft {
-  const nextParameters = tryParseStepParameters(draft.parametersText) ?? {};
+  const resolvedParameterName = resolveStepParameterName(draft.type, parameterName);
+  const nextParameters = normalizeStepParametersForType(
+    draft.type,
+    tryParseStepParameters(draft.parametersText) ?? {},
+  );
   const trimmed = rawValue.trim();
 
   if (!trimmed) {
-    delete nextParameters[parameterName];
+    delete nextParameters[resolvedParameterName];
   } else {
-    nextParameters[parameterName] = coerceParameterEditorValue(rawValue, parameterType);
+    nextParameters[resolvedParameterName] = coerceParameterEditorValue(
+      rawValue,
+      parameterType,
+    );
   }
 
   return {
     ...draft,
     parametersText: JSON.stringify(nextParameters, null, 2),
   };
+}
+
+function areStepInspectorDraftsEqual(
+  left: StudioStepInspectorDraft | null,
+  right: StudioStepInspectorDraft | null,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    left.id === right.id &&
+    left.type === right.type &&
+    left.targetRole === right.targetRole &&
+    left.next === right.next &&
+    left.parametersText === right.parametersText &&
+    left.branchesText === right.branchesText
+  );
 }
 
 async function consumeAguiDraftRun(
@@ -683,6 +942,37 @@ function mapScriptMarkers(
     }));
 }
 
+function formatScriptDiagnosticLocation(diagnostic: ScriptValidationDiagnostic): string {
+  const filePath = diagnostic.filePath || 'source';
+  if (!diagnostic.startLine || !diagnostic.startColumn) {
+    return filePath;
+  }
+
+  return `${filePath}:${diagnostic.startLine}:${diagnostic.startColumn}`;
+}
+
+function buildScriptDiagnosticFocusTarget(
+  diagnostic: ScriptValidationDiagnostic,
+  token: string,
+): ScriptEditorFocusTarget {
+  const startLineNumber = Math.max(diagnostic.startLine || 1, 1);
+  const startColumn = Math.max(diagnostic.startColumn || 1, 1);
+  return {
+    filePath: diagnostic.filePath || 'Behavior.cs',
+    startLineNumber,
+    startColumn,
+    endLineNumber: Math.max(
+      diagnostic.endLine || diagnostic.startLine || 1,
+      startLineNumber,
+    ),
+    endColumn: Math.max(
+      diagnostic.endColumn || (diagnostic.startColumn || 1) + 1,
+      startColumn + 1,
+    ),
+    token,
+  };
+}
+
 function ScriptLeaveDialog(props: {
   readonly open: boolean;
   readonly onStay: () => void;
@@ -695,23 +985,19 @@ function ScriptLeaveDialog(props: {
   return (
     <div style={modalCardStyle}>
       <Typography.Text strong style={{ fontSize: 16 }}>
-        Leave Script Build?
-      </Typography.Text>
+        {t("pages.studio.studiobuildpanels.leave.script.build.2", "Leave Script Build?")}</Typography.Text>
       <Typography.Text type="secondary">
-        当前脚本草稿还没有保存。离开 Build 会丢掉这次 source editor 里的未保存修改。
-      </Typography.Text>
+        {t("pages.studio.studiobuildpanels.build.source.editor", "The current script draft is not saved. Leaving Build will discard unsaved changes in the source editor.")}</Typography.Text>
       <Space>
         <Button className={AEVATAR_INTERACTIVE_BUTTON_CLASS} onClick={props.onStay}>
-          继续编辑
-        </Button>
+          {t("pages.studio.studiobuildpanels.copy", "Keep editing")}</Button>
         <Button
           className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           danger
           type="primary"
           onClick={props.onLeave}
         >
-          离开页面
-        </Button>
+          {t("pages.studio.studiobuildpanels.copy.2", "Leave page")}</Button>
       </Space>
     </div>
   );
@@ -720,7 +1006,12 @@ function ScriptLeaveDialog(props: {
 export type StudioWorkflowBuildPanelProps = {
   readonly draftYaml: string;
   readonly onSetDraftYaml: (value: string) => void;
-  readonly onSaveDraft: () => void;
+  readonly onSaveDraft: (
+    draft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ) => void;
   readonly savePending: boolean;
   readonly canSaveWorkflow: boolean;
   readonly saveNotice?: { readonly type: 'success' | 'error'; readonly message: string } | null;
@@ -736,7 +1027,12 @@ export type StudioWorkflowBuildPanelProps = {
   readonly workflowName: string;
   readonly runPrompt: string;
   readonly onRunPromptChange: (value: string) => void;
-  readonly buildWorkflowYamls: () => Promise<string[]>;
+  readonly buildWorkflowYamls: (
+    draft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ) => Promise<string[]>;
   readonly runMetadata?: Record<string, string>;
   readonly dryRunRouteLabel?: string;
   readonly dryRunModelLabel?: string;
@@ -818,14 +1114,12 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             current: StudioStepInspectorDraft | null,
           ) => StudioStepInspectorDraft | null),
     ) => {
-      setStepDraft((current) => {
-        const nextDraft =
-          typeof updater === 'function'
-            ? updater(current)
-            : updater;
-        stepDraftRef.current = nextDraft;
-        return nextDraft;
-      });
+      const nextDraft =
+        typeof updater === 'function'
+          ? updater(stepDraftRef.current)
+          : updater;
+      stepDraftRef.current = nextDraft;
+      setStepDraft(nextDraft);
     },
     [],
   );
@@ -915,6 +1209,14 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       }) ?? null,
     [runtimePrimitives, selectedStep?.type, stepDraft?.type],
   );
+  const selectedPrimitiveParameters = React.useMemo(
+    () =>
+      normalizePrimitiveParameterDescriptors(
+        stepDraft?.type || selectedStep?.type || '',
+        selectedPrimitiveDescriptor?.parameters ?? [],
+      ),
+    [selectedPrimitiveDescriptor, selectedStep?.type, stepDraft?.type],
+  );
   const parsedStepParameters = React.useMemo(
     () =>
       stepDraft
@@ -956,8 +1258,10 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       return;
     }
 
+    const currentStepDraft = stepDraftRef.current;
+
     if (!scopeId) {
-      const visibleMessage = 'Resolve the current scope before running the workflow draft.';
+      const visibleMessage = 'Resolve the current workspace before running the workflow draft.';
       setWorkflowRunError(visibleMessage);
       void message.error(visibleMessage);
       return;
@@ -993,7 +1297,16 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         {
           metadata: runMetadata,
           prompt: runPrompt,
-          workflowYamls: await buildWorkflowYamls(),
+          workflowYamls: await buildWorkflowYamls(
+            currentStepDraft &&
+              selectedStepDraftSeed &&
+              !areStepInspectorDraftsEqual(currentStepDraft, selectedStepDraftSeed)
+              ? {
+                  stepId: selectedStepId,
+                  draft: currentStepDraft,
+                }
+              : null,
+          ),
         },
         controller.signal,
       );
@@ -1016,7 +1329,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       const disconnectedProvider = rawMessage.match(/Provider '([^']+)' not connected/i);
       const visibleMessage =
         disconnectedProvider
-          ? `Dry-run 还不能运行，因为 ${disconnectedProvider[1]} provider 还没有连好。先连接可用 provider，再回来运行当前 workflow draft。`
+          ? t("pages.studio.studiobuildpanels.dry.run.provider.provider", "Dry-run cannot run because the {value1} provider is not connected yet. Connect an available provider, then run the current workflow draft again.", { value1: disconnectedProvider[1] })
           : rawMessage;
       setWorkflowRunError(
         visibleMessage,
@@ -1039,6 +1352,8 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     runMetadata,
     runPrompt,
     scopeId,
+    selectedStepDraftSeed,
+    selectedStepId,
   ]);
 
   const handleInsertStep = React.useCallback(async (stepType: string) => {
@@ -1082,6 +1397,20 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       setStepMutationPending('');
     }
   }, [onApplyStepDraft]);
+
+  const handleSaveDraft = React.useCallback(() => {
+    const currentStepDraft = stepDraftRef.current;
+    onSaveDraft(
+      currentStepDraft &&
+        selectedStepDraftSeed &&
+        !areStepInspectorDraftsEqual(currentStepDraft, selectedStepDraftSeed)
+        ? {
+            stepId: selectedStepId,
+            draft: currentStepDraft,
+          }
+        : null,
+    );
+  }, [onSaveDraft, selectedStepDraftSeed, selectedStepId]);
 
   const handleRemoveStep = React.useCallback(async () => {
     if (stepMutationPendingRef.current) {
@@ -1172,9 +1501,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       <div data-testid="workflow-stage-actions" style={workflowStageActionsStyle}>
         <div style={workflowStageActionsRowStyle}>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
-            <div style={sectionEyebrowStyle}>Build actions</div>
+            <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.build.actions.2", "Build actions")}</div>
             <Tag color={canSaveWorkflow ? 'gold' : 'default'}>
-              {canSaveWorkflow ? 'draft ready' : 'saved'}
+              {canSaveWorkflow ? t("pages.studio.studiobuildpanels.draft.ready.2", "draft ready") : t("pages.studio.studiobuildpanels.saved", "saved")}
             </Tag>
           </div>
           <Space wrap size={[8, 8]}>
@@ -1182,17 +1511,15 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               disabled={!canSaveWorkflow}
               loading={savePending}
-              onClick={onSaveDraft}
+              onClick={handleSaveDraft}
             >
-              Save draft
-            </Button>
+              {t("pages.studio.studiobuildpanels.save.draft.2", "Save draft")}</Button>
             <Button
               className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="primary"
               onClick={onContinueToBind}
             >
-              Continue to Bind
-            </Button>
+              {t("pages.studio.studiobuildpanels.continue.to.bind.4", "Continue to Bind")}</Button>
           </Space>
         </div>
         {saveNotice ? (
@@ -1211,32 +1538,38 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         >
           <div style={workflowToolbarStyle}>
             <Space wrap size={[8, 8]}>
-              <div style={sectionEyebrowStyle}>DAG Canvas</div>
-              <Tag color="processing">canvas · live</Tag>
+              <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.dag.canvas.2", "DAG Canvas")}</div>
+              <Tag color="processing">{t("pages.studio.studiobuildpanels.canvas.live.2", "canvas · live")}</Tag>
               <Typography.Text type="secondary">
-                {workflowName || 'Untitled workflow'}
+                {workflowName || t("pages.studio.studiobuildpanels.untitled.workflow.2", "Untitled workflow")}
               </Typography.Text>
             </Space>
             <div style={workflowToolbarActionsStyle}>
-              <div style={workflowViewSwitchStyle}>
-                <Button
-                  className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+              <div aria-label={t("pages.studio.studiobuildpanels.workflow.view.2", "Workflow view")} style={workflowViewSwitchStyle}>
+                <button
                   aria-pressed={viewMode === 'canvas'}
-                  onClick={() => setViewMode('canvas')}
-                  size="small"
-                  type={viewMode === 'canvas' ? 'primary' : 'text'}
-                >
-                  Canvas
-                </Button>
-                <Button
                   className={AEVATAR_INTERACTIVE_CHIP_CLASS}
-                  aria-pressed={viewMode === 'yaml'}
-                  onClick={() => setViewMode('yaml')}
-                  size="small"
-                  type={viewMode === 'yaml' ? 'primary' : 'text'}
+                  onClick={() => setViewMode('canvas')}
+                  style={
+                    viewMode === 'canvas'
+                      ? workflowViewSwitchButtonActiveStyle
+                      : workflowViewSwitchButtonStyle
+                  }
+                  type="button"
                 >
-                  YAML
-                </Button>
+                  {t("pages.studio.studiobuildpanels.canvas.2", "Canvas")}</button>
+                <button
+                  aria-pressed={viewMode === 'yaml'}
+                  className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+                  onClick={() => setViewMode('yaml')}
+                  style={
+                    viewMode === 'yaml'
+                      ? workflowViewSwitchButtonActiveStyle
+                      : workflowViewSwitchButtonStyle
+                  }
+                  type="button"
+                >
+                  {t("pages.studio.studiobuildpanels.yaml.3", "YAML")}</button>
               </div>
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1244,24 +1577,21 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 loading={stepMutationPending === 'add'}
                 onClick={() => setStepTypePickerOpen((current) => !current)}
               >
-                Add step
-              </Button>
+                {t("pages.studio.studiobuildpanels.add.step.2", "Add step")}</Button>
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 disabled={viewMode !== 'canvas' || Boolean(stepMutationPending)}
                 onClick={onAutoLayout}
               >
-                Auto-layout
-              </Button>
+                {t("pages.studio.studiobuildpanels.auto.layout.2", "Auto-layout")}</Button>
             </div>
           </div>
           <div style={workflowCanvasBodyStyle}>
             {stepTypePickerOpen ? (
               <div data-testid="workflow-step-type-picker" style={workflowTypePickerStyle}>
-                <div style={workflowSectionHeadingStyle}>Choose step type</div>
+                <div style={workflowSectionHeadingStyle}>{t("pages.studio.studiobuildpanels.choose.step.type.2", "Choose step type")}</div>
                 <div style={workflowInlineMetaStyle}>
-                  先决定要插入哪种 step，再把它接到当前选中的节点后面。
-                </div>
+                  {t("pages.studio.studiobuildpanels.step", "Choose which step type to insert, then connect it after the currently selected node.")}</div>
                 <div
                   data-testid="workflow-step-type-picker-grid"
                   style={workflowTypePickerGridStyle}
@@ -1317,11 +1647,11 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     justifyContent: 'space-between',
                   }}
                 >
-                  <div style={sectionEyebrowStyle}>Workflow YAML</div>
-                  <Tag color="blue">raw draft</Tag>
+                  <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.workflow.yaml.2", "Workflow YAML")}</div>
+                  <Tag color="blue">{t("pages.studio.studiobuildpanels.raw.draft.2", "raw draft")}</Tag>
                 </div>
                 <Input.TextArea
-                  aria-label="定义 YAML"
+                  aria-label={t("pages.studio.studiobuildpanels.yaml.2", "Define YAML")}
                   autoSize={{ minRows: 18, maxRows: 28 }}
                   value={draftYaml}
                   onChange={(event) => onSetDraftYaml(event.target.value)}
@@ -1344,7 +1674,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             }}
           >
             <div style={{ display: 'grid', gap: 4 }}>
-              <div style={sectionEyebrowStyle}>Step Detail</div>
+              <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.step.detail.2", "Step Detail")}</div>
               {selectedStep ? <Typography.Text strong>{selectedStep.id}</Typography.Text> : null}
             </div>
             {selectedStep ? <Tag>{selectedStep.type}</Tag> : null}
@@ -1355,13 +1685,12 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               <>
                 <div style={workflowDetailsGridStyle}>
                 <div style={workflowFieldStyle}>
-                  <div style={workflowSectionHeadingStyle}>Basics</div>
+                  <div style={workflowSectionHeadingStyle}>{t("pages.studio.studiobuildpanels.basics.2", "Basics")}</div>
                   <label htmlFor="workflow-step-id" style={workflowFieldLabelStyle}>
-                    Step ID
-                  </label>
+                    {t("pages.studio.studiobuildpanels.step.id.3", "Step ID")}</label>
                   <Input
                     id="workflow-step-id"
-                    aria-label="Step ID"
+                    aria-label={t("pages.studio.studiobuildpanels.step.id.4", "Step ID")}
                     value={stepDraft.id}
                     onChange={(event) =>
                       updateStepDraft((current) =>
@@ -1375,10 +1704,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     }
                   />
                   <label htmlFor="workflow-step-type" style={workflowFieldLabelStyle}>
-                    Step type
-                  </label>
+                    {t("pages.studio.studiobuildpanels.step.type.3", "Step type")}</label>
                   <Select
-                    aria-label="Step type"
+                    aria-label={t("pages.studio.studiobuildpanels.step.type.4", "Step type")}
                     id="workflow-step-type"
                     options={availableStepTypes.map((stepType) => ({
                       label: stepType,
@@ -1398,19 +1726,18 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   />
                 </div>
                 <div style={workflowFieldStyle}>
-                  <div style={workflowSectionHeadingStyle}>Routing</div>
+                  <div style={workflowSectionHeadingStyle}>{t("pages.studio.studiobuildpanels.routing.2", "Routing")}</div>
                   <label htmlFor="workflow-step-role" style={workflowFieldLabelStyle}>
-                    Target role
-                  </label>
+                    {t("pages.studio.studiobuildpanels.target.role.3", "Target role")}</label>
                   <Select
                     allowClear
-                    aria-label="Target role"
+                    aria-label={t("pages.studio.studiobuildpanels.target.role.4", "Target role")}
                     id="workflow-step-role"
                     options={workflowRoles.map((role) => ({
-                      label: `${role.name} (${role.id})`,
+                      label: t("pages.studio.studiobuildpanels.copy.4", "{value1} ({value2})", { value1: role.name, value2: role.id }),
                       value: role.id,
                     }))}
-                    placeholder={workflowRoleIds[0] || 'Select role'}
+                    placeholder={workflowRoleIds[0] || t("pages.studio.studiobuildpanels.select.role", "Select role")}
                     value={stepDraft.targetRole || undefined}
                     onChange={(value) =>
                       updateStepDraft((current) =>
@@ -1424,17 +1751,16 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     }
                   />
                   <label htmlFor="workflow-step-next" style={workflowFieldLabelStyle}>
-                    Next step
-                  </label>
+                    {t("pages.studio.studiobuildpanels.next.step.3", "Next step")}</label>
                   <Select
                     allowClear
-                    aria-label="Next step"
+                    aria-label={t("pages.studio.studiobuildpanels.next.step.4", "Next step")}
                     id="workflow-step-next"
                     options={availableNextStepIds.map((stepId) => ({
                       label: stepId,
                       value: stepId,
                     }))}
-                    placeholder="No next step"
+                    placeholder={t("pages.studio.studiobuildpanels.no.next.step.2", "No next step")}
                     value={stepDraft.next || undefined}
                     onChange={(value) =>
                       updateStepDraft((current) =>
@@ -1449,13 +1775,37 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   />
                 </div>
                 <div style={{ ...workflowFieldStyle, gridColumn: '1 / -1' }}>
-                  <div style={workflowSectionHeadingStyle}>Parameters</div>
-                  {selectedPrimitiveDescriptor?.parameters.length ? (
+                  <div style={workflowSectionHeadingStyle}>{t("pages.studio.studiobuildpanels.parameters.2", "Parameters")}</div>
+                  {selectedPrimitiveParameters.length ? (
                     <div style={{ display: 'grid', gap: 10 }}>
-                      {selectedPrimitiveDescriptor.parameters.map((parameter) => {
+                      {selectedPrimitiveParameters.map((parameter) => {
+                        const parameterDisplayLabel = getParameterDisplayLabel(
+                          stepDraft.type,
+                          parameter,
+                        );
+                        const parameterAriaLabel = `Parameter ${parameterDisplayLabel}`;
+                        const parameterPlaceholder = getParameterPlaceholder(
+                          stepDraft.type,
+                          parameter,
+                        );
+                        const parameterDescription = getParameterDisplayDescription(
+                          stepDraft.type,
+                          parameter,
+                        );
+                        const parameterValue = normalizeParameterEditorSourceValue(
+                          stepDraft.type,
+                          parameter.name,
+                          readStepParameterValue(
+                            parsedStepParameters,
+                            stepDraft.type,
+                            parameter.name,
+                          ),
+                        );
                         const currentValue = formatParameterEditorValue(
-                          parsedStepParameters?.[parameter.name] ??
-                            parameter.default,
+                          parameterValue ??
+                            (shouldUseParameterDefault(stepDraft.type, parameter)
+                              ? parameter.default
+                              : ''),
                         );
 
                         return (
@@ -1467,19 +1817,19 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               htmlFor={`workflow-step-parameter-${parameter.name}`}
                               style={workflowFieldLabelStyle}
                             >
-                              {parameter.name}
+                              {parameterDisplayLabel}
                               {parameter.required ? ' *' : ''}
                             </label>
                             {parameter.enumValues.length > 0 ? (
                               <Select
                                 allowClear={!parameter.required}
-                                aria-label={`Parameter ${parameter.name}`}
+                                aria-label={parameterAriaLabel}
                                 id={`workflow-step-parameter-${parameter.name}`}
                                 options={parameter.enumValues.map((value) => ({
                                   label: value,
                                   value,
                                 }))}
-                                placeholder={parameter.default || 'Select value'}
+                                placeholder={parameterPlaceholder}
                                 value={currentValue || undefined}
                                 onChange={(value) =>
                                   updateStepDraft((current) =>
@@ -1496,9 +1846,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               />
                             ) : (
                               <Input
-                                aria-label={`Parameter ${parameter.name}`}
+                                aria-label={parameterAriaLabel}
                                 id={`workflow-step-parameter-${parameter.name}`}
-                                placeholder={parameter.default || parameter.type || 'Value'}
+                                placeholder={parameterPlaceholder}
                                 value={currentValue}
                                 onChange={(event) =>
                                   updateStepDraft((current) =>
@@ -1515,7 +1865,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               />
                             )}
                             <div style={workflowInlineMetaStyle}>
-                              {parameter.description || `Type: ${parameter.type}`}
+                              {parameterDescription}
                             </div>
                           </div>
                         );
@@ -1523,20 +1873,17 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     </div>
                   ) : (
                     <div style={workflowInlineMetaStyle}>
-                      当前 step type 没有声明可引导参数，直接使用下面的 raw JSON 编辑。
-                    </div>
+                      {t("pages.studio.studiobuildpanels.step.type.raw.json", "The current step type has no guided parameters declared. Edit the raw JSON below directly.")}</div>
                   )}
                   <details style={workflowAdvancedSectionStyle}>
                     <summary style={{ ...workflowSectionHeadingStyle, cursor: 'pointer' }}>
-                      Raw parameters JSON
-                    </summary>
+                      {t("pages.studio.studiobuildpanels.raw.parameters.json.2", "Raw parameters JSON")}</summary>
                     <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
                       <label htmlFor="workflow-step-parameters" style={workflowFieldLabelStyle}>
-                        Parameters JSON
-                      </label>
+                        {t("pages.studio.studiobuildpanels.parameters.json.2", "Parameters JSON")}</label>
                       <Input.TextArea
                         id="workflow-step-parameters"
-                        aria-label="Step parameters"
+                        aria-label={t("pages.studio.studiobuildpanels.step.parameters.2", "Step parameters")}
                         autoSize={{ minRows: 8, maxRows: 14 }}
                         value={stepDraft.parametersText}
                         onChange={(event) =>
@@ -1556,15 +1903,13 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 <div style={{ ...workflowFieldStyle, gridColumn: '1 / -1' }}>
                   <details style={workflowAdvancedSectionStyle}>
                     <summary style={{ ...workflowSectionHeadingStyle, cursor: 'pointer' }}>
-                      Advanced routing JSON
-                    </summary>
+                      {t("pages.studio.studiobuildpanels.advanced.routing.json.2", "Advanced routing JSON")}</summary>
                     <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
                       <label htmlFor="workflow-step-branches" style={workflowFieldLabelStyle}>
-                        Branches JSON
-                      </label>
+                        {t("pages.studio.studiobuildpanels.branches.json.2", "Branches JSON")}</label>
                       <Input.TextArea
                         id="workflow-step-branches"
-                        aria-label="Step branches"
+                        aria-label={t("pages.studio.studiobuildpanels.step.branches.2", "Step branches")}
                         autoSize={{ minRows: 5, maxRows: 10 }}
                         value={stepDraft.branchesText}
                         onChange={(event) =>
@@ -1590,8 +1935,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   loading={stepMutationPending === 'remove'}
                   onClick={() => void handleRemoveStep()}
                 >
-                  Delete step
-                </Button>
+                  {t("pages.studio.studiobuildpanels.delete.step.2", "Delete step")}</Button>
                 <Button
                   className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   disabled={!selectedStepId || !stepDraft || Boolean(stepMutationPending)}
@@ -1599,12 +1943,11 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   type="primary"
                   onClick={() => void handleApplyStepChanges()}
                 >
-                  Apply changes
-                </Button>
+                  {t("pages.studio.studiobuildpanels.apply.changes.2", "Apply changes")}</Button>
               </div>
             </>
           ) : (
-            <Empty description="Select a step from the DAG canvas first." />
+            <Empty description={t("pages.studio.studiobuildpanels.select.step.from.the.dag.2", "Select a step from the DAG canvas first.")} />
           )}
           </div>
         </section>
@@ -1613,19 +1956,18 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       <section data-testid="workflow-dry-run-panel" style={workflowDryRunSectionStyle}>
         <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
           <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>Dry-run</div>
-            <Typography.Text strong>Workflow draft run</Typography.Text>
+            <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.dry.run.4", "Dry-run")}</div>
+            <Typography.Text strong>{t("pages.studio.studiobuildpanels.workflow.draft.run.2", "Workflow draft run")}</Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
-            seeded fixture
-          </span>
+            {t("pages.studio.studiobuildpanels.draft.input", "Draft input")}</span>
         </div>
         <div style={{ display: 'grid', gap: 8 }}>
           <div style={workflowInlineMetaStyle}>
-            Route: {dryRunRouteLabel || 'Config default'}
+            {t("pages.studio.studiobuildpanels.route.label", "Route: ")}{dryRunRouteLabel || t("pages.studio.studiobuildpanels.config.default.2", "Config default")}
           </div>
           <div style={workflowInlineMetaStyle}>
-            Model: {dryRunModelLabel || 'Use configured default'}
+            {t("pages.studio.studiobuildpanels.model.label", "Model: ")}{dryRunModelLabel || t("pages.studio.studiobuildpanels.use.configured.default.2", "Use configured default")}
           </div>
         </div>
         {dryRunBlockedReason ? (
@@ -1638,8 +1980,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   type="link"
                   onClick={onOpenRunSetup}
                 >
-                  Connect provider
-                </Button>
+                  {t("pages.studio.studiobuildpanels.connect.provider.2", "Connect provider")}</Button>
               ) : undefined
             }
             message={dryRunBlockedReason}
@@ -1648,9 +1989,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           />
         ) : null}
         <Input.TextArea
-          aria-label="Workflow dry run input"
+          aria-label={t("pages.studio.studiobuildpanels.workflow.dry.run.input.2", "Workflow dry run input")}
           autoSize={{ minRows: 4, maxRows: 6 }}
-          placeholder="Describe the input you want this workflow member to handle."
+          placeholder={t("pages.studio.studiobuildpanels.describe.the.input.you.want.2", "Describe the input you want this workflow member to handle.")}
           value={runPrompt}
           onChange={(event) => onRunPromptChange(event.target.value)}
         />
@@ -1663,8 +2004,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             disabled={Boolean(dryRunBlockedReason?.trim()) || runState.status === 'running'}
             onClick={() => void handleRun()}
           >
-            Run
-          </Button>
+            {t("pages.studio.studiobuildpanels.run.4", "Run")}</Button>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             disabled={runState.status === 'running'}
@@ -1682,19 +2022,18 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               )
             }
           >
-            Load fixture
-          </Button>
+            {t("pages.studio.studiobuildpanels.load.sample.input", "Load sample input")}</Button>
         </Space>
         {workflowRunError ? (
           <Alert message={workflowRunError} showIcon type="error" />
         ) : null}
         <div>
-          <div style={sectionEyebrowStyle}>Output</div>
+          <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.output.4", "Output")}</div>
           <pre style={workflowDryRunOutputStyle}>{renderRunOutput(runState)}</pre>
         </div>
         {renderRunSummary(runState) ? (
           <details style={dryRunDebugDetailsStyle}>
-            <summary style={dryRunDebugSummaryStyle}>Debug details</summary>
+            <summary style={dryRunDebugSummaryStyle}>{t("pages.studio.studiobuildpanels.debug.details.3", "Debug details")}</summary>
             <pre style={{ ...dryRunSummaryStyle, marginTop: 10 }}>{renderRunSummary(runState)}</pre>
           </details>
         ) : null}
@@ -1713,19 +2052,105 @@ export type StudioScriptBuildPanelProps = {
   };
   readonly selectedScriptId: string;
   readonly onSelectScriptId: (scriptId: string) => void;
+  readonly onCreateScriptDraft?: () => void;
   readonly onRefreshScripts?: () => Promise<unknown> | unknown;
   readonly onContinueToBind: () => void;
   readonly onRegisterLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
+  readonly onScriptBuildStateChange?: (state: StudioScriptBuildState | null) => void;
+  readonly pendingScriptDraft?: StudioPendingScriptDraft | null;
+  readonly onPendingScriptDraftChange?: (draft: StudioPendingScriptDraft | null) => void;
+  readonly onScriptDraftSaved?: (scriptId: string) => void;
 };
+
+export type StudioScriptBuildState = {
+  readonly scriptId: string;
+  readonly displayName: string;
+  readonly scriptRevision: string;
+  readonly revisionId?: string;
+  readonly sourceHash?: string;
+  readonly definitionActorId?: string;
+  readonly dirty: boolean;
+  readonly validationStatus: 'unknown' | 'valid' | 'invalid';
+  readonly saveStatus: 'idle' | 'accepted' | 'applied' | 'failed';
+};
+
+export type StudioPendingScriptDraft = {
+  readonly scriptId: string;
+  readonly displayName: string;
+  readonly sourceText?: string;
+};
+
+function buildPendingScriptDetail(
+  draft: StudioPendingScriptDraft | null | undefined,
+  scopeId?: string,
+): ScopedScriptDetail | null {
+  if (!draft?.scriptId) {
+    return null;
+  }
+
+  return {
+    available: true,
+    scopeId: scopeId || '',
+    script: {
+      scopeId: scopeId || '',
+      scriptId: draft.scriptId,
+      catalogActorId: '',
+      definitionActorId: '',
+      activeRevision: '',
+      activeSourceHash: '',
+      updatedAt: '',
+    },
+    source: {
+      sourceText: draft.sourceText || '',
+      definitionActorId: '',
+      revision: '',
+      sourceHash: '',
+    },
+  };
+}
+
+function buildAppliedScriptDetail(
+  scopeId: string,
+  acceptedScript: ScopeScriptAcceptedSummary,
+  sourceText: string,
+  currentScript?: ScopedScriptSummary | null,
+): ScopedScriptDetail {
+  const summary: ScopedScriptSummary = currentScript || {
+    scopeId,
+    scriptId: acceptedScript.scriptId,
+    catalogActorId: acceptedScript.catalogActorId || '',
+    definitionActorId: acceptedScript.definitionActorId,
+    activeRevision: acceptedScript.revisionId,
+    activeSourceHash: acceptedScript.sourceHash,
+    updatedAt: acceptedScript.acceptedAt,
+  };
+
+  return {
+    available: true,
+    scopeId,
+    script: summary,
+    source: {
+      sourceText,
+      definitionActorId: summary.definitionActorId || acceptedScript.definitionActorId,
+      revision: summary.activeRevision || acceptedScript.revisionId,
+      sourceHash: summary.activeSourceHash || acceptedScript.sourceHash,
+    },
+  };
+}
 
 export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   scopeId,
   scriptsQuery,
   selectedScriptId,
   onSelectScriptId,
+  onCreateScriptDraft,
   onRefreshScripts,
   onContinueToBind,
   onRegisterLeaveGuard,
+  onScriptBuildStateChange,
+  pendingScriptDraft,
+  onPendingScriptDraftChange,
+  onScriptDraftSaved,
 }) => {
   const [scriptPackage, setScriptPackage] = React.useState(() =>
     deserializePersistedSource(''),
@@ -1737,6 +2162,21 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   const [validationError, setValidationError] = React.useState('');
   const [savePending, setSavePending] = React.useState(false);
   const [saveNotice, setSaveNotice] = React.useState('');
+  const [saveObservationStatus, setSaveObservationStatus] = React.useState<
+    'idle' | 'accepted' | 'applied' | 'pending' | 'rejected' | 'failed'
+  >('idle');
+  const [saveStatus, setSaveStatus] =
+    React.useState<StudioScriptBuildState['saveStatus']>('idle');
+  const [observedAppliedScript, setObservedAppliedScript] =
+    React.useState<ScopedScriptDetail | null>(null);
+  const [focusedDiagnostic, setFocusedDiagnostic] =
+    React.useState<ScriptEditorFocusTarget | null>(null);
+  const [promotionReason, setPromotionReason] = React.useState('');
+  const [promotionPending, setPromotionPending] = React.useState(false);
+  const [promotionNotice, setPromotionNotice] = React.useState('');
+  const [promotionHistory, setPromotionHistory] = React.useState<
+    ScriptPromotionDecision[]
+  >([]);
   const [runPending, setRunPending] = React.useState(false);
   const [runInput, setRunInput] = React.useState(
     JSON.stringify(
@@ -1752,8 +2192,12 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   const [runOutput, setRunOutput] = React.useState(
     'Run the current script draft to inspect the draft-run result here.',
   );
+  const [lastRunResult, setLastRunResult] = React.useState<DraftRunResult | null>(null);
   const [leaveDialogOpen, setLeaveDialogOpen] = React.useState(false);
   const leaveResolverRef = React.useRef<((value: boolean) => void) | null>(null);
+  const saveObservationTimerRef = React.useRef<number | null>(null);
+  const saveObservationTokenRef = React.useRef(0);
+  const activeScriptIdRef = React.useRef('');
   const availableScripts = React.useMemo(
     () =>
       (scriptsQuery.data ?? []).filter(
@@ -1761,10 +2205,36 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       ),
     [scriptsQuery.data],
   );
+  const pendingScriptDetail = React.useMemo(
+    () =>
+      pendingScriptDraft?.scriptId === selectedScriptId
+        ? buildPendingScriptDetail(pendingScriptDraft, scopeId)
+        : null,
+    [pendingScriptDraft, scopeId, selectedScriptId],
+  );
+  const selectedCatalogScript = React.useMemo(
+    () => availableScripts.find((detail) => detail.script?.scriptId === selectedScriptId) || null,
+    [availableScripts, selectedScriptId],
+  );
+  const selectedObservedAppliedScript = React.useMemo(
+    () =>
+      !selectedCatalogScript &&
+      observedAppliedScript?.script?.scriptId === selectedScriptId
+        ? observedAppliedScript
+        : null,
+    [observedAppliedScript, selectedCatalogScript, selectedScriptId],
+  );
   const activeScript =
-    availableScripts.find((detail) => detail.script?.scriptId === selectedScriptId) ||
+    selectedCatalogScript ||
+    selectedObservedAppliedScript ||
+    pendingScriptDetail ||
     availableScripts[0] ||
     null;
+  activeScriptIdRef.current = activeScript?.script?.scriptId || '';
+  const activeScriptIsDraft = Boolean(pendingScriptDetail && activeScript === pendingScriptDetail);
+  const activeScriptIsObserved = Boolean(
+    selectedObservedAppliedScript && activeScript === selectedObservedAppliedScript,
+  );
   const persistedSource = React.useMemo(
     () => activeScript?.source?.sourceText || '',
     [activeScript?.source?.sourceText],
@@ -1773,7 +2243,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     () =>
       activeScript?.source?.revision ||
       activeScript?.script?.activeRevision ||
-      'draft-1',
+      '',
     [activeScript?.script?.activeRevision, activeScript?.source?.revision],
   );
   const selectedPackageEntry = React.useMemo(
@@ -1783,6 +2253,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   const editorMarkers = React.useMemo(
     () => mapScriptMarkers(validationResult?.diagnostics, selectedPackageEntry?.path || ''),
     [selectedPackageEntry?.path, validationResult?.diagnostics],
+  );
+  const packageEntries = React.useMemo(
+    () => getPackageEntries(scriptPackage),
+    [scriptPackage],
   );
   const isDirty = React.useMemo(
     () => serializePersistedSource(scriptPackage) !== persistedSource,
@@ -1794,7 +2268,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       return;
     }
 
-    const nextPackage = deserializePersistedSource(activeScript.source?.sourceText || '');
+    const nextPackage = activeScriptIsDraft && !activeScript.source?.sourceText
+      ? createScriptStarterPackage()
+      : deserializePersistedSource(activeScript.source?.sourceText || '');
     const nextEntry =
       getSelectedPackageEntry(nextPackage, nextPackage.entrySourcePath) ||
       getSelectedPackageEntry(nextPackage, '') ||
@@ -1803,16 +2279,50 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     setSelectedFilePath(nextEntry?.path || nextPackage.entrySourcePath || 'Behavior.cs');
     setValidationResult(null);
     setValidationError('');
-    setSaveNotice('');
-  }, [activeScript?.script?.scriptId, activeScript?.source?.sourceText]);
+    setFocusedDiagnostic(null);
+    if (activeScriptIsObserved) {
+      setSaveObservationStatus('applied');
+      setSaveStatus('applied');
+    } else {
+      setSaveNotice('');
+      setSaveObservationStatus('idle');
+      setSaveStatus('idle');
+    }
+    setLastRunResult(null);
+  }, [
+    activeScript?.script?.scriptId,
+    activeScript?.source?.sourceText,
+    activeScriptIsDraft,
+    activeScriptIsObserved,
+  ]);
 
   React.useEffect(() => {
-    if (selectedScriptId || !availableScripts[0]?.script?.scriptId) {
+    if (selectedScriptId || pendingScriptDraft?.scriptId || !availableScripts[0]?.script?.scriptId) {
       return;
     }
 
     onSelectScriptId(availableScripts[0].script!.scriptId);
-  }, [availableScripts, onSelectScriptId, selectedScriptId]);
+  }, [availableScripts, onSelectScriptId, pendingScriptDraft?.scriptId, selectedScriptId]);
+
+  const cancelSaveObservationPoll = React.useCallback(() => {
+    saveObservationTokenRef.current += 1;
+    if (saveObservationTimerRef.current) {
+      window.clearTimeout(saveObservationTimerRef.current);
+      saveObservationTimerRef.current = null;
+    }
+  }, []);
+
+  React.useEffect(
+    () => () => {
+      cancelSaveObservationPoll();
+      onScriptBuildStateChange?.(null);
+    },
+    [cancelSaveObservationPoll, onScriptBuildStateChange],
+  );
+
+  React.useEffect(() => {
+    cancelSaveObservationPoll();
+  }, [activeScript?.script?.scriptId, cancelSaveObservationPoll]);
 
   React.useEffect(() => {
     onRegisterLeaveGuard?.(
@@ -1833,11 +2343,160 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     };
   }, [isDirty, onRegisterLeaveGuard]);
 
+  const validationStatus: StudioScriptBuildState['validationStatus'] =
+    validationResult
+      ? validationResult.success
+        ? 'valid'
+        : 'invalid'
+      : validationError
+        ? 'invalid'
+        : 'unknown';
+  const effectiveSaveStatus: StudioScriptBuildState['saveStatus'] =
+    isDirty
+      ? saveStatus === 'failed'
+        ? 'failed'
+        : 'idle'
+      : saveStatus === 'accepted' || saveStatus === 'failed'
+        ? saveStatus
+        : activeScript?.script?.activeRevision
+          ? 'applied'
+          : saveStatus;
+  const scriptReadyToBind = Boolean(
+    activeScript?.script?.scriptId &&
+      !isDirty &&
+      effectiveSaveStatus === 'applied',
+  );
+  const hasActiveScript = Boolean(activeScript?.script?.scriptId);
+  const lifecycleStatus = !activeScript?.script?.scriptId
+    ? 'No script'
+    : isDirty && effectiveSaveStatus !== 'failed'
+        ? 'Unsaved edits'
+        : saveObservationStatus === 'accepted' || effectiveSaveStatus === 'accepted'
+          ? 'Save accepted'
+          : saveObservationStatus === 'pending'
+            ? 'Waiting for catalog'
+            : effectiveSaveStatus === 'failed'
+              ? 'Save needs attention'
+              : activeScriptIsDraft
+                ? 'Draft'
+                : scriptReadyToBind
+                  ? 'Catalog applied'
+                  : 'Catalog script';
+  const lifecycleStatusColor =
+    lifecycleStatus === 'Catalog applied'
+      ? 'green'
+      : lifecycleStatus === 'Save needs attention'
+        ? 'red'
+        : lifecycleStatus === 'Waiting for catalog' || lifecycleStatus === 'Save accepted'
+          ? 'gold'
+          : activeScriptIsDraft
+            ? 'blue'
+            : 'default';
+  const bindReadinessLabel =
+    !activeScript?.script?.scriptId
+      ? 'Create or select a script'
+      : validationStatus === 'invalid'
+        ? 'Fix validation errors'
+        : isDirty && validationStatus !== 'valid'
+          ? 'Validate current source'
+          : isDirty
+            ? 'Save script'
+        : effectiveSaveStatus === 'accepted'
+          ? 'Waiting for catalog'
+          : scriptReadyToBind
+            ? 'Ready to bind'
+            : 'Save script';
+  const saveObservationInFlight =
+    saveObservationStatus === 'accepted' || saveObservationStatus === 'pending';
+  const saveNoticeType =
+    saveObservationStatus === 'applied'
+      ? 'success'
+      : saveObservationStatus === 'accepted'
+        ? 'info'
+        : saveObservationStatus === 'failed'
+          ? 'error'
+          : 'warning';
+  const saveDisabled = Boolean(
+    !activeScript?.script?.scriptId ||
+      validationPending ||
+      saveObservationInFlight ||
+      validationStatus === 'invalid' ||
+      (isDirty && validationStatus !== 'valid'),
+  );
+
+  React.useEffect(() => {
+    if (!activeScript?.script?.scriptId) {
+      onScriptBuildStateChange?.(null);
+      return;
+    }
+
+    onScriptBuildStateChange?.({
+      scriptId: activeScript.script.scriptId,
+      displayName: pendingScriptDraft?.displayName || activeScript.script.scriptId,
+      scriptRevision:
+        activeScript.source?.revision ||
+        activeScript.script.activeRevision ||
+        currentRevision,
+      revisionId:
+        activeScript.source?.revision ||
+        activeScript.script.activeRevision ||
+        currentRevision,
+      sourceHash:
+        activeScript.source?.sourceHash ||
+        activeScript.script.activeSourceHash ||
+        '',
+      definitionActorId:
+        activeScript.source?.definitionActorId ||
+        activeScript.script.definitionActorId ||
+        '',
+      dirty: isDirty,
+      validationStatus,
+      saveStatus: effectiveSaveStatus,
+    });
+  }, [
+    activeScript?.script?.activeRevision,
+    activeScript?.script?.activeSourceHash,
+    activeScript?.script?.definitionActorId,
+    activeScript?.script?.scriptId,
+    activeScript?.source?.definitionActorId,
+    activeScript?.source?.revision,
+    activeScript?.source?.sourceHash,
+    currentRevision,
+    effectiveSaveStatus,
+    isDirty,
+    onScriptBuildStateChange,
+    pendingScriptDraft?.displayName,
+    validationStatus,
+  ]);
+
   const resolveLeave = React.useCallback((value: boolean) => {
     leaveResolverRef.current?.(value);
     leaveResolverRef.current = null;
     setLeaveDialogOpen(false);
   }, []);
+
+  const commitScriptPackage = React.useCallback(
+    (nextPackage: typeof scriptPackage, nextSelectedFilePath?: string) => {
+      cancelSaveObservationPoll();
+      setScriptPackage(nextPackage);
+      if (nextSelectedFilePath) {
+        setSelectedFilePath(nextSelectedFilePath);
+      }
+      setValidationResult(null);
+      setValidationError('');
+      setFocusedDiagnostic(null);
+      setSaveNotice('');
+      setSaveObservationStatus('idle');
+      setSaveStatus('idle');
+      if (activeScriptIsDraft && pendingScriptDraft) {
+        onPendingScriptDraftChange?.({
+          ...pendingScriptDraft,
+          sourceText: serializePersistedSource(nextPackage),
+        });
+      }
+    },
+    [activeScriptIsDraft, cancelSaveObservationPoll, onPendingScriptDraftChange, pendingScriptDraft],
+  );
 
   const handleValidate = React.useCallback(async () => {
     if (!activeScript?.script?.scriptId) {
@@ -1849,55 +2508,285 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     try {
       const result = await scriptsApi.validateDraft({
         scriptId: activeScript.script.scriptId,
-        scriptRevision: currentRevision,
+        scriptRevision: currentRevision || undefined,
         source: serializePersistedSource(scriptPackage),
         package: scriptPackage,
       });
       setValidationResult(result);
+      setFocusedDiagnostic(null);
+      if (result.success && isDirty) {
+        setSaveStatus('idle');
+      }
     } catch (error) {
       setValidationError(describeError(error));
       setValidationResult(null);
+      setFocusedDiagnostic(null);
     } finally {
       setValidationPending(false);
     }
-  }, [activeScript?.script?.scriptId, currentRevision, scriptPackage]);
+  }, [activeScript?.script?.scriptId, currentRevision, isDirty, scriptPackage]);
+
+  const markSaveObservationApplied = React.useCallback(
+    async (
+      accepted: ScopeScriptUpsertAcceptedResponse,
+      savedSourceText: string,
+      currentScript: ScopedScriptSummary | null | undefined,
+    ) => {
+      setObservedAppliedScript(
+        buildAppliedScriptDetail(
+          scopeId || '',
+          accepted.acceptedScript,
+          savedSourceText,
+          currentScript,
+        ),
+      );
+      onScriptDraftSaved?.(accepted.acceptedScript.scriptId);
+      await onRefreshScripts?.();
+      setSaveObservationStatus('applied');
+      setSaveStatus('applied');
+      setSaveNotice(
+        `Save applied for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+      );
+    },
+    [onRefreshScripts, onScriptDraftSaved, scopeId],
+  );
+
+  const pollSaveObservation = React.useCallback(
+    async (
+      accepted: ScopeScriptUpsertAcceptedResponse,
+      savedSourceText: string,
+      attemptIndex: number,
+      token: number,
+    ) => {
+      if (!scopeId) {
+        return;
+      }
+      const observedScriptId = accepted.acceptedScript.scriptId;
+
+      try {
+        const observation = await scriptsApi.observeSaveScript(
+          scopeId,
+          observedScriptId,
+          {
+            revisionId: accepted.acceptedScript.revisionId,
+            definitionActorId: accepted.acceptedScript.definitionActorId,
+            sourceHash: accepted.acceptedScript.sourceHash,
+            proposalId: accepted.acceptedScript.proposalId,
+            expectedBaseRevision: accepted.acceptedScript.expectedBaseRevision,
+            acceptedAt: accepted.acceptedScript.acceptedAt,
+          },
+        );
+        if (
+          saveObservationTokenRef.current !== token ||
+          activeScriptIdRef.current !== observedScriptId
+        ) {
+          return;
+        }
+
+        if (observation.status === 'applied') {
+          saveObservationTimerRef.current = null;
+          await markSaveObservationApplied(
+            accepted,
+            savedSourceText,
+            observation.currentScript,
+          );
+          return;
+        }
+
+        if (observation.status === 'rejected') {
+          saveObservationTimerRef.current = null;
+          await onRefreshScripts?.();
+          setSaveObservationStatus('rejected');
+          setSaveStatus('failed');
+          setSaveNotice(
+            observation.message ||
+              `Save rejected for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+          );
+          return;
+        }
+
+        setSaveObservationStatus('pending');
+        const nextDelay = SCRIPT_SAVE_OBSERVATION_POLL_DELAYS_MS[attemptIndex];
+        if (nextDelay == null) {
+          saveObservationTimerRef.current = null;
+          setSaveNotice(
+            `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Still waiting for catalog; use Refresh catalog to check again.`,
+          );
+          return;
+        }
+
+        setSaveNotice(
+          `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Waiting for catalog; checking again in ${Math.round(nextDelay / 1000)}s.`,
+        );
+        saveObservationTimerRef.current = window.setTimeout(() => {
+          void pollSaveObservation(
+            accepted,
+            savedSourceText,
+            attemptIndex + 1,
+            token,
+          );
+        }, nextDelay);
+      } catch (error) {
+        if (
+          saveObservationTokenRef.current !== token ||
+          activeScriptIdRef.current !== observedScriptId
+        ) {
+          return;
+        }
+        saveObservationTimerRef.current = null;
+        setSaveObservationStatus('failed');
+        setSaveStatus('failed');
+        setSaveNotice(describeError(error));
+      }
+    },
+    [markSaveObservationApplied, onRefreshScripts, scopeId],
+  );
 
   const handleSave = React.useCallback(async () => {
     if (!scopeId || !activeScript?.script?.scriptId) {
-      setSaveNotice('Resolve the current scope and select a script before saving.');
+      setSaveNotice('Resolve the current workspace and select a script before saving.');
       return;
     }
 
+    cancelSaveObservationPoll();
+    const savingScriptId = activeScript.script.scriptId;
     setSavePending(true);
     setSaveNotice('');
     try {
       const accepted = await scriptsApi.saveScript(scopeId, {
-        scriptId: activeScript.script.scriptId,
-        revisionId: currentRevision,
-        expectedBaseRevision: activeScript.script.activeRevision || undefined,
+        scriptId: savingScriptId,
+        expectedBaseRevision: activeScriptIsDraft
+          ? undefined
+          : activeScript.script.activeRevision || undefined,
         sourceText: serializePersistedSource(scriptPackage),
       });
-      await onRefreshScripts?.();
-      setSaveNotice(
-        `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
-      );
+      setSaveStatus('accepted');
+      setSaveObservationStatus('accepted');
+      const savedSourceText = serializePersistedSource(scriptPackage);
+      const token = saveObservationTokenRef.current;
+      await pollSaveObservation(accepted, savedSourceText, 0, token);
     } catch (error) {
+      if (activeScriptIdRef.current !== savingScriptId) {
+        return;
+      }
+      setSaveObservationStatus('failed');
+      setSaveStatus('failed');
       setSaveNotice(describeError(error));
     } finally {
-      setSavePending(false);
+      if (activeScriptIdRef.current === savingScriptId) {
+        setSavePending(false);
+      }
+    }
+  }, [
+    activeScript?.script?.activeRevision,
+    activeScript?.script?.scriptId,
+    activeScriptIsDraft,
+    cancelSaveObservationPoll,
+    pollSaveObservation,
+    scopeId,
+    scriptPackage,
+  ]);
+
+  const handleAddPackageFile = React.useCallback(
+    (kind: 'csharp' | 'proto') => {
+      const fallbackPath = kind === 'csharp' ? 'Behavior.cs' : 'schema.proto';
+      const nextPath = window.prompt(
+        kind === 'csharp' ? 'C# source path' : 'Proto file path',
+        fallbackPath,
+      );
+      if (!nextPath?.trim()) {
+        return;
+      }
+
+      const nextPackage = addPackageFile(scriptPackage, kind, nextPath.trim());
+      commitScriptPackage(nextPackage, nextPath.trim());
+    },
+    [commitScriptPackage, scriptPackage],
+  );
+
+  const handleRenamePackageFile = React.useCallback(() => {
+    if (!selectedPackageEntry) {
+      return;
+    }
+
+    const nextPath = window.prompt('Rename file', selectedPackageEntry.path);
+    if (!nextPath?.trim() || nextPath.trim() === selectedPackageEntry.path) {
+      return;
+    }
+
+    const nextPackage = renamePackageFile(
+      scriptPackage,
+      selectedPackageEntry.path,
+      nextPath.trim(),
+    );
+    commitScriptPackage(nextPackage, nextPath.trim());
+  }, [commitScriptPackage, scriptPackage, selectedPackageEntry]);
+
+  const handleRemovePackageFile = React.useCallback(() => {
+    if (!selectedPackageEntry || packageEntries.length <= 1) {
+      return;
+    }
+
+    const nextPackage = removePackageFile(scriptPackage, selectedPackageEntry.path);
+    const nextEntry =
+      getSelectedPackageEntry(nextPackage, nextPackage.entrySourcePath) ||
+      getSelectedPackageEntry(nextPackage, '');
+    commitScriptPackage(nextPackage, nextEntry?.path);
+  }, [commitScriptPackage, packageEntries.length, scriptPackage, selectedPackageEntry]);
+
+  const handleSetEntrySource = React.useCallback(() => {
+    if (!selectedPackageEntry || selectedPackageEntry.kind !== 'csharp') {
+      return;
+    }
+
+    commitScriptPackage(
+      setEntrySourcePath(scriptPackage, selectedPackageEntry.path),
+      selectedPackageEntry.path,
+    );
+  }, [commitScriptPackage, scriptPackage, selectedPackageEntry]);
+
+  const handlePromoteEvolution = React.useCallback(async () => {
+    if (!scopeId || !activeScript?.script?.scriptId) {
+      setPromotionNotice('Resolve the current workspace and script before proposing evolution.');
+      return;
+    }
+
+    setPromotionPending(true);
+    setPromotionNotice('');
+    try {
+      const decision = await scriptsApi.proposeEvolution(
+        scopeId,
+        activeScript.script.scriptId,
+        {
+          baseRevision: activeScript.script.activeRevision || undefined,
+          candidateRevision: currentRevision || undefined,
+          candidateSource: serializePersistedSource(scriptPackage),
+          reason: promotionReason.trim() || undefined,
+        },
+      );
+      setPromotionHistory((current) => [decision, ...current].slice(0, 6));
+      setPromotionNotice(
+        decision.accepted
+          ? `Promotion accepted: ${decision.candidateRevision || decision.proposalId}.`
+          : decision.failureReason || `Promotion ${decision.status || 'not accepted'}.`,
+      );
+    } catch (error) {
+      setPromotionNotice(describeError(error));
+    } finally {
+      setPromotionPending(false);
     }
   }, [
     activeScript?.script?.activeRevision,
     activeScript?.script?.scriptId,
     currentRevision,
+    promotionReason,
     scopeId,
     scriptPackage,
-    onRefreshScripts,
   ]);
 
   const handleRun = React.useCallback(async () => {
     if (!scopeId || !activeScript?.script?.scriptId) {
-      setRunOutput('Resolve the current scope and select a script before running.');
+      setRunOutput('Resolve the current workspace and select a script before running.');
       return;
     }
 
@@ -1906,7 +2795,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       const result = await scriptsApi.runDraftScript({
         scopeId,
         scriptId: activeScript.script.scriptId,
-        scriptRevision: currentRevision,
+        scriptRevision: currentRevision || undefined,
         source: serializePersistedSource(scriptPackage),
         input: runInput,
         definitionActorId:
@@ -1915,8 +2804,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           undefined,
         package: scriptPackage,
       });
+      setLastRunResult(result);
       setRunOutput(JSON.stringify(result, null, 2));
     } catch (error) {
+      setLastRunResult(null);
       setRunOutput(describeError(error));
     } finally {
       setRunPending(false);
@@ -1935,8 +2826,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     return (
       <div data-testid="studio-script-build-panel" style={buildSurfaceCardStyle}>
         <Typography.Text type="secondary">
-          Loading scope scripts...
-        </Typography.Text>
+          {t("pages.studio.studiobuildpanels.loading.workspace.scripts.2", "Loading workspace scripts...")}</Typography.Text>
       </div>
     );
   }
@@ -1954,107 +2844,260 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   }
 
   return (
-    <div data-testid="studio-script-build-panel" style={buildWorkbenchGridStyle}>
+    <div
+      data-testid="studio-script-build-panel"
+      style={hasActiveScript ? buildWorkbenchGridStyle : scriptLaunchpadGridStyle}
+    >
       <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
         <section style={buildSurfaceCardStyle}>
           <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>Script Source</div>
+            <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.script.source.2", "Script Source")}</div>
             <div style={sectionDescriptionStyle}>
-              Script mode 只做一件事：围绕当前 script draft 的 typed source、lints 和 dry-run 迭代实现。
+              {hasActiveScript
+                ? t("pages.studio.studiobuildpanels.script.mode.script.draft", "Script mode does one thing: iterate on the current script draft's typed source, lint results, and dry-run implementation.")
+                : t("pages.studio.studiobuildpanels.create.script.to.start.editing.saved", "Create a script to start editing. Saved workspace scripts appear here when this catalog has one.")}
             </div>
           </div>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
             <Space wrap size={[8, 8]}>
-              <Tag color="gold">lints · partial</Tag>
-              <Select
-                aria-label="Script ID"
-                style={{ minWidth: 220 }}
-                value={activeScript?.script?.scriptId || undefined}
-                onChange={onSelectScriptId}
-                options={availableScripts.map((detail) => ({
-                  label: detail.script?.scriptId || 'script',
-                  value: detail.script?.scriptId || '',
-                }))}
-              />
+              {hasActiveScript ? (
+                <>
+                  <Tag color={lifecycleStatusColor}>{lifecycleStatus}</Tag>
+                  <Tag color={scriptReadyToBind ? 'green' : 'default'}>
+                    {bindReadinessLabel}
+                  </Tag>
+                </>
+              ) : null}
+              {hasActiveScript ? (
+                <Select
+                  aria-label={t("pages.studio.studiobuildpanels.script.id.2", "Script ID")}
+                  style={{ minWidth: 220 }}
+                  placeholder={t("pages.studio.studiobuildpanels.select.script", "Select a script")}
+                  value={activeScript?.script?.scriptId || undefined}
+                  onChange={onSelectScriptId}
+                  options={[
+                    ...(pendingScriptDraft?.scriptId
+                      ? [
+                          {
+                            label: t("pages.studio.studiobuildpanels.draft", "{value1} (draft)", { value1: pendingScriptDraft.scriptId }),
+                            value: pendingScriptDraft.scriptId,
+                          },
+                        ]
+                      : []),
+                    ...(observedAppliedScript?.script?.scriptId &&
+                    !pendingScriptDraft?.scriptId &&
+                    !availableScripts.some(
+                      (detail) =>
+                        detail.script?.scriptId === observedAppliedScript.script?.scriptId,
+                    )
+                      ? [
+                          {
+                            label: t("pages.studio.studiobuildpanels.applied", "{value1} (applied)", { value1: observedAppliedScript.script.scriptId }),
+                            value: observedAppliedScript.script.scriptId,
+                          },
+                        ]
+                      : []),
+                    ...availableScripts.map((detail) => ({
+                      label: detail.script?.scriptId || 'script',
+                      value: detail.script?.scriptId || '',
+                    })),
+                  ]}
+                />
+              ) : null}
             </Space>
-            <Space wrap size={[8, 8]}>
-              <Button
-                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                loading={validationPending}
-                onClick={() => void handleValidate()}
-              >
-                Validate
-              </Button>
-              <Button
-                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                icon={<CheckCircleOutlined />}
-                loading={savePending}
-                onClick={() => void handleSave()}
-              >
-                Save draft
-              </Button>
-            </Space>
+            {hasActiveScript ? (
+              <Space wrap size={[8, 8]}>
+                <Button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                  disabled={validationPending}
+                  loading={validationPending}
+                  onClick={() => void handleValidate()}
+                >
+                  {t("pages.studio.studiobuildpanels.validate.2", "Validate")}</Button>
+                <Button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                  disabled={saveDisabled}
+                  icon={<CheckCircleOutlined />}
+                  loading={savePending}
+                  onClick={() => void handleSave()}
+                >
+                  {t("pages.studio.studiobuildpanels.save.script.2", "Save script")}</Button>
+              </Space>
+            ) : null}
           </div>
           {saveNotice ? (
             <Alert
               message={saveNotice}
               showIcon
-              type={saveNotice.startsWith('Save accepted') ? 'success' : 'warning'}
+              type={saveNoticeType}
+              action={
+                saveObservationStatus === 'pending' ? (
+                  <Button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                    size="small"
+                    onClick={() => void onRefreshScripts?.()}
+                  >
+                    {t("pages.studio.studiobuildpanels.refresh.catalog.2", "Refresh catalog")}</Button>
+                ) : undefined
+              }
             />
+          ) : null}
+          {hasActiveScript ? (
+            <div
+              aria-label={t("pages.studio.studiobuildpanels.script.lifecycle.status.2", "Script lifecycle status")}
+              style={{
+                alignItems: 'center',
+                color: '#667085',
+                display: 'flex',
+                flexWrap: 'wrap',
+                fontSize: 12,
+                gap: 8,
+                lineHeight: '18px',
+              }}
+            >
+              <Typography.Text type="secondary">
+                {activeScript?.script?.scriptId || '-'} · {lifecycleStatus} {t("pages.studio.studiobuildpanels.validation.2", "· validation")}{' '}
+                {validationStatus} {t("pages.studio.studiobuildpanels.save.2", "· save")}{saveObservationStatus} {t("pages.studio.studiobuildpanels.rev.2", "· rev")}{' '}
+                {currentRevision || t("pages.studio.studiobuildpanels.generated.on.save.2", "generated on save")}
+              </Typography.Text>
+            </div>
           ) : null}
           {validationError ? (
             <Alert message={validationError} showIcon type="error" />
           ) : null}
-          {selectedPackageEntry ? (
+          {hasActiveScript && selectedPackageEntry ? (
             <div style={{ display: 'grid', gap: 12 }}>
-              <div
+              <details
+                aria-label={t("pages.studio.studiobuildpanels.script.package.tree.2", "Script package tree")}
                 style={{
-                  alignItems: 'center',
-                  background: '#faf8f3',
                   border: '1px solid #efe7da',
                   borderRadius: 16,
-                  display: 'flex',
-                  gap: 10,
-                  justifyContent: 'space-between',
-                  padding: '12px 14px',
+                  padding: 12,
                 }}
               >
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <div style={sectionEyebrowStyle}>Editor</div>
-                  <Typography.Text strong>{selectedPackageEntry.path}</Typography.Text>
+                <summary
+                  style={{
+                    alignItems: 'center',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                    justifyContent: 'space-between',
+                    listStyle: 'none',
+                  }}
+                >
+                  <span style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.advanced.package.2", "Advanced package")}</span>
+                  <Typography.Text type="secondary">
+                    {packageEntries.length} {t("pages.studio.studiobuildpanels.file.2", "file")}{packageEntries.length === 1 ? '' : 's'} ·{' '}
+                    {scriptPackage.entrySourcePath || t("pages.studio.studiobuildpanels.no.entry.2", "no entry")} {t("pages.studio.studiobuildpanels.entry.2", "entry")}</Typography.Text>
+                </summary>
+                <div
+                  style={{
+                    alignItems: 'center',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                    justifyContent: 'space-between',
+                    marginTop: 12,
+                  }}
+                >
+                  <div>
+                    <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.package.2", "Package")}</div>
+                    <Typography.Text type="secondary">
+                      Entry: {scriptPackage.entrySourcePath || '-'} {t("pages.studio.studiobuildpanels.behavior.2", "· Behavior:")}{' '}
+                      {scriptPackage.entryBehaviorTypeName || '-'}
+                    </Typography.Text>
+                  </div>
+                  <Space wrap size={[8, 8]}>
+                    <Button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                      size="small"
+                      onClick={() => handleAddPackageFile('csharp')}
+                    >
+                      {t("pages.studio.studiobuildpanels.add.2", "Add C#")}</Button>
+                    <Button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                      size="small"
+                      onClick={() => handleAddPackageFile('proto')}
+                    >
+                      {t("pages.studio.studiobuildpanels.add.proto.2", "Add proto")}</Button>
+                    <Button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                      size="small"
+                      onClick={handleRenamePackageFile}
+                    >
+                      {t("pages.studio.studiobuildpanels.rename.2", "Rename")}</Button>
+                    <Button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                      disabled={packageEntries.length <= 1}
+                      size="small"
+                      onClick={handleRemovePackageFile}
+                    >
+                      {t("pages.studio.studiobuildpanels.remove.2", "Remove")}</Button>
+                  </Space>
                 </div>
-                <Space wrap size={[8, 8]}>
-                  {validationResult ? (
-                    <Tag color={validationResult.success ? 'green' : 'red'}>
-                      {validationResult.errorCount > 0
-                        ? `${validationResult.errorCount} errors`
-                        : validationResult.warningCount > 0
-                          ? `${validationResult.warningCount} warnings`
-                          : 'Clean'}
-                    </Tag>
-                  ) : null}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {packageEntries.map((entry) => (
+                    <button
+                      key={entry.path}
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                      type="button"
+                      onClick={() => setSelectedFilePath(entry.path)}
+                      style={{
+                        background:
+                          entry.path === selectedPackageEntry.path ? '#111827' : '#fffdf8',
+                        border: '1px solid #efe7da',
+                        borderRadius: 999,
+                        color:
+                          entry.path === selectedPackageEntry.path ? '#fffdf8' : '#374151',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        padding: '6px 10px',
+                      }}
+                    >
+                      {entry.kind === 'csharp' ? 'C#' : 'proto'} · {entry.path}
+                      {entry.path === scriptPackage.entrySourcePath ? t("pages.studio.studiobuildpanels.entry.3", "· entry") : ''}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'minmax(0, 1fr) auto' }}>
+                  <Input
+                    aria-label={t("pages.studio.studiobuildpanels.entry.behavior.type.2", "Entry behavior type")}
+                    placeholder={t("pages.studio.studiobuildpanels.entry.behavior.type.for.example.2", "Entry behavior type, for example DraftBehavior")}
+                    value={scriptPackage.entryBehaviorTypeName}
+                    onChange={(event) =>
+                      commitScriptPackage(
+                        updateEntryBehaviorTypeName(scriptPackage, event.target.value),
+                        selectedPackageEntry.path,
+                      )
+                    }
+                  />
                   <Button
                     className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                    icon={<PlayCircleOutlined />}
-                    loading={runPending}
-                    type="primary"
-                    onClick={() => void handleRun()}
+                    disabled={selectedPackageEntry.kind !== 'csharp'}
+                    onClick={handleSetEntrySource}
                   >
-                    Dry-run
-                  </Button>
-                </Space>
-              </div>
+                    {t("pages.studio.studiobuildpanels.set.entry.source.2", "Set entry source")}</Button>
+                </div>
+              </details>
               <div style={{ minHeight: 520 }}>
                 <ScriptCodeEditor
                   filePath={selectedPackageEntry.path}
                   language={selectedPackageEntry.kind === 'csharp' ? 'csharp' : 'plaintext'}
                   markers={editorMarkers}
                   value={selectedPackageEntry.content}
-                  onChange={(value) =>
-                    setScriptPackage((current) =>
-                      updatePackageFileContent(current, selectedPackageEntry.path, value),
-                    )
-                  }
+                  onChange={(value) => {
+                    commitScriptPackage(
+                      updatePackageFileContent(
+                        scriptPackage,
+                        selectedPackageEntry.path,
+                        value,
+                      ),
+                      selectedPackageEntry.path,
+                    );
+                  }}
+                  focusTarget={focusedDiagnostic}
                 />
               </div>
               <div
@@ -2070,43 +3113,122 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 }}
               >
                 <div>
-                  <div style={sectionEyebrowStyle}>Compiler</div>
+                  <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.compiler.2", "Compiler")}</div>
                   <Typography.Text type="secondary">
                     {validationResult
                       ? validationResult.success
-                        ? 'Validation completed without blocking errors.'
-                        : 'Validation returned blocking diagnostics.'
-                      : 'Run Validate to refresh compiler diagnostics.'}
+                        ? t("pages.studio.studiobuildpanels.validation.completed.without.blocking.errors.2", "Validation completed without blocking errors.")
+                        : t("pages.studio.studiobuildpanels.validation.returned.blocking.diagnostics.2", "Validation returned blocking diagnostics.")
+                      : t("pages.studio.studiobuildpanels.run.validate.to.refresh.compiler.diagnostics", "Run Validate to refresh compiler diagnostics.")}
                   </Typography.Text>
                 </div>
                 <Space wrap size={[8, 8]}>
                   {validationResult?.diagnostics?.length ? (
                     <Tag color={validationResult.success ? 'blue' : 'red'}>
-                      Problems {validationResult.diagnostics.length}
+                      {t("pages.studio.studiobuildpanels.problems.2", "Problems")}{validationResult.diagnostics.length}
                     </Tag>
                   ) : (
-                    <Tag color="green">Clean</Tag>
+                    <Tag color="green">{t("pages.studio.studiobuildpanels.clean.2", "Clean")}</Tag>
                   )}
                 </Space>
               </div>
+              {validationResult?.diagnostics?.length ? (
+                <div
+                  aria-label={t("pages.studio.studiobuildpanels.script.validation.diagnostics.2", "Script validation diagnostics")}
+                  style={{
+                    border: '1px solid #efe7da',
+                    borderRadius: 16,
+                    display: 'grid',
+                    gap: 8,
+                    padding: 12,
+                  }}
+                >
+                  <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.diagnostics.2", "Diagnostics")}</div>
+                  {validationResult.diagnostics.map((diagnostic, index) => {
+                    const diagnosticKey = `${diagnostic.filePath || 'source'}:${diagnostic.startLine || 0}:${diagnostic.startColumn || 0}:${diagnostic.code || index}`;
+                    const severityColor =
+                      diagnostic.severity === 'error'
+                        ? '#b42318'
+                        : diagnostic.severity === 'warning'
+                          ? '#ad6800'
+                          : '#2563eb';
+                    return (
+                      <button
+                        key={diagnosticKey}
+                        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                        type="button"
+                        onClick={() => {
+                          const focusTarget = buildScriptDiagnosticFocusTarget(
+                            diagnostic,
+                            `${diagnosticKey}:${Date.now()}`,
+                          );
+                          setSelectedFilePath(focusTarget.filePath);
+                          setFocusedDiagnostic(focusTarget);
+                        }}
+                        style={{
+                          background: '#fffdf8',
+                          border: '1px solid #efe7da',
+                          borderRadius: 12,
+                          color: '#1f2937',
+                          cursor: 'pointer',
+                          display: 'grid',
+                          gap: 4,
+                          padding: '10px 12px',
+                          textAlign: 'left',
+                        }}
+                      >
+                        <span style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
+                          <Tag color={diagnostic.severity === 'error' ? 'red' : diagnostic.severity === 'warning' ? 'gold' : 'blue'}>
+                            {diagnostic.severity}
+                          </Tag>
+                          <span style={{ color: '#6b5d4a', fontSize: 12 }}>
+                            {formatScriptDiagnosticLocation(diagnostic)}
+                          </span>
+                          {diagnostic.code ? (
+                            <span style={{ color: severityColor, fontSize: 12 }}>
+                              {diagnostic.code}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span style={{ color: '#374151', fontSize: 13, lineHeight: '18px' }}>
+                          {diagnostic.message}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           ) : (
-            <Empty description="No script source is available in this scope yet." />
+            <Empty
+              description={t("pages.studio.studiobuildpanels.no.script.is.selected.yet", "No script is selected yet. Start a script draft to open the editor.")}
+            >
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                onClick={onCreateScriptDraft}
+                type="primary"
+              >
+                {t("pages.studio.studiobuildpanels.add.script.2", "Add script")}</Button>
+            </Empty>
           )}
         </section>
 
-        <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
-          <Typography.Text type="secondary">
-            Script Build keeps code editing here. Service rollout still moves to Bind.
-          </Typography.Text>
-          <Button
-            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-            type="primary"
-            onClick={onContinueToBind}
-          >
-            Continue to Bind
-          </Button>
-        </div>
+        {hasActiveScript ? (
+          <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
+            <Typography.Text type="secondary">
+              {scriptReadyToBind
+                ? t("pages.studio.studiobuildpanels.script.revision.is.catalog.applied.continue", "Script revision is catalog-applied. Continue to Bind to publish the callable member contract.")
+                : t("pages.studio.studiobuildpanels.script.build.keeps.code.editing.here", "Script Build keeps code editing here. {value1}.", { value1: bindReadinessLabel })}
+            </Typography.Text>
+            <Button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+              disabled={!scriptReadyToBind}
+              type="primary"
+              onClick={onContinueToBind}
+            >
+              {t("pages.studio.studiobuildpanels.continue.to.bind.5", "Continue to Bind")}</Button>
+          </div>
+        ) : null}
 
         <ScriptLeaveDialog
           open={leaveDialogOpen}
@@ -2115,61 +3237,167 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         />
       </div>
 
-      <aside style={dryRunAsideStyle}>
-        <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
-          <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>Dry-run</div>
-            <Typography.Text strong>Script draft run</Typography.Text>
-          </div>
-          <span style={{ ...statusTagStyle, background: '#fffbe6', color: '#ad6800' }}>
-            seeded fixture
-          </span>
-        </div>
-        <div style={sectionDescriptionStyle}>
-          Draft-run 会直接调用当前 source editor 里的脚本，不需要先把 scope 默认服务切到这个 script。
-        </div>
-        <Input.TextArea
-          aria-label="Script dry run input"
-          autoSize={{ minRows: 6, maxRows: 10 }}
-          value={runInput}
-          onChange={(event) => setRunInput(event.target.value)}
-        />
-        <Space wrap size={[8, 8]}>
-          <Button
-            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-            icon={<PlayCircleOutlined />}
-            loading={runPending}
-            type="primary"
-            onClick={() => void handleRun()}
+      {hasActiveScript ? (
+        <aside style={dryRunAsideStyle}>
+            <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.dry.run.5", "Dry-run")}</div>
+                <Typography.Text strong>{t("pages.studio.studiobuildpanels.script.draft.run.2", "Script draft run")}</Typography.Text>
+              </div>
+              <span style={{ ...statusTagStyle, background: '#fffbe6', color: '#ad6800' }}>
+                {t("pages.studio.studiobuildpanels.draft.input.2", "Draft input")}</span>
+            </div>
+            <div style={sectionDescriptionStyle}>
+              {t("pages.studio.studiobuildpanels.draft.run.source.editor", "Draft-run directly calls the script in the current source editor; you do not need to switch the scope default service to this script first.")}</div>
+            <Input.TextArea
+              aria-label={t("pages.studio.studiobuildpanels.script.dry.run.input.2", "Script dry run input")}
+              autoSize={{ minRows: 6, maxRows: 10 }}
+              value={runInput}
+              onChange={(event) => setRunInput(event.target.value)}
+            />
+            <Space wrap size={[8, 8]}>
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                icon={<PlayCircleOutlined />}
+                loading={runPending}
+                type="primary"
+                onClick={() => void handleRun()}
+              >
+                {t("pages.studio.studiobuildpanels.run.5", "Run")}</Button>
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                onClick={() =>
+                  setRunInput(
+                    JSON.stringify(
+                      {
+                        channel: 'telegram',
+                        text: 'refund for order #92817 — 3rd time asking',
+                        user: 'alex',
+                      },
+                      null,
+                      2,
+                    ),
+                  )
+                }
+              >
+                {t("pages.studio.studiobuildpanels.load.sample.input.2", "Load sample input")}</Button>
+            </Space>
+            <div>
+              {lastRunResult ? (
+                <div
+                  aria-label={t("pages.studio.studiobuildpanels.script.dry.run.facts.2", "Script dry run facts")}
+                  style={{
+                    border: '1px solid #efe7da',
+                    borderRadius: 14,
+                    display: 'grid',
+                    gap: 6,
+                    marginBottom: 12,
+                    padding: 12,
+                  }}
+                >
+                  <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.run.facts.2", "Run facts")}</div>
+                  {[
+                    ['Run', lastRunResult.runId],
+                    ['Runtime', lastRunResult.runtimeActorId],
+                    ['Definition', lastRunResult.definitionActorId],
+                    ['Command type', lastRunResult.commandTypeUrl],
+                    ['Source hash', lastRunResult.sourceHash],
+                    ['Activity', lastRunResult.activityUrl],
+                  ].map(([label, value]) => (
+                    <div key={label} style={{ display: 'grid', gap: 2 }}>
+                      <span style={{ color: '#8b7b63', fontSize: 11, fontWeight: 700 }}>
+                        {label}
+                      </span>
+                      <Typography.Text copyable={Boolean(value)} ellipsis style={{ fontSize: 12 }}>
+                        {value || '-'}
+                      </Typography.Text>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.output.5", "Output")}</div>
+              <pre style={dryRunOutputStyle}>{runOutput}</pre>
+            </div>
+          <details
+            aria-label={t("pages.studio.studiobuildpanels.script.promotion.history.2", "Script promotion history")}
+            style={{
+              border: '1px solid #efe7da',
+              borderRadius: 14,
+              padding: 12,
+            }}
           >
-            Run
-          </Button>
-          <Button
-            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-            onClick={() =>
-              setRunInput(
-                JSON.stringify(
-                  {
-                    channel: 'telegram',
-                    text: 'refund for order #92817 — 3rd time asking',
-                    user: 'alex',
-                  },
-                  null,
-                  2,
-                ),
-              )
-            }
-          >
-            Load fixture
-          </Button>
-        </Space>
-        <div>
-          <div style={sectionEyebrowStyle}>Output</div>
-          <pre style={dryRunOutputStyle}>{runOutput}</pre>
-        </div>
-      </aside>
+            <summary style={{ ...sectionEyebrowStyle, cursor: 'pointer' }}>
+              {t("pages.studio.studiobuildpanels.promotion.2", "Promotion")}</summary>
+            <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+              <Input.TextArea
+                aria-label={t("pages.studio.studiobuildpanels.promotion.reason.2", "Promotion reason")}
+                autoSize={{ minRows: 2, maxRows: 4 }}
+                placeholder={t("pages.studio.studiobuildpanels.why.is.this.revision.ready.2", "Why is this revision ready to promote?")}
+                value={promotionReason}
+                onChange={(event) => setPromotionReason(event.target.value)}
+              />
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                disabled={promotionPending}
+                loading={promotionPending}
+                onClick={() => void handlePromoteEvolution()}
+              >
+                {t("pages.studio.studiobuildpanels.propose.evolution.2", "Propose evolution")}</Button>
+              {promotionNotice ? (
+                <Alert
+                  showIcon
+                  message={promotionNotice}
+                  type={promotionNotice.startsWith('Promotion accepted') ? 'success' : 'warning'}
+                />
+              ) : null}
+              {promotionHistory.length > 0 ? (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {promotionHistory.map((decision) => (
+                    <div
+                      key={decision.proposalId || `${decision.scriptId}:${decision.candidateRevision}`}
+                      style={{
+                        background: '#fffdf8',
+                        border: '1px solid #efe7da',
+                        borderRadius: 12,
+                        display: 'grid',
+                        gap: 4,
+                        padding: 10,
+                      }}
+                    >
+                      <Typography.Text strong>
+                        {decision.accepted ? t("pages.studio.studiobuildpanels.accepted.2", "Accepted") : decision.status || t("pages.studio.studiobuildpanels.decision.2", "Decision")}
+                      </Typography.Text>
+                      <Typography.Text type="secondary">
+                        {decision.scriptId} · {decision.baseRevision || '-'} →{' '}
+                        {decision.candidateRevision || '-'}
+                      </Typography.Text>
+                      {decision.failureReason ? (
+                        <Typography.Text type="danger">
+                          {decision.failureReason}
+                        </Typography.Text>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Typography.Text type="secondary">
+                  {t("pages.studio.studiobuildpanels.no.promotion.decisions.in.this.2", "No promotion decisions in this session.")}</Typography.Text>
+              )}
+            </div>
+          </details>
+        </aside>
+      ) : null}
     </div>
   );
+};
+
+export type StudioGAgentBuildState = {
+  readonly actorTypeName: string;
+  readonly displayName: string;
+  readonly initialPrompt: string;
+  readonly persistenceMode: 'grain' | 'ephemeral';
+  readonly role: string;
+  readonly tools: readonly string[];
 };
 
 export type StudioGAgentBuildPanelProps = {
@@ -2180,7 +3408,8 @@ export type StudioGAgentBuildPanelProps = {
   readonly gAgentTypesError: unknown;
   readonly selectedGAgentTypeName: string;
   readonly onSelectGAgentTypeName: (value: string) => void;
-  readonly onContinueToBind: () => void;
+  readonly onBuildStateChange?: (state: StudioGAgentBuildState) => void;
+  readonly onContinueToBind: (state: StudioGAgentBuildState) => void;
 };
 
 export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
@@ -2191,6 +3420,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   gAgentTypesError,
   selectedGAgentTypeName,
   onSelectGAgentTypeName,
+  onBuildStateChange,
   onContinueToBind,
 }) => {
   const [displayName, setDisplayName] = React.useState(currentMemberLabel || 'Member GAgent');
@@ -2225,6 +3455,17 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         .filter(Boolean),
     [toolsDraft],
   );
+  const currentBuildState = React.useMemo<StudioGAgentBuildState>(
+    () => ({
+      actorTypeName: selectedTypeName,
+      displayName: displayName.trim(),
+      initialPrompt: initialPrompt.trim(),
+      persistenceMode,
+      role: role.trim(),
+      tools: toolTags,
+    }),
+    [displayName, initialPrompt, persistenceMode, role, selectedTypeName, toolTags],
+  );
 
   React.useEffect(() => {
     if (!selectedGAgentTypeName && selectedTypeName) {
@@ -2235,6 +3476,10 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   React.useEffect(() => {
     setDisplayName((current) => current || currentMemberLabel || 'Member GAgent');
   }, [currentMemberLabel]);
+
+  React.useEffect(() => {
+    onBuildStateChange?.(currentBuildState);
+  }, [currentBuildState, onBuildStateChange]);
 
   React.useEffect(
     () => () => {
@@ -2247,7 +3492,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
     if (!scopeId || !selectedTypeName.trim() || !runPrompt.trim()) {
       setRunState({
         ...IDLE_DRAFT_RUN_STATE,
-        error: 'Scope, GAgent type, and prompt are required before running.',
+        error: 'Workspace, GAgent type, and prompt are required before running.',
         status: 'error',
       });
       return;
@@ -2256,6 +3501,11 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(createGAgentDraftRunTimeoutError());
+      }
+    }, GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS);
     setRunState({
       ...IDLE_DRAFT_RUN_STATE,
       status: 'running',
@@ -2267,6 +3517,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         {
           actorTypeName: selectedTypeName,
           prompt: runPrompt,
+          timeoutMs: GAGENT_DRAFT_RUN_TIMEOUT_MS,
         },
         controller.signal,
       );
@@ -2282,6 +3533,14 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
+        const reason = controller.signal.reason;
+        if (reason instanceof Error) {
+          setRunState({
+            ...IDLE_DRAFT_RUN_STATE,
+            error: reason.message,
+            status: 'error',
+          });
+        }
         return;
       }
 
@@ -2291,6 +3550,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         status: 'error',
       });
     } finally {
+      window.clearTimeout(timeoutId);
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
@@ -2302,14 +3562,13 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
       <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
         <section style={buildSurfaceCardStyle}>
           <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>GAgent Definition</div>
+            <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.gagent.definition.2", "GAgent Definition")}</div>
             <div style={sectionDescriptionStyle}>
-              GAgent mode 在 Build 里定义当前 member 的 actor 类型、展示名、角色、初始提示词、工具和状态持久化语义。
-            </div>
+              {t("pages.studio.studiobuildpanels.gagent.mode.build.member", "GAgent mode defines the current member's Actor type, display name, role, initial Prompt, tools, and state persistence semantics in Build.")}</div>
           </div>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
             <Space wrap size={[8, 8]}>
-              <Tag color="green">template · seeded</Tag>
+              <Tag color="green">{t("pages.studio.studiobuildpanels.template.seeded.2", "template · seeded")}</Tag>
               {selectedType ? (
                 <Tag>{buildRuntimeGAgentTypeLabel(selectedType)}</Tag>
               ) : null}
@@ -2325,9 +3584,9 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
               gridTemplateColumns: '160px minmax(0, 1fr)',
             }}
           >
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>Type URL</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.type.url.2", "Type URL")}</div>
             <Select
-              aria-label="GAgent type"
+              aria-label={t("pages.studio.studiobuildpanels.gagent.type.2", "GAgent type")}
               loading={gAgentTypesLoading}
               value={selectedTypeName || undefined}
               onChange={onSelectGAgentTypeName}
@@ -2335,38 +3594,38 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
                 label: buildRuntimeGAgentTypeLabel(descriptor),
                 value: buildRuntimeGAgentAssemblyQualifiedName(descriptor),
               }))}
-              placeholder="Select a typed GAgent"
+              placeholder={t("pages.studio.studiobuildpanels.select.typed.gagent.2", "Select a typed GAgent")}
             />
 
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>Display name</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.display.name.2", "Display name")}</div>
             <Input
-              aria-label="GAgent display name"
+              aria-label={t("pages.studio.studiobuildpanels.gagent.display.name.2", "GAgent display name")}
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
             />
 
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>Role</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.role.2", "Role")}</div>
             <Input
-              aria-label="GAgent role"
+              aria-label={t("pages.studio.studiobuildpanels.gagent.role.2", "GAgent role")}
               value={role}
               onChange={(event) => setRole(event.target.value)}
             />
 
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>Initial prompt</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.initial.prompt.2", "Initial prompt")}</div>
             <Input.TextArea
-              aria-label="GAgent initial prompt"
+              aria-label={t("pages.studio.studiobuildpanels.gagent.initial.prompt.2", "GAgent initial prompt")}
               autoSize={{ minRows: 4, maxRows: 8 }}
               value={initialPrompt}
               onChange={(event) => setInitialPrompt(event.target.value)}
             />
 
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>Tools</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.tools.2", "Tools")}</div>
             <div style={{ display: 'grid', gap: 10 }}>
               <Input
-                aria-label="GAgent tools"
+                aria-label={t("pages.studio.studiobuildpanels.gagent.tools.2", "GAgent tools")}
                 value={toolsDraft}
                 onChange={(event) => setToolsDraft(event.target.value)}
-                placeholder="classify_intent, detect_language"
+                placeholder={t("pages.studio.studiobuildpanels.classify.intent.detect.language.2", "classify_intent, detect_language")}
               />
               <Space wrap size={[8, 8]}>
                 {toolTags.length > 0 ? (
@@ -2376,19 +3635,19 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
                     </Tag>
                   ))
                 ) : (
-                  <Tag>+ add tool</Tag>
+                  <Tag>{t("pages.studio.studiobuildpanels.add.tool.2", "+ add tool")}</Tag>
                 )}
               </Space>
             </div>
 
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>State persistence</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.state.persistence.2", "State persistence")}</div>
             <Radio.Group
               value={persistenceMode}
               onChange={(event) => setPersistenceMode(event.target.value)}
             >
               <Space direction="vertical">
-                <Radio value="grain">Orleans grain</Radio>
-                <Radio value="ephemeral">Ephemeral</Radio>
+                <Radio value="grain">{t("pages.studio.studiobuildpanels.orleans.grain.2", "Orleans grain")}</Radio>
+                <Radio value="ephemeral">{t("pages.studio.studiobuildpanels.ephemeral.2", "Ephemeral")}</Radio>
               </Space>
             </Radio.Group>
           </div>
@@ -2396,33 +3655,30 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
 
         <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
           <Typography.Text type="secondary">
-            GAgent Build 只负责定义 actor 语义；真正发布 service / endpoint 还是下一步去 Bind。
-          </Typography.Text>
+            {t("pages.studio.studiobuildpanels.gagent.build.actor.service", "GAgent Build only defines Actor semantics. Publish the Service and Endpoint in Bind.")}</Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            disabled={!selectedTypeName}
             type="primary"
-            onClick={onContinueToBind}
+            onClick={() => onContinueToBind(currentBuildState)}
           >
-            Continue to Bind
-          </Button>
+            {t("pages.studio.studiobuildpanels.continue.to.bind.6", "Continue to Bind")}</Button>
         </div>
       </div>
 
       <aside style={dryRunAsideStyle}>
         <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
           <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>Dry-run</div>
-            <Typography.Text strong>GAgent draft run</Typography.Text>
+            <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.dry.run.6", "Dry-run")}</div>
+            <Typography.Text strong>{t("pages.studio.studiobuildpanels.gagent.draft.run.2", "GAgent draft run")}</Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
-            seeded fixture
-          </span>
+            {t("pages.studio.studiobuildpanels.draft.input.3", "Draft input")}</span>
         </div>
         <div style={sectionDescriptionStyle}>
-          这里用当前选中的 GAgent 类型直接做一次草稿运行，验证 prompt 和 transcript 是否符合预期。
-        </div>
+          {t("pages.studio.studiobuildpanels.gagent.prompt.transcript", "Run the currently selected GAgent type as a draft to verify that the prompt and transcript match expectations.")}</div>
         <Input.TextArea
-          aria-label="GAgent dry run input"
+          aria-label={t("pages.studio.studiobuildpanels.gagent.dry.run.input.2", "GAgent dry run input")}
           autoSize={{ minRows: 6, maxRows: 10 }}
           value={runPrompt}
           onChange={(event) => setRunPrompt(event.target.value)}
@@ -2435,24 +3691,36 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             type="primary"
             onClick={() => void handleRun()}
           >
-            Run
-          </Button>
+            {t("pages.studio.studiobuildpanels.run.6", "Run")}</Button>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={() =>
               setRunPrompt('Classify this support ticket, keep the member state, and decide whether to escalate.')
             }
           >
-            Load fixture
-          </Button>
+            {t("pages.studio.studiobuildpanels.load.sample.input.3", "Load sample input")}</Button>
         </Space>
         <div>
-          <div style={sectionEyebrowStyle}>Output</div>
+          <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.output.6", "Output")}</div>
           <pre style={dryRunOutputStyle}>{renderRunOutput(runState)}</pre>
         </div>
+        {getGAgentDraftRunRecoveryText(runState) ? (
+          <Alert
+            showIcon
+            message={
+              runState.status === 'error'
+                ? t("pages.studio.studiobuildpanels.build.dry.run.needs.attention", "Build dry-run needs attention")
+                : runState.status === 'success'
+                  ? t("pages.studio.studiobuildpanels.build.dry.run.ready", "Build dry-run is ready")
+                  : t("pages.studio.studiobuildpanels.build.dry.run.running", "Build dry-run is running")
+            }
+            description={getGAgentDraftRunRecoveryText(runState)}
+            type={runState.status === 'error' ? 'warning' : 'info'}
+          />
+        ) : null}
         {renderRunSummary(runState) ? (
           <details style={dryRunDebugDetailsStyle}>
-            <summary style={dryRunDebugSummaryStyle}>Debug details</summary>
+            <summary style={dryRunDebugSummaryStyle}>{t("pages.studio.studiobuildpanels.debug.details.4", "Debug details")}</summary>
             <pre style={{ ...dryRunSummaryStyle, marginTop: 10 }}>{renderRunSummary(runState)}</pre>
           </details>
         ) : null}
@@ -2475,24 +3743,24 @@ export function getDefaultBuildModeCards(scriptsEnabled: boolean): readonly Stud
       key: 'workflow',
       label: 'Workflow',
       description:
-        'Compose steps as a DAG. Best when the flow is known and parallel fan-out matters.',
+        t("pages.studio.studiobuildpanels.compose.steps.as.dag.best.2", "Compose steps as a DAG. Best when the flow is known and parallel fan-out matters."),
       hint: 'When · Multiple agents hand off predictably',
     },
     {
       key: 'script',
       label: 'Script',
       description:
-        'Write a typed script that handles deterministic business logic and code-level branches.',
+        t("pages.studio.studiobuildpanels.write.typed.script.that.handles.2", "Write a typed script that handles deterministic business logic and code-level branches."),
       hint: scriptsEnabled
         ? 'When · You need code-level control'
-        : '当前环境暂未启用脚本能力。',
+        : t("pages.studio.studiobuildpanels.copy.3", "Script capability is not enabled in the current environment."),
       disabled: !scriptsEnabled,
     },
     {
       key: 'gagent',
       label: 'GAgent',
       description:
-        'Wire a typed GAgent actor with long-lived state. Best when one member owns durable behavior.',
+        t("pages.studio.studiobuildpanels.wire.typed.gagent.actor.with.2", "Wire a typed GAgent actor with long-lived state. Best when one member owns durable behavior."),
       hint: 'When · State lives with one agent',
     },
   ];

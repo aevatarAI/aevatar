@@ -3,7 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -14,7 +14,10 @@ public sealed class GAgentDraftRunInteractionTests
     public async Task Resolver_ShouldRejectExistingActor_WhenRuntimeTypeDoesNotMatchRequestedType()
     {
         var runtime = new StubActorRuntime(new StubActor("actor-1", new DifferentAgent()));
-        var resolver = new GAgentDraftRunCommandTargetResolver(runtime, new NoOpDraftRunProjectionPort());
+        var resolver = new GAgentDraftRunCommandTargetResolver(
+            runtime,
+            new NoOpDraftRunProjectionPort(),
+            new NoOpGAgentRunTerminalProjectionPort());
 
         var result = await resolver.ResolveAsync(
             new GAgentDraftRunCommand(
@@ -36,6 +39,7 @@ public sealed class GAgentDraftRunInteractionTests
         var resolver = new GAgentDraftRunCommandTargetResolver(
             runtime,
             new NoOpDraftRunProjectionPort(),
+            new NoOpGAgentRunTerminalProjectionPort(),
             new StubAgentTypeVerifier(result: true));
 
         var result = await resolver.ResolveAsync(
@@ -95,21 +99,21 @@ public sealed class GAgentDraftRunInteractionTests
     {
         public bool ProjectionEnabled => true;
 
-        public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
+        public Task<EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>?> AttachExistingActorProjectionAsync(
             string actorId,
             string commandId,
+            IEventSink<AGUIEvent> sink,
             CancellationToken ct = default) =>
-            Task.FromResult<IGAgentDraftRunProjectionLease?>(null);
+            Task.FromResult<EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>?>(null);
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IGAgentDraftRunProjectionLease lease,
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default) =>
-            Task.CompletedTask;
+            Task.FromResult<IAsyncDisposable?>(null);
 
         public Task DetachLiveSinkAsync(
-            IGAgentDraftRunProjectionLease lease,
-            IEventSink<AGUIEvent> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
@@ -118,6 +122,27 @@ public sealed class GAgentDraftRunInteractionTests
             CancellationToken ct = default) =>
             Task.CompletedTask;
     }
+
+    private sealed class NoOpGAgentRunTerminalProjectionPort : IGAgentRunTerminalProjectionPort
+    {
+        public Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
+            string actorId,
+            string correlationId,
+            GAgentRunTerminalInteractionKind interactionKind,
+            CancellationToken ct = default) =>
+            Task.FromResult<IGAgentRunTerminalProjectionLease?>(
+                new NoOpGAgentRunTerminalProjectionLease(actorId, correlationId, interactionKind));
+
+        public Task ReleaseProjectionAsync(
+            IGAgentRunTerminalProjectionLease lease,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed record NoOpGAgentRunTerminalProjectionLease(
+        string ActorId,
+        string CorrelationId,
+        GAgentRunTerminalInteractionKind InteractionKind) : IGAgentRunTerminalProjectionLease;
 
     private sealed class StubAgentTypeVerifier(bool result) : IAgentTypeVerifier
     {

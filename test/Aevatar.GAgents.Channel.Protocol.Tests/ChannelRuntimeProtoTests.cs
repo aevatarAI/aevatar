@@ -1,4 +1,5 @@
 using System.Linq;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
@@ -33,6 +34,57 @@ public sealed class ChannelRuntimeProtoTests
 
         failed.NotRetryable = new Empty();
         failed.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
+    }
+
+    [Fact]
+    public void NyxRelayTextOperationRawResult_ShouldRoundtripTypedFailureDiagnostics()
+    {
+        var raw = new NyxRelayTextOperationRawResult
+        {
+            RawErrorCode = "relay_reply_update_rejected",
+            RawErrorSummary = "rate limited",
+            FailureKind = FailureKind.TransientAdapterError,
+            RetryAfterMs = 4000,
+            HttpStatus = 429,
+            RawErrorKey = "rate_limited",
+            RawErrorCodeValue = 1005,
+        };
+
+        var parsed = NyxRelayTextOperationRawResult.Parser.ParseFrom(raw.ToByteArray());
+
+        parsed.ShouldBe(raw);
+        parsed.FailureKind.ShouldBe(FailureKind.TransientAdapterError);
+        parsed.RetryAfterMs.ShouldBe(4000);
+        parsed.HttpStatus.ShouldBe(429);
+        parsed.RawErrorKey.ShouldBe("rate_limited");
+        parsed.RawErrorCodeValue.ShouldBe(1005);
+    }
+
+    [Fact]
+    public void ConversationReplyLifecycleStateAndEvent_ShouldRoundtripNyxRelayRetryAttempt()
+    {
+        var state = new ConversationReplyLifecycleState
+        {
+            CorrelationId = "corr-retry",
+            Mode = ConversationReplyLifecycleMode.NyxRelayText,
+            Phase = ConversationReplyLifecyclePhase.TextStreaming,
+            NyxRelayRetryAttempt = 2,
+        };
+        var evt = new ConversationReplyLifecycleChangedEvent
+        {
+            CorrelationId = "corr-retry",
+            Mode = ConversationReplyLifecycleMode.NyxRelayText,
+            PreviousPhase = ConversationReplyLifecyclePhase.TextStreaming,
+            Phase = ConversationReplyLifecyclePhase.TextStreaming,
+            NyxRelayRetryAttempt = 2,
+        };
+
+        var parsedState = ConversationReplyLifecycleState.Parser.ParseFrom(state.ToByteArray());
+        var parsedEvent = ConversationReplyLifecycleChangedEvent.Parser.ParseFrom(evt.ToByteArray());
+
+        parsedState.NyxRelayRetryAttempt.ShouldBe(2);
+        parsedEvent.HasNyxRelayRetryAttempt.ShouldBeTrue();
+        parsedEvent.NyxRelayRetryAttempt.ShouldBe(2);
     }
 
     [Fact]
@@ -89,6 +141,23 @@ public sealed class ChannelRuntimeProtoTests
                 Conversation = completed.Conversation.Clone(),
                 Content = new MessageContent { Text = "hello" },
             },
+            TargetRef = new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ToolChoiceHint = new ChatRouteToolChoiceHint
+                    {
+                        ToolName = "aevatar_invoke_gagent",
+                        PrefilledArguments = new Struct
+                        {
+                            Fields =
+                            {
+                                ["actor_id"] = Value.ForString("target-gagent-1"),
+                            },
+                        },
+                    },
+                },
+            },
             RequestedAtUnixMs = 42,
         };
         var llmReady = new LlmReplyReadyEvent
@@ -120,6 +189,8 @@ public sealed class ChannelRuntimeProtoTests
         PayloadQuarantineReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(PlatformQuarantineEnvelope));
         llmRequested.Clone().ShouldBe(llmRequested);
+        llmRequested.Clone().TargetRef.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"]
+            .StringValue.ShouldBe("target-gagent-1");
         llmReady.Clone().ShouldBe(llmReady);
     }
 }

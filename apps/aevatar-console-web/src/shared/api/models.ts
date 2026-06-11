@@ -86,7 +86,6 @@ export interface WorkflowPrimitiveCapability {
   aliases: string[];
   category: string;
   description: string;
-  closedWorldBlocked: boolean;
   runtimeModule: string;
   parameters: WorkflowCapabilityParameter[];
 }

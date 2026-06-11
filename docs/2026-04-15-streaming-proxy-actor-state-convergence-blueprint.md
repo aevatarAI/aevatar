@@ -55,7 +55,7 @@
 ### 非范围
 
 - `#148` 的 actor store 收敛
-- `StreamingProxyActorStore` / `IGAgentActorStore` / `IStreamingProxyParticipantStore` 的最终事实源治理
+- `StreamingProxyActorStore` / `IGAgentActorStore` / 旧 participant singleton/store 的最终事实源治理（2026-05-23 已由 #887 删除 singleton participant authority，participant 查询改走 room current-state projection）
 - `#204` 的 AGUI / SSE projection-session 主链统一
 - endpoint transport 语义重写
 - 将 streaming proxy 直接接入新的 read model / projection 方案

@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
-using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
@@ -14,16 +13,13 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
 {
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IServiceGovernanceCommandTargetProvisioner _targetProvisioner;
-    private readonly IServiceConfigurationProjectionPort _configurationProjectionPort;
 
     public ServiceGovernanceCommandApplicationService(
         IActorDispatchPort dispatchPort,
-        IServiceGovernanceCommandTargetProvisioner targetProvisioner,
-        IServiceConfigurationProjectionPort configurationProjectionPort)
+        IServiceGovernanceCommandTargetProvisioner targetProvisioner)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _targetProvisioner = targetProvisioner ?? throw new ArgumentNullException(nameof(targetProvisioner));
-        _configurationProjectionPort = configurationProjectionPort ?? throw new ArgumentNullException(nameof(configurationProjectionPort));
     }
 
     public async Task<ServiceCommandAcceptedReceipt> CreateBindingAsync(
@@ -31,7 +27,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
-        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForBinding(command.Spec.Identity, command.Spec.BindingId), ct);
     }
 
@@ -40,7 +35,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
-        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForBinding(command.Spec.Identity, command.Spec.BindingId), ct);
     }
 
@@ -49,7 +43,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Identity, ct);
-        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForBinding(command.Identity, command.BindingId), ct);
     }
 
@@ -58,7 +51,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
-        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForService(command.Spec.Identity), ct);
     }
 
@@ -67,7 +59,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
-        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForService(command.Spec.Identity), ct);
     }
 
@@ -76,7 +67,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
-        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForPolicy(command.Spec.Identity, command.Spec.PolicyId), ct);
     }
 
@@ -85,7 +75,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
-        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForPolicy(command.Spec.Identity, command.Spec.PolicyId), ct);
     }
 
@@ -94,10 +83,12 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Identity, ct);
-        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForPolicy(command.Identity, command.PolicyId), ct);
     }
 
+    // Refactor (iter18/cluster-006):
+    //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
+    //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
     private async Task<ServiceCommandAcceptedReceipt> DispatchAsync(
         string actorId,
         IMessage command,

@@ -1,4 +1,5 @@
 import { jsonBody, requestJson, withQuery } from "./http/client";
+import { decodeServiceCatalogSnapshots } from "./servicesApi";
 import {
   expectArray,
   expectRecord,
@@ -31,7 +32,10 @@ import type {
   BoundServiceReference,
   ServiceBindingSnapshot,
 } from "@/shared/models/governance";
-import type { ServiceCommandAcceptedReceipt } from "@/shared/models/services";
+import type {
+  ServiceCatalogSnapshot,
+  ServiceCommandAcceptedReceipt,
+} from "@/shared/models/services";
 import {
   normalizeStudioScopeBindingImplementationKind,
   type StudioScopeBindingRevision,
@@ -560,13 +564,15 @@ function decodeScopeServiceEndpointContract(
   label = "ScopeServiceEndpointContract",
 ): ScopeServiceEndpointContract {
   const record = expectRecord(value, label);
+  const serviceId = readOptionalString(record, ["serviceId", "ServiceId"]);
   return {
     scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
-    serviceId: readString(
-      record,
-      ["serviceId", "ServiceId"],
-      `${label}.serviceId`,
-    ),
+    serviceId: serviceId || "",
+    memberId: readOptionalString(record, ["memberId", "MemberId"]),
+    publishedServiceId: readOptionalString(record, [
+      "publishedServiceId",
+      "PublishedServiceId",
+    ]),
     endpointId: readString(
       record,
       ["endpointId", "EndpointId"],
@@ -1149,6 +1155,19 @@ function encodeScopeServiceBindingPayload(input: ScopeServiceBindingInput) {
 }
 
 export const scopeRuntimeApi = {
+  listServices(
+    scopeId: string,
+    query?: { appId?: string; take?: number },
+  ): Promise<ServiceCatalogSnapshot[]> {
+    return requestJson(
+      withQuery(`/api/scopes/${encodeURIComponent(scopeId)}/services`, {
+        appId: query?.appId?.trim(),
+        take: query?.take,
+      }),
+      decodeServiceCatalogSnapshots,
+    );
+  },
+
   getServiceBindings(
     scopeId: string,
     serviceId: string,
@@ -1233,6 +1252,17 @@ export const scopeRuntimeApi = {
   ): Promise<ScopeServiceEndpointContract> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/endpoints/${encodeURIComponent(endpointId)}/contract`,
+      decodeScopeServiceEndpointContract,
+    );
+  },
+
+  getMemberEndpointContract(
+    scopeId: string,
+    memberId: string,
+    endpointId: string,
+  ): Promise<ScopeServiceEndpointContract> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/endpoints/${encodeURIComponent(endpointId)}/contract`,
       decodeScopeServiceEndpointContract,
     );
   },

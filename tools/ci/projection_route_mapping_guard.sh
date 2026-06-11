@@ -79,11 +79,15 @@ while IFS= read -r projector_file; do
     route_mapping_violations="${route_mapping_violations}${projector_file}:missing TryGetValue(typeUrl, out reducers) exact route lookup\n"
   fi
 done < <(
+  projector_scan_roots=(src)
+  if [[ -d demos ]]; then
+    projector_scan_roots+=(demos)
+  fi
   while IFS= read -r file; do
     if rg -n "_reducersByType|IProjectionEventReducer<" "${file}" >/dev/null; then
       echo "${file}"
     fi
-  done < <(rg --files src demos -g '*Projector*.cs')
+  done < <(rg --files "${projector_scan_roots[@]}" -g '*Projector*.cs')
 )
 
 if [ -n "${route_mapping_violations}" ]; then

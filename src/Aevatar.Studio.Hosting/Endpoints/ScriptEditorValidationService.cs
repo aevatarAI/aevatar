@@ -1,3 +1,4 @@
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Runtime;
@@ -10,6 +11,9 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 
 internal sealed class ScriptEditorValidationService
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: host validation treated source text as the reusable scripting source fact.
+    //   New principle: host source text is a one-file adapter input and is converted to ScriptPackageSpec before compilation.
     private readonly ScriptSandboxPolicy _sandboxPolicy;
     private readonly IScriptProtoCompiler _protoCompiler;
 
@@ -43,10 +47,10 @@ internal sealed class ScriptEditorValidationService
                     normalizedScriptId,
                     normalizedRevision,
                     AppScriptPackagePayloads.ResolvePackage(package, source))
-                : ScriptBehaviorCompilationRequest.FromPersistedSource(
+                : new ScriptBehaviorCompilationRequest(
                     normalizedScriptId,
                     normalizedRevision,
-                    source ?? string.Empty);
+                    ScriptPackageSpecExtensions.CreateSingleSource(source ?? string.Empty));
             var normalizedPackage = request.Package.Normalize();
             var primarySourcePath = normalizedPackage.CSharpSources.FirstOrDefault()?.NormalizedPath ?? "Behavior.cs";
             var diagnostics = new List<ScriptEditorValidationDiagnostic>();

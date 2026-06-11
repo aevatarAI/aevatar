@@ -130,15 +130,47 @@ message TimePeriodChangedEvent {
 
 // ─── Device Inbound (from DeviceEventEndpoints via EventEnvelope) ───
 
-// Normalized device event from NyxID relay's CallbackPayload.
+message SensorDeviceInboundPayload {
+  double temperature = 1;
+  double humidity = 2;
+  double light_level = 3;
+  bool motion_detected = 4;
+}
+
+message CameraDeviceInboundPayload {
+  string scene_description = 1;
+}
+
+message MotionDeviceInboundPayload {
+  bool detected = 1;
+}
+
+message SpeechDeviceInboundPayload {
+  string text = 1;
+}
+
+// V1 normalized device event from NyxID relay's CallbackPayload.
 // Defined in Household domain because it's the inbound contract for
 // HouseholdEntity; DeviceEventEndpoints (boundary layer) references
 // this project, keeping dependency direction correct (Host → Domain).
+// Refactor (issue1485/first-slice): Old pattern: DeviceInbound carried payload_json across the actor boundary.
+// New principle: the Host/Adapter parses NyxID callback JSON and admits only known typed device event payloads.
+// The actor receives Protobuf fields, while the old payload_json tag and name stay reserved.
+// Unknown adapter event_type values are rejected before dispatch instead of becoming an untyped raw payload bag.
 message DeviceInbound {
+  reserved 5;
+  reserved "payload_json";
+
   string event_id = 1;       // NyxID event envelope's event_id
   string source = 2;         // "camera-analyzer", "temperature-sensor", etc.
   string event_type = 3;     // "person_detected", "temperature_change", "motion_detected"
   string timestamp = 4;      // RFC 3339
-  string payload_json = 5;   // Raw device payload JSON (temporary — will evolve to typed sub-messages)
   string device_id = 6;      // Device identifier (optional)
+
+  oneof payload {
+    SensorDeviceInboundPayload sensor = 7;
+    CameraDeviceInboundPayload camera = 8;
+    MotionDeviceInboundPayload motion = 9;
+    SpeechDeviceInboundPayload speech = 10;
+  }
 }

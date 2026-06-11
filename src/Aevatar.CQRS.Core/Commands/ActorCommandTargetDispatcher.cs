@@ -4,7 +4,7 @@ namespace Aevatar.CQRS.Core.Commands;
 
 public sealed class ActorCommandTargetDispatcher<TTarget>
     : ICommandTargetDispatcher<TTarget>
-    where TTarget : class, IActorCommandDispatchTarget
+    where TTarget : class, ICommandDispatchTarget
 {
     private readonly IActorDispatchPort _dispatchPort;
 
@@ -13,7 +13,7 @@ public sealed class ActorCommandTargetDispatcher<TTarget>
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
     }
 
-    public Task DispatchAsync(
+    public Task<DispatchAdmission> DispatchAsync(
         TTarget target,
         EventEnvelope envelope,
         CancellationToken ct = default)

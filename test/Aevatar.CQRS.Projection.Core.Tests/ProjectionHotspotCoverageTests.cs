@@ -19,17 +19,17 @@ public sealed class ProjectionHotspotCoverageTests
         var streamProvider = new RecordingStreamProvider();
         var hub = new ProjectionSessionEventHub<StringValue>(streamProvider, new TestSessionCodec("projection-run"));
 
-        Func<Task> blankScopePublish = () => hub.PublishAsync("", "session-1", new StringValue { Value = "evt" });
+        Func<Task> blankRootActorPublish = () => hub.PublishAsync("", "session-1", new StringValue { Value = "evt" });
         Func<Task> blankSessionPublish = () => hub.PublishAsync("scope-1", "", new StringValue { Value = "evt" });
         Func<Task> nullEventPublish = () => hub.PublishAsync("scope-1", "session-1", null!);
-        Func<Task> blankScopeSubscribe = () => hub.SubscribeAsync("", "session-1", _ => ValueTask.CompletedTask);
+        Func<Task> blankRootActorSubscribe = () => hub.SubscribeAsync("", "session-1", _ => ValueTask.CompletedTask);
         Func<Task> blankSessionSubscribe = () => hub.SubscribeAsync("scope-1", "", _ => ValueTask.CompletedTask);
         Func<Task> nullHandlerSubscribe = () => hub.SubscribeAsync("scope-1", "session-1", null!);
 
-        await blankScopePublish.Should().ThrowAsync<ArgumentException>().WithParameterName("scopeId");
+        await blankRootActorPublish.Should().ThrowAsync<ArgumentException>().WithParameterName("rootActorId");
         await blankSessionPublish.Should().ThrowAsync<ArgumentException>().WithParameterName("sessionId");
         await nullEventPublish.Should().ThrowAsync<ArgumentNullException>().WithParameterName("evt");
-        await blankScopeSubscribe.Should().ThrowAsync<ArgumentException>().WithParameterName("scopeId");
+        await blankRootActorSubscribe.Should().ThrowAsync<ArgumentException>().WithParameterName("rootActorId");
         await blankSessionSubscribe.Should().ThrowAsync<ArgumentException>().WithParameterName("sessionId");
         await nullHandlerSubscribe.Should().ThrowAsync<ArgumentNullException>().WithParameterName("handler");
 
@@ -37,10 +37,9 @@ public sealed class ProjectionHotspotCoverageTests
 
         streamProvider.Streams.Should().ContainKey("projection-run:scope-1:session-1");
         var message = streamProvider.Streams["projection-run:scope-1:session-1"].Produced.Should().ContainSingle().Subject;
-        message.ScopeId.Should().Be("scope-1");
+        message.RootActorId.Should().Be("scope-1");
         message.SessionId.Should().Be("session-1");
         message.EventType.Should().Be("native");
-        message.LegacyPayload.Should().Be("legacy:native:ok");
         message.Payload.Should().NotBeNull();
         message.Payload.IsEmpty.Should().BeFalse();
 
@@ -52,8 +51,11 @@ public sealed class ProjectionHotspotCoverageTests
         await invalidSubscribe.Should().ThrowAsync<InvalidOperationException>();
     }
 
+    // Refactor (iter34/cluster-003-projection-session-legacy-payload):
+    //   Old pattern: Projection session event transport carries both protobuf bytes and legacy string payload compatibility (legacy_payload string field in proto + legacy codec interface + legacy payload write path).
+    //   New principle: Projection session event transport carries protobuf payload only; obsolete legacy codec surface is deleted; tests/docs updated; protobuf legacy_payload field reserved per protobuf evolution rules; no concrete codec depended on the legacy interface.
     [Fact]
-    public async Task ProjectionSessionEventHub_ShouldHandleNativeLegacyAndUndecodableMessages()
+    public async Task ProjectionSessionEventHub_ShouldHandleNativeAndUndecodableProtobufMessages()
     {
         var streamProvider = new RecordingStreamProvider();
         var stream = streamProvider.GetOrAdd("projection-run:scope-1:session-1");
@@ -72,7 +74,7 @@ public sealed class ProjectionHotspotCoverageTests
         await stream.ProduceAsync(
             new ProjectionSessionEventTransportMessage
             {
-                ScopeId = "scope-x",
+                RootActorId = "scope-x",
                 SessionId = "session-1",
                 EventType = "native",
                 Payload = ByteString.CopyFromUtf8("native:ignored"),
@@ -80,14 +82,14 @@ public sealed class ProjectionHotspotCoverageTests
         await stream.ProduceAsync(
             new ProjectionSessionEventTransportMessage
             {
-                ScopeId = "scope-1",
+                RootActorId = "scope-1",
                 SessionId = "session-1",
                 EventType = "native",
             });
         await stream.ProduceAsync(
             new ProjectionSessionEventTransportMessage
             {
-                ScopeId = "scope-1",
+                RootActorId = "scope-1",
                 SessionId = "session-1",
                 EventType = "native",
                 Payload = ByteString.CopyFromUtf8("native:ok"),
@@ -95,23 +97,21 @@ public sealed class ProjectionHotspotCoverageTests
         await stream.ProduceAsync(
             new ProjectionSessionEventTransportMessage
             {
-                ScopeId = "scope-1",
+                RootActorId = "scope-1",
                 SessionId = "session-1",
                 EventType = "legacy",
                 Payload = ByteString.CopyFromUtf8("broken"),
-                LegacyPayload = "legacy:fallback",
             });
         await stream.ProduceAsync(
             new ProjectionSessionEventTransportMessage
             {
-                ScopeId = "scope-1",
+                RootActorId = "scope-1",
                 SessionId = "session-1",
                 EventType = "legacy",
                 Payload = ByteString.CopyFromUtf8("broken"),
-                LegacyPayload = "broken",
             });
 
-        received.Should().Equal("native:ok", "fallback");
+        received.Should().Equal("native:ok");
     }
 
     [Fact]
@@ -274,23 +274,22 @@ public sealed class ProjectionHotspotCoverageTests
         toRuntime!.Invoke(null, [System.Enum.ToObject(toProto.ReturnType, 1)]).Should().Be(ProjectionRuntimeMode.DurableMaterialization);
         toRuntime.Invoke(null, [System.Enum.ToObject(toProto.ReturnType, 0)]).Should().Be(ProjectionRuntimeMode.SessionObservation);
 
-        var activation = new TestMaterializationActivationService();
         var release = new TestMaterializationReleaseService();
-        var enabledPort = new TestMaterializationPort(() => true, activation, release);
-        var enabledWithoutRelease = new TestMaterializationPort(() => true, activation, null);
-        var disabledPort = new TestMaterializationPort(() => false, activation, null);
+        var enabledPort = new TestMaterializationPort(() => true, release);
+        var enabledWithoutRelease = new TestMaterializationPort(() => true, null);
+        var disabledPort = new TestMaterializationPort(() => false, null);
+        var lease = new TestMaterializationLease("actor-1");
 
-        (await enabledPort.EnsureProjectionFromRequestPublicAsync(null, CancellationToken.None)).Should().BeNull();
-        (await disabledPort.EnsureProjectionPublicAsync("", CancellationToken.None)).Should().BeNull();
-        (await disabledPort.EnsureProjectionPublicAsync("actor-1", CancellationToken.None)).Should().BeNull();
-        activation.Requests.Should().BeEmpty();
+        var sourcePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../../src/Aevatar.CQRS.Projection.Core/Orchestration/MaterializationProjectionPortBase.cs"));
+        var source = File.ReadAllText(sourcePath);
+        source.Should().Contain("Refactor (iter101/cluster-104):");
+        source.Should().NotContain("protected async Task<TRuntimeLease?> EnsureProjectionAsync");
+        source.Should().NotContain("_activationService");
+        source.Should().NotContain("IProjectionScopeActivationService<TRuntimeLease>");
 
-        var lease = await enabledPort.EnsureProjectionPublicAsync("actor-1", CancellationToken.None);
-        lease.Should().NotBeNull();
-        activation.Requests.Should().ContainSingle();
-        activation.Requests[0].RootActorId.Should().Be("actor-1");
-
-        await enabledPort.ReleaseProjectionPublicAsync(lease!, CancellationToken.None);
+        await enabledPort.ReleaseProjectionPublicAsync(lease, CancellationToken.None);
         release.Released.Should().ContainSingle().Which.Should().BeSameAs(lease);
 
         await enabledWithoutRelease.ReleaseProjectionPublicAsync(new TestMaterializationLease("actor-3"), CancellationToken.None);
@@ -305,9 +304,7 @@ public sealed class ProjectionHotspotCoverageTests
         await nullLease.Should().ThrowAsync<ArgumentNullException>().WithParameterName("runtimeLease");
     }
 
-    private sealed class TestSessionCodec
-        : IProjectionSessionEventCodec<StringValue>,
-          ILegacyProjectionSessionEventCodec<StringValue>
+    private sealed class TestSessionCodec : IProjectionSessionEventCodec<StringValue>
     {
         public TestSessionCodec(string channel)
         {
@@ -339,23 +336,6 @@ public sealed class ProjectionHotspotCoverageTests
                 : null;
         }
 
-        public string SerializeLegacy(StringValue evt)
-        {
-            ArgumentNullException.ThrowIfNull(evt);
-            return "legacy:" + evt.Value;
-        }
-
-        public StringValue? DeserializeLegacy(string eventType, string payload)
-        {
-            if (!string.Equals(eventType, "legacy", StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(payload) ||
-                !payload.StartsWith("legacy:", StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            return new StringValue { Value = payload["legacy:".Length..] };
-        }
     }
 
     private sealed class RecordingStreamProvider : IStreamProvider
@@ -489,42 +469,13 @@ public sealed class ProjectionHotspotCoverageTests
     {
         public TestMaterializationPort(
             Func<bool> projectionEnabledAccessor,
-            IProjectionScopeActivationService<TestMaterializationLease> activationService,
             IProjectionScopeReleaseService<TestMaterializationLease>? releaseService)
-            : base(projectionEnabledAccessor, activationService, releaseService)
+            : base(projectionEnabledAccessor, releaseService)
         {
         }
-
-        public Task<TestMaterializationLease?> EnsureProjectionPublicAsync(string rootActorId, CancellationToken ct) =>
-            EnsureProjectionAsync(
-                new ProjectionScopeStartRequest
-                {
-                    RootActorId = rootActorId,
-                    ProjectionKind = "kind-a",
-                    Mode = ProjectionRuntimeMode.DurableMaterialization,
-                },
-                ct);
-
-        public Task<TestMaterializationLease?> EnsureProjectionFromRequestPublicAsync(
-            ProjectionScopeStartRequest? request,
-            CancellationToken ct) =>
-            EnsureProjectionAsync(request!, ct);
 
         public Task ReleaseProjectionPublicAsync(TestMaterializationLease lease, CancellationToken ct) =>
             ReleaseProjectionAsync(lease, ct);
-    }
-
-    private sealed class TestMaterializationActivationService : IProjectionScopeActivationService<TestMaterializationLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public Task<TestMaterializationLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            return Task.FromResult(new TestMaterializationLease(request.RootActorId));
-        }
     }
 
     private sealed class TestMaterializationReleaseService : IProjectionScopeReleaseService<TestMaterializationLease>

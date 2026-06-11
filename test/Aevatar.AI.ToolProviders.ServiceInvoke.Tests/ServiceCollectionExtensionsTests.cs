@@ -42,7 +42,7 @@ public class ServiceCollectionExtensionsTests
     public async Task AddServiceInvokeTools_WorksWithoutArtifactStore()
     {
         var services = new ServiceCollection();
-        // Only register required dependencies, NOT IServiceRevisionArtifactStore
+        // Only register required dependencies, NOT IServiceRevisionCatalogQueryReader.
         services.AddSingleton<IServiceCatalogQueryReader, StubCatalogReader>();
         services.AddSingleton<IServiceInvocationPort, StubInvocationPort>();
 
@@ -61,7 +61,7 @@ public class ServiceCollectionExtensionsTests
     {
         services.AddSingleton<IServiceCatalogQueryReader, StubCatalogReader>();
         services.AddSingleton<IServiceInvocationPort, StubInvocationPort>();
-        services.AddSingleton<IServiceRevisionArtifactStore, StubArtifactStore>();
+        services.AddSingleton<IServiceRevisionCatalogQueryReader, StubRevisionCatalogReader>();
     }
 
     private sealed class StubCatalogReader : IServiceCatalogQueryReader
@@ -82,12 +82,9 @@ public class ServiceCollectionExtensionsTests
             throw new NotImplementedException();
     }
 
-    private sealed class StubArtifactStore : IServiceRevisionArtifactStore
+    private sealed class StubRevisionCatalogReader : IServiceRevisionCatalogQueryReader
     {
-        public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task<PreparedServiceRevisionArtifact?> GetAsync(string serviceKey, string revisionId, CancellationToken ct = default) =>
-            Task.FromResult<PreparedServiceRevisionArtifact?>(null);
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
     }
 }

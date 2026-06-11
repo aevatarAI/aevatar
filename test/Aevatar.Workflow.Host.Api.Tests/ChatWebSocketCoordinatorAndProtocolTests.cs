@@ -246,8 +246,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         aborted.CloseCalls.Should().Be(0);
     }
 
-    private sealed class FakeCommandInteractionService
-        : ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
+    private sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort
     {
         public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> Handler { get; set; } =
             (_, _, _, _) => Task.FromResult(

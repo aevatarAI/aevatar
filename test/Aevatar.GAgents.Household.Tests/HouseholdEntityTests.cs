@@ -283,3 +283,31 @@ public class ProtobufSerializationTests
         restored.Safety.ActionsThisMinute.Should().Be(2);
     }
 }
+
+public class HouseholdEntitySourceRegressionTests
+{
+    [Fact]
+    public void HouseholdEntity_must_use_streaming_chat_chain_not_blocking_ChatAsync()
+    {
+        var source = File.ReadAllText(FindRepoFile(
+            "agents/Aevatar.GAgents.Household/HouseholdEntity.cs"));
+
+        source.Should().NotContain("ChatAsync(",
+            "household reasoning must use ChatStreamAsync per AI 对话主链流式化");
+    }
+
+    private static string FindRepoFile(string relativePath)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            var candidate = Path.Combine(dir.FullName, relativePath);
+            if (File.Exists(candidate))
+                return candidate;
+
+            dir = dir.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate {relativePath} from {AppContext.BaseDirectory}");
+    }
+}

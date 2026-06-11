@@ -3,6 +3,8 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.CQRS.Core.DependencyInjection;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.CommandServices;
 using Aevatar.Studio.Projection.Metadata;
@@ -10,6 +12,9 @@ using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.GAgents.StudioMember;
+using Aevatar.Studio.Workspace;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -21,9 +26,21 @@ public static class ServiceCollectionExtensions
     /// Registers Studio projection components: materialization runtime,
     /// projectors, query ports, command services, and document metadata providers.
     /// </summary>
-    public static IServiceCollection AddStudioProjectionComponents(this IServiceCollection services)
+    public static IServiceCollection AddStudioProjectionComponents(this IServiceCollection services) =>
+        services.AddStudioProjectionComponents(configuration: null);
+
+    public static IServiceCollection AddStudioProjectionComponents(
+        this IServiceCollection services,
+        IConfiguration? configuration)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        var optionsBuilder = services.AddOptions<StudioMemberPlatformBindingOptions>();
+        if (configuration != null)
+            optionsBuilder.Bind(configuration.GetSection(StudioMemberPlatformBindingOptions.SectionName));
+
+        services.AddCqrsCore();
+        services.AddStudioProjectionActorCommandDispatch();
 
         // Projection read-model runtime (write dispatcher + sink bindings)
         services.AddProjectionReadModelRuntime();
@@ -42,7 +59,6 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             context => new StudioMaterializationRuntimeLease(context));
-        services.TryAddSingleton<StudioCurrentStateProjectionPort>();
 
         // ── Projectors ──
 
@@ -68,10 +84,6 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
-            StreamingProxyParticipantCurrentStateProjector>();
-
-        services.AddCurrentStateProjectionMaterializer<
-            StudioMaterializationContext,
             ChatHistoryIndexCurrentStateProjector>();
 
         services.AddCurrentStateProjectionMaterializer<
@@ -81,6 +93,22 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
             StudioMemberCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            StudioMemberBindingRunCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            StudioTeamRosterFanoutMaterializer>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            StudioTeamCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            StudioWorkspaceCurrentStateProjector>();
 
         // ── Document metadata providers (for index creation in Elasticsearch) ──
 
@@ -105,10 +133,6 @@ public static class ServiceCollectionExtensions
             UserMemoryCurrentStateDocumentMetadataProvider>();
 
         services.TryAddSingleton<
-            IProjectionDocumentMetadataProvider<StreamingProxyParticipantCurrentStateDocument>,
-            StreamingProxyParticipantCurrentStateDocumentMetadataProvider>();
-
-        services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<ChatHistoryIndexCurrentStateDocument>,
             ChatHistoryIndexCurrentStateDocumentMetadataProvider>();
 
@@ -120,23 +144,42 @@ public static class ServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<StudioMemberCurrentStateDocument>,
             StudioMemberCurrentStateDocumentMetadataProvider>();
 
-        // Projection scope activation port — required so Studio projectors
-        // actually subscribe to their actor streams and materialize events.
-        services.TryAddSingleton<StudioProjectionPort>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<StudioMemberBindingRunCurrentStateDocument>,
+            StudioMemberBindingRunCurrentStateDocumentMetadataProvider>();
 
-        // Compile-time-safe bootstrap used by every Studio actor-backed
-        // store: "ensure actor + activate its projection scope" in one call,
-        // keyed off IProjectedActor.ProjectionKind so kind cannot drift from
-        // the agent type.
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<StudioTeamCurrentStateDocument>,
+            StudioTeamCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<StudioWorkspaceCurrentStateDocument>,
+            StudioWorkspaceCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            StudioCommittedStateProjectionActivationPlanProvider>());
+
+        // Compile-time-safe actor provisioning used by every Studio actor-backed
+        // store. Projection activation is driven by committed-state plans.
         services.TryAddSingleton<IStudioActorBootstrap, StudioActorBootstrap>();
 
         // Query ports (read side)
         services.TryAddSingleton<IUserConfigQueryPort, ProjectionUserConfigQueryPort>();
         services.TryAddSingleton<IStudioMemberQueryPort, ProjectionStudioMemberQueryPort>();
+        services.TryAddSingleton<IStudioMemberBindingRunQueryPort, ProjectionStudioMemberBindingRunQueryPort>();
+        services.TryAddSingleton<IStudioTeamQueryPort, ProjectionStudioTeamQueryPort>();
+        services.TryAddSingleton<IStudioWorkspaceQueryPort, ProjectionStudioWorkspaceQueryPort>();
 
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
+        services.TryAddSingleton<IStudioMemberPlatformBindingCommandPort, ScopeBindingStudioMemberPlatformBindingCommandService>();
+        services.TryAddSingleton<IStudioTeamCommandPort, ActorDispatchStudioTeamCommandService>();
 
         return services;
     }

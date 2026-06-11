@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using FluentAssertions;
@@ -234,6 +235,37 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldExposeLarkOperatorIds_FromCardActionRawPlatformData()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-operator-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_123", "type": "group" },
+              "sender": { "platform_id": "ou_sender_123", "display_name": "User One" },
+              "content": { "type": "card_action", "text": "{\"approved\":true}" },
+              "raw_platform_data": {
+                "event": {
+                  "operator": {
+                    "user_id": "ou_operator_1",
+                    "open_id": "ou_open_operator_1",
+                    "union_id": "on_operator_1"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.TransportExtras.NyxLarkOperatorUserId.Should().Be("ou_operator_1");
+        parsed.Activity.TransportExtras.NyxLarkOperatorOpenId.Should().Be("ou_open_operator_1");
+        parsed.Activity.TransportExtras.NyxLarkOperatorUnionId.Should().Be("on_operator_1");
+    }
+
+    [Fact]
     public void Parse_ShouldPopulateCardAction_ForAgentBuilderFormSubmit()
     {
         var body = """
@@ -245,7 +277,7 @@ public sealed class NyxIdRelayTransportTests
               "sender": { "platform_id": "ou_1", "display_name": "User One" },
               "content": {
                 "content_type": "card_action",
-                "text": "{\"value\":{\"agent_builder_action\":\"create_daily_report\"},\"form_value\":{\"github_username\":\"eanzhao\",\"schedule_time\":\"09:00\"}}"
+                "text": "{\"value\":{\"agent_builder_action\":\"create_daily\"},\"form_value\":{\"github_username\":\"eanzhao\",\"schedule_time\":\"09:00\"}}"
               }
             }
             """;
@@ -258,12 +290,114 @@ public sealed class NyxIdRelayTransportTests
         var cardAction = parsed.Activity.Content.CardAction;
         cardAction.Should().NotBeNull();
         cardAction!.Arguments.Should().ContainKey("agent_builder_action")
-            .WhoseValue.Should().Be("create_daily_report");
+            .WhoseValue.Should().Be("create_daily");
         cardAction.FormFields.Should().ContainKey("github_username")
             .WhoseValue.Should().Be("eanzhao");
         cardAction.FormFields.Should().ContainKey("schedule_time")
             .WhoseValue.Should().Be("09:00");
-        cardAction.ActionId.Should().Be("create_daily_report");
+        cardAction.ActionId.Should().Be("create_daily");
+    }
+
+    [Fact]
+    public void Parse_ShouldPopulateCardAction_FromCompactTelegramPayload()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-compact",
+              "platform": "telegram",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "123", "type": "private" },
+              "sender": { "platform_id": "456", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"a\":\"llm_select_service\",\"s\":\"chrono-llm-shared\",\"v\":{\"service_id\":\"chrono-llm-shared\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.ActionId.Should().Be("llm_select_service");
+        cardAction.SubmittedValue.Should().Be("chrono-llm-shared");
+        cardAction.Arguments.Should().NotContainKey("service_id");
+        cardAction.LlmSelection.Action.Should().Be("select_service");
+        cardAction.LlmSelection.ServiceId.Should().Be("chrono-llm-shared");
+    }
+
+    [Theory]
+    [InlineData("lp")]
+    [InlineData("llm_apply_preset")]
+    public void Parse_ShouldMapCompactApplyPresetActionId_ToTypedLlmSelection(string actionId)
+    {
+        var cardActionText = JsonSerializer.Serialize(new
+        {
+            a = actionId,
+            s = "work-fast",
+            v = new
+            {
+                preset_id = "work-fast",
+            },
+        });
+        var body = $$"""
+            {
+              "message_id": "msg-card-compact-preset",
+              "platform": "telegram",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "123", "type": "private" },
+              "sender": { "platform_id": "456", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": {{JsonSerializer.Serialize(cardActionText)}}
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.ActionId.Should().Be(actionId);
+        cardAction.SubmittedValue.Should().Be("work-fast");
+        cardAction.Arguments.Should().NotContainKey("preset_id");
+        cardAction.LlmSelection.Action.Should().Be("apply_preset");
+        cardAction.LlmSelection.PresetId.Should().Be("work-fast");
+    }
+
+    [Fact]
+    public void Parse_ShouldMapKnownWorkflowCallbackFields_ToTypedPayload()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-workflow",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"actor_id\":\"actor-1\",\"run_id\":\"run-1\",\"step_id\":\"step-1\",\"approved\":false},\"form_value\":{\"user_input\":\"needs work\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.WorkflowResume.ActorId.Should().Be("actor-1");
+        cardAction.WorkflowResume.RunId.Should().Be("run-1");
+        cardAction.WorkflowResume.StepId.Should().Be("step-1");
+        cardAction.WorkflowResume.Approved.Should().BeFalse();
+        cardAction.WorkflowResume.UserInput.Should().Be("needs work");
+        cardAction.Arguments.Should().NotContainKey("actor_id");
+        cardAction.Arguments.Should().NotContainKey("run_id");
+        cardAction.Arguments.Should().NotContainKey("step_id");
+        cardAction.Arguments.Should().NotContainKey("approved");
     }
 
     [Fact]
@@ -313,9 +447,10 @@ public sealed class NyxIdRelayTransportTests
         parsed.Activity.Conversation.Scope.Should().Be(ConversationScope.Unspecified);
         var cardAction = parsed.Activity.Content.CardAction;
         cardAction.Should().NotBeNull();
-        cardAction!.Arguments.Should().ContainKey("actor_id").WhoseValue.Should().Be("actor-1");
-        cardAction.Arguments.Should().ContainKey("run_id").WhoseValue.Should().Be("run-1");
-        cardAction.Arguments.Should().ContainKey("step_id").WhoseValue.Should().Be("step-1");
+        cardAction!.WorkflowResume.ActorId.Should().Be("actor-1");
+        cardAction.WorkflowResume.RunId.Should().Be("run-1");
+        cardAction.WorkflowResume.StepId.Should().Be("step-1");
+        cardAction.Arguments.Should().BeEmpty();
     }
 
     [Fact]
@@ -373,7 +508,7 @@ public sealed class NyxIdRelayTransportTests
               "agent": { "api_key_id": "api-key-1" },
               "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
               "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
-              "content": { "type": "text", "text": "/daily" },
+              "content": { "type": "text", "text": "/summary" },
               "raw_platform_data": {
                 "schema": "2.0",
                 "header": { "event_type": "im.message.receive_v1" },
@@ -418,7 +553,7 @@ public sealed class NyxIdRelayTransportTests
               "sender": { "platform_id": "ou_user_2", "display_name": "User Two" },
               "content": {
                 "content_type": "card_action",
-                "text": "{\"value\":{\"agent_builder_action\":\"create_daily_report\"}}"
+                "text": "{\"value\":{\"agent_builder_action\":\"create_daily\"}}"
               },
               "raw_platform_data": {
                 "schema": "2.0",
@@ -435,7 +570,7 @@ public sealed class NyxIdRelayTransportTests
                   },
                   "action": {
                     "tag": "button",
-                    "value": { "agent_builder_action": "create_daily_report" }
+                    "value": { "agent_builder_action": "create_daily" }
                   }
                 }
               }
@@ -490,7 +625,7 @@ public sealed class NyxIdRelayTransportTests
               "agent": { "api_key_id": "api-key-1" },
               "conversation": { "id": "conv-3", "platform_id": "oc_chat_3", "type": "private" },
               "sender": { "platform_id": "ou_user_3", "display_name": "User Three" },
-              "content": { "type": "text", "text": "/daily" }
+              "content": { "type": "text", "text": "/summary" }
             }
             """;
 

@@ -7,6 +7,9 @@
     <RootNamespace>Aevatar.AI.ToolProviders.Lark</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.GAgents.NyxidChat" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
   </ItemGroup>

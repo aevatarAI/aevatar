@@ -1,10 +1,10 @@
+using Aevatar.CQRS.Core.Abstractions.Streaming;
+
 namespace Aevatar.CQRS.Core.Abstractions.Interactions;
 
 public sealed record CommandInteractionResult<TReceipt, TError, TCompletion>
+    : RealtimeSessionResult<TReceipt, TError, TCompletion>
 {
-    public required bool Succeeded { get; init; }
-    public required TError Error { get; init; }
-    public TReceipt? Receipt { get; init; }
     public CommandInteractionFinalizeResult<TCompletion>? FinalizeResult { get; init; }
 
     public static CommandInteractionResult<TReceipt, TError, TCompletion> Success(
@@ -19,11 +19,13 @@ public sealed record CommandInteractionResult<TReceipt, TError, TCompletion>
             Succeeded = true,
             Error = default!,
             Receipt = receipt,
+            Completion = finalizeResult.Completion,
+            Completed = finalizeResult.Completed,
             FinalizeResult = finalizeResult,
         };
     }
 
-    public static CommandInteractionResult<TReceipt, TError, TCompletion> Failure(TError error) =>
+    public static new CommandInteractionResult<TReceipt, TError, TCompletion> Failure(TError error) =>
         new()
         {
             Succeeded = false,

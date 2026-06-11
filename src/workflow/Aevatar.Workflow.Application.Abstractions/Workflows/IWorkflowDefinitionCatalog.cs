@@ -6,7 +6,8 @@ namespace Aevatar.Workflow.Application.Abstractions.Workflows;
 public sealed record WorkflowDefinitionRegistration(
     string WorkflowName,
     string WorkflowYaml,
-    string DefinitionActorId);
+    string DefinitionActorId,
+    string SourceKind = "builtin");
 
 /// <summary>
 /// Read-only catalog of workflow YAML definitions loaded at application startup.

@@ -348,6 +348,19 @@ body.aevatar-studio-host
   padding-top: 0;
 }
 
+@media (max-width: 720px) {
+  .teams-home-roster-row {
+    align-items: stretch !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .teams-home-roster-row-actions,
+  .teams-home-roster-row-actions .ant-space-item,
+  .teams-home-roster-row-actions .ant-btn {
+    width: 100%;
+  }
+}
+
 canvas {
   display: block;
 }

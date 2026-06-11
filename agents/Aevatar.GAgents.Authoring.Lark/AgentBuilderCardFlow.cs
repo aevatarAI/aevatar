@@ -1,4 +1,4 @@
-using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -11,89 +11,125 @@ public static class AgentBuilderCardFlow
 {
     private const string PrivateChatType = "p2p";
     private const string CardActionChatType = "card_action";
-    private const string OpenDailyReportFormAction = "open_daily_report_form";
-    private const string OpenSocialMediaFormAction = "open_social_media_form";
-    private const string DailyReportAction = "create_daily_report";
-    private const string SocialMediaAction = "create_social_media";
-    private const string ListTemplatesAction = "list_templates";
-    private const string ListAgentsAction = "list_agents";
-    private const string AgentStatusAction = "agent_status";
-    private const string RunAgentAction = "run_agent";
-    private const string DisableAgentAction = "disable_agent";
-    private const string EnableAgentAction = "enable_agent";
-    private const string ConfirmDeleteAgentAction = "confirm_delete_agent";
-    private const string DeleteAgentAction = "delete_agent";
-    private const string DefaultScheduleTime = "09:00";
-    private const string SocialMediaCommand = "/social-media";
+    private const string ListAgentsAction = AgentBuilderActionIds.ListAgents;
+    private const string AgentStatusAction = AgentBuilderActionIds.AgentStatus;
+    private const string RunAgentAction = AgentBuilderActionIds.RunAgent;
+    private const string DisableAgentAction = AgentBuilderActionIds.DisableAgent;
+    private const string EnableAgentAction = AgentBuilderActionIds.EnableAgent;
+    private const string ConfirmDeleteAgentAction = AgentBuilderActionIds.ConfirmDeleteAgent;
+    private const string DeleteAgentAction = AgentBuilderActionIds.DeleteAgent;
+    private const string ListAgentsCommand = "/agents";
     private const string AgentStatusCommand = "/agent-status";
     private const string RunAgentCommand = "/run-agent";
     private const string DisableAgentCommand = "/disable-agent";
     private const string EnableAgentCommand = "/enable-agent";
     private const string DeleteAgentCommand = "/delete-agent";
 
-    private static readonly HashSet<string> LaunchIntents = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "/daily",
-        "create daily report",
-        "创建日报助手",
-        "创建日报agent",
-    };
+    private sealed record AgentBuilderCommandSpec(
+        string TextCommand,
+        string CardAction,
+        string ToolAction,
+        string Usage,
+        bool RequiresAgentId,
+        Func<IReadOnlyList<string>, AgentBuilderCommandSpec, AgentBuilderFlowDecision> BuildFromText,
+        Func<ChannelInboundEvent, AgentBuilderCommandSpec, AgentBuilderFlowDecision> BuildFromCard,
+        Func<JsonElement, MessageContent>? FormatResult);
 
-    private static readonly HashSet<string> SocialMediaIntents = new(StringComparer.OrdinalIgnoreCase)
-    {
-        SocialMediaCommand,
-        "/create-social-media",
-        "create social media",
-        "创建社媒助手",
-        "创建社媒agent",
-    };
+    private static readonly AgentBuilderCommandSpec[] CommandSpecs =
+    [
+        new(
+            ListAgentsCommand,
+            ListAgentsAction,
+            ListAgentsAction,
+            string.Empty,
+            RequiresAgentId: false,
+            BuildListAgentsTextDecision,
+            BuildListAgentsCardDecision,
+            root => AgentBuilderCardContent.FormatListAgentsResult(root)),
+        new(
+            AgentStatusCommand,
+            AgentStatusAction,
+            AgentStatusAction,
+            $"Usage: {AgentStatusCommand} <agent_id>",
+            RequiresAgentId: true,
+            BuildSimpleAgentTextDecision,
+            BuildAgentScopedCardDecision,
+            FormatAgentStatusResult),
+        new(
+            RunAgentCommand,
+            RunAgentAction,
+            RunAgentAction,
+            $"Usage: {RunAgentCommand} <agent_id>",
+            RequiresAgentId: true,
+            BuildSimpleAgentTextDecision,
+            BuildAgentScopedCardDecision,
+            FormatRunAgentResult),
+        new(
+            DisableAgentCommand,
+            DisableAgentAction,
+            DisableAgentAction,
+            $"Usage: {DisableAgentCommand} <agent_id>",
+            RequiresAgentId: true,
+            BuildSimpleAgentTextDecision,
+            BuildAgentScopedCardDecision,
+            FormatDisableAgentResult),
+        new(
+            EnableAgentCommand,
+            EnableAgentAction,
+            EnableAgentAction,
+            $"Usage: {EnableAgentCommand} <agent_id>",
+            RequiresAgentId: true,
+            BuildSimpleAgentTextDecision,
+            BuildAgentScopedCardDecision,
+            FormatEnableAgentResult),
+        new(
+            DeleteAgentCommand,
+            DeleteAgentAction,
+            DeleteAgentAction,
+            $"Usage: {DeleteAgentCommand} <agent_id>",
+            RequiresAgentId: true,
+            BuildDeleteAgentTextDecision,
+            BuildDeleteAgentCardDecision,
+            FormatDeleteAgentResultAsList),
+    ];
 
-    private static readonly HashSet<string> ListIntents = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "/agents",
-        "list agents",
-        "我的助手",
-    };
+    private static readonly AgentBuilderCommandSpec ConfirmDeleteSpec = new(
+        TextCommand: string.Empty,
+        CardAction: ConfirmDeleteAgentAction,
+        ToolAction: ConfirmDeleteAgentAction,
+        Usage: string.Empty,
+        RequiresAgentId: true,
+        BuildFromText: static (_, _) => throw new InvalidOperationException("confirm_delete_agent has no text command."),
+        BuildFromCard: BuildConfirmDeleteCardDecision,
+        FormatResult: null);
 
-    private static readonly HashSet<string> TemplateIntents = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "/templates",
-        "/agent-templates",
-        "list templates",
-        "模板列表",
-    };
+    private static readonly IReadOnlyDictionary<string, AgentBuilderCommandSpec> SpecsByTextCommand =
+        CommandSpecs.ToDictionary(static spec => spec.TextCommand, StringComparer.OrdinalIgnoreCase);
+
+    private static readonly IReadOnlyDictionary<string, AgentBuilderCommandSpec> SpecsByCardAction =
+        CommandSpecs
+            .Append(ConfirmDeleteSpec)
+            .ToDictionary(static spec => spec.CardAction, StringComparer.OrdinalIgnoreCase);
+
+    private static readonly IReadOnlyDictionary<string, AgentBuilderCommandSpec> SpecsByToolAction =
+        CommandSpecs
+            .Where(static spec => spec.FormatResult is not null)
+            .ToDictionary(static spec => spec.ToolAction, StringComparer.OrdinalIgnoreCase);
 
     public static bool TryResolve(ChannelInboundEvent evt, out AgentBuilderFlowDecision? decision) =>
         TryResolve(evt, preferredGithubUsername: null, out decision);
 
-    public static async Task<AgentBuilderFlowDecision?> TryResolveAsync(
+    public static Task<AgentBuilderFlowDecision?> TryResolveAsync(
         ChannelInboundEvent evt,
         IUserConfigQueryPort? userConfigQueryPort,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(evt);
+        _ = userConfigQueryPort;
+        _ = ct;
 
-        string? preferredGithubUsername = null;
-        if (ShouldLoadPreferredGithubUsername(evt) && userConfigQueryPort is not null)
-        {
-            try
-            {
-                preferredGithubUsername = (await userConfigQueryPort.GetAsync(
-                    ChannelUserConfigScope.FromInboundEvent(evt),
-                    ct)).GithubUsername;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch
-            {
-                preferredGithubUsername = null;
-            }
-        }
-
-        TryResolve(evt, preferredGithubUsername, out var decision);
-        return decision;
+        TryResolve(evt, preferredGithubUsername: null, out var decision);
+        return Task.FromResult(decision);
     }
 
     private static bool TryResolve(
@@ -102,45 +138,11 @@ public static class AgentBuilderCardFlow
         out AgentBuilderFlowDecision? decision)
     {
         ArgumentNullException.ThrowIfNull(evt);
+        _ = preferredGithubUsername;
         decision = null;
 
-        if (IsPrivateChatText(evt))
-        {
-            var normalized = NormalizeText(evt.Text);
-            if (LaunchIntents.Contains(normalized))
-            {
-                // Direct webhook deployments hit this path (no Nyx relay in front); the pre-serialized
-                // Lark JSON card from BuildDailyReportCard used to land in MessageContent.Text and
-                // render as raw JSON. Route through the channel-neutral form builder so the composer
-                // emits a real interactive card.
-                decision = AgentBuilderFlowDecision.DirectReply(
-                    AgentBuilderCardContent.BuildDailyReportForm(preferredGithubUsername));
-                return true;
-            }
-
-            if (SocialMediaIntents.Contains(normalized))
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(AgentBuilderCardContent.BuildSocialMediaForm());
-                return true;
-            }
-
-            if (ListIntents.Contains(normalized))
-            {
-                decision = AgentBuilderFlowDecision.ToolCall(ListAgentsAction, """{"action":"list_agents"}""");
-                return true;
-            }
-
-            if (TemplateIntents.Contains(normalized))
-            {
-                decision = AgentBuilderFlowDecision.ToolCall(ListTemplatesAction, """{"action":"list_templates"}""");
-                return true;
-            }
-
-            if (TryResolvePrivateChatCommand(normalized, out decision))
-                return true;
-
-            return false;
-        }
+        if (TryResolveTextCommand(evt, out decision))
+            return true;
 
         if (!string.Equals(evt.ChatType, CardActionChatType, StringComparison.Ordinal))
             return false;
@@ -148,115 +150,77 @@ public static class AgentBuilderCardFlow
         if (!evt.Extra.TryGetValue("agent_builder_action", out var action))
             return false;
 
-        switch ((action ?? string.Empty).Trim())
-        {
-            case OpenDailyReportFormAction:
-                decision = AgentBuilderFlowDecision.DirectReply(
-                    AgentBuilderCardContent.BuildDailyReportForm(preferredGithubUsername));
-                return true;
+        var normalizedAction = (action ?? string.Empty).Trim();
+        if (!SpecsByCardAction.TryGetValue(normalizedAction, out var spec))
+            return false;
 
-            case OpenSocialMediaFormAction:
-                decision = AgentBuilderFlowDecision.DirectReply(AgentBuilderCardContent.BuildSocialMediaForm());
-                return true;
-
-            case DailyReportAction:
-                if (!TryBuildCreateDailyReportArguments(evt, out var argumentsJson, out var validationError))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(DailyReportAction, argumentsJson!);
-                return true;
-
-            case SocialMediaAction:
-                if (!TryBuildCreateSocialMediaArguments(evt, out argumentsJson, out validationError))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(SocialMediaAction, argumentsJson!);
-                return true;
-
-            case ListAgentsAction:
-                decision = AgentBuilderFlowDecision.ToolCall(ListAgentsAction, """{"action":"list_agents"}""");
-                return true;
-
-            case ListTemplatesAction:
-                // The /agents card surfaces a `Templates` button (also reachable via the
-                // text-flow `/templates` slash command). Without this branch, clicking the
-                // button leaves the user with an unhandled card action and no feedback.
-                decision = AgentBuilderFlowDecision.ToolCall(ListTemplatesAction, """{"action":"list_templates"}""");
-                return true;
-
-            case AgentStatusAction:
-                if (!TryBuildAgentActionArguments(evt, "agent_status", out argumentsJson, out validationError))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(AgentStatusAction, argumentsJson!);
-                return true;
-
-            case RunAgentAction:
-                if (!TryBuildAgentActionArguments(evt, "run_agent", out argumentsJson, out validationError))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(RunAgentAction, argumentsJson!);
-                return true;
-
-            case DisableAgentAction:
-                if (!TryBuildAgentActionArguments(evt, "disable_agent", out argumentsJson, out validationError))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(DisableAgentAction, argumentsJson!);
-                return true;
-
-            case EnableAgentAction:
-                if (!TryBuildAgentActionArguments(evt, "enable_agent", out argumentsJson, out validationError))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(EnableAgentAction, argumentsJson!);
-                return true;
-
-            case ConfirmDeleteAgentAction:
-                if (!TryGetRequiredExtra(evt, "agent_id", out var agentId))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply("agent_id is required for delete confirmation.");
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(
-                    agentId,
-                    evt.Extra.TryGetValue("template", out var template) ? template : null));
-                return true;
-
-            case DeleteAgentAction:
-                if (!TryBuildAgentActionArguments(evt, "delete_agent", out argumentsJson, out validationError, confirm: true))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(DeleteAgentAction, argumentsJson!);
-                return true;
-
-            default:
-                return false;
-        }
+        decision = spec.BuildFromCard(evt, spec);
+        return true;
     }
 
+    private static bool TryResolveTextCommand(
+        ChannelInboundEvent evt,
+        out AgentBuilderFlowDecision? decision)
+    {
+        decision = null;
+        if (string.IsNullOrWhiteSpace(evt.Text))
+            return false;
+
+        var trimmedText = evt.Text.TrimStart();
+        if (!trimmedText.StartsWith('/'))
+            return false;
+
+        var tokens = ChannelTextCommandParser.Tokenize(trimmedText);
+        if (tokens.Count == 0)
+            return false;
+
+        var command = tokens[0];
+        if (!SpecsByTextCommand.TryGetValue(command, out var spec))
+            return false;
+
+        if (!IsPrivateChat(evt.ChatType))
+        {
+            decision = AgentBuilderFlowDecision.DirectReply(BuildPrivateChatRestrictionReply(command));
+            return true;
+        }
+
+        decision = spec.BuildFromText(tokens, spec);
+        return true;
+    }
+
+    private static AgentBuilderFlowDecision BuildListAgentsTextDecision(
+        IReadOnlyList<string> tokens,
+        AgentBuilderCommandSpec spec)
+    {
+        _ = tokens;
+        return AgentBuilderFlowDecision.ToolCall(spec.ToolAction, JsonSerializer.Serialize(new
+        {
+            action = spec.ToolAction,
+        }));
+    }
+
+    private static AgentBuilderFlowDecision BuildSimpleAgentTextDecision(
+        IReadOnlyList<string> tokens,
+        AgentBuilderCommandSpec spec)
+    {
+        if (tokens.Count < 2 || string.IsNullOrWhiteSpace(tokens[1]))
+            return AgentBuilderFlowDecision.DirectReply(spec.Usage);
+
+        return AgentBuilderFlowDecision.ToolCall(
+            spec.ToolAction,
+            JsonSerializer.Serialize(new
+            {
+                action = spec.ToolAction,
+                agent_id = tokens[1].Trim(),
+            }));
+    }
+
+    /// <summary>
+    /// Formats the tool result for a card-action invocation. Each branch returns a structured
+    /// <see cref="MessageContent"/> with <c>Cards</c> and <c>Actions</c> populated; never a Lark
+    /// card JSON string wrapped as <see cref="MessageContent.Text"/>. The latter shape used to
+    /// reach the relay verbatim and the user saw raw <c>{"config":...}</c> blobs (issue #482).
+    /// </summary>
     public static MessageContent FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
     {
         ArgumentNullException.ThrowIfNull(decision);
@@ -264,22 +228,11 @@ public static class AgentBuilderCardFlow
         try
         {
             using var doc = JsonDocument.Parse(toolResultJson);
-            return decision.ToolAction switch
-            {
-                // Daily report creation uses the shared formatter so Nyx-relay slash commands and
-                // Feishu card-action submits render the same "running now, I'll reply when done"
-                // acknowledgment instead of one path dumping the legacy JSON card as text.
-                DailyReportAction => AgentBuilderCardContent.FormatDailyReportToolReply(doc.RootElement),
-                SocialMediaAction => ToTextContent(FormatCreateSocialMediaResult(doc.RootElement)),
-                ListTemplatesAction => ToTextContent(FormatListTemplatesResult(doc.RootElement)),
-                ListAgentsAction => ToTextContent(FormatListAgentsResult(doc.RootElement)),
-                AgentStatusAction => ToTextContent(FormatAgentStatusResult(doc.RootElement)),
-                RunAgentAction => ToTextContent(FormatRunAgentResult(doc.RootElement)),
-                DisableAgentAction => ToTextContent(FormatDisableAgentResult(doc.RootElement)),
-                EnableAgentAction => ToTextContent(FormatEnableAgentResult(doc.RootElement)),
-                DeleteAgentAction => ToTextContent(FormatDeleteAgentResult(doc.RootElement)),
-                _ => ToTextContent(toolResultJson),
-            };
+            return decision.ToolAction is not null &&
+                   SpecsByToolAction.TryGetValue(decision.ToolAction, out var spec) &&
+                   spec.FormatResult is not null
+                ? spec.FormatResult(doc.RootElement)
+                : ToTextContent(toolResultJson);
         }
         catch (JsonException)
         {
@@ -287,7 +240,7 @@ public static class AgentBuilderCardFlow
         }
     }
 
-    private static MessageContent ToTextContent(string text) => new() { Text = text };
+    private static MessageContent ToTextContent(string text) => AgentBuilderJson.TextContent(text);
 
     public static string ResolveToolChatType(ChannelInboundEvent evt)
     {
@@ -298,101 +251,53 @@ public static class AgentBuilderCardFlow
             : evt.ChatType;
     }
 
-    private static bool TryBuildCreateDailyReportArguments(
+    private static AgentBuilderFlowDecision BuildListAgentsCardDecision(
         ChannelInboundEvent evt,
-        out string? argumentsJson,
-        out string? validationError)
+        AgentBuilderCommandSpec spec)
     {
-        argumentsJson = null;
-        validationError = null;
-        var githubUsername = evt.Extra.TryGetValue("github_username", out var rawGithubUsername)
-            ? NormalizeOptional(rawGithubUsername)
-            : null;
-
-        if (!TryBuildDailyCron(evt.Extra.TryGetValue("schedule_time", out var scheduleTime) ? scheduleTime : null, out var scheduleCron, out validationError))
-            return false;
-
-        var scheduleTimezone = (evt.Extra.TryGetValue("schedule_timezone", out var rawTimezone)
-                ? rawTimezone
-                : null) ?? SkillRunnerDefaults.DefaultTimezone;
-        scheduleTimezone = string.IsNullOrWhiteSpace(scheduleTimezone)
-            ? SkillRunnerDefaults.DefaultTimezone
-            : scheduleTimezone.Trim();
-
-        var repositories = evt.Extra.TryGetValue("repositories", out var rawRepositories)
-            ? NormalizeOptional(rawRepositories)
-            : null;
-
-        var runImmediately = !evt.Extra.TryGetValue("run_immediately", out var rawRunImmediately) ||
-                             !bool.TryParse(rawRunImmediately, out var parsedRunImmediately) ||
-                             parsedRunImmediately;
-
-        argumentsJson = JsonSerializer.Serialize(new
+        _ = evt;
+        return AgentBuilderFlowDecision.ToolCall(spec.ToolAction, JsonSerializer.Serialize(new
         {
-            action = "create_agent",
-            template = "daily_report",
-            github_username = githubUsername,
-            save_github_username_preference = githubUsername is not null,
-            repositories,
-            schedule_cron = scheduleCron,
-            schedule_timezone = scheduleTimezone,
-            run_immediately = runImmediately,
-        });
-        return true;
+            action = spec.ToolAction,
+        }));
     }
 
-    private static bool TryBuildCreateSocialMediaArguments(
+    private static AgentBuilderFlowDecision BuildAgentScopedCardDecision(
         ChannelInboundEvent evt,
-        out string? argumentsJson,
-        out string? validationError)
+        AgentBuilderCommandSpec spec)
     {
-        argumentsJson = null;
-        validationError = null;
+        if (!TryBuildAgentActionArguments(evt, spec, out var argumentsJson, out var validationError))
+            return AgentBuilderFlowDecision.DirectReply(validationError!);
 
-        if (!TryGetRequiredExtra(evt, "topic", out var topic))
-        {
-            validationError = "Topic is required. Send /social-media and fill in the form again.";
-            return false;
-        }
+        return AgentBuilderFlowDecision.ToolCall(spec.ToolAction, argumentsJson!);
+    }
 
-        if (!TryBuildDailyCron(evt.Extra.TryGetValue("schedule_time", out var scheduleTime) ? scheduleTime : null, out var scheduleCron, out validationError))
-            return false;
+    private static AgentBuilderFlowDecision BuildConfirmDeleteCardDecision(
+        ChannelInboundEvent evt,
+        AgentBuilderCommandSpec spec)
+    {
+        _ = spec;
+        if (!TryGetRequiredExtra(evt, "agent_id", out var agentId))
+            return AgentBuilderFlowDecision.DirectReply("agent_id is required for delete confirmation.");
 
-        var scheduleTimezone = (evt.Extra.TryGetValue("schedule_timezone", out var rawTimezone)
-                ? rawTimezone
-                : null) ?? SkillRunnerDefaults.DefaultTimezone;
-        scheduleTimezone = string.IsNullOrWhiteSpace(scheduleTimezone)
-            ? SkillRunnerDefaults.DefaultTimezone
-            : scheduleTimezone.Trim();
+        return AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(
+            agentId,
+            evt.Extra.TryGetValue("template", out var template) ? template : null));
+    }
 
-        var audience = evt.Extra.TryGetValue("audience", out var rawAudience)
-            ? NormalizeOptional(rawAudience)
-            : null;
-        var style = evt.Extra.TryGetValue("style", out var rawStyle)
-            ? NormalizeOptional(rawStyle)
-            : null;
+    private static AgentBuilderFlowDecision BuildDeleteAgentCardDecision(
+        ChannelInboundEvent evt,
+        AgentBuilderCommandSpec spec)
+    {
+        if (!TryBuildAgentActionArguments(evt, spec, out var argumentsJson, out var validationError, confirm: true))
+            return AgentBuilderFlowDecision.DirectReply(validationError!);
 
-        var runImmediately = !evt.Extra.TryGetValue("run_immediately", out var rawRunImmediately) ||
-                             !bool.TryParse(rawRunImmediately, out var parsedRunImmediately) ||
-                             parsedRunImmediately;
-
-        argumentsJson = JsonSerializer.Serialize(new
-        {
-            action = "create_agent",
-            template = "social_media",
-            topic,
-            audience,
-            style,
-            schedule_cron = scheduleCron,
-            schedule_timezone = scheduleTimezone,
-            run_immediately = runImmediately,
-        });
-        return true;
+        return AgentBuilderFlowDecision.ToolCall(spec.ToolAction, argumentsJson!);
     }
 
     private static bool TryBuildAgentActionArguments(
         ChannelInboundEvent evt,
-        string action,
+        AgentBuilderCommandSpec spec,
         out string? argumentsJson,
         out string? validationError,
         bool confirm = false)
@@ -400,13 +305,14 @@ public static class AgentBuilderCardFlow
         argumentsJson = null;
         validationError = null;
 
-        if (!TryGetRequiredExtra(evt, "agent_id", out var agentId))
+        string? agentId = null;
+        if (spec.RequiresAgentId && !TryGetRequiredExtra(evt, "agent_id", out agentId!))
         {
             validationError = "agent_id is required. Send /agents and retry from the latest card.";
             return false;
         }
 
-        var revisionFeedback = string.Equals(action, "run_agent", StringComparison.Ordinal)
+        var revisionFeedback = string.Equals(spec.ToolAction, RunAgentAction, StringComparison.Ordinal)
             ? NormalizeOptional(evt.Extra.TryGetValue("revision_feedback", out var rawRevisionFeedback)
                 ? rawRevisionFeedback
                 : (evt.Extra.TryGetValue("user_input", out var rawUserInput) ? rawUserInput : null))
@@ -414,7 +320,7 @@ public static class AgentBuilderCardFlow
 
         argumentsJson = JsonSerializer.Serialize(new
         {
-            action,
+            action = spec.ToolAction,
             agent_id = agentId,
             confirm,
             revision_feedback = revisionFeedback,
@@ -422,144 +328,34 @@ public static class AgentBuilderCardFlow
         return true;
     }
 
-    private static bool TryResolvePrivateChatCommand(
-        string normalizedText,
-        out AgentBuilderFlowDecision? decision)
+    /// <summary>
+    /// Parses <c>/delete-agent &lt;agent_id&gt; [confirm]</c>. Without the trailing keyword the
+    /// card flow keeps its explicit confirmation card; with it, the command dispatches directly.
+    /// </summary>
+    private static AgentBuilderFlowDecision BuildDeleteAgentTextDecision(
+        IReadOnlyList<string> tokens,
+        AgentBuilderCommandSpec spec)
     {
-        decision = null;
+        if (tokens.Count < 2 || string.IsNullOrWhiteSpace(tokens[1]))
+            return AgentBuilderFlowDecision.DirectReply(spec.Usage);
 
-        if (TryParseAgentCommand(normalizedText, AgentStatusCommand, out var agentId, out var errorReply))
+        var agentId = tokens[1].Trim();
+        var confirmed = tokens.Count > 2 &&
+                        string.Equals(tokens[2], "confirm", StringComparison.OrdinalIgnoreCase);
+
+        if (confirmed)
         {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
-
-            decision = AgentBuilderFlowDecision.ToolCall(
-                AgentStatusAction,
+            return AgentBuilderFlowDecision.ToolCall(
+                spec.ToolAction,
                 JsonSerializer.Serialize(new
                 {
-                    action = AgentStatusAction,
+                    action = spec.ToolAction,
                     agent_id = agentId,
+                    confirm = true,
                 }));
-            return true;
         }
 
-        if (TryParseAgentCommand(normalizedText, RunAgentCommand, out agentId, out errorReply))
-        {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
-
-            decision = AgentBuilderFlowDecision.ToolCall(
-                RunAgentAction,
-                JsonSerializer.Serialize(new
-                {
-                    action = RunAgentAction,
-                    agent_id = agentId,
-            }));
-            return true;
-        }
-
-        if (TryParseAgentCommand(normalizedText, DisableAgentCommand, out agentId, out errorReply))
-        {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
-
-            decision = AgentBuilderFlowDecision.ToolCall(
-                DisableAgentAction,
-                JsonSerializer.Serialize(new
-                {
-                    action = DisableAgentAction,
-                    agent_id = agentId,
-                }));
-            return true;
-        }
-
-        if (TryParseAgentCommand(normalizedText, EnableAgentCommand, out agentId, out errorReply))
-        {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
-
-            decision = AgentBuilderFlowDecision.ToolCall(
-                EnableAgentAction,
-                JsonSerializer.Serialize(new
-                {
-                    action = EnableAgentAction,
-                    agent_id = agentId,
-                }));
-            return true;
-        }
-
-        if (TryParseAgentCommand(normalizedText, DeleteAgentCommand, out agentId, out errorReply))
-        {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
-
-            decision = AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(agentId!, null));
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool TryParseAgentCommand(
-        string normalizedText,
-        string command,
-        out string? agentId,
-        out string? errorReply)
-    {
-        agentId = null;
-        errorReply = null;
-
-        if (!normalizedText.StartsWith(command, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        var rawArgument = normalizedText.Length == command.Length
-            ? string.Empty
-            : normalizedText.Substring(command.Length).Trim();
-
-        if (string.IsNullOrWhiteSpace(rawArgument))
-        {
-            errorReply = $"Usage: {command} <agent_id>";
-            return true;
-        }
-
-        agentId = rawArgument;
-        return true;
-    }
-
-    private static bool TryBuildDailyCron(string? rawTime, out string? cron, out string? error)
-    {
-        cron = null;
-        error = null;
-
-        var normalized = NormalizeOptional(rawTime) ?? DefaultScheduleTime;
-        if (!TimeOnly.TryParseExact(
-                normalized,
-                ["HH:mm", "H:mm"],
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.None,
-                out var time))
-        {
-            error = "schedule_time must use HH:mm, for example 09:00.";
-            return false;
-        }
-
-        cron = $"{time.Minute} {time.Hour} * * *";
-        return true;
+        return AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(agentId, null));
     }
 
     private static bool TryGetRequiredExtra(ChannelInboundEvent evt, string key, out string value)
@@ -572,24 +368,11 @@ public static class AgentBuilderCardFlow
         return value.Length > 0;
     }
 
-    private static bool IsPrivateChatText(ChannelInboundEvent evt) =>
-        string.Equals(evt.ChatType, PrivateChatType, StringComparison.OrdinalIgnoreCase) &&
-        !string.IsNullOrWhiteSpace(evt.Text);
+    private static bool IsPrivateChat(string? chatType) =>
+        string.Equals(chatType, PrivateChatType, StringComparison.OrdinalIgnoreCase);
 
-    private static bool ShouldLoadPreferredGithubUsername(ChannelInboundEvent evt)
-    {
-        if (IsPrivateChatText(evt))
-        {
-            var normalized = NormalizeText(evt.Text);
-            return LaunchIntents.Contains(normalized);
-        }
-
-        return string.Equals(evt.ChatType, CardActionChatType, StringComparison.Ordinal) &&
-               evt.Extra.TryGetValue("agent_builder_action", out var action) &&
-               string.Equals(action, OpenDailyReportFormAction, StringComparison.Ordinal);
-    }
-
-    private static string NormalizeText(string? text) => (text ?? string.Empty).Trim();
+    private static string BuildPrivateChatRestrictionReply(string command) =>
+        $"`{command}` only works in a private chat with this bot. Please DM me and run `{command}` again.";
 
     private static string? NormalizeOptional(string? value)
     {
@@ -597,174 +380,10 @@ public static class AgentBuilderCardFlow
         return normalized.Length == 0 ? null : normalized;
     }
 
-    private static string FormatCreateSocialMediaResult(JsonElement root)
+    private static MessageContent FormatAgentStatusResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"Create social media agent failed: {error}";
-
-        var status = ReadString(root, "status") ?? "accepted";
-        var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
-        var workflowId = ReadString(root, "workflow_id") ?? "pending";
-        var nextRun = ReadString(root, "next_scheduled_run") ?? "pending";
-        var note = ReadString(root, "note");
-
-        var lines = new List<string>
-        {
-            string.Equals(status, "created", StringComparison.OrdinalIgnoreCase)
-                ? $"Social media agent created: {agentId}"
-                : $"Social media agent accepted: {agentId}",
-            $"Workflow ID: `{workflowId}`",
-            $"Next scheduled run: {nextRun}",
-        };
-
-        if (!string.IsNullOrWhiteSpace(note))
-            lines.Add(note!);
-
-        return BuildInfoCard(
-            "Social Media Agent",
-            string.Join("\n", lines),
-            "orange",
-            new object[]
-            {
-                BuildButton("View Agents", "primary", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-                BuildButton("Create Another", "default", new
-                {
-                    agent_builder_action = OpenSocialMediaFormAction,
-                }),
-            });
-    }
-
-    private static string FormatListTemplatesResult(JsonElement root)
-    {
-        if (TryReadError(root, out var error))
-            return $"List templates failed: {error}";
-
-        if (!root.TryGetProperty("templates", out var templatesElement) ||
-            templatesElement.ValueKind != JsonValueKind.Array)
-        {
-            return "No templates available.";
-        }
-
-        var elements = new List<object>
-        {
-            new
-            {
-                tag = "markdown",
-                content = "Day One currently exposes the templates below.",
-            },
-        };
-
-        foreach (var item in templatesElement.EnumerateArray())
-        {
-            var name = ReadString(item, "name") ?? "unknown-template";
-            var status = ReadString(item, "status") ?? "unknown";
-            var description = ReadString(item, "description") ?? "No description.";
-            var requiredFields = ReadStringArray(item, "required_fields");
-            var optionalFields = ReadStringArray(item, "optional_fields");
-
-            elements.Add(new
-            {
-                tag = "markdown",
-                content =
-                    $"**{EscapeMarkdown(name)}**\nStatus: `{EscapeMarkdown(status)}`\n{EscapeMarkdown(description)}\nRequired: {FormatFieldList(requiredFields)}\nOptional: {FormatFieldList(optionalFields)}",
-            });
-
-            if (string.Equals(name, "daily_report", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase))
-            {
-                elements.Add(new
-                {
-                    tag = "action",
-                    actions = new object[]
-                    {
-                        BuildButton("Create Daily Report", "primary", new
-                        {
-                            agent_builder_action = OpenDailyReportFormAction,
-                        }),
-                    },
-                });
-            }
-            else if (string.Equals(name, "social_media", StringComparison.OrdinalIgnoreCase) &&
-                     string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase))
-            {
-                elements.Add(new
-                {
-                    tag = "action",
-                    actions = new object[]
-                    {
-                        BuildButton("Create Social Media", "primary", new
-                        {
-                            agent_builder_action = OpenSocialMediaFormAction,
-                        }),
-                    },
-                });
-            }
-        }
-
-        elements.Add(new
-        {
-            tag = "action",
-            actions = new object[]
-            {
-                BuildButton("List Agents", "default", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-            },
-        });
-
-        return JsonSerializer.Serialize(new
-        {
-            config = new
-            {
-                wide_screen_mode = true,
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = "Available Templates",
-                },
-                template = "indigo",
-            },
-            elements,
-        });
-    }
-
-    private static string FormatListAgentsResult(JsonElement root)
-    {
-        if (TryReadError(root, out var error))
-            return $"List agents failed: {error}";
-
-        if (!root.TryGetProperty("agents", out var agentsElement) ||
-            agentsElement.ValueKind != JsonValueKind.Array)
-        {
-            return BuildEmptyAgentListCard();
-        }
-
-        var agents = new List<AgentListCardItem>();
-        foreach (var item in agentsElement.EnumerateArray())
-        {
-            var agentId = ReadString(item, "agent_id") ?? "unknown-agent";
-            var template = ReadString(item, "template") ?? "unknown-template";
-            var status = ReadString(item, "status") ?? "unknown";
-            var nextRun = ReadString(item, "next_scheduled_run") ?? "pending";
-            agents.Add(new AgentListCardItem(agentId, template, status, nextRun));
-        }
-
-        return agents.Count == 0
-            ? BuildEmptyAgentListCard()
-            : BuildAgentListCard(agents);
-    }
-
-    private static string FormatAgentStatusResult(JsonElement root)
-    {
-        if (TryReadError(root, out var error))
-            return $"Agent status failed: {error}";
+            return ToTextContent($"Agent status failed: {error}");
 
         var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
         var template = ReadString(root, "template") ?? "unknown-template";
@@ -774,79 +393,96 @@ public static class AgentBuilderCardFlow
         var lastRunAt = ReadString(root, "last_run_at") ?? "n/a";
         var nextRunAt = ReadString(root, "next_scheduled_run") ?? "n/a";
         var errorCount = ReadString(root, "error_count") ?? "0";
-        var lastError = ReadString(root, "last_error");
-        var note = ReadString(root, "note");
+        var lastError = NormalizeOptional(ReadString(root, "last_error"));
+        var note = NormalizeOptional(ReadString(root, "note"));
 
-        var lines = new List<string>
+        var body = new StringBuilder();
+        body.Append($"- Agent ID: `{agentId}`\n");
+        body.Append($"- Template: `{template}`\n");
+        body.Append($"- Status: `{status}`\n");
+        body.Append($"- Schedule: `{scheduleCron}` ({scheduleTimezone})\n");
+        body.Append($"- Last run: `{lastRunAt}`\n");
+        body.Append($"- Next run: `{nextRunAt}`\n");
+        body.Append($"- Error count: `{errorCount}`");
+        if (lastError is not null)
+            body.Append($"\n- Last error: {lastError}");
+        if (note is not null)
+            body.Append("\n\n").Append(note);
+
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
         {
-            $"**Agent:** `{agentId}`",
-            $"Template: `{template}`",
-            $"Status: `{status}`",
-            $"Schedule: `{scheduleCron}` ({scheduleTimezone})",
-            $"Last run: `{lastRunAt}`",
-            $"Next run: `{nextRunAt}`",
-            $"Error count: `{errorCount}`",
-        };
+            Kind = CardBlockKind.Section,
+            BlockId = $"agent_status:{agentId}",
+            Title = "Agent Status",
+            Text = body.ToString(),
+        });
 
-        if (!string.IsNullOrWhiteSpace(lastError))
-            lines.Add($"Last error: `{lastError}`");
-        if (!string.IsNullOrWhiteSpace(note))
-            lines.Add(note!);
+        var isDisabled = string.Equals(
+            status,
+            SkillRunnerDefaults.StatusDisabled,
+            StringComparison.OrdinalIgnoreCase);
+        content.Actions.Add(BuildAgentScopedCardAction("Refresh Status", AgentStatusAction, agentId, isPrimary: false));
+        if (isDisabled)
+        {
+            content.Actions.Add(BuildAgentScopedCardAction("Enable", EnableAgentAction, agentId, isPrimary: true));
+        }
+        else
+        {
+            content.Actions.Add(BuildAgentScopedCardAction("Run Now", RunAgentAction, agentId, isPrimary: true));
+            content.Actions.Add(BuildAgentScopedCardAction("Disable", DisableAgentAction, agentId, isPrimary: false));
+        }
+        content.Actions.Add(BuildCardAction("Back to Agents", ListAgentsAction, isPrimary: false));
 
-        return BuildInfoCard(
-            "Agent Status",
-            string.Join("\n", lines),
-            string.Equals(status, SkillRunnerDefaults.StatusDisabled, StringComparison.OrdinalIgnoreCase) ? "grey" : "green",
-            BuildStatusCardActions(agentId, template, status));
+        var deleteButton = BuildAgentScopedCardAction("Delete", ConfirmDeleteAgentAction, agentId, isPrimary: false);
+        deleteButton.IsDanger = true;
+        deleteButton.Arguments["template"] = template;
+        content.Actions.Add(deleteButton);
+        return content;
     }
 
-    private static string FormatRunAgentResult(JsonElement root)
+    private static MessageContent FormatRunAgentResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"Run agent failed: {error}";
+            return ToTextContent($"Run agent failed: {error}");
 
         var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
         var template = ReadString(root, "template") ?? "unknown-template";
         var note = ReadString(root, "note") ?? "Manual run dispatched.";
 
-        return BuildInfoCard(
-            "Run Triggered",
-            $"Agent `{agentId}` (`{template}`)\n{note}",
-            "green",
-            new object[]
-            {
-                BuildButton("Back to Agents", "default", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-                BuildButton("Refresh Status", "primary", new
-                {
-                    agent_builder_action = AgentStatusAction,
-                    agent_id = agentId,
-                }),
-            });
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = $"run_triggered:{agentId}",
+            Title = "Run Triggered",
+            Text = $"Agent `{agentId}` (`{template}`)\n\n{note}",
+        });
+        content.Actions.Add(BuildCardAction("Back to Agents", ListAgentsAction, isPrimary: false));
+        content.Actions.Add(BuildAgentScopedCardAction("Refresh Status", AgentStatusAction, agentId, isPrimary: true));
+        return content;
     }
 
-    private static string FormatDisableAgentResult(JsonElement root)
+    private static MessageContent FormatDisableAgentResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"Disable agent failed: {error}";
+            return ToTextContent($"Disable agent failed: {error}");
 
         return FormatAgentStatusResult(root);
     }
 
-    private static string FormatEnableAgentResult(JsonElement root)
+    private static MessageContent FormatEnableAgentResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"Enable agent failed: {error}";
+            return ToTextContent($"Enable agent failed: {error}");
 
         return FormatAgentStatusResult(root);
     }
 
-    private static string FormatDeleteAgentResult(JsonElement root)
+    private static MessageContent FormatDeleteAgentResultAsList(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"Delete agent failed: {error}";
+            return ToTextContent($"Delete agent failed: {error}");
 
         var status = ReadString(root, "status") ?? "accepted";
         var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
@@ -866,402 +502,60 @@ public static class AgentBuilderCardFlow
         if (!string.IsNullOrWhiteSpace(note))
             lines.Add(note!);
 
-        var noticeMarkdown = string.Join("\n", lines);
-        var agents = ReadAgentList(root);
-        return agents.Count == 0
-            ? BuildEmptyAgentListCard(noticeMarkdown)
-            : BuildAgentListCard(agents, noticeMarkdown);
+        return AgentBuilderCardContent.FormatListAgentsResult(root, string.Join("\n", lines));
     }
 
-    private static bool TryReadError(JsonElement root, out string error)
-    {
-        error = ReadString(root, "error") ?? string.Empty;
-        return error.Length > 0;
-    }
+    private static bool TryReadError(JsonElement root, out string error) =>
+        AgentBuilderJson.TryReadError(root, out error);
 
-    private static string? ReadString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property))
-            return null;
+    private static string? ReadString(JsonElement element, string propertyName) =>
+        AgentBuilderJson.TryReadString(element, propertyName);
 
-        return property.ValueKind switch
-        {
-            JsonValueKind.String => property.GetString(),
-            JsonValueKind.Number => property.GetRawText(),
-            JsonValueKind.True => bool.TrueString,
-            JsonValueKind.False => bool.FalseString,
-            _ => null,
-        };
-    }
-
-    private static IReadOnlyList<string> ReadStringArray(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property) ||
-            property.ValueKind != JsonValueKind.Array)
-            return Array.Empty<string>();
-
-        var values = new List<string>();
-        foreach (var item in property.EnumerateArray())
-        {
-            if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString()))
-                values.Add(item.GetString()!);
-        }
-
-        return values;
-    }
-
-    private static string FormatFieldList(IReadOnlyList<string> fields) =>
-        fields.Count == 0
-            ? "`None`"
-            : string.Join(", ", fields.Select(static field => $"`{field}`"));
-
-    private static string BuildAgentListCard(IReadOnlyList<AgentListCardItem> agents, string? noticeMarkdown = null)
-    {
-        var elements = new List<object>
-        {
-            new
-            {
-                tag = "markdown",
-                content = $"You currently have **{agents.Count}** agent(s).",
-            },
-            new
-            {
-                tag = "markdown",
-                content = "Quick commands: `/daily`, `/social-media`, `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/disable-agent <agent_id>`, `/enable-agent <agent_id>`, `/delete-agent <agent_id>`",
-            },
-        };
-
-        if (!string.IsNullOrWhiteSpace(noticeMarkdown))
-        {
-            elements.Insert(0, new
-            {
-                tag = "markdown",
-                content = noticeMarkdown,
-            });
-        }
-
-        foreach (var agent in agents)
-        {
-            elements.Add(new
-            {
-                tag = "markdown",
-                content = $"**{EscapeMarkdown(agent.Template)}**\nID: `{EscapeMarkdown(agent.AgentId)}`\nStatus: `{EscapeMarkdown(agent.Status)}`\nNext run: `{EscapeMarkdown(agent.NextRun)}`",
-            });
-            elements.Add(new
-            {
-                tag = "action",
-                actions = new object[]
-                {
-                    BuildButton("Status", "primary", new
-                    {
-                        agent_builder_action = AgentStatusAction,
-                        agent_id = agent.AgentId,
-                    }),
-                    BuildAgentListPrimaryAction(agent),
-                    BuildButton("Delete", "danger", new
-                    {
-                        agent_builder_action = ConfirmDeleteAgentAction,
-                        agent_id = agent.AgentId,
-                        template = agent.Template,
-                    }),
-                },
-            });
-        }
-
-        elements.Add(new
-        {
-            tag = "action",
-            actions = new object[]
-            {
-                BuildButton("Refresh List", "default", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-                BuildButton("Create Daily Report", "default", new
-                {
-                    agent_builder_action = OpenDailyReportFormAction,
-                }),
-                BuildButton("Create Social Media", "default", new
-                {
-                    agent_builder_action = OpenSocialMediaFormAction,
-                }),
-                BuildButton("View Templates", "default", new
-                {
-                    agent_builder_action = ListTemplatesAction,
-                }),
-            },
-        });
-
-        return JsonSerializer.Serialize(new
-        {
-            config = new
-            {
-                wide_screen_mode = true,
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = "Current Agents",
-                },
-                template = "wathet",
-            },
-            elements,
-        });
-    }
-
-    private static string BuildEmptyAgentListCard()
-    {
-        return BuildEmptyAgentListCard(null);
-    }
-
-    private static string BuildEmptyAgentListCard(string? noticeMarkdown)
-    {
-        var elements = new List<object>();
-        if (!string.IsNullOrWhiteSpace(noticeMarkdown))
-        {
-            elements.Add(new
-            {
-                tag = "markdown",
-                content = noticeMarkdown,
-            });
-        }
-
-        elements.Add(new
-        {
-            tag = "markdown",
-            content = "No agents found yet. Create your first daily report or social media agent from here.",
-        });
-        elements.Add(new
-        {
-            tag = "markdown",
-            content = "Quick commands: `/templates`, `/daily`, `/social-media`, `/agent-status <agent_id>`",
-        });
-        elements.Add(new
-        {
-            tag = "action",
-            actions = new object[]
-            {
-                BuildButton("Create Daily Report", "primary", new
-                {
-                    agent_builder_action = OpenDailyReportFormAction,
-                }),
-                BuildButton("View Templates", "default", new
-                {
-                    agent_builder_action = ListTemplatesAction,
-                }),
-                BuildButton("Create Social Media", "default", new
-                {
-                    agent_builder_action = OpenSocialMediaFormAction,
-                }),
-            },
-        });
-
-        return JsonSerializer.Serialize(new
-        {
-            config = new
-            {
-                wide_screen_mode = true,
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = "Current Agents",
-                },
-                template = "wathet",
-            },
-            elements,
-        });
-    }
-
-    private static string BuildDeleteConfirmationCard(string agentId, string? template)
+    private static MessageContent BuildDeleteConfirmationCard(string agentId, string? template)
     {
         var templateLabel = NormalizeOptional(template) ?? "unknown-template";
-        return BuildInfoCard(
-            "Delete Agent",
-            $"Delete agent `{EscapeMarkdown(agentId)}` from template `{EscapeMarkdown(templateLabel)}`?\nThis will disable scheduling, revoke the Nyx API key, and tombstone the registry entry.",
-            "red",
-            new object[]
-            {
-                BuildButton("Confirm Delete", "danger", new
-                {
-                    agent_builder_action = DeleteAgentAction,
-                    agent_id = agentId,
-                }),
-                BuildButton("Back to Agents", "default", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-            });
-    }
-
-    private static string BuildInfoCard(
-        string title,
-        string markdown,
-        string template,
-        object[] actions)
-    {
-        return JsonSerializer.Serialize(new
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
         {
-            config = new
-            {
-                wide_screen_mode = true,
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = title,
-                },
-                template,
-            },
-            elements = new object[]
-            {
-                new
-                {
-                    tag = "markdown",
-                    content = markdown,
-                },
-                new
-                {
-                    tag = "action",
-                    actions,
-                },
-            },
+            Kind = CardBlockKind.Section,
+            BlockId = $"delete_confirm:{agentId}",
+            Title = "Delete Agent",
+            Text =
+                $"Delete agent `{agentId}` from template `{templateLabel}`?\n\n" +
+                "This will disable scheduling, revoke the Nyx API key, and tombstone the registry entry.",
         });
+        var confirmButton = BuildAgentScopedCardAction("Confirm Delete", DeleteAgentAction, agentId, isPrimary: false);
+        confirmButton.IsDanger = true;
+        content.Actions.Add(confirmButton);
+        content.Actions.Add(BuildCardAction("Back to Agents", ListAgentsAction, isPrimary: false));
+        return content;
     }
 
-    private static object BuildButton(string label, string style, object value) =>
-        new
-        {
-            tag = "button",
-            type = style,
-            text = new
-            {
-                tag = "plain_text",
-                content = label,
-            },
-            value,
-        };
-
-    private static object BuildLinkButton(string label, string style, string url) =>
-        new
-        {
-            tag = "button",
-            type = style,
-            text = new
-            {
-                tag = "plain_text",
-                content = label,
-            },
-            multi_url = new
-            {
-                url,
-                pc_url = url,
-                ios_url = url,
-                android_url = url,
-            },
-        };
-
-    private static string EscapeMarkdown(string value) =>
-        value
-            .Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("`", "\\`", StringComparison.Ordinal);
-
-    private static object[] BuildStatusCardActions(string agentId, string template, string status)
+    private static ActionElement BuildCardAction(string label, string agentBuilderAction, bool isPrimary)
     {
-        var actions = new List<object>
+        var button = new ActionElement
         {
-            BuildButton("Refresh Status", "default", new
-            {
-                agent_builder_action = AgentStatusAction,
-                agent_id = agentId,
-            }),
+            Kind = ActionElementKind.Button,
+            ActionId = agentBuilderAction,
+            Label = label,
+            IsPrimary = isPrimary,
         };
-
-        if (string.Equals(status, SkillRunnerDefaults.StatusDisabled, StringComparison.OrdinalIgnoreCase))
-        {
-            actions.Add(BuildButton("Enable Agent", "primary", new
-            {
-                agent_builder_action = EnableAgentAction,
-                agent_id = agentId,
-            }));
-        }
-        else
-        {
-            actions.Add(BuildButton("Run Now", "primary", new
-            {
-                agent_builder_action = RunAgentAction,
-                agent_id = agentId,
-            }));
-            actions.Add(BuildButton("Disable Agent", "default", new
-            {
-                agent_builder_action = DisableAgentAction,
-                agent_id = agentId,
-            }));
-        }
-
-        actions.Add(BuildButton("Back to Agents", "default", new
-        {
-            agent_builder_action = ListAgentsAction,
-        }));
-        actions.Add(BuildButton("Delete Agent", "danger", new
-        {
-            agent_builder_action = ConfirmDeleteAgentAction,
-            agent_id = agentId,
-            template,
-        }));
-
-        return actions.ToArray();
+        button.Arguments["agent_builder_action"] = agentBuilderAction;
+        return button;
     }
 
-    private static object BuildAgentListPrimaryAction(AgentListCardItem agent)
+    private static ActionElement BuildAgentScopedCardAction(
+        string label,
+        string agentBuilderAction,
+        string agentId,
+        bool isPrimary)
     {
-        if (string.Equals(agent.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.OrdinalIgnoreCase))
-        {
-            return BuildButton("Enable", "default", new
-            {
-                agent_builder_action = EnableAgentAction,
-                agent_id = agent.AgentId,
-            });
-        }
-
-        return BuildButton("Run Now", "default", new
-        {
-            agent_builder_action = RunAgentAction,
-            agent_id = agent.AgentId,
-        });
+        var button = BuildCardAction(label, agentBuilderAction, isPrimary);
+        button.Arguments["agent_id"] = agentId;
+        return button;
     }
 
-    private static IReadOnlyList<AgentListCardItem> ReadAgentList(JsonElement root)
-    {
-        if (!root.TryGetProperty("agents", out var agentsElement) ||
-            agentsElement.ValueKind != JsonValueKind.Array)
-            return Array.Empty<AgentListCardItem>();
-
-        var agents = new List<AgentListCardItem>();
-        foreach (var item in agentsElement.EnumerateArray())
-        {
-            var agentId = ReadString(item, "agent_id") ?? "unknown-agent";
-            var template = ReadString(item, "template") ?? "unknown-template";
-            var status = ReadString(item, "status") ?? "unknown";
-            var nextRun = ReadString(item, "next_scheduled_run") ?? "pending";
-            agents.Add(new AgentListCardItem(agentId, template, status, nextRun));
-        }
-
-        return agents;
-    }
 }
-
-public sealed record AgentListCardItem(
-    string AgentId,
-    string Template,
-    string Status,
-    string NextRun);
 
 public sealed record AgentBuilderFlowDecision(
     bool RequiresToolExecution,

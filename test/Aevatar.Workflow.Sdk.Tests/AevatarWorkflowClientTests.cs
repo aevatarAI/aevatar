@@ -16,11 +16,11 @@ public sealed class AevatarWorkflowClientTests
     public async Task RunToCompletionAsync_WhenRunErrorFramePresent_ShouldThrowRunFailedException()
     {
         const string ssePayload = """
-data: {"type":"RUN_STARTED","threadId":"actor-1"}
+data: {"runStarted":{"threadId":"actor-1","runId":"run-1"}}
 
-data: {"type":"RUN_ERROR","code":"EXECUTION_FAILED","message":"Workflow execution failed."}
+data: {"runError":{"code":"EXECUTION_FAILED","message":"Workflow execution failed."}}
 
-data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionCompleted":false}}
+data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflow.runs.WorkflowProjectionStateSnapshotPayload","actorId":"actor-1","projectionCompleted":false}}}
 
 """;
 
@@ -152,15 +152,20 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
     }
 
     [Fact]
-    public async Task GetActorSnapshotAsync_WhenNotFound_ShouldReturnNull()
+    public async Task GetWorkflowActorCurrentStateAsync_WhenNotFound_ShouldReturnNull()
     {
-        var client = CreateClient((_, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+        var client = CreateClient((request, _) =>
+        {
+            request.Method.Should().Be(HttpMethod.Get);
+            request.RequestUri?.PathAndQuery.Should().Be("/api/workflow-actors/missing-actor/current-state");
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
             {
                 Content = new StringContent("""{"error":"missing"}""", Encoding.UTF8, "application/json"),
-            }));
+            });
+        });
 
-        var snapshot = await client.GetActorSnapshotAsync("missing-actor", CancellationToken.None);
+        var snapshot = await client.GetWorkflowActorCurrentStateAsync("missing-actor", CancellationToken.None);
         snapshot.Should().BeNull();
     }
 
@@ -186,6 +191,18 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
         catalog.Should().HaveCount(1);
         catalog[0].GetProperty("name").GetString().Should().Be("workflow_install");
         catalog[0].GetProperty("sourceLabel").GetString().Should().Be("Starter");
+    }
+
+    [Fact]
+    public async Task GetWorkflowCatalogAsync_WhenSendCanceled_ShouldPropagateCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var client = CreateClient((_, ct) => Task.FromCanceled<HttpResponseMessage>(ct));
+
+        var act = () => client.GetWorkflowCatalogAsync(cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]
@@ -254,6 +271,79 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
         detail.Should().NotBeNull();
         detail!.Value.GetProperty("catalog").GetProperty("name").GetString().Should().Be("workflow_install");
         detail.Value.GetProperty("definition").GetProperty("name").GetString().Should().Be("workflow_install");
+    }
+
+    [Fact]
+    public async Task GetWorkflowRunTimelineExportAsync_ShouldBuildUrlAndParseArray()
+    {
+        var client = CreateClient((request, _) =>
+        {
+            request.Method.Should().Be(HttpMethod.Get);
+            request.RequestUri?.PathAndQuery.Should().Be("/api/workflow-runs/run%2042/timeline-export?take=12");
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """[{"stage":"completed","stepId":"step-1"}]""",
+                    Encoding.UTF8,
+                    "application/json"),
+            });
+        });
+
+        var timeline = await client.GetWorkflowRunTimelineExportAsync("run 42", 12, CancellationToken.None);
+
+        timeline.Should().HaveCount(1);
+        timeline[0].GetProperty("stage").GetString().Should().Be("completed");
+        timeline[0].GetProperty("stepId").GetString().Should().Be("step-1");
+    }
+
+    [Fact]
+    public async Task GetWorkflowRunTimelineExportAsync_WhenTakeInvalid_ShouldThrowInvalidRequestWithoutCallingServer()
+    {
+        var called = false;
+        var client = CreateClient((_, _) =>
+        {
+            called = true;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        });
+
+        var act = () => client.GetWorkflowRunTimelineExportAsync("run-1", 0, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<AevatarWorkflowException>();
+        ex.Which.Kind.Should().Be(AevatarWorkflowErrorKind.InvalidRequest);
+        called.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetWorkflowRunTimelineExportAsync_WhenPayloadIsNotArray_ShouldThrowStreamPayload()
+    {
+        var client = CreateClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"stage":"completed"}""", Encoding.UTF8, "application/json"),
+            }));
+
+        var act = () => client.GetWorkflowRunTimelineExportAsync("run-1", 5, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<AevatarWorkflowException>();
+        ex.Which.Kind.Should().Be(AevatarWorkflowErrorKind.StreamPayload);
+        ex.Which.Message.Should().Contain("not a JSON array");
+    }
+
+    [Fact]
+    public async Task GetWorkflowRunTimelineExportAsync_WhenPayloadInvalidJson_ShouldThrowStreamPayload()
+    {
+        var client = CreateClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""[{"stage":""", Encoding.UTF8, "application/json"),
+            }));
+
+        var act = () => client.GetWorkflowRunTimelineExportAsync("run-1", 5, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<AevatarWorkflowException>();
+        ex.Which.Kind.Should().Be(AevatarWorkflowErrorKind.StreamPayload);
+        ex.Which.Message.Should().Contain("Failed to parse workflow run timeline export response payload");
     }
 
     private static IAevatarWorkflowClient CreateClient(

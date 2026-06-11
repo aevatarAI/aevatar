@@ -3,6 +3,11 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Tests.Messages;
+using Aevatar.Scripting.Infrastructure.Compilation;
+using Aevatar.Scripting.Infrastructure.Serialization;
+using Aevatar.Scripting.Core.Materialization;
+using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Projection.Materialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -20,6 +25,7 @@ public sealed class ScriptReadModelProjectorTests
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
             dispatcher,
+            CreateRealMaterializer(),
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptExecutionMaterializationContext
         {
@@ -49,7 +55,6 @@ public sealed class ScriptReadModelProjectorTests
                 },
             }),
             ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
-            ReadModelPayload = Any.Pack(readModel),
             StateVersion = 1,
         };
         var state = ScriptCommittedEnvelopeFactory.CreateState(
@@ -58,7 +63,10 @@ public sealed class ScriptReadModelProjectorTests
             "rev-1",
             new SimpleTextState { Value = "HELLO" },
             fact.StateVersion,
-            ScriptSources.UppercaseReadModelTypeUrl);
+            ScriptSources.UppercaseReadModelTypeUrl,
+            ScriptSources.UppercaseBehavior,
+            ScriptSources.UppercaseBehaviorHash,
+            ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior));
 
         await projector.ProjectAsync(
             context,
@@ -86,6 +94,7 @@ public sealed class ScriptReadModelProjectorTests
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
             dispatcher,
+            StubScriptProjectionPayloadMaterializer.WithReadModel(new Empty()),
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptExecutionMaterializationContext
         {
@@ -112,11 +121,12 @@ public sealed class ScriptReadModelProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldUseCommittedReadModelPayloadAsSourceOfTruth()
+    public async Task ProjectAsync_ShouldFallbackToLegacyReadModelPayload_WhenStateRootCannotDerive()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
             dispatcher,
+            CreateRealMaterializer(),
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptExecutionMaterializationContext
         {
@@ -128,7 +138,7 @@ public sealed class ScriptReadModelProjectorTests
             HasValue = true,
             Value = "NEW",
         };
-        var fact = new ScriptDomainFactCommitted
+        var fact = ScriptLegacyFactPayloadTestHelper.WithLegacyPayloads(new ScriptDomainFactCommitted
         {
             ActorId = "runtime-3",
             DefinitionActorId = string.Empty,
@@ -146,9 +156,8 @@ public sealed class ScriptReadModelProjectorTests
                 },
             }),
             ReadModelTypeUrl = Any.Pack(committedReadModel).TypeUrl,
-            ReadModelPayload = Any.Pack(committedReadModel),
             StateVersion = 3,
-        };
+        }, readModelPayload: Any.Pack(committedReadModel));
         var state = ScriptCommittedEnvelopeFactory.CreateState(
             "definition-3",
             "script-3",
@@ -177,6 +186,13 @@ public sealed class ScriptReadModelProjectorTests
         document.ReadModelTypeUrl.Should().Be(Any.Pack(committedReadModel).TypeUrl);
         document.ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("NEW");
     }
+
+    private static IScriptProjectionPayloadMaterializer CreateRealMaterializer() =>
+        new ScriptProjectionPayloadMaterializer(
+            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
+            new ScriptReadModelMaterializationCompiler(),
+            new ScriptNativeProjectionBuilder(),
+            new ProtobufMessageCodec());
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
     {

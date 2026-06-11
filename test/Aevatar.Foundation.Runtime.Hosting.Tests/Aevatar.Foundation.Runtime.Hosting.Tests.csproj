@@ -12,6 +12,7 @@
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Hosting\Aevatar.Foundation.Runtime.Hosting.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
@@ -20,7 +21,11 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NSubstitute" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\SharedOrleansPortAllocator.cs" Link="Shared\SharedOrleansPortAllocator.cs" />
   </ItemGroup>
 </Project>

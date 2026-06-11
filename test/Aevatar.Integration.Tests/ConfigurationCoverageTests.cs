@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace Aevatar.Integration.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class ConfigurationCoverageTests
 {
     [Fact]
@@ -138,7 +139,7 @@ public sealed class ConfigurationCoverageTests
             "http://explicit.local:1000",
             config,
             "Service:ListenUrls",
-            defaultPort: 5000);
+            defaultPort: 5100);
 
         resolved.Should().Be("http://explicit.local:1000");
     }
@@ -159,7 +160,7 @@ public sealed class ConfigurationCoverageTests
             null,
             config,
             "Service:ListenUrls",
-            defaultPort: 5000);
+            defaultPort: 5100);
 
         resolvedFromConfiguration.Should().Be("http://configured.local:1001");
 
@@ -168,7 +169,7 @@ public sealed class ConfigurationCoverageTests
             null,
             blankConfig,
             null,
-            defaultPort: 5000);
+            defaultPort: 5100);
 
         resolvedFromAspNet.Should().Be("http://env.local:1002");
     }

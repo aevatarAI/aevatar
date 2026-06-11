@@ -7,7 +7,7 @@ namespace Aevatar.GAgents.Scheduled;
 internal sealed class UserAgentCatalogTombstoneCompactionTarget : ITombstoneCompactionTarget
 {
     public string ActorId => UserAgentCatalogGAgent.WellKnownId;
-    public string ProjectionKind => UserAgentCatalogProjectionPort.ProjectionKind;
+    public string ProjectionKind => UserAgentCatalogProjectionBootstrapActivator.ProjectionKind;
     public string TargetName => "user agent catalog";
 
     public async Task EnsureActorAsync(IActorRuntime actorRuntime, CancellationToken ct)

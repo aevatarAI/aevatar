@@ -1,0 +1,372 @@
+using System.Text;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core;
+using Aevatar.AI.Core.Hooks;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Workflow.Abstractions;
+using Microsoft.Extensions.Logging;
+
+namespace Aevatar.Workflow.Integration.AI;
+
+[GAgent(WorkflowAssistantRoleAgentKind)]
+public class WorkflowRoleGAgent(
+    ILLMProviderFactory? llmProviderFactory = null,
+    IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
+    IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
+    IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
+    IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
+    IEnumerable<IAgentToolSource>? toolSources = null,
+    IToolApprovalHandler? approvalHandler = null,
+    IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+    : RoleGAgent(
+        llmProviderFactory,
+        additionalHooks,
+        agentMiddlewares,
+        toolMiddlewares,
+        llmMiddlewares,
+        toolSources,
+        approvalHandler,
+        remoteToolApprovalPort)
+{
+    public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
+
+    [EventHandler(AllowSelfHandling = true)]
+    public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        var initialize = new InitializeRoleAgentEvent
+        {
+            RoleId = evt.RoleId ?? string.Empty,
+            RoleName = evt.RoleName ?? string.Empty,
+            ProviderName = evt.ProviderName ?? string.Empty,
+            Model = evt.Model ?? string.Empty,
+            SystemPrompt = evt.SystemPrompt ?? string.Empty,
+            MaxTokens = evt.MaxTokens,
+            MaxToolRounds = evt.MaxToolRounds,
+            MaxHistoryMessages = evt.MaxHistoryMessages,
+            EventModules = evt.EventModules ?? string.Empty,
+            EventRoutes = evt.EventRoutes ?? string.Empty,
+        };
+        if (evt.HasTemperature)
+            initialize.Temperature = evt.Temperature;
+
+        return HandleInitializeRoleAgent(initialize);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleWorkflowLlmExecutionIntent(WorkflowLlmExecutionIntent intent)
+    {
+        ArgumentNullException.ThrowIfNull(intent);
+        await PublishAsync(new WorkflowLlmInvocationStartedEvent
+        {
+            RunId = intent.RunId ?? string.Empty,
+            StepId = intent.StepId ?? string.Empty,
+            SessionId = intent.SessionId ?? string.Empty,
+            RoleActorId = Id,
+        }, TopologyAudience.Parent);
+
+        var chatRequest = BuildChatRequestFromWorkflowIntent(intent);
+        using var timeoutCts = intent.TimeoutMs > 0 ? new CancellationTokenSource(intent.TimeoutMs) : null;
+        var streamCt = timeoutCts?.Token ?? CancellationToken.None;
+        try
+        {
+            var replayRecord = await ExecuteWorkflowIntentStreamingChatAsync(intent, chatRequest, streamCt);
+            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = intent.RunId ?? string.Empty,
+                StepId = intent.StepId ?? string.Empty,
+                SessionId = intent.SessionId ?? string.Empty,
+                RoleActorId = Id,
+                Success = true,
+                Content = replayRecord.Content,
+                ReasoningContent = replayRecord.ReasoningContent,
+            }, TopologyAudience.Parent);
+            await PersistRoleChatSessionCompletionAsync(
+                chatRequest,
+                replayRecord.Content,
+                replayRecord.ReasoningContent,
+                replayRecord.ToolCalls,
+                replayRecord.ContentParts,
+                replayRecord.ContentEmitted);
+        }
+        catch (OperationCanceledException) when (timeoutCts is { IsCancellationRequested: true })
+        {
+            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = intent.RunId ?? string.Empty,
+                StepId = intent.StepId ?? string.Empty,
+                SessionId = intent.SessionId ?? string.Empty,
+                RoleActorId = Id,
+                Success = false,
+                Error = $"LLM request timed out after {intent.TimeoutMs}ms",
+            }, TopologyAudience.Parent);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "[{Role}] Workflow LLM intent failed. run={RunId} step={StepId} session={SessionId}",
+                RoleName,
+                intent.RunId,
+                intent.StepId,
+                intent.SessionId);
+            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = intent.RunId ?? string.Empty,
+                StepId = intent.StepId ?? string.Empty,
+                SessionId = intent.SessionId ?? string.Empty,
+                RoleActorId = Id,
+                Success = false,
+                Error = SanitizeWorkflowFailureMessage(ex.Message),
+            }, TopologyAudience.Parent);
+        }
+    }
+
+    private static ChatRequestEvent BuildChatRequestFromWorkflowIntent(WorkflowLlmExecutionIntent intent)
+    {
+        var request = new ChatRequestEvent
+        {
+            Prompt = intent.Prompt ?? string.Empty,
+            SessionId = intent.SessionId ?? string.Empty,
+            TimeoutMs = intent.TimeoutMs,
+            LlmControl = new LLMControlContextPayload
+            {
+                ModelOverride = intent.Model ?? string.Empty,
+                UserMemoryPrompt = intent.UserMemoryPrompt ?? string.Empty,
+                SenderNyxIdAccessToken = intent.SenderNyxIdAccessToken ?? string.Empty,
+            },
+        };
+        if (intent.HasMaxToolRounds)
+            request.LlmControl.MaxToolRoundsOverride = intent.MaxToolRounds;
+        foreach (var pair in intent.Headers)
+            request.Metadata[pair.Key] = pair.Value;
+        foreach (var pair in intent.Annotations)
+            request.Metadata[pair.Key] = pair.Value;
+        return request;
+    }
+
+    private async Task<WorkflowIntentReplayRecord> ExecuteWorkflowIntentStreamingChatAsync(
+        WorkflowLlmExecutionIntent intent,
+        ChatRequestEvent request,
+        CancellationToken streamCt)
+    {
+        var inputParts = ResolveWorkflowRequestInputParts(request);
+        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+        var toolContext = llmControl.ToToolContext(AgentToolExecutionContext.Empty);
+        var metadata = request.Metadata.Count > 0
+            ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
+                new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))
+            : null;
+
+        var fullContent = new StringBuilder();
+        var fullReasoning = new StringBuilder();
+        var toolCalls = new WorkflowToolCallAccumulator();
+        var contentParts = new List<ContentPart>();
+
+        await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            {
+                fullContent.Append(chunk.DeltaContent);
+                await PublishAsync(new WorkflowLlmStreamChunkEvent
+                {
+                    RunId = intent.RunId ?? string.Empty,
+                    StepId = intent.StepId ?? string.Empty,
+                    SessionId = intent.SessionId ?? string.Empty,
+                    RoleActorId = Id,
+                    DeltaContent = chunk.DeltaContent,
+                }, TopologyAudience.Parent);
+            }
+
+            if (chunk.DeltaContentPart != null)
+                contentParts.Add(chunk.DeltaContentPart);
+
+            if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
+            {
+                fullReasoning.Append(chunk.DeltaReasoningContent);
+                await PublishAsync(new WorkflowLlmStreamChunkEvent
+                {
+                    RunId = intent.RunId ?? string.Empty,
+                    StepId = intent.StepId ?? string.Empty,
+                    SessionId = intent.SessionId ?? string.Empty,
+                    RoleActorId = Id,
+                    DeltaReasoningContent = chunk.DeltaReasoningContent,
+                }, TopologyAudience.Parent);
+            }
+
+            if (chunk.DeltaToolCall != null)
+                toolCalls.TrackDelta(chunk.DeltaToolCall);
+        }
+
+        return new WorkflowIntentReplayRecord(
+            fullContent.ToString(),
+            fullReasoning.ToString(),
+            toolCalls.BuildToolCalls(),
+            contentParts,
+            ContentEmitted: fullContent.Length > 0);
+    }
+
+    private static IReadOnlyList<ContentPart> ResolveWorkflowRequestInputParts(ChatRequestEvent request)
+    {
+        if (request.InputParts.Count > 0)
+        {
+            var parts = new List<ContentPart>();
+            if (!string.IsNullOrWhiteSpace(request.Prompt))
+                parts.Add(ContentPart.TextPart(request.Prompt));
+            parts.AddRange(ContentPartProtoMapper.FromProtoList(request.InputParts));
+            return parts;
+        }
+
+        return [ContentPart.TextPart(request.Prompt ?? string.Empty)];
+    }
+
+    private static string SanitizeWorkflowFailureMessage(string? message) =>
+        string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
+
+    private sealed record WorkflowIntentReplayRecord(
+        string Content,
+        string ReasoningContent,
+        IReadOnlyList<ToolCall> ToolCalls,
+        IReadOnlyList<ContentPart> ContentParts,
+        bool ContentEmitted);
+
+    private sealed class WorkflowToolCallAccumulator
+    {
+        private readonly Dictionary<string, ToolCallAggregate> _aggregates = new(StringComparer.Ordinal);
+        private readonly List<string> _order = [];
+        private int _anonymousCounter;
+        private string? _activeAnonymousKey;
+        private string? _lastKnownKey;
+
+        public void TrackDelta(ToolCall delta)
+        {
+            ArgumentNullException.ThrowIfNull(delta);
+
+            var aggregate = ResolveAggregate(delta);
+            if (!string.IsNullOrWhiteSpace(delta.Name))
+                aggregate.Name = delta.Name;
+            if (!string.IsNullOrEmpty(delta.ArgumentsJson))
+                aggregate.Arguments.Append(delta.ArgumentsJson);
+        }
+
+        public IReadOnlyList<ToolCall> BuildToolCalls()
+        {
+            var result = new List<ToolCall>(_order.Count);
+            foreach (var key in _order)
+            {
+                if (!_aggregates.TryGetValue(key, out var aggregate))
+                    continue;
+
+                result.Add(new ToolCall
+                {
+                    Id = aggregate.Id,
+                    Name = aggregate.Name ?? string.Empty,
+                    ArgumentsJson = aggregate.Arguments.ToString(),
+                });
+            }
+
+            return result;
+        }
+
+        private ToolCallAggregate ResolveAggregate(ToolCall delta)
+        {
+            if (!string.IsNullOrWhiteSpace(delta.Id))
+                return ResolveKnownIdAggregate(delta.Id);
+
+            if (!string.IsNullOrWhiteSpace(_lastKnownKey) &&
+                _aggregates.TryGetValue(_lastKnownKey, out var knownAggregate))
+            {
+                return knownAggregate;
+            }
+
+            return ResolveAnonymousAggregate();
+        }
+
+        private ToolCallAggregate ResolveKnownIdAggregate(string id)
+        {
+            var knownKey = $"id:{id}";
+            if (TryPromoteActiveAnonymousAggregate(knownKey, id, out var promoted))
+            {
+                _activeAnonymousKey = null;
+                _lastKnownKey = knownKey;
+                return promoted;
+            }
+
+            _activeAnonymousKey = null;
+            if (!_aggregates.TryGetValue(knownKey, out var aggregate))
+            {
+                aggregate = new ToolCallAggregate(id);
+                _aggregates[knownKey] = aggregate;
+                _order.Add(knownKey);
+            }
+
+            _lastKnownKey = knownKey;
+            return aggregate;
+        }
+
+        private ToolCallAggregate ResolveAnonymousAggregate()
+        {
+            if (!string.IsNullOrWhiteSpace(_activeAnonymousKey) &&
+                _aggregates.TryGetValue(_activeAnonymousKey, out var activeAggregate))
+            {
+                return activeAggregate;
+            }
+
+            _anonymousCounter++;
+            var anonymousKey = $"anon:{_anonymousCounter}";
+            var anonymousId = $"stream-tool-call-{_anonymousCounter}";
+            var aggregate = new ToolCallAggregate(anonymousId);
+            _aggregates[anonymousKey] = aggregate;
+            _order.Add(anonymousKey);
+            _activeAnonymousKey = anonymousKey;
+            return aggregate;
+        }
+
+        private bool TryPromoteActiveAnonymousAggregate(
+            string knownKey,
+            string knownId,
+            out ToolCallAggregate aggregate)
+        {
+            aggregate = default!;
+
+            if (string.IsNullOrWhiteSpace(_activeAnonymousKey))
+                return false;
+
+            if (!_aggregates.TryGetValue(_activeAnonymousKey, out var anonymousAggregate))
+                return false;
+
+            if (_aggregates.ContainsKey(knownKey))
+                return false;
+
+            anonymousAggregate.Id = knownId;
+            _aggregates.Remove(_activeAnonymousKey);
+            _aggregates[knownKey] = anonymousAggregate;
+            ReplaceOrderKey(_activeAnonymousKey, knownKey);
+            aggregate = anonymousAggregate;
+            return true;
+        }
+
+        private void ReplaceOrderKey(string sourceKey, string targetKey)
+        {
+            for (var index = 0; index < _order.Count; index++)
+            {
+                if (!string.Equals(_order[index], sourceKey, StringComparison.Ordinal))
+                    continue;
+
+                _order[index] = targetKey;
+                return;
+            }
+        }
+
+        private sealed class ToolCallAggregate(string id)
+        {
+            public string Id { get; set; } = id;
+            public string? Name { get; set; }
+            public StringBuilder Arguments { get; } = new();
+        }
+    }
+}

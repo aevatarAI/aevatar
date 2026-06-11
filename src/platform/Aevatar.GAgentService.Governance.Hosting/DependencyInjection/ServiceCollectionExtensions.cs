@@ -1,4 +1,3 @@
-using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -8,7 +7,6 @@ using Aevatar.GAgentService.Governance.Application.Services;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Governance.Infrastructure.Activation;
 using Aevatar.GAgentService.Governance.Infrastructure.Admission;
-using Aevatar.GAgentService.Governance.Hosting.Migration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
@@ -40,9 +38,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceGovernanceCommandPort, ServiceGovernanceCommandApplicationService>();
         services.TryAddSingleton<ServiceGovernanceQueryApplicationService>();
         services.TryAddSingleton<IServiceGovernanceQueryPort>(sp => sp.GetRequiredService<ServiceGovernanceQueryApplicationService>());
-#pragma warning disable CS0618 // Legacy migration — remove after all deployments complete governance migration
-        services.AddHostedService<ServiceGovernanceLegacyMigrationHostedService>();
-#pragma warning restore CS0618
+        // Refactor (iter23/cluster-003-governance-legacy-startup-eventstore-fold):
+        //   Old pattern: host startup replayed legacy event streams and folded state in process.
+        //   New principle: normal startup composes ports only; migrations are explicit operator jobs.
         return services;
     }
 
@@ -55,21 +53,12 @@ public static class ServiceCollectionExtensions
 
         if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceConfigurationReadModel, string>)))
             return services;
-        var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
-        var inMemoryEnabled = ResolveOptionalBool(
-            configuration["Projection:Document:Providers:InMemory:Enabled"],
-            fallbackValue: !elasticsearchEnabled);
-        var providerCount = (elasticsearchEnabled ? 1 : 0) + (inMemoryEnabled ? 1 : 0);
-        if (providerCount != 1)
-        {
-            throw new InvalidOperationException(
-                "Exactly one document projection provider must be enabled for GAgentService governance.");
-        }
+        var documentProvider = ProjectionDocumentProviderConfiguration.Resolve(configuration, "GAgentService governance");
 
-        if (elasticsearchEnabled)
+        if (documentProvider.ElasticsearchEnabled)
         {
             services.AddElasticsearchDocumentProjectionStore<ServiceConfigurationReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
@@ -85,39 +74,4 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)
-    {
-        var section = configuration.GetSection("Projection:Document:Providers:Elasticsearch");
-        var explicitEnabled = section["Enabled"];
-        var hasEndpoints = section
-            .GetSection("Endpoints")
-            .GetChildren()
-            .Select(x => x.Value?.Trim() ?? string.Empty)
-            .Any(x => x.Length > 0);
-        return ResolveOptionalBool(explicitEnabled, hasEndpoints);
-    }
-
-    private static ElasticsearchProjectionDocumentStoreOptions BuildElasticsearchDocumentOptions(
-        IConfiguration configuration)
-    {
-        var options = new ElasticsearchProjectionDocumentStoreOptions();
-        configuration.GetSection("Projection:Document:Providers:Elasticsearch").Bind(options);
-        if (options.Endpoints.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Projection:Document:Providers:Elasticsearch is enabled but Endpoints is empty.");
-        }
-
-        return options;
-    }
-
-    private static bool ResolveOptionalBool(string? rawValue, bool fallbackValue)
-    {
-        if (string.IsNullOrWhiteSpace(rawValue))
-            return fallbackValue;
-        if (!bool.TryParse(rawValue, out var parsed))
-            throw new InvalidOperationException($"Invalid boolean value '{rawValue}'.");
-
-        return parsed;
-    }
 }

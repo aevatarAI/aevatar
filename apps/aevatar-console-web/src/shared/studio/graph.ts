@@ -5,6 +5,7 @@ import {
   type Node,
   type XYPosition,
 } from '@xyflow/react';
+import { t } from '@/shared/i18n/messages';
 
 export type StudioGraphRole = {
   readonly id: string;
@@ -241,29 +242,66 @@ function normalizeSteps(document: WorkflowDocumentLike): StudioGraphStep[] {
     .filter((step): step is StudioGraphStep => Boolean(step));
 }
 
-function summarizeStepParameters(parameters: Record<string, unknown>): string {
+function summarizeStepParameterEntry(
+  stepType: string,
+  key: string,
+  value: unknown,
+): string {
+  const displayKey =
+    stepType.trim().toLowerCase() === 'llm_call' && key === 'prompt_prefix'
+      ? 'instruction'
+      : key;
+
+  if (typeof value === 'string') {
+    return `${displayKey}: ${value}`;
+  }
+
+  if (
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    value === null
+  ) {
+    return `${displayKey}: ${String(value)}`;
+  }
+
+  return `${displayKey}: ${JSON.stringify(value)}`;
+}
+
+function getSummarizableStepParameterEntries(
+  stepType: string,
+  parameters: Record<string, unknown>,
+): Array<[string, unknown]> {
   const entries = Object.entries(parameters);
+  if (stepType.trim().toLowerCase() !== 'llm_call') {
+    return entries;
+  }
+
+  const promptPrefixValue = parameters.prompt_prefix ?? parameters.prompt;
+  const nextEntries = entries.filter(
+    ([key]) => key !== 'prompt_prefix' && key !== 'prompt',
+  );
+  if (typeof promptPrefixValue === 'string' && promptPrefixValue.trim()) {
+    return [['prompt_prefix', promptPrefixValue], ...nextEntries];
+  }
+
+  return nextEntries;
+}
+
+function summarizeStepParameters(
+  stepType: string,
+  parameters: Record<string, unknown>,
+): string {
+  const entries = getSummarizableStepParameterEntries(stepType, parameters);
   if (entries.length === 0) {
-    return 'No parameters configured';
+    return t(
+      'shared.studio.graph.no.parameters.configured',
+      'No parameters configured',
+    );
   }
 
   return entries
     .slice(0, 2)
-    .map(([key, value]) => {
-      if (typeof value === 'string') {
-        return `${key}: ${value}`;
-      }
-
-      if (
-        typeof value === 'number' ||
-        typeof value === 'boolean' ||
-        value === null
-      ) {
-        return `${key}: ${String(value)}`;
-      }
-
-      return `${key}: ${JSON.stringify(value)}`;
-    })
+    .map(([key, value]) => summarizeStepParameterEntry(stepType, key, value))
     .join(' · ');
 }
 
@@ -530,7 +568,7 @@ export function buildStudioGraphElements(
         stepId: step.id,
         stepType: step.type,
         targetRole: step.targetRole,
-        parametersSummary: summarizeStepParameters(step.parameters),
+        parametersSummary: summarizeStepParameters(step.type, step.parameters),
         branchCount: Object.keys(step.branches).length,
       },
     };

@@ -20,6 +20,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public class WorkflowExecutionProjectionRegistrationTests
 {
     [Fact]
@@ -47,27 +48,23 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         await using var provider = services.BuildServiceProvider();
         var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
-        var timelineStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunTimelineDocument, string>>();
         var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
-        var timelineDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunTimelineDocument>>();
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
         var graphWriter = provider.GetRequiredService<IProjectionGraphWriter<WorkflowRunInsightReportDocument>>();
         var currentStateMaterializers = provider.GetServices<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
         var artifactMaterializers = provider.GetServices<IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>>();
         currentStateStore.Should().NotBeNull();
-        timelineStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
         currentStateDispatcher.Should().NotBeNull();
-        timelineDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
         graphWriter.Should().NotBeNull();
-        currentStateMaterializers.Should().ContainSingle()
-            .Which.Should().BeOfType<WorkflowExecutionCurrentStateProjector>();
-        artifactMaterializers.Should().ContainSingle()
-            .Which.Should().BeOfType<WorkflowRunInsightReportArtifactProjector>();
+        currentStateMaterializers.Should().ContainSingle();
+        artifactMaterializers.Should().ContainSingle();
+        provider.GetRequiredService<WorkflowExecutionCurrentStateProjector>().Should().NotBeNull();
+        provider.GetRequiredService<WorkflowRunInsightReportArtifactProjector>().Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();
@@ -111,17 +108,6 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void WorkflowRunTimelineDocumentMetadataProvider_ShouldExposeExpectedDefaults()
-    {
-        var provider = new WorkflowRunTimelineDocumentMetadataProvider();
-
-        provider.Metadata.IndexName.Should().Be("workflow-run-timelines");
-        provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
-        provider.Metadata.Settings.Should().BeEmpty();
-        provider.Metadata.Aliases.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task AddWorkflowExecutionProjectionCQRS_ShouldNotRegisterLegacyEventDeduplicator()
     {
         var services = new ServiceCollection();
@@ -136,11 +122,6 @@ public class WorkflowExecutionProjectionRegistrationTests
     private static void RegisterInMemoryProviders(IServiceCollection services)
     {
         services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
-            keySelector: document => document.RootActorId,
-            keyFormatter: key => key,
-            defaultSortSelector: document => document.UpdatedAt,
-            queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
             keySelector: document => document.RootActorId,
             keyFormatter: key => key,
             defaultSortSelector: document => document.UpdatedAt,
@@ -161,14 +142,6 @@ public class WorkflowExecutionProjectionRegistrationTests
                 Endpoints = ["http://localhost:9200"],
             },
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>>().Metadata,
-            keySelector: document => document.RootActorId,
-            keyFormatter: key => key);
-        services.AddElasticsearchDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
-            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
-            {
-                Endpoints = ["http://localhost:9200"],
-            },
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>>().Metadata,
             keySelector: document => document.RootActorId,
             keyFormatter: key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowRunInsightReportDocument, string>(
@@ -210,12 +183,12 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             _ = actorId;
             _ = envelope;
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(false);

@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -11,18 +11,19 @@ public sealed class WorkflowRunInsightReportArtifactProjector
 {
     private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _reportReader;
     private readonly IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> _reportWriter;
-    private readonly IProjectionWriteDispatcher<WorkflowRunTimelineDocument> _timelineWriter;
     private readonly IProjectionGraphWriter<WorkflowRunInsightReportDocument> _graphWriter;
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: workflow history / report / graph are treated as current-state readmodels (current-state query path enriches actor snapshots by reading report artifacts; duplicate WorkflowRunTimelineDocument and WorkflowRunGraphArtifactDocument shells copy WorkflowRunInsightReportDocument; public application/query/tool/HTTP surfaces expose them as actor current-state queries instead of workflow-run artifacts)
+    //   New principle: Workflow history / report / graph are workflow-run artifacts (or aggregate-owned views), NOT actor current-state readmodels: keep existing WorkflowRunInsightReportDocument adapter/name workflow-local as the single report artifact source; delete duplicate WorkflowRunTimelineDocument / WorkflowRunGraphArtifactDocument shells (timeline derived from report artifact, graph materialization derived from report artifact); stop current-state query paths from reading report/history artifacts to enrich actor snapshots; rename public application/query/tool/HTTP surfaces so report/timeline/graph are explicit workflow-run artifact / export, not current-state readmodel surfaces; WorkflowExecutionCurrentStateDocument remains the only workflow actor-scoped current-state readmodel; NO CLAUDE.md change, NO new core abstraction, NO generic CQRS Projection artifact storage seam, NO new actor type
+    //   New pattern: workflow history/report/graph are artifacts or aggregate-owned views, not current-state readmodels.
     public WorkflowRunInsightReportArtifactProjector(
         IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> reportReader,
         IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> reportWriter,
-        IProjectionWriteDispatcher<WorkflowRunTimelineDocument> timelineWriter,
         IProjectionGraphWriter<WorkflowRunInsightReportDocument> graphWriter)
     {
         _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
         _reportWriter = reportWriter ?? throw new ArgumentNullException(nameof(reportWriter));
-        _timelineWriter = timelineWriter ?? throw new ArgumentNullException(nameof(timelineWriter));
         _graphWriter = graphWriter ?? throw new ArgumentNullException(nameof(graphWriter));
     }
 
@@ -51,9 +52,6 @@ public sealed class WorkflowRunInsightReportArtifactProjector
         WorkflowExecutionArtifactMaterializationSupport.ApplyReportBase(readModel, context, state, stateEvent, observedAt);
         WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(readModel, stateEvent, observedAt);
         await _reportWriter.UpsertAsync(readModel, ct);
-        await _timelineWriter.UpsertAsync(
-            WorkflowExecutionArtifactMaterializationSupport.BuildTimelineDocument(readModel),
-            ct);
         await _graphWriter.UpsertAsync(readModel, ct);
     }
 }

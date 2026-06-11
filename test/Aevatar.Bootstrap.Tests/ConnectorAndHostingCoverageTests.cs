@@ -6,14 +6,17 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Workflow.Core.Connectors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using ConnectorRegistryEntry = Aevatar.Foundation.Abstractions.Connectors.ConnectorRegistration;
 
 namespace Aevatar.Bootstrap.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public class ConnectorAndHostingCoverageTests
 {
     [Fact]
@@ -110,6 +113,71 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task HttpConnector_ShouldUseTypedAuthorizationAndIgnoreLegacyMetadataAuth()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var connector = new HttpConnector(
+            "auth-http",
+            "https://example.com",
+            allowedMethods: ["POST"],
+            allowedPaths: ["/invoke"],
+            client: new HttpClient(handler));
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/invoke",
+            HttpAuthorization = " Bearer typed-token ",
+            Metadata = new Dictionary<string, string>
+            {
+                ["connector.http.authorization"] = "Bearer legacy-token",
+            },
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        response.Success.Should().BeTrue();
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Headers.Authorization.Should().NotBeNull();
+        handler.LastRequest.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        handler.LastRequest.Headers.Authorization.Parameter.Should().Be("typed-token");
+    }
+
+    [Fact]
+    public async Task HttpConnector_ShouldNotUseLegacyMetadataAuthorization()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var connector = new HttpConnector(
+            "metadata-auth-http",
+            "https://example.com",
+            allowedMethods: ["POST"],
+            allowedPaths: ["/invoke"],
+            client: new HttpClient(handler));
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/invoke",
+            Metadata = new Dictionary<string, string>
+            {
+                ["connector.http.authorization"] = "Bearer legacy-token",
+            },
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        response.Success.Should().BeTrue();
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Headers.Authorization.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HttpConnector_ShouldAppendResponseDescriptionToErrorMessage()
     {
         var handler = new StubHttpMessageHandler(_ =>
@@ -142,10 +210,11 @@ public class ConnectorAndHostingCoverageTests
     [Fact]
     public async Task CliConnector_ShouldRejectPolicyAndExecuteCommand()
     {
+        var (command, args) = BuildSuccessfulCliCommand();
         var connector = new CliConnector(
             "cli-test",
-            command: "dotnet",
-            fixedArguments: ["--info"],
+            command: command,
+            fixedArguments: args,
             allowedOperations: ["status"],
             allowedInputKeys: ["q"]);
 
@@ -174,6 +243,15 @@ public class ConnectorAndHostingCoverageTests
         success.Success.Should().BeTrue();
         success.Metadata.Should().ContainKey("connector.cli.exit_code");
         success.Metadata["connector.cli.exit_code"].Should().Be("0");
+    }
+
+    private static (string Command, string[] Arguments) BuildSuccessfulCliCommand()
+    {
+        if (OperatingSystem.IsWindows())
+            return ("cmd", ["/c", "exit 0"]);
+
+        var truePath = File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true";
+        return (truePath, []);
     }
 
     [Fact]
@@ -390,7 +468,7 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
-    public void ConnectorRegistration_ShouldBuildSupportedConnectorsOnly()
+    public async Task ConnectorRegistration_ShouldBuildSupportedConnectorsOnly()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"connector-reg-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
@@ -419,10 +497,55 @@ public class ConnectorAndHostingCoverageTests
             var logger = NullLogger.Instance;
             var builders = new IConnectorBuilder[] { new HttpConnectorBuilder() };
 
-            var added = ConnectorRegistration.RegisterConnectors(registry, builders, logger, filePath);
+            var added = await ConnectorRegistration.RegisterConnectorsAsync(registry, builders, logger, filePath);
 
             added.Should().Be(1);
             registry.ListNames().Should().ContainSingle().Which.Should().Be("valid_http");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ConnectorRegistration_ShouldRegisterBootstrapConnectorsAsRegistryOwned()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"connector-ownership-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var filePath = Path.Combine(tempDir, "connectors.json");
+
+        File.WriteAllText(filePath,
+            """
+            {
+              "connectors": [
+                {
+                  "name": "owned_connector",
+                  "type": "recording"
+                }
+              ]
+            }
+            """);
+
+        try
+        {
+            await using var registry = new ConfiguredConnectorRegistry();
+            var connector = new RecordingConnector("owned_connector", "recording");
+            var builders = new IConnectorBuilder[] { new RecordingConnectorBuilder("recording", connector) };
+
+            var added = await ConnectorRegistration.RegisterConnectorsAsync(
+                registry,
+                builders,
+                NullLogger.Instance,
+                filePath);
+
+            added.Should().Be(1);
+            registry.TryGet("owned_connector", out var resolved).Should().BeTrue();
+            resolved.Should().BeSameAs(connector);
+
+            await registry.DisposeAsync();
+
+            connector.DisposeCount.Should().Be(1);
         }
         finally
         {
@@ -468,7 +591,7 @@ public class ConnectorAndHostingCoverageTests
             services.AddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
             services.AddSingleton<IConnectorBuilder, HttpConnectorBuilder>();
 
-            using var provider = services.BuildServiceProvider();
+            await using var provider = services.BuildServiceProvider();
             var service = new ConnectorBootstrapHostedService(
                 provider,
                 NullLogger<ConnectorBootstrapHostedService>.Instance);
@@ -477,6 +600,51 @@ public class ConnectorAndHostingCoverageTests
 
             var registry = provider.GetRequiredService<IConnectorRegistry>();
             registry.ListNames().Should().Contain("h1");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, previousHome);
+            Directory.Delete(tempHome, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ConnectorBootstrapHostedService_StopAsync_ShouldDisposeRegistryOwnedConnectors()
+    {
+        var tempHome = Path.Combine(Path.GetTempPath(), $"connector-stop-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempHome);
+        var previousHome = Environment.GetEnvironmentVariable(AevatarPaths.HomeEnv);
+        Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, tempHome);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tempHome, "connectors.json"),
+                """
+                {
+                  "connectors": [
+                    {
+                      "name": "owned_stop_connector",
+                      "type": "recording"
+                    }
+                  ]
+                }
+                """);
+
+            var connector = new RecordingConnector("owned_stop_connector", "recording");
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddSingleton<IConnectorRegistry, ConfiguredConnectorRegistry>();
+            services.AddSingleton<IConnectorBuilder>(new RecordingConnectorBuilder("recording", connector));
+
+            await using var provider = services.BuildServiceProvider();
+            var service = new ConnectorBootstrapHostedService(
+                provider,
+                NullLogger<ConnectorBootstrapHostedService>.Instance);
+
+            await service.StartAsync(CancellationToken.None);
+            await service.StopAsync(CancellationToken.None);
+
+            connector.DisposeCount.Should().Be(1);
         }
         finally
         {
@@ -572,6 +740,95 @@ public class ConnectorAndHostingCoverageTests
         telegramUserConnector.Should().NotBeNull();
         telegramUserConnector!.Type.Should().Be("telegram_user");
         telegramUserConnector.Name.Should().Be("telegram-user-valid");
+    }
+
+    [Fact]
+    public async Task TelegramUserConnector_GetUpdates_ShouldRejectGetUpdatesWithNyxIdRelayGuidance()
+    {
+        var connector = new TelegramUserConnector(
+            "telegram-user-no-inbound",
+            apiId: 123456,
+            apiHash: "hash",
+            phoneNumber: "",
+            verificationCode: "",
+            password: "",
+            sessionPath: "",
+            deviceModel: "",
+            systemVersion: "",
+            appVersion: "",
+            systemLangCode: "",
+            langCode: "",
+            allowedOperations: ["/sendMessage"],
+            timeoutMs: 1000,
+            logger: NullLogger.Instance);
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/getUpdates",
+            Payload = """{"offset":1,"timeout":25}""",
+        });
+
+        response.Success.Should().BeFalse();
+        response.Error.Should().Contain("/getUpdates was removed");
+        response.Error.Should().Contain("NyxID Channel Bot Relay");
+    }
+
+    [Fact]
+    public void TelegramUser_only_getUpdates_should_fallback_to_sendMessage()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "aevatar-connectors-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, """
+            {
+              "connectors": [
+                {
+                  "name": "telegram_user_main",
+                  "type": "telegram_user",
+                  "telegramUser": {
+                    "allowedOperations": ["/getUpdates"]
+                  }
+                }
+              ]
+            }
+            """);
+
+        try
+        {
+            var connectors = AevatarConnectorConfig.LoadConnectors(path);
+
+            connectors.Should().ContainSingle()
+                .Which.TelegramUser.AllowedOperations.Should().Equal(["/sendMessage"],
+                    "filtering /getUpdates should fall back to /sendMessage when no allowed operations remain");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TelegramUserConnector_must_not_reintroduce_inbound_queue_or_polling_state()
+    {
+        var path = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "Aevatar.Bootstrap",
+            "Connectors",
+            "TelegramUserConnector.cs"));
+        var source = File.ReadAllText(path);
+
+        source.Should().NotContain("TelegramInboundUpdate",
+            "deleted per iter113/cluster-1 - inbound goes through NyxID relay");
+        source.Should().NotContain("GetUpdatesPayload",
+            "/getUpdates implementation deleted");
+        source.Should().NotContain("MaxBufferedUpdates",
+            "in-memory buffer deleted");
+        source.Should().NotContain("Queue<",
+            "inbound queue state deleted");
     }
 
     [Fact]
@@ -734,11 +991,51 @@ public class ConnectorAndHostingCoverageTests
         }
     }
 
+    private sealed class RecordingConnectorBuilder(string type, IConnector connector) : IConnectorBuilder
+    {
+        public string Type { get; } = type;
+
+        public bool TryBuild(ConnectorConfigEntry entry, ILogger logger, out IConnector? builtConnector)
+        {
+            _ = entry;
+            _ = logger;
+            builtConnector = connector;
+            return true;
+        }
+    }
+
+    private sealed class RecordingConnector(string name, string type) : IConnector, IAsyncDisposable
+    {
+        public int DisposeCount { get; private set; }
+
+        public string Name { get; } = name;
+
+        public string Type { get; } = type;
+
+        public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            return Task.FromResult(new ConnectorResponse { Success = true });
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private sealed class InMemoryConnectorRegistry : IConnectorRegistry
     {
         private readonly Dictionary<string, IConnector> _connectors = new(StringComparer.OrdinalIgnoreCase);
 
-        public void Register(IConnector connector) => _connectors[connector.Name] = connector;
+        public ValueTask RegisterAsync(ConnectorRegistryEntry registration, CancellationToken ct = default)
+        {
+            _ = ct;
+            _connectors[registration.Connector.Name] = registration.Connector;
+            return ValueTask.CompletedTask;
+        }
 
         public bool TryGet(string name, out IConnector? connector)
         {
@@ -748,6 +1045,8 @@ public class ConnectorAndHostingCoverageTests
         }
 
         public IReadOnlyList<string> ListNames() => _connectors.Keys.OrderBy(x => x, StringComparer.Ordinal).ToList();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RecordingHttpClientFactory(Func<string, HttpClient> clientFactory) : IHttpClientFactory

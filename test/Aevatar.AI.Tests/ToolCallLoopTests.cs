@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Reflection;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -62,7 +63,7 @@ public class ToolCallLoopTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldKeepStableRequestIdAndEmitPerCallMetadata()
+    public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldKeepStableRequestIdAndEmitPerCallTypedContext()
     {
         var provider = new QueueLLMProvider(
         [
@@ -100,8 +101,226 @@ public class ToolCallLoopTests
         provider.Requests[0].RequestId.Should().Be("session-99");
         provider.Requests[1].RequestId.Should().Be("session-99");
         provider.Requests.Should().OnlyContain(x => x.Metadata != null && x.Metadata["workflow.run_id"] == "run-99");
-        provider.Requests[0].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99");
-        provider.Requests[1].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99:tool-round:2");
+        provider.Requests.Should().OnlyContain(x => !x.Metadata!.ContainsKey(LLMRequestMetadataKeys.CallId));
+        provider.Requests[0].ToolContext!.Request.CallId.Should().Be("session-99");
+        provider.Requests[1].ToolContext!.Request.CallId.Should().Be("session-99:tool-round:2");
+    }
+
+    [Fact]
+    public void AgentToolExecutionContextMapper_ShouldIgnoreOwnedKeysAndKeepExternalMetadataOnly()
+    {
+        var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.RequestId] = "request-a",
+            [LLMRequestMetadataKeys.CallId] = "call-a",
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
+            [LLMRequestMetadataKeys.NyxIdOrgToken] = "org-token",
+            [LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "sender-token",
+            [LLMRequestMetadataKeys.ModelOverride] = "model-a",
+            [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/preferred",
+            [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "7",
+            [LLMRequestMetadataKeys.UserMemoryPrompt] = "memory-a",
+            [LLMRequestMetadataKeys.ConnectedServicesContext] = "{\"services\":[]}",
+            [LLMRequestMetadataKeys.OwnerSubject] = "owner-a",
+            [LLMRequestMetadataKeys.ResponseId] = "response-a",
+            [LLMRequestMetadataKeys.SenderBindingId] = "binding-a",
+            ["scope_id"] = "scope-a",
+            ["channel.platform"] = "lark",
+            ["channel.sender_id"] = "ou_1",
+            ["trace-id"] = "trace-1",
+        });
+
+        context.Request.RequestId.Should().BeNull();
+        context.Request.CallId.Should().BeNull();
+        context.Credentials.NyxIdAccessToken.Should().BeNull();
+        context.Credentials.NyxIdOrgToken.Should().BeNull();
+        context.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        context.Caller.ScopeId.Should().BeNull();
+        context.Caller.OwnerSubject.Should().BeNull();
+        context.Caller.ResponseId.Should().BeNull();
+        context.Channel.Platform.Should().BeNull();
+        context.Channel.SenderId.Should().BeNull();
+        context.SenderBinding.BindingId.Should().BeNull();
+        context.Routing.ModelOverride.Should().BeNull();
+        context.Routing.NyxIdRoutePreference.Should().BeNull();
+        context.Routing.MaxToolRoundsOverride.Should().BeNull();
+        context.Routing.UserMemoryPrompt.Should().BeNull();
+        context.ConnectedServices.ContextJson.Should().BeNull();
+        context.ExternalMetadata.Should().ContainSingle();
+        context.ExternalMetadata["trace-id"].Should().Be("trace-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenMetadataHasOwnedKeys_ShouldKeepOnlyExternalAnnotationsForToolExecution()
+    {
+        string? capturedToken = null;
+        string? capturedScope = null;
+        string? capturedExternal = null;
+        string? capturedCallId = null;
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tool-call-1",
+                        Name = "capture",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("capture", _ =>
+        {
+            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedScope = AgentToolRequestContext.ScopeId;
+            capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("trace-id");
+            capturedCallId = AgentToolRequestContext.CallId;
+            return "{}";
+        }));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+                [LLMRequestMetadataKeys.ScopeId] = "metadata-scope",
+                [LLMRequestMetadataKeys.CallId] = "metadata-call",
+                ["trace-id"] = "trace-1",
+            },
+        };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        capturedToken.Should().BeNull();
+        capturedScope.Should().BeNull();
+        capturedExternal.Should().Be("trace-1");
+        capturedCallId.Should().Be("tool-call-1");
+        messages.Should().ContainSingle(m => m.Role == "tool" && m.ToolCallId == "tool-call-1");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteToolCallsAsync_WhenMetadataHasOwnedKeys_ShouldPushOnlyExternalAnnotations()
+    {
+        string? capturedToken = null;
+        string? capturedScope = null;
+        string? capturedExternal = null;
+        string? capturedCallId = null;
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("capture", _ =>
+        {
+            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedScope = AgentToolRequestContext.ScopeId;
+            capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("trace-id");
+            capturedCallId = AgentToolRequestContext.CallId;
+            return """{"ok":true}""";
+        }));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            [LLMRequestMetadataKeys.ScopeId] = "metadata-scope",
+            [LLMRequestMetadataKeys.CallId] = "metadata-call",
+            ["trace-id"] = "trace-standalone",
+        };
+        var method = typeof(ToolCallLoop).GetMethod(
+            "ExecuteToolCallsAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var task = (Task)method!.Invoke(loop,
+        [
+            new List<ToolCall>
+            {
+                new()
+                {
+                    Id = "standalone-tool-call",
+                    Name = "capture",
+                    ArgumentsJson = "{}",
+                },
+            },
+            messages,
+            metadata,
+            CancellationToken.None,
+        ])!;
+
+        await task;
+
+        capturedToken.Should().BeNull();
+        capturedScope.Should().BeNull();
+        capturedExternal.Should().Be("trace-standalone");
+        capturedCallId.Should().Be("standalone-tool-call");
+        messages.Should().ContainSingle(m =>
+            m.Role == "tool" &&
+            m.ToolCallId == "standalone-tool-call" &&
+            m.Content == """{"ok":true}""");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenTypedToolContextExists_ShouldExposeRequestExternalMetadataToToolExecution()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-context",
+                        Name = "capture_context",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        string? observedOperatorUserId = null;
+        string? observedExplicitMetadata = null;
+        string? observedAccessToken = null;
+        tools.Register(new DelegateTool("capture_context", _ =>
+        {
+            observedOperatorUserId = AgentToolRequestContext.TryGetExternalMetadata("channel.lark.operator_user_id");
+            observedExplicitMetadata = AgentToolRequestContext.TryGetExternalMetadata("explicit");
+            observedAccessToken = AgentToolRequestContext.NyxIdAccessToken;
+            return "{}";
+        }));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("approve it") };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            RequestId = "session-operator",
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["channel.lark.operator_user_id"] = "lark-user-1",
+                ["explicit"] = "from-request",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            },
+            ToolContext = AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials("typed-token", null, null),
+                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["explicit"] = "from-tool-context",
+                },
+            },
+        };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        observedOperatorUserId.Should().Be("lark-user-1");
+        observedExplicitMetadata.Should().Be("from-tool-context");
+        observedAccessToken.Should().Be("typed-token");
+        AgentToolRequestContext.Current.Should().BeNull();
     }
 
     [Fact]
@@ -142,6 +361,46 @@ public class ToolCallLoopTests
 
         requestIdMiddleware.RequestIds.Should().Equal("session-105", "session-105");
         requestIdMiddleware.CallIds.Should().Equal("session-105", "session-105:tool-round:2");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareRuns_ShouldExposeStreamingContextAndAggregateProviderStream()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "stream-answer",
+                ReasoningContent = "stream-reasoning",
+                FinishReason = "stop",
+            },
+        ]);
+        bool? observedIsStreaming = null;
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            observedIsStreaming = context.IsStreaming;
+            await next();
+            context.Response.Should().NotBeNull();
+            context.Response!.Content.Should().Be("stream-answer");
+            context.Response.ReasoningContent.Should().Be("stream-reasoning");
+        });
+        var loop = new ToolCallLoop(
+            new ToolManager(),
+            hooks: null,
+            toolMiddlewares: [],
+            llmMiddlewares: [middleware]);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
+
+        result.Should().Be("stream-answer");
+        observedIsStreaming.Should().BeTrue();
+        provider.Requests.Should().HaveCount(1);
+        messages.Should().ContainSingle(m =>
+            m.Role == "assistant" &&
+            m.Content == "stream-answer" &&
+            m.ReasoningContent == "stream-reasoning");
     }
 
     [Fact]
@@ -470,6 +729,226 @@ public class ToolCallLoopTests
         ToolCallLoop.IsLengthTruncated("").Should().BeFalse();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenNoToolCalls_ShouldPropagateReasoningContent()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = "answer", ReasoningContent = "thinking-step" },
+        ]);
+        var loop = new ToolCallLoop(new ToolManager());
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        result.Should().Be("answer");
+        messages.Should().ContainSingle(m => m.Role == "assistant");
+        var assistant = messages.Single(m => m.Role == "assistant");
+        assistant.Content.Should().Be("answer");
+        assistant.ReasoningContent.Should().Be("thinking-step");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenToolCallThenFollowUp_ShouldPropagateReasoningOnBothRounds()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "will use tool",
+                ReasoningContent = "first-thought",
+                ToolCalls =
+                [
+                    new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" },
+                ],
+            },
+            new LLMResponse { Content = "final", ReasoningContent = "second-thought" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        result.Should().Be("final");
+        var toolCallAssistant = messages.Single(m => m.Role == "assistant" && m.ToolCalls is { Count: 1 });
+        toolCallAssistant.Content.Should().Be("will use tool");
+        toolCallAssistant.ReasoningContent.Should().Be("first-thought");
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Messages.Should().Contain(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls != null &&
+            m.ToolCalls.Count == 1 &&
+            m.Content == "will use tool" &&
+            m.ReasoningContent == "first-thought");
+        var finalAssistant = messages.Last(m => m.Role == "assistant");
+        finalAssistant.ReasoningContent.Should().Be("second-thought");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLengthRecovery_ShouldPropagateReasoningContent()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "partial",
+                ReasoningContent = "thinking-partial",
+                FinishReason = "length",
+            },
+            new LLMResponse
+            {
+                Content = " continued",
+                ReasoningContent = "thinking-continued",
+            },
+        ]);
+        var loop = new ToolCallLoop(new ToolManager());
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        result.Should().Be("partial continued");
+        var partialAssistant = messages.First(m => m.Role == "assistant");
+        partialAssistant.ReasoningContent.Should().Be("thinking-partial");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenMaxRoundsExhausted_ShouldPropagateReasoningInFinalCall()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "summary", ReasoningContent = "final-thought" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
+
+        result.Should().Be("summary");
+        var lastAssistant = messages.Last(m => m.Role == "assistant");
+        lastAssistant.ReasoningContent.Should().Be("final-thought");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenHookBlocksToolCalls_ShouldPropagateReasoningContent()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "blocked-content",
+                ReasoningContent = "blocked-thinking",
+                ToolCalls = [new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" }],
+            },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var hook = new BlockPostSamplingHook();
+        var loop = new ToolCallLoop(tools, new AgentHookPipeline([hook]));
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        result.Should().Be("blocked-content");
+        var assistant = messages.Single(m => m.Role == "assistant");
+        assistant.Content.Should().Be("blocked-content");
+        assistant.ReasoningContent.Should().Be("blocked-thinking");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDsmlTextToolCalls_ShouldPropagateReasoningContent()
+    {
+        var dsmlContent = "I will search now.\n<function_calls><invoke name=\"echo\"><parameter name=\"q\">test</parameter></invoke></function_calls>";
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = dsmlContent, ReasoningContent = "dsml-thinking" },
+            new LLMResponse { Content = "final-after-dsml", ReasoningContent = "final-thinking" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "echo-result"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        result.Should().Be("final-after-dsml");
+        var dsmlAssistant = messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "echo");
+        dsmlAssistant.Content.Should().Be("I will search now.");
+        dsmlAssistant.ReasoningContent.Should().Be("dsml-thinking");
+        var forwardedDsmlAssistant = provider.Requests[1].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "echo");
+        forwardedDsmlAssistant.ReasoningContent.Should().Be("dsml-thinking");
+        var finalAssistant = messages.Last(m => m.Role == "assistant");
+        finalAssistant.ReasoningContent.Should().Be("final-thinking");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDsmlToolCallBlockedByHook_ShouldPropagateReasoningContent()
+    {
+        var dsmlContent = "I will search now.\n<function_calls><invoke name=\"echo\"><parameter name=\"q\">test</parameter></invoke></function_calls>";
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = dsmlContent, ReasoningContent = "blocked-dsml-thinking" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var hook = new BlockPostSamplingHook();
+        var loop = new ToolCallLoop(tools, new AgentHookPipeline([hook]));
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        messages.Should().Contain(m => m.Role == "assistant" && m.ReasoningContent == "blocked-dsml-thinking");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenMaxRoundsExhaustedAndDsmlInFinalCall_ShouldPropagateReasoning()
+    {
+        var dsmlContent = "Final search.\n<function_calls><invoke name=\"echo\"><parameter name=\"q\">final</parameter></invoke></function_calls>";
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { ToolCalls = [new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" }] },
+            new LLMResponse { Content = dsmlContent, ReasoningContent = "final-dsml-thinking" },
+            new LLMResponse { Content = "summary", ReasoningContent = "summary-thinking" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
+
+        result.Should().Be("summary");
+        var forwardedFinalDsmlAssistant = provider.Requests[2].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "echo" &&
+            m.ReasoningContent == "final-dsml-thinking");
+        forwardedFinalDsmlAssistant.ReasoningContent.Should().Be("final-dsml-thinking");
+        var lastAssistant = messages.Last(m => m.Role == "assistant");
+        lastAssistant.ReasoningContent.Should().Be("summary-thinking");
+    }
+
     [Theory]
     [InlineData("base64")]
     [InlineData("data")]
@@ -529,21 +1008,33 @@ public class ToolCallLoopTests
         public string Name => "queue";
         public List<LLMRequest> Requests { get; } = [];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(_responses.Count > 0 ? _responses.Dequeue() : new LLMResponse());
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
-            _ = request;
             ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            var response = _responses.Count > 0 ? _responses.Dequeue() : new LLMResponse();
+
+            if (!string.IsNullOrEmpty(response.ReasoningContent))
+                yield return new LLMStreamChunk { DeltaReasoningContent = response.ReasoningContent };
+
+            if (!string.IsNullOrEmpty(response.Content))
+                yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+            if (response.ToolCalls is { Count: > 0 })
+            {
+                foreach (var toolCall in response.ToolCalls)
+                    yield return new LLMStreamChunk { DeltaToolCall = toolCall };
+            }
+
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = response.Usage,
+                FinishReason = response.FinishReason,
+            };
             await Task.CompletedTask;
-            yield break;
         }
     }
 
@@ -600,6 +1091,18 @@ public class ToolCallLoopTests
             }
 
             await next();
+        }
+    }
+
+    private sealed class BlockPostSamplingHook : IAIGAgentExecutionHook
+    {
+        public string Name => "block-post-sampling";
+        public int Priority => 0;
+
+        public Task OnPostSamplingAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
+        {
+            ctx.Items["block_tool_calls"] = true;
+            return Task.CompletedTask;
         }
     }
 

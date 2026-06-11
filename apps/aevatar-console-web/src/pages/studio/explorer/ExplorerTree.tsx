@@ -13,6 +13,7 @@ import { Typography } from "antd";
 import React from "react";
 import type { ExplorerManifestEntry } from "@/shared/api/explorerApi";
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
+import { t } from "@/shared/i18n/messages";
 
 type ExplorerTreeProps = {
   manifest: ExplorerManifestEntry[];
@@ -277,11 +278,18 @@ const ExplorerTree: React.FC<ExplorerTreeProps> = ({
 
       {!scopeId ? (
         <Typography.Text style={{ ...treeMetaStyle, paddingInline: 12 }}>
-          Resolve a project scope to browse explorer storage.
-        </Typography.Text>
+          {t("pages.studio.explorer.explorertree.resolve.project.scope.to.browse", "Resolve a project scope to browse explorer storage.")}</Typography.Text>
       ) : filteredManifest.length === 0 ? (
         <Typography.Text style={{ ...treeMetaStyle, paddingInline: 12 }}>
-          {manifest.length === 0 ? "No explorer files found." : "No explorer files matched."}
+          {manifest.length === 0
+            ? t(
+                "pages.studio.explorer.explorertree.no.explorer.files.found",
+                "No explorer files found.",
+              )
+            : t(
+                "pages.studio.explorer.explorertree.no.explorer.files.matched",
+                "No explorer files matched.",
+              )}
         </Typography.Text>
       ) : (
         tree.map((node) => renderNode(node))

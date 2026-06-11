@@ -89,26 +89,53 @@ jest.mock("@/shared/studio/api", () => ({
         scopeId: "scope-a",
         serviceId: "support-service",
       })),
-      getUserConfig: jest.fn(async () => ({
+      getUserLlmSettings: jest.fn(async () => ({
+        savedRoute: "",
+        savedRouteLabel: "Backend saved gateway",
+        effectiveRoute: "",
+        effectiveRouteLabel: "Backend effective gateway",
+        routeFallbackActive: false,
+        fallbackReason: null,
+        catalogStatus: "ready",
         defaultModel: "",
-        preferredLlmRoute: "",
-        runtimeBaseUrl: "https://runtime.example.test",
-      })),
-      getUserConfigModels: jest.fn(async () => ({
-        gatewayUrl: "https://nyx-gateway.example.test",
-        modelsByProvider: {
-          openai: ["gpt-5.4-mini", "gpt-4.1-mini"],
+        capabilities: {
+          canEditRoute: true,
+          canEditModel: true,
+          canSave: true,
+          canRetryCatalog: false,
         },
-        providers: [
+        routeOptions: [
           {
-            providerName: "OpenAI",
-            providerSlug: "openai",
-            proxyUrl: "https://nyx-api.example/openai",
+            routeValue: "",
+            label: "Gateway route option",
+            source: "gateway_provider",
+            status: "ready",
+            allowed: true,
+            ready: true,
+            serviceId: null,
+            serviceSlug: null,
+            description: null,
+          },
+          {
+            routeValue: "/api/v1/proxy/s/openai",
+            label: "OpenAI",
             source: "user_service",
             status: "ready",
+            allowed: true,
+            ready: true,
+            serviceId: "svc-openai",
+            serviceSlug: "openai",
+            description: null,
           },
         ],
-        supportedModels: ["gpt-5.4-mini", "gpt-4.1-mini"],
+        modelGroupsByRoute: [
+          {
+            routeValue: "/api/v1/proxy/s/openai",
+            groupId: "openai",
+            label: "OpenAI",
+            models: ["gpt-5.4-mini", "gpt-4.1-mini"],
+          },
+        ],
       })),
       getSettings: jest.fn(async () => ({
         defaultProviderName: "openai-1",
@@ -343,6 +370,41 @@ jest.mock("@/shared/api/scopesApi", () => ({
 
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
+    listServices: jest.fn(async () => [
+      {
+        activeServingRevisionId: "rev-1",
+        appId: "default",
+        defaultServingRevisionId: "rev-1",
+        deploymentId: "deploy-1",
+        deploymentStatus: "Active",
+        displayName: "Support service",
+        endpoints: [
+          {
+            description: "Streaming support chat",
+            displayName: "Chat",
+            endpointId: "chat",
+            kind: "chat",
+            requestTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+            responseTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+          },
+          {
+            description: "Ask for structured help",
+            displayName: "Assist",
+            endpointId: "assist",
+            kind: "command",
+            requestTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+            responseTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+          },
+        ],
+        namespace: "default",
+        policyIds: [],
+        primaryActorId: "actor://support",
+        serviceId: "support-service",
+        serviceKey: "scope-a:default:default:support-service",
+        tenantId: "scope-a",
+        updatedAt: "2026-04-01T09:00:00Z",
+      },
+    ]),
     getServiceRunAudit: jest.fn(async () => ({
       summary: {
         actorId: "actor://support-command",
@@ -825,14 +887,18 @@ describe("ChatPage", () => {
     expect(
       await screen.findByRole("button", { name: "Conversation model settings" })
     ).toHaveTextContent("Provider default");
-    expect(screen.getAllByText("NyxID Gateway").length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Backend effective gateway")).length).toBeGreaterThan(0);
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Conversation model settings" })
     );
-    fireEvent.change(await screen.findByLabelText("Conversation route"), {
+    const routeSelect = await screen.findByLabelText("Conversation route");
+    expect(routeSelect).toHaveTextContent("Gateway route option");
+    expect(routeSelect).toHaveTextContent("OpenAI");
+    fireEvent.change(routeSelect, {
       target: { value: "/api/v1/proxy/s/openai" },
     });
+    expect(await screen.findByText("Via OpenAI")).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "gpt-5.4-mini" }));
 
     fireEvent.change(await screen.findByPlaceholderText("Send a message..."), {
@@ -1101,7 +1167,7 @@ describe("ChatPage", () => {
     });
   });
 
-  it("opens the advanced console and queries the current scope binding", async () => {
+  it("opens the advanced console and queries the current workspace binding", async () => {
     renderWithQueryClient(React.createElement(ChatPage));
 
     const serviceSelector = await screen.findByLabelText("Chat service");
@@ -1113,7 +1179,7 @@ describe("ChatPage", () => {
     expect(await screen.findByText("Advanced Console")).toBeTruthy();
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Query Scope Binding" })
+      await screen.findByRole("button", { name: "Query Workspace Binding" })
     );
 
     expect(

@@ -9,6 +9,21 @@ public class ForbiddenPatternTests
     private static readonly ArchitectureModel Arch = ArchitectureTestBase.ProductionArchitecture;
 
     [Fact]
+    public void QueryReadFiles_ShouldNot_Trigger_EventReplay_StateRebuild_OrProjectionMaterialization()
+    {
+        // Refactor (v1/issue1468-first):
+        // Query/read bootstrap is intentionally out of v1. Query ports and query services
+        // must read already materialized read models, not replay facts or prime projection work.
+        var forbiddenCalls = new[] { "ReadEventsAsync", "GetEventsAsync", "RebuildAsync", "MaterializeAsync" };
+        var violations = EnumerateProductionSourceFiles()
+            .Where(IsQueryReadFile)
+            .SelectMany(file => FindForbiddenQueryReplayCalls(file, forbiddenCalls))
+            .ToArray();
+
+        Assert.Empty(violations);
+    }
+
+    [Fact]
     public void MiddleLayer_ShouldNot_Declare_IdMappingDictionaries()
     {
         // Application/Projection middle layers must not maintain entity/actor/run/session ID
@@ -241,5 +256,77 @@ public class ForbiddenPatternTests
             .Because("runtime script provisioning must not query/poll definition snapshot read models")
             .WithoutRequiringPositiveResults();
         rule.Check(Arch);
+    }
+
+    private static IEnumerable<string> EnumerateProductionSourceFiles()
+    {
+        var roots = new[] { Path.Combine(FindRepoRoot(), "src"), Path.Combine(FindRepoRoot(), "agents") };
+
+        foreach (var root in roots)
+        {
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+            {
+                var normalized = file.Replace('\\', '/');
+                if (normalized.Contains("/bin/", StringComparison.Ordinal)
+                    || normalized.Contains("/obj/", StringComparison.Ordinal)
+                    || normalized.EndsWith(".g.cs", StringComparison.Ordinal)
+                    || normalized.EndsWith(".designer.cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                yield return file;
+            }
+        }
+    }
+
+    private static bool IsQueryReadFile(string file)
+    {
+        var name = Path.GetFileName(file);
+        return name.EndsWith("QueryPort.cs", StringComparison.Ordinal)
+            || name.EndsWith("QueryService.cs", StringComparison.Ordinal)
+            || name.EndsWith("ApplicationService.cs", StringComparison.Ordinal);
+    }
+
+    private static IEnumerable<string> FindForbiddenQueryReplayCalls(string file, IReadOnlyCollection<string> forbiddenCalls)
+    {
+        var lines = File.ReadAllLines(file);
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            if (line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var forbiddenCall in forbiddenCalls)
+            {
+                if (line.Contains(forbiddenCall + "(", StringComparison.Ordinal))
+                {
+                    yield return $"{file.Replace('\\', '/')}:{index + 1}: forbidden query-time call `{forbiddenCall}`";
+                }
+            }
+        }
+    }
+
+    private static string FindRepoRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current != null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "aevatar.slnx")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root from test output directory.");
     }
 }

@@ -2,6 +2,9 @@
 
 defaultConfig.hashed = false;
 
+// React 19 expects the test environment to opt into act-aware updates.
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
 const localStorageState = new Map();
 
 const localStorageMock = {
@@ -113,6 +116,8 @@ if (typeof window !== 'undefined') {
 }
 const ignoredConsoleErrors = [
   'Warning: An update to %s inside a test was not wrapped in act(...)',
+  'inside a test was not wrapped in act(...)',
+  'The current testing environment is not configured to support act(...)',
   'Warning: [antd: Space] `direction` is deprecated. Please use `orientation` instead.',
   'Warning: [antd: List] The `List` component is deprecated. And will be removed in next major version.',
   'Warning: [antd: Alert] `message` is deprecated. Please use `title` instead.',

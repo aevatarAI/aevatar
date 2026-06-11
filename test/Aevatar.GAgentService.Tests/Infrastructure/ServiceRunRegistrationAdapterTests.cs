@@ -16,8 +16,7 @@ public sealed class ServiceRunRegistrationAdapterTests
     {
         var runtime = new RecordingRunRegistryRuntime();
         var dispatchPort = new RecordingDispatchPort();
-        var projectionPort = new RecordingServiceRunProjectionPort();
-        var adapter = new ServiceRunRegistrationAdapter(runtime, dispatchPort, projectionPort);
+        var adapter = new ServiceRunRegistrationAdapter(runtime, dispatchPort);
 
         var record = BuildRecord(scopeId: "tenant-1", serviceId: "svc-1", runId: "run-1");
         var result = await adapter.RegisterAsync(record);
@@ -28,7 +27,6 @@ public sealed class ServiceRunRegistrationAdapterTests
         runtime.CreateCalls.Should().ContainSingle();
         runtime.CreateCalls[0].agentType.Should().Be(typeof(ServiceRunGAgent));
         runtime.CreateCalls[0].actorId.Should().Be(expectedActorId);
-        projectionPort.EnsureCalls.Should().Equal(expectedActorId);
         dispatchPort.Calls.Should().ContainSingle();
         dispatchPort.Calls[0].actorId.Should().Be(expectedActorId);
         dispatchPort.Calls[0].envelope.Payload.TypeUrl.Should().Contain("RegisterServiceRunRequested");
@@ -39,9 +37,7 @@ public sealed class ServiceRunRegistrationAdapterTests
     {
         var runtime = new RecordingRunRegistryRuntime();
         var adapter = new ServiceRunRegistrationAdapter(
-            runtime,
-            new RecordingDispatchPort(),
-            new RecordingServiceRunProjectionPort());
+            runtime, new RecordingDispatchPort());
 
         await adapter.RegisterAsync(BuildRecord("tenant-a", "svc", "run-shared"));
         await adapter.RegisterAsync(BuildRecord("tenant-b", "svc", "run-shared"));
@@ -56,9 +52,7 @@ public sealed class ServiceRunRegistrationAdapterTests
     public async Task RegisterAsync_ShouldRejectMissingRequiredFields()
     {
         var adapter = new ServiceRunRegistrationAdapter(
-            new RecordingRunRegistryRuntime(),
-            new RecordingDispatchPort(),
-            new RecordingServiceRunProjectionPort());
+            new RecordingRunRegistryRuntime(), new RecordingDispatchPort());
 
         var noRun = BuildRecord("tenant", "svc", string.Empty);
         var act = () => adapter.RegisterAsync(noRun);
@@ -78,9 +72,7 @@ public sealed class ServiceRunRegistrationAdapterTests
     {
         var dispatchPort = new RecordingDispatchPort();
         var adapter = new ServiceRunRegistrationAdapter(
-            new RecordingRunRegistryRuntime(),
-            dispatchPort,
-            new RecordingServiceRunProjectionPort());
+            new RecordingRunRegistryRuntime(), dispatchPort);
 
         await adapter.UpdateStatusAsync("service-run:tenant:svc:run-1", "run-1", ServiceRunStatus.Completed);
 
@@ -94,9 +86,7 @@ public sealed class ServiceRunRegistrationAdapterTests
     {
         var dispatchPort = new RecordingDispatchPort();
         var adapter = new ServiceRunRegistrationAdapter(
-            new RecordingRunRegistryRuntime(),
-            dispatchPort,
-            new RecordingServiceRunProjectionPort());
+            new RecordingRunRegistryRuntime(), dispatchPort);
 
         await adapter.UpdateStatusAsync("service-run:tenant:svc:run-1", "run-1", ServiceRunStatus.Unspecified);
 
@@ -151,24 +141,12 @@ public sealed class ServiceRunRegistrationAdapterTests
     {
         public List<(string actorId, EventEnvelope envelope)> Calls { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Calls.Add((actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
-
-    private sealed class RecordingServiceRunProjectionPort : IServiceRunCurrentStateProjectionPort
-    {
-        public List<string> EnsureCalls { get; } = [];
-
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default)
-        {
-            EnsureCalls.Add(actorId);
-            return Task.CompletedTask;
-        }
-    }
-
     private sealed class RecordingActor : IActor
     {
         public RecordingActor(string id)

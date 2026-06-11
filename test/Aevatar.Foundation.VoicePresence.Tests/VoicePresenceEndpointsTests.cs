@@ -1,7 +1,8 @@
 using System.Net.WebSockets;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
-using Aevatar.Foundation.VoicePresence.Modules;
 using Google.Protobuf;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -19,7 +20,7 @@ public class VoicePresenceEndpointsTests
     [Fact]
     public void MapVoicePresenceWebSocket_should_register_expected_route()
     {
-        using var app = CreateApp(static (_, _) => Task.FromResult<VoicePresenceSession?>(null));
+        using var app = CreateApp(new RecordingRealtimeSession(VoiceRealtimeSessionStartError.NotFound));
 
         var route = GetVoiceEndpoint(app);
 
@@ -29,46 +30,35 @@ public class VoicePresenceEndpointsTests
     [Fact]
     public async Task Request_should_resolve_session_from_registered_service()
     {
-        var module = CreateModule(new RecordingVoiceProvider());
-        await module.InitializeAsync(CancellationToken.None);
-
-        var resolver = new RecordingSessionResolver(new VoicePresenceSession(module, static (_, _) => Task.CompletedTask));
+        var session = new RecordingRealtimeSession();
         var socket = new FakeWebSocket(WebSocketState.Open, keepOpenUntilCancelledWhenEmpty: true);
-        using var app = CreateApp(resolver);
+        using var app = CreateApp(session);
         var context = CreateHttpContext(app);
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
-        resolver.RequestedActorIds.ShouldContain("agent-1");
-        resolver.Requests.ShouldContain(static request => string.Equals(request.ModuleName, null, StringComparison.Ordinal));
+        session.RequestedActorIds.ShouldContain("agent-1");
+        session.Requests.ShouldContain(static request => string.Equals(request.ModuleName, null, StringComparison.Ordinal));
     }
 
     [Fact]
     public async Task Request_should_pass_module_query_to_registered_service_resolver()
     {
-        var module = CreateModule(new RecordingVoiceProvider());
-        await module.InitializeAsync(CancellationToken.None);
-
-        var resolver = new RecordingSessionResolver(new VoicePresenceSession(module, static (_, _) => Task.CompletedTask));
+        var session = new RecordingRealtimeSession();
         var socket = new FakeWebSocket(WebSocketState.Open, keepOpenUntilCancelledWhenEmpty: true);
-        using var app = CreateApp(resolver);
+        using var app = CreateApp(session);
         var context = CreateHttpContext(app);
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
         context.Request.QueryString = new QueryString("?module=voice_presence_openai");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
-        resolver.RequestedActorIds.ShouldContain("agent-1");
-        resolver.Requests.ShouldContain(request =>
+        session.Requests.ShouldContain(request =>
             string.Equals(request.ActorId, "agent-1", StringComparison.Ordinal) &&
             string.Equals(request.ModuleName, "voice_presence_openai", StringComparison.Ordinal));
     }
@@ -76,25 +66,21 @@ public class VoicePresenceEndpointsTests
     [Fact]
     public async Task Request_should_reject_non_websocket_requests()
     {
-        var resolverCalled = false;
-        using var app = CreateApp((_, _) =>
-        {
-            resolverCalled = true;
-            return Task.FromResult<VoicePresenceSession?>(null);
-        });
+        var session = new RecordingRealtimeSession(VoiceRealtimeSessionStartError.NotFound);
+        using var app = CreateApp(session);
         var context = CreateHttpContext(app);
 
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
         context.Response.StatusCode.ShouldBe(StatusCodes.Status400BadRequest);
         (await ReadBodyAsync(context)).ShouldContain("WebSocket required.");
-        resolverCalled.ShouldBeFalse();
+        session.Requests.ShouldBeEmpty();
     }
 
     [Fact]
     public async Task Request_should_reject_missing_actor_id()
     {
-        using var app = CreateApp(static (_, _) => Task.FromResult<VoicePresenceSession?>(null));
+        using var app = CreateApp(new RecordingRealtimeSession(VoiceRealtimeSessionStartError.NotFound));
         var context = CreateHttpContext(app);
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(new FakeWebSocket(WebSocketState.Open)));
 
@@ -107,7 +93,7 @@ public class VoicePresenceEndpointsTests
     [Fact]
     public async Task Request_should_return_not_found_when_session_missing()
     {
-        using var app = CreateApp(static (_, _) => Task.FromResult<VoicePresenceSession?>(null));
+        using var app = CreateApp(new RecordingRealtimeSession(VoiceRealtimeSessionStartError.NotFound));
         var context = CreateHttpContext(app);
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(new FakeWebSocket(WebSocketState.Open)));
         context.Request.RouteValues["actorId"] = "agent-1";
@@ -121,9 +107,7 @@ public class VoicePresenceEndpointsTests
     [Fact]
     public async Task Request_should_return_service_unavailable_when_module_not_initialized()
     {
-        var module = CreateModule(new RecordingVoiceProvider());
-        var session = new VoicePresenceSession(module, static (_, _) => Task.CompletedTask);
-        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session));
+        using var app = CreateApp(new RecordingRealtimeSession(VoiceRealtimeSessionStartError.NotInitialized));
         var context = CreateHttpContext(app);
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(new FakeWebSocket(WebSocketState.Open)));
         context.Request.RouteValues["actorId"] = "agent-1";
@@ -137,37 +121,35 @@ public class VoicePresenceEndpointsTests
     [Fact]
     public async Task Request_should_attach_transport_and_cleanup_when_request_ends()
     {
-        var module = CreateModule(new RecordingVoiceProvider());
-        await module.InitializeAsync(CancellationToken.None);
-
         var socket = new FakeWebSocket(WebSocketState.Open, keepOpenUntilCancelledWhenEmpty: true);
-        var session = new VoicePresenceSession(module, static (_, _) => Task.CompletedTask);
-        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session));
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: async (transport, ct) =>
+            {
+                await using (transport)
+                {
+                    await foreach (var _ in transport.ReceiveFramesAsync(ct))
+                    {
+                    }
+                }
+            });
+        using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
         var context = CreateHttpContext(app);
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
-        module.IsTransportAttached.ShouldBeFalse();
-        socket.CloseCalls.ShouldBe(1);
+        mediaPort.AttachCalls.ShouldBe(1);
+        mediaPort.DetachCalls.ShouldBe(1);
+        socket.State.ShouldBe(WebSocketState.Closed);
     }
 
     [Fact]
     public async Task Request_should_reject_second_transport_without_detaching_existing_one()
     {
-        var module = CreateModule(new RecordingVoiceProvider());
-        await module.InitializeAsync(CancellationToken.None);
-
-        var existingTransport = new StubVoiceTransport();
-        module.AttachTransport(existingTransport, static (_, _) => Task.CompletedTask);
-
         var socket = new FakeWebSocket(WebSocketState.Open);
-        var session = new VoicePresenceSession(module, static (_, _) => Task.CompletedTask);
-        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session));
+        using var app = CreateApp(new RecordingRealtimeSession(VoiceRealtimeSessionStartError.TransportAlreadyAttached));
         var context = CreateHttpContext(app);
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
@@ -176,8 +158,6 @@ public class VoicePresenceEndpointsTests
 
         context.Response.StatusCode.ShouldBe(StatusCodes.Status409Conflict);
         (await ReadBodyAsync(context)).ShouldContain("Voice transport already attached.");
-        module.IsTransportAttached.ShouldBeTrue();
-        existingTransport.Disposed.ShouldBeFalse();
         socket.CloseCalls.ShouldBe(0);
     }
 
@@ -185,13 +165,9 @@ public class VoicePresenceEndpointsTests
     public async Task Request_should_close_websocket_when_attach_fails_after_upgrade()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
-        var session = new VoicePresenceSession(
-            isInitialized: static () => true,
-            isTransportAttached: static () => false,
-            attachTransportAsync: static (_, _) => throw new InvalidOperationException("already attached"),
-            detachTransportAsync: static (_, _) => Task.CompletedTask,
-            pcmSampleRateHz: 24000);
-        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session));
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: static (_, _) => throw new InvalidOperationException("already attached"));
+        using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
         var context = CreateHttpContext(app);
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
@@ -203,60 +179,59 @@ public class VoicePresenceEndpointsTests
     }
 
     [Fact]
+    public async Task Request_should_close_websocket_with_policy_violation_when_remote_audio_is_unavailable()
+    {
+        var socket = new RecordingCloseWebSocket(WebSocketState.Open);
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: static (_, _) => throw new VoiceVolatileMediaStreamUnavailableException());
+        using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
+        var context = CreateHttpContext(app);
+        context.Features.Set<IHttpWebSocketFeature>(new RecordingHttpWebSocketFeature(socket));
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetVoiceEndpoint(app).RequestDelegate!(context);
+
+        socket.CloseCalls.ShouldBe(1);
+        socket.LastCloseStatus.ShouldBe(WebSocketCloseStatus.PolicyViolation);
+        socket.LastCloseDescription.ShouldBe(VoiceVolatileMediaStreamUnavailableException.Reason);
+        socket.State.ShouldBe(WebSocketState.Closed);
+    }
+
+    [Fact]
     public async Task Request_should_prefer_route_module_name_over_query()
     {
-        var module = CreateModule(new RecordingVoiceProvider());
-        await module.InitializeAsync(CancellationToken.None);
-
-        var resolver = new RecordingSessionResolver(new VoicePresenceSession(module, static (_, _) => Task.CompletedTask));
+        var session = new RecordingRealtimeSession();
         var socket = new FakeWebSocket(WebSocketState.Open, keepOpenUntilCancelledWhenEmpty: true);
-        using var app = CreateApp("/voice/{actorId}/{moduleName}", resolver);
+        using var app = CreateApp("/voice/{actorId}/{moduleName}", session);
         var context = CreateHttpContext(app);
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
         context.Request.RouteValues["moduleName"] = "voice_presence_openai";
         context.Request.QueryString = new QueryString("?module=voice_presence_minicpm");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app, "/voice/{actorId}/{moduleName}").RequestDelegate!(context);
 
-        resolver.Requests.ShouldContain(request =>
+        session.Requests.ShouldContain(request =>
             string.Equals(request.ModuleName, "voice_presence_openai", StringComparison.Ordinal));
     }
 
     private static WebApplication CreateApp(
-        Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession)
-    {
-        return CreateApp("/voice/{actorId}", resolveSession);
-    }
+        RecordingRealtimeSession session,
+        RecordingVolatileMediaStreamPort? mediaPort = null) =>
+        CreateApp("/voice/{actorId}", session, mediaPort);
 
     private static WebApplication CreateApp(
         string pattern,
-        Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession)
+        RecordingRealtimeSession session,
+        RecordingVolatileMediaStreamPort? mediaPort = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             EnvironmentName = Environments.Development,
         });
-        var app = builder.Build();
-        app.MapVoicePresenceWebSocket(pattern, resolveSession);
-        return app;
-    }
-
-    private static WebApplication CreateApp(IVoicePresenceSessionResolver resolver)
-    {
-        return CreateApp("/voice/{actorId}", resolver);
-    }
-
-    private static WebApplication CreateApp(string pattern, IVoicePresenceSessionResolver resolver)
-    {
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
-        {
-            EnvironmentName = Environments.Development,
-        });
-        builder.Services.AddSingleton(resolver);
+        builder.Services.AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(session);
+        builder.Services.AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort ?? new RecordingVolatileMediaStreamPort());
         var app = builder.Build();
         app.MapVoicePresenceWebSocket(pattern);
         return app;
@@ -287,115 +262,214 @@ public class VoicePresenceEndpointsTests
         return await reader.ReadToEndAsync();
     }
 
-    private static VoicePresenceModule CreateModule(RecordingVoiceProvider provider) =>
+    private static VoicePresenceSessionLeaseHandle CreateLeaseHandle(string sessionId = "session-1") =>
         new(
-            provider,
-            new VoiceProviderConfig
-            {
-                ProviderName = "openai",
-                ApiKey = "sk-test",
-                Model = "gpt-realtime",
-            },
-            new VoiceSessionConfig
-            {
-                Voice = "alloy",
-                SampleRateHz = 24000,
-            });
+            "agent-1",
+            "voice_presence",
+            sessionId,
+            "voice-presence.host",
+            42,
+            DateTimeOffset.UtcNow.AddMinutes(5),
+            VoiceRemoteAudioSupport.Supported,
+            "transport-1");
 
-    private sealed class RecordingVoiceProvider : IRealtimeVoiceProvider
+    private sealed class RecordingRealtimeSession(
+        VoiceRealtimeSessionStartError? failure = null)
+        : IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>
     {
-        public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
-
-        public Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct)
-        {
-            _ = config;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = pcm16;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
-        {
-            _ = callId;
-            _ = resultJson;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
-        {
-            _ = injection;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task CancelResponseAsync(CancellationToken ct)
-        {
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
-        {
-            _ = session;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed class StubVoiceTransport : IVoiceTransport
-    {
-        public bool Disposed { get; private set; }
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = pcm16;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
-        {
-            _ = frame;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-        {
-            _ = ct;
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            Disposed = true;
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingSessionResolver(VoicePresenceSession? session) : IVoicePresenceSessionResolver
-    {
-        public List<VoicePresenceSessionRequest> Requests { get; } = [];
+        public List<VoiceRealtimeSessionRequest> Requests { get; } = [];
 
         public List<string> RequestedActorIds { get; } = [];
 
-        public Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default)
+        public Task<RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>> ExecuteAsync(
+            VoiceRealtimeSessionRequest inbound,
+            Func<VoiceRealtimeFrame, CancellationToken, ValueTask> emitAsync,
+            Func<VoiceRealtimeSessionAccepted, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default)
         {
-            _ = ct;
-            Requests.Add(request);
-            RequestedActorIds.Add(request.ActorId);
-            return Task.FromResult(session);
+            _ = emitAsync;
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(inbound);
+            RequestedActorIds.Add(inbound.ActorId);
+
+            if (failure.HasValue)
+            {
+                return Task.FromResult(
+                    RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>
+                        .Failure(failure.Value));
+            }
+
+            var accepted = new VoiceRealtimeSessionAccepted(
+                inbound.ActorId,
+                inbound.ModuleName ?? "voice_presence",
+                "session-1",
+                24000,
+                42,
+                CreateLeaseHandle());
+            return Task.FromResult(
+                RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>
+                    .Success(accepted, VoiceRealtimeSessionCompletion.Accepted, completed: true));
+        }
+    }
+
+    private sealed class RecordingVolatileMediaStreamPort(
+        Func<IVoiceTransport, CancellationToken, Task>? attachAsync = null)
+        : IVoiceVolatileMediaStreamPort
+    {
+        public bool SupportsRemoteAudio => true;
+
+        public int AttachCalls { get; private set; }
+
+        public int DetachCalls { get; private set; }
+
+        public int LifetimeCompletionCalls { get; private set; }
+
+        public async Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            CancellationToken ct = default)
+        {
+            AttachCalls++;
+            if (attachAsync != null)
+            {
+                await attachAsync(transport, ct);
+            }
+            else
+            {
+                await using (transport)
+                {
+                    await foreach (var _ in transport.ReceiveFramesAsync(ct))
+                    {
+                    }
+                }
+            }
+
+            return new VoiceTransportLifetimeCompleted
+            {
+                SessionId = handle.SessionId,
+                TransportLeaseId = "transport-1",
+                Reason = "completed",
+                OwnerId = handle.OwnerId,
+            };
+        }
+
+        public Task DetachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport? expectedTransport,
+            CancellationToken ct = default)
+        {
+            _ = handle;
+            _ = expectedTransport;
+            ct.ThrowIfCancellationRequested();
+            DetachCalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task CompleteTransportLifetimeAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            VoiceTransportLifetimeCompleted? completed,
+            string reason,
+            CancellationToken ct = default)
+        {
+            _ = handle;
+            _ = completed;
+            _ = reason;
+            ct.ThrowIfCancellationRequested();
+            LifetimeCompletionCalls++;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingCloseWebSocket : WebSocket
+    {
+        private WebSocketState _state;
+
+        public RecordingCloseWebSocket(WebSocketState state)
+        {
+            _state = state;
+        }
+
+        public int CloseCalls { get; private set; }
+
+        public WebSocketCloseStatus? LastCloseStatus { get; private set; }
+
+        public string? LastCloseDescription { get; private set; }
+
+        public override WebSocketCloseStatus? CloseStatus => LastCloseStatus;
+
+        public override string? CloseStatusDescription => LastCloseDescription;
+
+        public override WebSocketState State => _state;
+
+        public override string? SubProtocol => null;
+
+        public override void Abort()
+        {
+            _state = WebSocketState.Aborted;
+        }
+
+        public override Task CloseAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CloseCalls++;
+            LastCloseStatus = closeStatus;
+            LastCloseDescription = statusDescription;
+            _state = WebSocketState.Closed;
+            return Task.CompletedTask;
+        }
+
+        public override Task CloseOutputAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LastCloseStatus = closeStatus;
+            LastCloseDescription = statusDescription;
+            _state = WebSocketState.CloseSent;
+            return Task.CompletedTask;
+        }
+
+        public override void Dispose()
+        {
+            _state = WebSocketState.Closed;
+        }
+
+        public override Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer,
+            CancellationToken cancellationToken)
+        {
+            _ = buffer;
+            cancellationToken.ThrowIfCancellationRequested();
+            _state = WebSocketState.CloseReceived;
+            return Task.FromResult(new WebSocketReceiveResult(0, WebSocketMessageType.Close, true));
+        }
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken)
+        {
+            _ = buffer;
+            _ = messageType;
+            _ = endOfMessage;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingHttpWebSocketFeature(RecordingCloseWebSocket socket) : IHttpWebSocketFeature
+    {
+        public bool IsWebSocketRequest => true;
+
+        public Task<WebSocket> AcceptAsync(WebSocketAcceptContext context)
+        {
+            _ = context;
+            return Task.FromResult<WebSocket>(socket);
         }
     }
 }

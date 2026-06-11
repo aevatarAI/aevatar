@@ -27,7 +27,7 @@ internal sealed class WorkflowRunDurableCompletionResolver
 
         try
         {
-            var snapshot = await _currentStateQueryPort.GetActorSnapshotAsync(actorId, ct);
+            var snapshot = await _currentStateQueryPort.GetWorkflowActorCurrentStateAsync(actorId, ct);
             return MapSnapshot(snapshot);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

@@ -165,6 +165,9 @@ public sealed class FailoverLLMProviderFactory : ILLMProviderFactory
 /// <summary>
 /// Wrapper provider that executes primary first and falls back to secondary provider when primary is invalid.
 /// </summary>
+// Refactor (iter18/cluster-001):
+//   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+//   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
 public sealed class FailoverLLMProvider : ILLMProvider
 {
     private readonly ILLMProvider? _primary;
@@ -186,42 +189,6 @@ public sealed class FailoverLLMProvider : ILLMProvider
         _primary = primary;
         _fallback = fallback;
         _logger = logger ?? NullLogger.Instance;
-    }
-
-    public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-    {
-        var primary = ResolveCompatiblePrimary(request);
-        var fallback = ResolveCompatibleFallback(request);
-
-        if (primary == null)
-            return await RequireFallback(fallback).ChatAsync(request, ct);
-
-        if (fallback == null)
-            return await primary.ChatAsync(request, ct);
-
-        try
-        {
-            var response = await primary.ChatAsync(request, ct);
-            if (HasUsableOutput(response))
-                return response;
-
-            _logger.LogWarning(
-                "Failover provider {Name}: primary provider {Primary} returned empty response, switching to fallback {Fallback}.",
-                Name,
-                primary.Name,
-                fallback.Name);
-        }
-        catch (Exception ex) when (CanFailover(ex, ct))
-        {
-            _logger.LogWarning(
-                ex,
-                "Failover provider {Name}: primary provider {Primary} failed, switching to fallback {Fallback}.",
-                Name,
-                primary.Name,
-                fallback.Name);
-        }
-
-        return await fallback.ChatAsync(request, ct);
     }
 
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
@@ -346,16 +313,6 @@ public sealed class FailoverLLMProvider : ILLMProvider
         var requested = string.Join(", ", Capabilities.SupportedInputModalities);
         return new InvalidOperationException(
             $"No compatible LLM provider is available for failover provider '{Name}'. Advertised modalities: {requested}.");
-    }
-
-    private static bool HasUsableOutput(LLMResponse? response)
-    {
-        if (response == null)
-            return false;
-
-        return !string.IsNullOrWhiteSpace(response.Content)
-               || response.ContentParts is { Count: > 0 }
-               || response.ToolCalls is { Count: > 0 };
     }
 
     private static bool IsMeaningfulChunk(LLMStreamChunk chunk) =>

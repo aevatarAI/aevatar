@@ -8,6 +8,11 @@ cd "${REPO_ROOT}"
 
 allowlist_file="tools/ci/test_polling_allowlist.txt"
 
+run_guard_meta_tests() {
+  bash "${SCRIPT_DIR}/tests/test_project_reference_layer_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_architecture_guards_enforces_layer_guard.sh"
+}
+
 if [[ ! -f "${allowlist_file}" ]]; then
   echo "Missing allowlist: ${allowlist_file}"
   exit 1
@@ -16,6 +21,7 @@ fi
 hits="$(rg -n "Task\\.Delay\\(|WaitUntilAsync\\(" test -g '*.cs' || true)"
 if [[ -z "${hits}" ]]; then
   echo "No polling waits found in tests."
+  run_guard_meta_tests
   exit 0
 fi
 
@@ -37,3 +43,4 @@ if [[ -n "${disallowed}" ]]; then
 fi
 
 echo "Test stability guard passed (polling waits constrained by allowlist)."
+run_guard_meta_tests

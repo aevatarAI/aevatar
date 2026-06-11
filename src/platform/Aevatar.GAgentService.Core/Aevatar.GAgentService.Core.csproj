@@ -7,6 +7,7 @@
     <RootNamespace>Aevatar.GAgentService.Core</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Governance.Abstractions\Aevatar.GAgentService.Governance.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
@@ -14,5 +15,14 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Schedules/scheduled_dispatch_state.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\Aevatar.Foundation.Abstractions;..\Aevatar.GAgentService.Abstractions\Protos" />
   </ItemGroup>
 </Project>

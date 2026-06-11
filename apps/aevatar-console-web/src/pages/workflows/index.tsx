@@ -4,6 +4,7 @@ import {
   PlayCircleOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
+import { useIntl } from "@umijs/max";
 import {
   Alert,
   Button,
@@ -21,7 +22,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { history } from "@/shared/navigation/history";
 import {
-  buildRuntimeRunsHref,
+  buildRuntimeWorkflowRunHref,
   buildRuntimeWorkflowsHref,
 } from "@/shared/navigation/runtimeRoutes";
 import { buildStudioWorkflowEditorRoute } from "@/shared/studio/navigation";
@@ -55,6 +56,7 @@ import {
   type WorkflowLibraryRow,
   type WorkflowStepRow,
 } from "./workflowPresentation";
+import { t } from "@/shared/i18n/messages";
 
 const tableHeaderCellStyle: React.CSSProperties = {
   background: "var(--ant-color-fill-alter)",
@@ -94,6 +96,10 @@ function buildWorkflowHref(workflowName: string): string {
   return buildRuntimeWorkflowsHref({
     workflow: workflowName.trim() || undefined,
   });
+}
+
+function buildWorkflowRunHref(workflowName: string): string {
+  return buildRuntimeWorkflowRunHref(workflowName);
 }
 
 function buildWorkflowSummary(workflow: WorkflowCatalogItem): string {
@@ -210,6 +216,7 @@ const WorkflowCatalogStatusTags: React.FC<{
 );
 
 const WorkflowsPage: React.FC = () => {
+  const intl = useIntl();
   const [filters, setFilters] = useState<WorkflowLibraryFilter>(
     defaultWorkflowLibraryFilter,
   );
@@ -302,7 +309,10 @@ const WorkflowsPage: React.FC = () => {
         ),
       },
       {
-        title: "Runtime fit",
+        title: intl.formatMessage({
+          id: "pages.workflows.index.runtime.fit",
+          defaultMessage: "Runtime fit",
+        }),
         key: "runtime-fit",
         width: "18%",
         render: (_value, workflow) => <WorkflowCatalogStatusTags workflow={workflow} />,
@@ -333,28 +343,32 @@ const WorkflowsPage: React.FC = () => {
                 setSelectedWorkflow(workflow.name);
               }}
             >
-              Inspect
+              {intl.formatMessage({
+                id: "pages.workflows.index.inspect",
+                defaultMessage: "Inspect",
+              })}
             </Button>
             <Button
               icon={<PlayCircleOutlined />}
               onClick={(event) => {
                 event.stopPropagation();
                 history.push(
-                  buildRuntimeRunsHref({
-                    workflow: workflow.name,
-                  }),
+                  buildWorkflowRunHref(workflow.name),
                 );
               }}
               style={workflowRunTextButtonStyle}
               type="text"
             >
-              Run
+              {intl.formatMessage({
+                id: "pages.workflows.index.run",
+                defaultMessage: "Run",
+              })}
             </Button>
           </Space>
         ),
       },
     ],
-    [],
+    [intl],
   );
 
   const roleColumns = useMemo<ColumnsType<WorkflowCatalogRole>>(
@@ -377,8 +391,20 @@ const WorkflowsPage: React.FC = () => {
         width: "24%",
         render: (_value, role) => (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <Typography.Text>{role.provider || "No provider"}</Typography.Text>
-            <Typography.Text type="secondary">{role.model || "No model"}</Typography.Text>
+            <Typography.Text>
+              {role.provider ||
+                intl.formatMessage({
+                  id: "pages.workflows.index.no.provider",
+                  defaultMessage: "No provider",
+                })}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              {role.model ||
+                intl.formatMessage({
+                  id: "pages.workflows.index.no.model",
+                  defaultMessage: "No model",
+                })}
+            </Typography.Text>
           </div>
         ),
       },
@@ -393,7 +419,10 @@ const WorkflowsPage: React.FC = () => {
         ),
       },
       {
-        title: "Runtime limits",
+        title: intl.formatMessage({
+          id: "pages.workflows.index.runtime.limits",
+          defaultMessage: "Runtime limits",
+        }),
         key: "limits",
         render: (_value, role) => (
           <Typography.Text type="secondary">
@@ -404,7 +433,7 @@ const WorkflowsPage: React.FC = () => {
         ),
       },
     ],
-    [],
+    [intl],
   );
 
   const stepColumns = useMemo<ColumnsType<WorkflowStepRow>>(
@@ -436,7 +465,10 @@ const WorkflowsPage: React.FC = () => {
         ),
       },
       {
-        title: "Target role",
+        title: intl.formatMessage({
+          id: "pages.workflows.index.target.role",
+          defaultMessage: "Target role",
+        }),
         dataIndex: "targetRole",
         key: "targetRole",
         width: "16%",
@@ -451,10 +483,19 @@ const WorkflowsPage: React.FC = () => {
         render: (_value, step) => (
           <Typography.Text type="secondary">
             {step.next
-              ? `Next: ${step.next}`
+              ? t("pages.workflows.index.next", "Next: {value1}", { value1: step.next })
               : step.branchCount > 0
-                ? `${step.branchCount} branch routes`
-                : "No explicit next step"}
+                ? intl.formatMessage(
+                    {
+                      id: "pages.workflows.index.branch.routes",
+                      defaultMessage: "{count} branch routes",
+                    },
+                    { count: step.branchCount },
+                  )
+                : intl.formatMessage({
+                    id: "pages.workflows.index.no.explicit.next.step",
+                    defaultMessage: "No explicit next step",
+                  })}
           </Typography.Text>
         ),
       },
@@ -463,19 +504,28 @@ const WorkflowsPage: React.FC = () => {
         key: "parameters",
         render: (_value, step) => (
           <Typography.Text type="secondary">
-            {step.parameterCount} params · {step.childCount} child steps
+            {step.parameterCount}{" "}
+            {intl.formatMessage({
+              id: "pages.workflows.index.params",
+              defaultMessage: "params ·",
+            })}
+            {step.childCount}{" "}
+            {intl.formatMessage({
+              id: "pages.workflows.index.child.steps",
+              defaultMessage: "child steps",
+            })}
           </Typography.Text>
         ),
       },
     ],
-    [],
+    [intl],
   );
 
   return (
     <AevatarPageShell
       layoutMode="document"
-      title="Workflow Library"
-      titleHelp="Browse runtime-exposed workflow definitions, inspect how they are wired, then jump into run or editor from the same catalog."
+      title={t("pages.workflows.index.workflow.library", "Workflow Library")}
+      titleHelp={t("pages.workflows.index.browse.runtime.exposed.workflow.definitions", "Browse runtime-exposed workflow definitions, inspect how they are wired, then jump into run or editor from the same catalog.")}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {catalogQuery.error ? (
@@ -497,23 +547,22 @@ const WorkflowsPage: React.FC = () => {
             gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
           }}
         >
-          <WorkflowSummaryMetric label="Workflows in library" value={metrics.workflows} />
+          <WorkflowSummaryMetric label={t("pages.workflows.index.workflows.in.library", "Workflows in library")} value={metrics.workflows} />
           <WorkflowSummaryMetric label="Groups" value={metrics.groups} />
-          <WorkflowSummaryMetric label="LLM required" value={metrics.llmRequired} />
-          <WorkflowSummaryMetric label="Your workflows" value={metrics.yourWorkflows} />
+          <WorkflowSummaryMetric label={t("pages.workflows.index.llm.required", "LLM required")} value={metrics.llmRequired} />
+          <WorkflowSummaryMetric label={t("pages.workflows.index.your.workflows", "Your workflows")} value={metrics.yourWorkflows} />
         </div>
 
         <AevatarPanel
-          description="The runtime catalog is already loaded. Filters apply immediately so you can stay focused on selecting a runnable definition."
+          description={t("pages.workflows.index.the.runtime.catalog.is.already", "The runtime catalog is already loaded. Filters apply immediately so you can stay focused on selecting a runnable definition.")}
           extra={
             <Button
               onClick={() => setFilters(defaultWorkflowLibraryFilter)}
               type="default"
             >
-              Reset
-            </Button>
+              {t("pages.workflows.index.reset", "Reset")}</Button>
           }
-          title="Find workflows"
+          title={t("pages.workflows.index.find.workflows", "Find workflows")}
         >
           <div
             style={{
@@ -529,7 +578,7 @@ const WorkflowsPage: React.FC = () => {
                   keyword: event.target.value,
                 }))
               }
-              placeholder="Search workflow, description, group, or primitive"
+              placeholder={t("pages.workflows.index.search.workflow.description.group.or", "Search workflow, description, group, or primitive")}
               value={filters.keyword}
             />
             <Select
@@ -566,9 +615,9 @@ const WorkflowsPage: React.FC = () => {
                 }))
               }
               options={[
-                { label: "All workflows", value: "all" },
-                { label: "LLM required", value: "required" },
-                { label: "Closed-world ready", value: "optional" },
+                { label: t("pages.workflows.index.all.workflows", "All workflows"), value: "all" },
+                { label: t("pages.workflows.index.llm.required.2", "LLM required"), value: "required" },
+                { label: t("pages.workflows.index.closed.world.ready", "Closed-world ready"), value: "optional" },
               ]}
               value={filters.llmRequirement}
             />
@@ -576,14 +625,14 @@ const WorkflowsPage: React.FC = () => {
         </AevatarPanel>
 
         <AevatarPanel
-          description="This page is the runtime catalog, not the draft workspace. Stay here to choose a definition, then inspect, run, or open the editor."
-          title="Workflow catalog"
+          description={t("pages.workflows.index.this.page.is.the.runtime", "This page is the runtime catalog, not the draft workspace. Stay here to choose a definition, then inspect, run, or open the editor.")}
+          title={t("pages.workflows.index.workflow.catalog", "Workflow catalog")}
         >
           {catalogQuery.isLoading ? (
-            <Typography.Text type="secondary">Loading workflow catalog…</Typography.Text>
+            <Typography.Text type="secondary">{t("pages.workflows.index.loading.workflow.catalog", "Loading workflow catalog…")}</Typography.Text>
           ) : filteredRows.length === 0 ? (
             <Empty
-              description="No workflows matched the current filters."
+              description={t("pages.workflows.index.no.workflows.matched.the.current", "No workflows matched the current filters.")}
               image={Empty.PRESENTED_IMAGE_SIMPLE}
             />
           ) : (
@@ -620,33 +669,29 @@ const WorkflowsPage: React.FC = () => {
                   )
                 }
               >
-                Open workflow editor
-              </Button>
+                {t("pages.workflows.index.open.workflow.editor", "Open workflow editor")}</Button>
               <Button
                 icon={<PlayCircleOutlined />}
                 onClick={() =>
                   history.push(
-                    buildRuntimeRunsHref({
-                      workflow: selectedWorkflowDetail.catalog.name,
-                    }),
+                    buildWorkflowRunHref(selectedWorkflowDetail.catalog.name),
                   )
                 }
                 style={workflowRunTextButtonStyle}
                 type="text"
               >
-                Run workflow
-              </Button>
+                {t("pages.workflows.index.run.workflow", "Run workflow")}</Button>
             </Space>
           ) : null
         }
         onClose={() => setSelectedWorkflow("")}
         open={Boolean(selectedWorkflow)}
-        subtitle="Runtime workflow detail"
+        subtitle={t("pages.workflows.index.runtime.workflow.detail", "Runtime workflow detail")}
         title={selectedWorkflowDetail?.catalog.name || selectedWorkflow || "Workflow"}
         width={920}
       >
         {!selectedWorkflow ? null : selectedWorkflowQuery.isLoading ? (
-          <Typography.Text type="secondary">Loading workflow detail…</Typography.Text>
+          <Typography.Text type="secondary">{t("pages.workflows.index.loading.workflow.detail", "Loading workflow detail…")}</Typography.Text>
         ) : selectedWorkflowQuery.error ? (
           <Alert
             showIcon
@@ -658,7 +703,7 @@ const WorkflowsPage: React.FC = () => {
             type="error"
           />
         ) : !selectedWorkflowDetail ? (
-          <AevatarInspectorEmpty description="Choose a workflow to inspect its runtime wiring, role model, and source YAML." />
+          <AevatarInspectorEmpty description={t("pages.workflows.index.choose.workflow.to.inspect.its", "Choose a workflow to inspect its runtime wiring, role model, and source YAML.")} />
         ) : (
           <Tabs
             defaultActiveKey="overview"
@@ -669,8 +714,8 @@ const WorkflowsPage: React.FC = () => {
                 children: (
                   <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                     <AevatarPanel
-                      description="Check the runtime fit, role count, step count, and linked connectors before you decide to run or edit this definition."
-                      title="Definition summary"
+                      description={t("pages.workflows.index.check.the.runtime.fit.role", "Check the runtime fit, role count, step count, and linked connectors before you decide to run or edit this definition.")}
+                      title={t("pages.workflows.index.definition.summary", "Definition summary")}
                     >
                       <div
                         style={{
@@ -688,7 +733,7 @@ const WorkflowsPage: React.FC = () => {
                           value={selectedWorkflowDetail.catalog.sourceLabel}
                         />
                         <WorkflowField
-                          label="Closed-world mode"
+                          label={t("pages.workflows.index.closed.world.mode", "Closed-world mode")}
                           value={
                             selectedWorkflowDetail.definition.closedWorldMode
                               ? "Enabled"
@@ -696,7 +741,7 @@ const WorkflowsPage: React.FC = () => {
                           }
                         />
                         <WorkflowField
-                          label="Requires LLM provider"
+                          label={t("pages.workflows.index.requires.llm.provider", "Requires LLM provider")}
                           value={
                             selectedWorkflowDetail.catalog.requiresLlmProvider
                               ? "Yes"
@@ -712,7 +757,7 @@ const WorkflowsPage: React.FC = () => {
                           value={selectedWorkflowDetail.definition.steps.length}
                         />
                         <WorkflowField
-                          label="Topology edges"
+                          label={t("pages.workflows.index.topology.edges", "Topology edges")}
                           value={selectedWorkflowDetail.edges.length}
                         />
                         <WorkflowField
@@ -733,11 +778,13 @@ const WorkflowsPage: React.FC = () => {
                         }}
                       >
                         <Typography.Text style={summaryFieldLabelStyle}>
-                          Description
-                        </Typography.Text>
+                          {t("pages.workflows.index.description", "Description")}</Typography.Text>
                         <Typography.Text>
                           {selectedWorkflowDetail.catalog.description ||
-                            "No description provided."}
+                            intl.formatMessage({
+                              id: "pages.workflows.index.no.description.provided",
+                              defaultMessage: "No description provided.",
+                            })}
                         </Typography.Text>
                       </div>
                       <div
@@ -768,11 +815,13 @@ const WorkflowsPage: React.FC = () => {
               },
               {
                 key: "roles",
-                label: `Roles (${selectedWorkflowDetail.definition.roles.length})`,
+                label: t("pages.workflows.index.roles.count", "Roles ({count})", {
+                  count: selectedWorkflowDetail.definition.roles.length,
+                }),
                 children: (
                   <AevatarPanel
-                    description="These are the runtime roles the workflow definition declares, including provider/model hints and attached connectors."
-                    title="Role model"
+                    description={t("pages.workflows.index.these.are.the.runtime.roles", "These are the runtime roles the workflow definition declares, including provider/model hints and attached connectors.")}
+                    title={t("pages.workflows.index.role.model", "Role model")}
                   >
                     <Table<WorkflowCatalogRole>
                       columns={roleColumns}
@@ -786,11 +835,13 @@ const WorkflowsPage: React.FC = () => {
               },
               {
                 key: "steps",
-                label: `Steps (${stepRows.length})`,
+                label: t("pages.workflows.index.steps.count", "Steps ({count})", {
+                  count: stepRows.length,
+                }),
                 children: (
                   <AevatarPanel
-                    description="Use this view to understand the execution path before opening the full editor."
-                    title="Execution steps"
+                    description={t("pages.workflows.index.use.this.view.to.understand", "Use this view to understand the execution path before opening the full editor.")}
+                    title={t("pages.workflows.index.execution.steps", "Execution steps")}
                   >
                     <Table<WorkflowStepRow>
                       columns={stepColumns}
@@ -807,8 +858,8 @@ const WorkflowsPage: React.FC = () => {
                 label: "YAML",
                 children: (
                   <AevatarPanel
-                    description="Keep source close by for inspection, but off the main stage so the library stays scannable."
-                    title="Definition source"
+                    description={t("pages.workflows.index.keep.source.close.by.for", "Keep source close by for inspection, but off the main stage so the library stays scannable.")}
+                    title={t("pages.workflows.index.definition.source", "Definition source")}
                   >
                     <pre
                       style={{

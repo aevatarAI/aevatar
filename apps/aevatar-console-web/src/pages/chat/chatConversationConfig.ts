@@ -1,15 +1,15 @@
 import type {
-  StudioUserConfigModelsResponse,
-  StudioUserConfigProviderStatus,
+  StudioUserLlmModelGroup,
+  StudioUserLlmRouteOption,
+  StudioUserLlmSettings,
 } from "@/shared/studio/models";
 
 export const USER_LLM_ROUTE_GATEWAY = "";
-export const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = "gateway_provider";
-export const USER_CONFIG_PROVIDER_SOURCE_SERVICE = "user_service";
 export const LLM_ROUTE_HEADER_KEY = "nyxid.route_preference";
 export const LLM_MODEL_HEADER_KEY = "aevatar.model_override";
 export const CONVERSATION_ROUTE_DEFAULT_VALUE = "__config_default__";
 export const CONVERSATION_ROUTE_GATEWAY_VALUE = "__gateway__";
+const USER_LLM_ROUTE_GATEWAY_LABEL = "Gateway";
 
 export type ConversationRouteOption = {
   label: string;
@@ -42,49 +42,6 @@ export function normalizeUserLlmRoute(value: unknown): string {
   }
 
   return `/api/v1/proxy/s/${normalized.replace(/^\/+|\/+$/g, "")}`;
-}
-
-export function routePathFromProviderSlug(slug: string): string {
-  const normalized = String(slug || "").trim();
-  return normalized ? `/api/v1/proxy/s/${normalized}` : USER_LLM_ROUTE_GATEWAY;
-}
-
-export function resolveReadyConversationRoute(
-  preferredRoute: string,
-  readyGatewayProvider: { providerSlug: string } | null | undefined,
-  readyServiceProviders: readonly { providerSlug: string }[]
-): string {
-  if (preferredRoute === USER_LLM_ROUTE_GATEWAY) {
-    if (readyGatewayProvider) {
-      return USER_LLM_ROUTE_GATEWAY;
-    }
-
-    const fallbackServiceProvider = readyServiceProviders.find((provider) =>
-      trimConversationValue(provider.providerSlug)
-    );
-    return fallbackServiceProvider
-      ? routePathFromProviderSlug(fallbackServiceProvider.providerSlug)
-      : USER_LLM_ROUTE_GATEWAY;
-  }
-
-  const matchingServiceProvider = readyServiceProviders.find(
-    (provider) =>
-      routePathFromProviderSlug(provider.providerSlug) === preferredRoute
-  );
-  if (matchingServiceProvider) {
-    return preferredRoute;
-  }
-
-  if (readyGatewayProvider) {
-    return USER_LLM_ROUTE_GATEWAY;
-  }
-
-  const fallbackServiceProvider = readyServiceProviders.find((provider) =>
-    trimConversationValue(provider.providerSlug)
-  );
-  return fallbackServiceProvider
-    ? routePathFromProviderSlug(fallbackServiceProvider.providerSlug)
-    : preferredRoute;
 }
 
 export function buildConversationHeaders(
@@ -137,208 +94,55 @@ export function describeConversationRoute(
     return "Config default";
   }
 
-  if (route === USER_LLM_ROUTE_GATEWAY) {
-    return "NyxID Gateway";
-  }
-
-  return routeOptions.find((option) => option.value === route)?.label || route;
-}
-
-export function formatConversationProviderLabel(provider: {
-  providerName: string;
-  providerSlug: string;
-}): string {
-  const explicitName = provider.providerName.trim();
-  if (explicitName) {
-    return explicitName;
-  }
-
-  const slug = provider.providerSlug.trim();
-  if (!slug) {
-    return "Provider";
-  }
-
-  return slug
-    .split(/[-_]+/)
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
-
-function getReadyProviders(
-  providers: readonly StudioUserConfigProviderStatus[]
-): StudioUserConfigProviderStatus[] {
-  return providers.filter(
-    (provider) => provider.status.trim().toLowerCase() === "ready"
-  );
+  return routeOptions.find((option) => option.value === route)?.label ||
+    route ||
+    USER_LLM_ROUTE_GATEWAY_LABEL;
 }
 
 export function buildConversationRouteOptions(
-  models: StudioUserConfigModelsResponse | undefined,
-  globalPreferredRoute?: string,
-  conversationRoute?: string
+  settings: StudioUserLlmSettings | undefined
 ): ConversationRouteOption[] {
-  const options: ConversationRouteOption[] = [
-    { label: "NyxID Gateway", value: USER_LLM_ROUTE_GATEWAY },
-  ];
-  const seen = new Set(options.map((option) => option.value));
-
-  for (const provider of getReadyProviders(models?.providers ?? [])) {
-    const source =
-      provider.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY;
-    if (source !== USER_CONFIG_PROVIDER_SOURCE_SERVICE) {
-      continue;
-    }
-
-    const route = routePathFromProviderSlug(provider.providerSlug);
-    if (!provider.providerSlug || seen.has(route)) {
+  const options: ConversationRouteOption[] = [];
+  const seen = new Set<string>();
+  for (const option of settings?.routeOptions ?? []) {
+    const route = normalizeUserLlmRoute(option.routeValue);
+    if (seen.has(route)) {
       continue;
     }
 
     seen.add(route);
     options.push({
-      label: formatConversationProviderLabel(provider),
+      label: option.label.trim() || route || USER_LLM_ROUTE_GATEWAY_LABEL,
       value: route,
     });
-  }
-
-  for (const route of [globalPreferredRoute, conversationRoute]) {
-    if (route && !seen.has(route)) {
-      seen.add(route);
-      options.push({ label: route, value: route });
-    }
   }
 
   return options;
 }
 
-function buildProviderPrefixMap(
-  providers: readonly StudioUserConfigProviderStatus[]
-): Record<string, string> {
-  const prefixToProvider: Record<string, string> = {};
-
-  for (const provider of providers) {
-    const slug = provider.providerSlug.trim();
-    const name = formatConversationProviderLabel(provider);
-    if (slug === "openai") {
-      for (const prefix of ["gpt-", "o1-", "o1", "o3-", "o3", "o4-", "chatgpt-"]) {
-        prefixToProvider[prefix] = name;
-      }
-    } else if (slug === "anthropic") {
-      prefixToProvider["claude-"] = name;
-    } else if (slug === "google-ai") {
-      prefixToProvider["gemini-"] = name;
-    } else if (slug === "mistral") {
-      for (const prefix of ["mistral-", "codestral-", "magistral-"]) {
-        prefixToProvider[prefix] = name;
-      }
-    } else if (slug === "cohere") {
-      prefixToProvider["command-"] = name;
-    } else if (slug === "deepseek") {
-      prefixToProvider["deepseek-"] = name;
-    } else if (slug) {
-      prefixToProvider[`${slug}-`] = name;
-    }
-  }
-
-  return prefixToProvider;
-}
-
-function buildFallbackModelGroups(
-  supportedModels: readonly string[],
-  providers: readonly StudioUserConfigProviderStatus[]
-): ConversationLlmModelGroup[] {
-  const prefixToProvider = buildProviderPrefixMap(providers);
-  const groupedModels = new Map<string, string[]>();
-
-  for (const model of supportedModels) {
-    if (!model.trim()) {
-      continue;
-    }
-
-    let providerName = "Supported models";
-    for (const [prefix, name] of Object.entries(prefixToProvider)) {
-      if (model.startsWith(prefix) || model === prefix.replace(/-$/, "")) {
-        providerName = name;
-        break;
-      }
-    }
-
-    if (!groupedModels.has(providerName)) {
-      groupedModels.set(providerName, []);
-    }
-
-    groupedModels.get(providerName)?.push(model);
-  }
-
-  return Array.from(groupedModels.entries()).map(([label, models], index) => ({
-    id: `fallback-${index}`,
-    label,
-    models,
-  }));
-}
-
 export function buildConversationModelGroups(input: {
-  conversationModel?: string;
   effectiveRoute: string;
-  globalDefaultModel?: string;
-  models: StudioUserConfigModelsResponse | undefined;
+  settings: StudioUserLlmSettings | undefined;
 }): ConversationLlmModelGroup[] {
-  const readyProviders = getReadyProviders(input.models?.providers ?? []);
-  const gatewayProviders = readyProviders.filter(
-    (provider) =>
-      (provider.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY) ===
-      USER_CONFIG_PROVIDER_SOURCE_GATEWAY
-  );
-  const routeProviders =
-    input.effectiveRoute === USER_LLM_ROUTE_GATEWAY
-      ? gatewayProviders
-      : readyProviders.filter(
-          (provider) =>
-            routePathFromProviderSlug(provider.providerSlug) ===
-            input.effectiveRoute
-        );
-
-  const explicitGroups = routeProviders
-    .map((provider) => {
-      const models = Array.from(
-        new Set(
-          (input.models?.modelsByProvider?.[provider.providerSlug] ?? []).filter(
-            Boolean
-          )
-        )
-      );
-
-      return {
-        id: provider.providerSlug || formatConversationProviderLabel(provider),
-        label: formatConversationProviderLabel(provider),
-        models,
-      };
-    })
+  const normalizedRoute = normalizeUserLlmRoute(input.effectiveRoute);
+  return (input.settings?.modelGroupsByRoute ?? [])
+    .filter((group: StudioUserLlmModelGroup) =>
+      normalizeUserLlmRoute(group.routeValue) === normalizedRoute
+    )
+    .map((group) => ({
+      id: group.groupId,
+      label: group.label,
+      models: Array.from(new Set(group.models.filter(Boolean))),
+    }))
     .filter((group) => group.models.length > 0);
+}
 
-  const fallbackGroups =
-    explicitGroups.length > 0
-      ? []
-      : input.effectiveRoute === USER_LLM_ROUTE_GATEWAY
-        ? buildFallbackModelGroups(input.models?.supportedModels ?? [], routeProviders)
-        : [];
-
-  const groups = [...explicitGroups, ...fallbackGroups];
-  const selectedModel =
-    trimConversationValue(input.conversationModel) ||
-    trimConversationValue(input.globalDefaultModel);
-
-  if (
-    selectedModel &&
-    !groups.some((group) => group.models.includes(selectedModel))
-  ) {
-    groups.unshift({
-      id: "__current__",
-      label: "Current",
-      models: [selectedModel],
-    });
-  }
-
-  return groups;
+export function findConversationRouteOption(
+  settings: StudioUserLlmSettings | undefined,
+  route: string
+): StudioUserLlmRouteOption | undefined {
+  const normalizedRoute = normalizeUserLlmRoute(route);
+  return settings?.routeOptions.find(
+    (option) => normalizeUserLlmRoute(option.routeValue) === normalizedRoute
+  );
 }

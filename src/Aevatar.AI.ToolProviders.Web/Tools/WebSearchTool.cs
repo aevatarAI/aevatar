@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 
@@ -47,7 +46,10 @@ public sealed class WebSearchTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+        //   Old pattern: tool methods pulled NyxID credentials from generic Metadata keys.
+        //   New principle: credentials are typed request context fields, not internal Metadata.
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
@@ -57,6 +59,7 @@ public sealed class WebSearchTool : IAgentTool
             return """{"error":"'query' is required"}""";
 
         var maxResults = Math.Clamp(args.Int("max_results") ?? _options.MaxSearchResults, 1, 20);
-        return await _client.SearchAsync(token, query, maxResults, ct);
+        var result = await _client.SearchAsync(token, query, maxResults, ct);
+        return WebToolResultBoundaryJson.ToBoundaryJson(result);
     }
 }

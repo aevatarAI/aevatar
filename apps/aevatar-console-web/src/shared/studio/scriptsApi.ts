@@ -10,7 +10,7 @@ import type {
   ScriptCatalogSnapshot,
   ScriptPackage,
   ScriptPromotionDecision,
-  ScriptReadModelSnapshot,
+  ScriptRuntimeActivitySnapshot,
   ScriptValidationResult,
 } from './scriptsModels';
 
@@ -192,7 +192,7 @@ export const scriptsApi = {
   validateDraft(
     payload: {
       scriptId: string;
-      scriptRevision: string;
+      scriptRevision?: string;
       source?: string;
       package?: ScriptPackage | null;
     },
@@ -290,13 +290,13 @@ export const scriptsApi = {
     );
   },
 
-  listRuntimes(take = 24): Promise<ScriptReadModelSnapshot[]> {
+  listRuntimes(take = 24): Promise<ScriptRuntimeActivitySnapshot[]> {
     return requestJson(`/api/app/scripts/runtimes?take=${take}`);
   },
 
-  getRuntimeReadModel(actorId: string): Promise<ScriptReadModelSnapshot> {
+  getRuntimeActivity(actorId: string): Promise<ScriptRuntimeActivitySnapshot> {
     return requestJson(
-      `/api/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`,
+      `/api/app/scripts/runtimes/${encodeURIComponent(actorId)}/activity`,
     );
   },
 

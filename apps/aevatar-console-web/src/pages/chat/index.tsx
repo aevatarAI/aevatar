@@ -4,14 +4,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { nyxIdChatApi } from "@/shared/api/nyxIdChatApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
-import { servicesApi } from "@/shared/api/servicesApi";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { history } from "@/shared/navigation/history";
 import {
   buildScopeConsoleServiceOptions,
   createNyxIdChatBindingInput,
   nyxIdChatServiceId,
   scopeServiceAppId,
-  scopeServiceNamespace,
   type ScopeConsoleServiceOption,
 } from "@/shared/runs/scopeConsole";
 import { studioApi } from "@/shared/studio/api";
@@ -92,6 +91,7 @@ import type {
   StepInfo,
   ToolCallInfo,
 } from "./chatTypes";
+import { t } from "@/shared/i18n/messages";
 
 function readChatQueryValue(
   key: string,
@@ -375,15 +375,10 @@ const ChatPage: React.FC = () => {
     queryKey: ["studio-settings"],
     queryFn: () => studioApi.getSettings(),
   });
-  const userConfigQuery = useQuery({
+  const userLlmSettingsQuery = useQuery({
     enabled: authSessionQuery.isSuccess,
-    queryKey: ["chat", "user-config"],
-    queryFn: () => studioApi.getUserConfig(),
-  });
-  const userConfigModelsQuery = useQuery({
-    enabled: authSessionQuery.isSuccess,
-    queryKey: ["chat", "user-config-models"],
-    queryFn: () => studioApi.getUserConfigModels(),
+    queryKey: ["chat", "user-llm-settings"],
+    queryFn: () => studioApi.getUserLlmSettings(),
   });
 
   const defaultRouteTargetQuery = useQuery({
@@ -395,10 +390,8 @@ const ChatPage: React.FC = () => {
     enabled: scopeId.length > 0,
     queryKey: ["chat", "services", scopeId],
     queryFn: () =>
-      servicesApi.listServices({
+      scopeRuntimeApi.listServices(scopeId, {
         appId: scopeServiceAppId,
-        namespace: scopeServiceNamespace,
-        tenantId: scopeId,
       }),
   });
 
@@ -429,41 +422,35 @@ const ChatPage: React.FC = () => {
   const selectedService =
     services.find((service) => service.id === selectedServiceId) ?? null;
   const globalPreferredRoute = normalizeUserLlmRoute(
-    userConfigQuery.data?.preferredLlmRoute
+    userLlmSettingsQuery.data?.effectiveRoute
   );
   const routeOptions = useMemo(
-    () =>
-      buildConversationRouteOptions(
-        userConfigModelsQuery.data,
-        globalPreferredRoute,
-        conversationRoute
-      ),
-    [conversationRoute, globalPreferredRoute, userConfigModelsQuery.data]
+    () => buildConversationRouteOptions(userLlmSettingsQuery.data),
+    [userLlmSettingsQuery.data]
   );
   const effectiveRoute =
     conversationRoute !== undefined ? conversationRoute : globalPreferredRoute;
+  const backendEffectiveRouteLabel = trimConversationValue(
+    userLlmSettingsQuery.data?.effectiveRouteLabel
+  );
   const effectiveRouteLabel = useMemo(
-    () => describeConversationRoute(effectiveRoute, routeOptions),
-    [effectiveRoute, routeOptions]
+    () =>
+      conversationRoute === undefined && backendEffectiveRouteLabel
+        ? backendEffectiveRouteLabel
+        : describeConversationRoute(effectiveRoute, routeOptions),
+    [backendEffectiveRouteLabel, conversationRoute, effectiveRoute, routeOptions]
   );
   const effectiveModel =
     trimConversationValue(conversationModel) ||
-    trimConversationValue(userConfigQuery.data?.defaultModel) ||
+    trimConversationValue(userLlmSettingsQuery.data?.defaultModel) ||
     "";
   const modelGroups = useMemo(
     () =>
       buildConversationModelGroups({
-        conversationModel,
         effectiveRoute,
-        globalDefaultModel: userConfigQuery.data?.defaultModel,
-        models: userConfigModelsQuery.data,
+        settings: userLlmSettingsQuery.data,
       }),
-    [
-      conversationModel,
-      effectiveRoute,
-      userConfigModelsQuery.data,
-      userConfigQuery.data?.defaultModel,
-    ]
+    [effectiveRoute, userLlmSettingsQuery.data]
   );
   const conversationHeaders = useMemo(
     () => buildConversationHeaders(conversationRoute, conversationModel),
@@ -2057,8 +2044,7 @@ const ChatPage: React.FC = () => {
                   fontWeight: 600,
                 }}
               >
-                Console
-              </div>
+                {t("pages.chat.index.console", "Console")}</div>
               {scopeId && services.length > 0 ? (
                 <ServiceSelector
                   onCreate={handleCreate}
@@ -2093,8 +2079,7 @@ const ChatPage: React.FC = () => {
                 }}
                 type="button"
               >
-                New Chat
-              </button>
+                {t("pages.chat.index.new.chat", "New Chat")}</button>
               <ChatToolsMenu
                 advancedOpen={advancedOpen}
                 eventStreamOpen={showDebug}
@@ -2165,13 +2150,13 @@ const ChatPage: React.FC = () => {
                   ) : !scopeId ? (
                     <Alert
                       showIcon
-                    title="No project scope is currently available."
+                    title={t("pages.chat.index.no.project.scope.is.currently", "No project scope is currently available.")}
                     type="warning"
                   />
                 ) : !selectedService || !selectedServiceId ? (
                   <Alert
                     showIcon
-                    title="No chat-capable services are currently available."
+                    title={t("pages.chat.index.no.chat.capable.services.are", "No chat-capable services are currently available.")}
                     type="info"
                   />
                 ) : messages.length === 0 &&
@@ -2286,8 +2271,8 @@ const ChatPage: React.FC = () => {
                         modelGroups={modelGroups}
                         modelValue={conversationModel}
                         modelsLoading={
-                          userConfigModelsQuery.isLoading ||
-                          Boolean(userConfigModelsQuery.isFetching)
+                          userLlmSettingsQuery.isLoading ||
+                          Boolean(userLlmSettingsQuery.isFetching)
                         }
                         onModelChange={handleConversationModelChange}
                         onReset={handleResetConversationLlm}

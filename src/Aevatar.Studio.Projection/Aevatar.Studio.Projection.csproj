@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Runtime.Abstractions\Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
@@ -20,9 +22,10 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ConnectorCatalog\Aevatar.GAgents.ConnectorCatalog.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.RoleCatalog\Aevatar.GAgents.RoleCatalog.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.UserMemory\Aevatar.GAgents.UserMemory.csproj" />
-    <ProjectReference Include="..\..\agents\Aevatar.GAgents.StreamingProxyParticipant\Aevatar.GAgents.StreamingProxyParticipant.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StudioMember\Aevatar.GAgents.StudioMember.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.StudioTeam\Aevatar.GAgents.StudioTeam.csproj" />
+    <ProjectReference Include="..\workflow\Aevatar.Workflow.Studio\Aevatar.Workflow.Studio.csproj" />
   </ItemGroup>
 
   <ItemGroup>

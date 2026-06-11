@@ -18,22 +18,23 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 {
     private const string WriteActorIdPrefix = "user-memory-";
+    private const string PublisherId = "aevatar.studio.infrastructure.user-memory";
 
     private readonly IStudioActorBootstrap _bootstrap;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioActorCommandDispatch _commandDispatch;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IProjectionDocumentReader<UserMemoryCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedUserMemoryStore> _logger;
 
     public ActorBackedUserMemoryStore(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort,
+        StudioActorCommandDispatch commandDispatch,
         IAppScopeResolver scopeResolver,
         IProjectionDocumentReader<UserMemoryCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedUserMemoryStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -92,7 +93,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
                     UpdatedAt = entry.UpdatedAt,
                 },
             };
-            await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);
+            await _commandDispatch.DispatchAsync(actor, evt, PublisherId, ct);
         }
     }
 
@@ -112,7 +113,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
         };
 
         var evt = new MemoryEntryAddedEvent { Entry = entry };
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, ct);
 
         return new UserMemoryEntry(
             Id: entry.Id,
@@ -125,13 +126,14 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     public async Task<bool> RemoveEntryAsync(string id, CancellationToken ct = default)
     {
-        var state = await ReadProjectedStateAsync(ct);
+        var actorId = ResolveWriteActorId();
+        var state = await ReadProjectedStateAsync(actorId, ct);
         if (state is null || !state.Entries.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
             return false;
 
-        var actor = await EnsureWriteActorAsync(ct);
+        var actor = await EnsureWriteActorAsync(actorId, ct);
         var evt = new MemoryEntryRemovedEvent { EntryId = id };
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, ct);
         return true;
     }
 
@@ -142,9 +144,13 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
         {
             doc = await GetAsync(ct);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Failed to load user memory for prompt injection");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read user memory prompt section; continuing without user memory.");
             return string.Empty;
         }
 
@@ -198,7 +204,15 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     private async Task<UserMemoryState?> ReadProjectedStateAsync(CancellationToken ct)
     {
-        var actorId = ResolveWriteActorId();
+        var actorId = TryResolveWriteActorId();
+        if (actorId is null)
+            return null;
+
+        return await ReadProjectedStateAsync(actorId, ct);
+    }
+
+    private async Task<UserMemoryState?> ReadProjectedStateAsync(string actorId, CancellationToken ct)
+    {
         var document = await _documentReader.GetAsync(actorId, ct);
         if (document?.StateRoot == null ||
             !document.StateRoot.Is(UserMemoryState.Descriptor))
@@ -209,15 +223,27 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     // ── Actor resolution ──
 
+    private string? TryResolveScopeId()
+        => _scopeResolver.Resolve()?.ScopeId;
+
     private string ResolveScopeId()
-        => _scopeResolver.Resolve()?.ScopeId
+        => TryResolveScopeId()
            ?? throw new InvalidOperationException(
                "User memory store requires an authenticated user scope. No scope could be resolved.");
+
+    private string? TryResolveWriteActorId()
+    {
+        var scopeId = TryResolveScopeId();
+        return scopeId is null ? null : WriteActorIdPrefix + scopeId;
+    }
 
     private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
 
     private Task<IActor> EnsureWriteActorAsync(CancellationToken ct) =>
-        _bootstrap.EnsureAsync<UserMemoryGAgent>(ResolveWriteActorId(), ct);
+        EnsureWriteActorAsync(ResolveWriteActorId(), ct);
+
+    private Task<IActor> EnsureWriteActorAsync(string actorId, CancellationToken ct) =>
+        _bootstrap.EnsureAsync<UserMemoryGAgent>(actorId, ct);
 
     private static string GenerateId()
     {

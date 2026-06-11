@@ -1,27 +1,23 @@
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.MCP;
-using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Hosting;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Extensions.Maker;
+using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class WorkflowHostingExtensionsCoverageTests
 {
     [Fact]
@@ -33,80 +29,42 @@ public sealed class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
-    public async Task AddAevatarPlatform_ShouldRegisterWorkflowScriptingAiAndMakerBundles()
+    public async Task WorkflowPlatformServices_ShouldRegisterWorkflowAndMakerServices()
     {
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
-        {
-            EnvironmentName = Environments.Development,
-        });
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
 
-        builder.AddAevatarPlatform(options =>
-        {
-            options.EnableMakerExtensions = true;
-            options.ConfigureAIFeatures = aiOptions =>
-            {
-                aiOptions.EnableMCPTools = false;
-                aiOptions.EnableSkills = false;
-                aiOptions.ApiKey = "demo-key";
-                aiOptions.DefaultProvider = "openai";
-            };
-        });
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+        services.AddWorkflowCapability(configuration);
+        services.AddWorkflowMakerExtensions();
 
-        builder.Services.Any(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowActorBindingDocument, string>)).Should().BeTrue();
-        builder.Services
-            .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
-            .Select(x => x.ImplementationInstance)
-            .OfType<AevatarCapabilityRegistration>()
-            .Should()
-            .Contain(x => x.Name == "workflow-bundle")
-            .And.Contain(x => x.Name == "scripting-bundle");
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowChatRunInteractionPort));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+        services.Should().Contain(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowRunProvisioningPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowDefinitionProvisioningPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowDefinitionParser));
+        services.Should().Contain(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>));
+        services.Should().Contain(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowActorBindingDocument, string>));
 
-        await using var provider = builder.Services.BuildServiceProvider();
-        provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
+        await using var provider = services.BuildServiceProvider();
         provider.GetService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>().Should().NotBeNull();
         provider.GetService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
         provider.GetServices<IWorkflowModulePack>().Should().ContainSingle(x => x is MakerModulePack);
-
-        var toolSources = provider.GetServices<IAgentToolSource>().ToList();
-        toolSources.Should().NotContain(x => x is MCPAgentToolSource);
-        toolSources.Should().NotContain(x => x is SkillsAgentToolSource);
-    }
-
-    [Fact]
-    public void AddAevatarPlatform_WhenScriptingDisabled_ShouldNotRegisterScriptingBundle()
-    {
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
-        {
-            EnvironmentName = Environments.Development,
-        });
-
-        builder.AddAevatarPlatform(options =>
-        {
-            options.EnableScriptingCapability = false;
-        });
-
-        builder.Services
-            .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
-            .Select(x => x.ImplementationInstance)
-            .OfType<AevatarCapabilityRegistration>()
-            .Should()
-            .NotContain(x => x.Name == "scripting-bundle");
     }
 
     [Fact]
     public void AddAevatarPlatform_WhenMakerEnabledWithoutWorkflow_ShouldThrow()
     {
-        var builder = WebApplication.CreateBuilder();
-
-        var act = () => builder.AddAevatarPlatform(options =>
+        var options = new AevatarPlatformCompositionOptions
         {
-            options.EnableWorkflowCapability = false;
-            options.EnableMakerExtensions = true;
-        });
+            EnableAIFeatures = false,
+            EnableWorkflowCapability = false,
+            EnableMakerExtensions = true,
+        };
+
+        var act = () => InvokeValidateOptions(options);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Maker extensions require workflow capability*");
@@ -424,4 +382,20 @@ public sealed class WorkflowHostingExtensionsCoverageTests
             .Should()
             .NotBeNull();
     }
+
+    private static void InvokeValidateOptions(AevatarPlatformCompositionOptions options)
+    {
+        var method = typeof(AevatarPlatformHostBuilderExtensions)
+            .GetMethod("ValidateOptions", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        method.Should().NotBeNull();
+        try
+        {
+            method!.Invoke(null, [options]);
+        }
+        catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            throw ex.InnerException;
+        }
+    }
+
 }

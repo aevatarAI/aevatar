@@ -24,9 +24,9 @@ public sealed class ScriptPackageModelTests
         var spec = ScriptPackageModel.ToPackageSpec(package);
 
         spec.EntryBehaviorTypeName.Should().Be("EntryBehavior");
-        spec.EntrySourcePath.Should().Be("./z/Second.cs");
-        spec.CsharpSources.Select(x => x.Path).Should().Equal("./z/Second.cs", "Behavior.cs");
-        spec.ProtoFiles.Select(x => x.Path).Should().Equal("./proto/z.proto", "proto/a.proto");
+        spec.EntrySourcePath.Should().Be("Behavior.cs");
+        spec.CsharpSources.Select(x => x.Path).Should().Equal("Behavior.cs", "z/Second.cs");
+        spec.ProtoFiles.Select(x => x.Path).Should().Equal("proto/a.proto", "proto/z.proto");
     }
 
     [Fact]
@@ -60,8 +60,8 @@ public sealed class ScriptPackageModelTests
         var package = ScriptPackageModel.ToSourcePackage(spec);
 
         package.EntryBehaviorTypeName.Should().Be("EntryBehavior");
-        package.CSharpSources.Select(x => x.Path).Should().Equal("./src/Behavior.cs", "file", "src/Other.cs");
-        package.ProtoFiles.Select(x => x.Path).Should().Equal("./proto/z.proto", "proto/a.proto");
+        package.CSharpSources.Select(x => x.Path).Should().Equal("file", "src/Behavior.cs", "src/Other.cs");
+        package.ProtoFiles.Select(x => x.Path).Should().Equal("proto/a.proto", "proto/z.proto");
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public sealed class ScriptPackageModelTests
         var leftHash = ScriptPackageModel.ComputePackageHash(left);
         var rightHash = ScriptPackageModel.ComputePackageHash(right);
 
-        leftHash.Should().NotBe(rightHash);
+        leftHash.Should().Be(rightHash);
         leftHash.Should().NotBeEmpty();
         rightHash.Should().NotBeEmpty();
     }

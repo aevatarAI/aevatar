@@ -55,11 +55,11 @@ flowchart LR
 
 1. Host/API 把输入规范化为 `WorkflowChatRunRequest`。
 2. CQRS Core 通过 `ICommandDispatchService` / `DefaultCommandDispatchPipeline` 驱动这次命令。
-3. Application 通过 `WorkflowRunCommandTargetResolver` 解析 workflow source，并把目标统一折叠成 `WorkflowRunCommandTarget`。
-4. `WorkflowRunCommandTargetBinder` 为 run actor 建立 projection lease 与 live sink，并由 `WorkflowRunAcceptedReceiptFactory` 生成 accepted receipt。
+3. Application 通过 `WorkflowRunCommandTargetResolver` 解析 interaction 目标；accepted-only dispatch 使用 `WorkflowRunAcceptedCommandTargetResolver` 解析 receipt-only 目标。
+4. realtime interaction 路径由 `IWorkflowChatRunInteractionPort` 先激活本次 run actor 的 observation scope，再把 seeded request 交给内部默认 CQRS interaction service；`WorkflowRunObservationLifecycle` 只 attach existing projection lease 与 live sink。accepted-only 路径使用 `DefaultCommandDispatchService`，只生成 accepted receipt，不 drain session event stream。
 5. `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 把 `ChatRequestEvent` 包进 `EventEnvelope` 后投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责。
 6. `WorkflowRunGAgent` 在自己的事件管线中驱动 `StartWorkflowEvent -> StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`。
-7. Projection 与 AGUI 从同一条 run actor envelope 流投影出查询模型和实时事件；SSE/WS 路径由 `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 持续回推事件给客户端。
+7. Projection 与 AGUI 从同一条 run actor envelope 流投影出查询模型和实时事件；SSE/WS 路径由 `IWorkflowChatRunInteractionPort` 持续回推事件给客户端。内部默认 CQRS interaction service 只是该业务端口的 non-fallback plumbing，不作为用户可解析的 realtime 入口。
 8. `resume/signal` 命令同样先进入 CQRS `ICommandDispatchService`，再由 `WorkflowResumeCommandEnvelopeFactory` / `WorkflowSignalCommandEnvelopeFactory` 构建 run control envelope。
 
 ## 状态边界
@@ -99,7 +99,7 @@ flowchart LR
 
 ## API 语义
 
-- `ChatInput.AgentId` 表示 workflow source actor id。推荐传 definition actor id；如果传的是已绑定 workflow 的 run actor，系统会读取其 definition binding 再创建新的 run actor。
+- `/api/chat` 的 actor-targeted 输入只使用 typed source 子消息：`source.definitionActor.actorId` 表示 workflow source actor id；如果传的是已绑定 workflow 的 run actor，系统会读取其 definition binding 再创建新的 run actor。
 - 对 named workflow，若 source actor 缺少 `DefinitionActorId`，系统会回落到 registry 的规范 definition actor id，而不是创建新的匿名 definition actor。
 - `WorkflowChatRunStarted.ActorId` 是新创建的 run actor id。
 - resume/signal 请求中的 `ActorId` 必须是 run actor id。

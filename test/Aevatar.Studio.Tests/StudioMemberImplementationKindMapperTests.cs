@@ -65,4 +65,27 @@ public sealed class StudioMemberImplementationKindMapperTests
             .ToWireName(StudioMemberLifecycleStage.Unspecified)
             .Should().BeEmpty();
     }
+
+    [Theory]
+    [InlineData(StudioMemberBindingRunStatus.Accepted, "accepted")]
+    [InlineData(StudioMemberBindingRunStatus.AdmissionPending, "admission_pending")]
+    [InlineData(StudioMemberBindingRunStatus.Admitted, "admitted")]
+    [InlineData(StudioMemberBindingRunStatus.PlatformBindingPending, "platform_binding_pending")]
+    [InlineData(StudioMemberBindingRunStatus.MemberNotificationPending, "member_notification_pending")]
+    [InlineData(StudioMemberBindingRunStatus.Succeeded, "succeeded")]
+    [InlineData(StudioMemberBindingRunStatus.Failed, "failed")]
+    [InlineData(StudioMemberBindingRunStatus.Rejected, "rejected")]
+    public void ToWireName_BindingRunStatus_ShouldMapToWireName(
+        StudioMemberBindingRunStatus status, string expected)
+    {
+        MemberImplementationKindMapper.ToWireName(status).Should().Be(expected);
+    }
+
+    [Fact]
+    public void ToWireName_BindingRunStatus_ShouldReturnEmpty_ForUnspecified()
+    {
+        MemberImplementationKindMapper
+            .ToWireName(StudioMemberBindingRunStatus.Unspecified)
+            .Should().BeEmpty();
+    }
 }

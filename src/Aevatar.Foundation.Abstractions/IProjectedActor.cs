@@ -1,10 +1,8 @@
 // ─────────────────────────────────────────────────────────────
 // IProjectedActor - optional marker for actors whose committed events
 // are materialized by a projection scope. The static ProjectionKind
-// identifies which scope should be activated alongside the actor's
-// lifetime. Consumers (e.g. Studio / Scripting / Governance bootstraps)
-// use this as a compile-time binding between agent type and scope so
-// callers cannot pass a mismatched kind at a write path.
+// identifies which committed-state activation plan should start the
+// materialization scope for that actor family.
 // ─────────────────────────────────────────────────────────────
 
 namespace Aevatar.Foundation.Abstractions;
@@ -12,9 +10,8 @@ namespace Aevatar.Foundation.Abstractions;
 /// <summary>
 /// An agent whose committed events are materialized into a read-model
 /// document by a projection scope. The scope is identified by
-/// <see cref="ProjectionKind"/> and must be activated before the agent
-/// publishes any committed event, otherwise the projector never
-/// subscribes and materialization silently drops the event.
+/// <see cref="ProjectionKind"/>; committed-state projection activation
+/// providers use it to bind actor type to readmodel materialization kind.
 /// </summary>
 public interface IProjectedActor
 {

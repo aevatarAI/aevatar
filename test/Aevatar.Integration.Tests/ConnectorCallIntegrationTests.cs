@@ -1,12 +1,12 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
-using Aevatar.AI.Core.Agents;
-using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Connectors;
+using Aevatar.Workflow.Integration.AI;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -20,7 +20,7 @@ public class ConnectorCallIntegrationTests
     public async Task ConnectorCall_ShouldInvokeRegisteredConnector_AndPublishMetadata()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FakeConnector("fake_connector", "echo://done"));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FakeConnector("fake_connector", "echo://done")));
         await using var env = BuildEnvironment(registry);
 
         const string yaml = """
@@ -80,7 +80,7 @@ public class ConnectorCallIntegrationTests
     public async Task ConnectorCall_WhenConnectorFailsAndContinue_ShouldKeepInput()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FakeFailConnector("unstable_connector"));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FakeFailConnector("unstable_connector")));
         await using var env = BuildEnvironment(registry);
 
         const string yaml = """
@@ -109,7 +109,7 @@ public class ConnectorCallIntegrationTests
     public async Task ConnectorCall_WhenRoleHasConnectorsAllowlist_AndConnectorInList_ShouldSucceed()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FakeConnector("allowed_connector", "ok"));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FakeConnector("allowed_connector", "ok")));
         await using var env = BuildEnvironment(registry);
 
         const string yaml = """
@@ -117,6 +117,7 @@ public class ConnectorCallIntegrationTests
             roles:
               - id: coordinator
                 name: Coordinator
+                agent_kind: workflow.assistant-role
                 system_prompt: ""
                 connectors:
                   - allowed_connector
@@ -140,7 +141,7 @@ public class ConnectorCallIntegrationTests
     public async Task ConnectorCall_WhenRoleHasConnectorsAllowlist_AndConnectorNotInList_ShouldFailStep()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FakeConnector("other_connector", "ok"));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FakeConnector("other_connector", "ok")));
         await using var env = BuildEnvironment(registry);
 
         const string yaml = """
@@ -148,6 +149,7 @@ public class ConnectorCallIntegrationTests
             roles:
               - id: coordinator
                 name: Coordinator
+                agent_kind: workflow.assistant-role
                 system_prompt: ""
                 connectors:
                   - only_this_one
@@ -173,12 +175,20 @@ public class ConnectorCallIntegrationTests
         services.AddSingleton(registry);
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.AddAevatarAgentKindRegistry(RegisterAssistantRoleKind);
 
         var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         return new TestEnvironment(provider, runtime);
     }
+
+    private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
+        builder.Register(new AgentRegistration(
+            "workflow.assistant-role",
+            typeof(WorkflowRoleGAgent),
+            typeof(RoleGAgentState),
+            [],
+            []));
 
     private static async Task<WorkflowRunResult> RunWorkflowAsync(
         ServiceProvider provider,
@@ -248,7 +258,7 @@ public class ConnectorCallIntegrationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "test-session" }),
+            Payload = Any.Pack(new WorkflowChatRequestEvent { Prompt = input, SessionId = "test-session" }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         });
 

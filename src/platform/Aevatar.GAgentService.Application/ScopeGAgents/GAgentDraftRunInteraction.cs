@@ -1,6 +1,7 @@
 using System.Runtime.ExceptionServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -8,7 +9,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Application.ScopeGAgents;
@@ -20,36 +21,62 @@ internal sealed class GAgentDraftRunCommandTarget
       ICommandDispatchCleanupAware
 {
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
+    private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
     public GAgentDraftRunCommandTarget(
         IActor actor,
         string actorTypeName,
-        IGAgentDraftRunProjectionPort projectionPort)
+        IGAgentDraftRunProjectionPort projectionPort,
+        IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         ActorTypeName = string.IsNullOrWhiteSpace(actorTypeName)
             ? throw new ArgumentException("Actor type name is required.", nameof(actorTypeName))
             : actorTypeName.Trim();
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
     public IActor Actor { get; }
     public string ActorTypeName { get; }
     public string TargetId => Actor.Id;
     public string ActorId => Actor.Id;
+    public string SessionId { get; private set; } = string.Empty;
     public IGAgentDraftRunProjectionLease? ProjectionLease { get; private set; }
+    public IGAgentRunTerminalProjectionLease? TerminalProjectionLease { get; private set; }
+    public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<AGUIEvent>? LiveSink { get; private set; }
+    private IEventSink<AGUIEvent>? InteractionLiveSink { get; set; }
+    public bool AwaitingApprovalTerminalFact { get; private set; }
+
+    public void BindTerminalProjection(IGAgentRunTerminalProjectionLease? lease)
+    {
+        TerminalProjectionLease = lease;
+    }
 
     public void BindLiveObservation(
         IGAgentDraftRunProjectionLease lease,
-        IEventSink<AGUIEvent> sink)
+        IAsyncDisposable? liveSinkLease,
+        IEventSink<AGUIEvent> sink,
+        string sessionId)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
+        LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
+        InteractionLiveSink = new ApprovalObservingEventSink(sink, MarkAwaitingApprovalTerminalFact);
+        SessionId = sessionId;
     }
 
     public IEventSink<AGUIEvent> RequireLiveSink() =>
-        LiveSink ?? throw new InvalidOperationException("GAgent draft-run live sink is not bound.");
+        InteractionLiveSink ?? throw new InvalidOperationException("GAgent draft-run live sink is not bound.");
+
+    public void MarkAwaitingApprovalTerminalFact()
+    {
+        AwaitingApprovalTerminalFact = true;
+    }
 
     public Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default) =>
         ReleaseAsync(ct);
@@ -61,10 +88,19 @@ internal sealed class GAgentDraftRunCommandTarget
     {
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentNullException.ThrowIfNull(cleanup);
-        return ReleaseAsync(ct);
+        return ReleaseAsync(ShouldReleaseTerminalProjection(cleanup), ct);
     }
 
-    private async Task ReleaseAsync(CancellationToken ct)
+    private bool ShouldReleaseTerminalProjection(
+        CommandInteractionCleanupContext<GAgentDraftRunCompletionStatus> cleanup) =>
+        !cleanup.ObservedCompleted ||
+        cleanup.ObservedCompletion != GAgentDraftRunCompletionStatus.TextMessageCompleted ||
+        !AwaitingApprovalTerminalFact;
+
+    private async Task ReleaseAsync(CancellationToken ct) =>
+        await ReleaseAsync(releaseTerminalProjection: true, ct);
+
+    private async Task ReleaseAsync(bool releaseTerminalProjection, CancellationToken ct)
     {
         Exception? firstException = null;
         var projectionLease = ProjectionLease;
@@ -76,11 +112,14 @@ internal sealed class GAgentDraftRunCommandTarget
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
                     projectionLease,
+                    LiveSinkLease,
                     sink,
                     null,
                     ct);
                 ProjectionLease = null;
+                LiveSinkLease = null;
                 LiveSink = null;
+                InteractionLiveSink = null;
             }
             catch (Exception ex)
             {
@@ -95,7 +134,9 @@ internal sealed class GAgentDraftRunCommandTarget
                 {
                     sink.Complete();
                     await sink.DisposeAsync();
+                    LiveSinkLease = null;
                     LiveSink = null;
+                    InteractionLiveSink = null;
                 }
                 catch (Exception ex)
                 {
@@ -109,6 +150,8 @@ internal sealed class GAgentDraftRunCommandTarget
                 {
                     await _projectionPort.ReleaseActorProjectionAsync(projectionLease, ct);
                     ProjectionLease = null;
+                    LiveSinkLease = null;
+                    InteractionLiveSink = null;
                 }
                 catch (Exception ex)
                 {
@@ -117,8 +160,49 @@ internal sealed class GAgentDraftRunCommandTarget
             }
         }
 
+        var terminalProjectionLease = TerminalProjectionLease;
+        if (releaseTerminalProjection && terminalProjectionLease != null)
+        {
+            try
+            {
+                await _terminalProjectionPort.ReleaseProjectionAsync(terminalProjectionLease, ct);
+                TerminalProjectionLease = null;
+                AwaitingApprovalTerminalFact = false;
+            }
+            catch (Exception ex)
+            {
+                firstException ??= ex;
+            }
+        }
+
         if (firstException != null)
             ExceptionDispatchInfo.Capture(firstException).Throw();
+    }
+
+    private sealed class ApprovalObservingEventSink(
+        IEventSink<AGUIEvent> inner,
+        Action markAwaitingApproval) : IEventSink<AGUIEvent>
+    {
+        public void Push(AGUIEvent evt) => inner.Push(evt);
+
+        public ValueTask PushAsync(AGUIEvent evt, CancellationToken ct = default) =>
+            inner.PushAsync(evt, ct);
+
+        public void Complete() => inner.Complete();
+
+        public async IAsyncEnumerable<AGUIEvent> ReadAllAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await foreach (var evt in inner.ReadAllAsync(ct))
+            {
+                if (evt.Custom?.Name == "TOOL_APPROVAL_REQUEST")
+                    markAwaitingApproval();
+
+                yield return evt;
+            }
+        }
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 }
 
@@ -127,16 +211,22 @@ internal sealed class GAgentDraftRunCommandTargetResolver
 {
     private readonly IActorRuntime _actorRuntime;
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
+    private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
     private readonly IAgentTypeVerifier? _agentTypeVerifier;
+    private readonly IAgentKindRegistry? _agentKindRegistry;
 
     public GAgentDraftRunCommandTargetResolver(
         IActorRuntime actorRuntime,
         IGAgentDraftRunProjectionPort projectionPort,
-        IAgentTypeVerifier? agentTypeVerifier = null)
+        IGAgentRunTerminalProjectionPort terminalProjectionPort,
+        IAgentTypeVerifier? agentTypeVerifier = null,
+        IAgentKindRegistry? agentKindRegistry = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
         _agentTypeVerifier = agentTypeVerifier;
+        _agentKindRegistry = agentKindRegistry;
     }
 
     public async Task<CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>> ResolveAsync(
@@ -145,7 +235,9 @@ internal sealed class GAgentDraftRunCommandTargetResolver
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        var agentType = ScopeGAgentActorTypeResolver.Resolve(command.ActorTypeName);
+        var agentKind = NormalizeOptional(command.AgentKind);
+        var legacyActorTypeName = NormalizeOptional(command.ActorTypeName);
+        var agentType = ResolveExpectedType(agentKind, legacyActorTypeName);
         if (agentType is null)
         {
             return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Failure(
@@ -172,16 +264,49 @@ internal sealed class GAgentDraftRunCommandTargetResolver
             }
             else
             {
-                actor = await _actorRuntime.CreateAsync(agentType, preferredActorId, ct);
+                actor = string.IsNullOrWhiteSpace(agentKind)
+                    ? await _actorRuntime.CreateAsync(agentType!, preferredActorId, ct)
+                    : await _actorRuntime.CreateByKindAsync(agentKind, preferredActorId, ct);
             }
         }
         else
         {
-            actor = await _actorRuntime.CreateAsync(agentType, null, ct);
+            actor = string.IsNullOrWhiteSpace(agentKind)
+                ? await _actorRuntime.CreateAsync(agentType!, null, ct)
+                : await _actorRuntime.CreateByKindAsync(agentKind, null, ct);
         }
 
         return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Success(
-            new GAgentDraftRunCommandTarget(actor, command.ActorTypeName, _projectionPort));
+            new GAgentDraftRunCommandTarget(
+                actor,
+                legacyActorTypeName ?? agentKind!,
+                _projectionPort,
+                _terminalProjectionPort));
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private System.Type? ResolveExpectedType(string? agentKind, string? legacyActorTypeName)
+    {
+        if (!string.IsNullOrWhiteSpace(agentKind))
+        {
+            try
+            {
+                var implementation = _agentKindRegistry?.Resolve(agentKind);
+                if (implementation != null)
+                    return ScopeGAgentActorTypeResolver.Resolve(implementation.Metadata.ImplementationClrTypeName);
+            }
+            catch (UnknownAgentKindException)
+            {
+                return null;
+            }
+        }
+
+        return ScopeGAgentActorTypeResolver.Resolve(legacyActorTypeName ?? string.Empty);
     }
 
     private async Task<bool> MatchesExpectedTypeAsync(
@@ -202,56 +327,98 @@ internal sealed class GAgentDraftRunCommandTargetResolver
     }
 }
 
-internal sealed class GAgentDraftRunCommandTargetBinder
-    : ICommandTargetBinder<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>
+internal sealed class GAgentDraftRunObservationLifecycle
+    : ICommandObservationLifecycle<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>
 {
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
+    private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
-    public GAgentDraftRunCommandTargetBinder(
-        IGAgentDraftRunProjectionPort projectionPort)
+    public GAgentDraftRunObservationLifecycle(
+        IGAgentDraftRunProjectionPort projectionPort,
+        IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
-    public async Task<CommandTargetBindingResult<GAgentDraftRunStartError>> BindAsync(
+    public async Task<CommandObservationBindingResult<GAgentDraftRunStartError>> BindAsync(
         GAgentDraftRunCommand command,
-        GAgentDraftRunCommandTarget target,
-        CommandContext context,
+        CommandDispatchExecution<GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
+        // Refactor (iter37/cluster-037-gagentservice-binders-attach-existing):
+        //   Old pattern: GAgentService interaction binders synchronously prime projection sessions before dispatch(request-path projection activation in BindAsync).
+        //   New principle: Attach-only to existing projection sessions/materialization leases via capability-specific attach-existing ports.
+        //   Cold sessions return ProjectionUnavailable / pending before dispatch; no top-level live-observation exception.
         ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(execution);
 
+        var target = execution.Target;
+        var context = execution.Context;
         var sink = new EventChannel<AGUIEvent>();
+        IGAgentRunTerminalProjectionLease? terminalProjectionLease = null;
 
         try
         {
-            var projectionLease = await _projectionPort.EnsureAndAttachAsync(
-                token => _projectionPort.EnsureActorProjectionAsync(
-                    target.ActorId,
-                    context.CommandId,
-                    token),
+            terminalProjectionLease = await _terminalProjectionPort.AttachExistingProjectionAsync(
+                target.ActorId,
+                context.CorrelationId,
+                GAgentRunTerminalInteractionKind.DraftRun,
+                ct);
+            if (terminalProjectionLease == null)
+                return await FailProjectionUnavailableAsync(sink);
+
+            target.BindTerminalProjection(terminalProjectionLease);
+
+            var attachment = await _projectionPort.AttachExistingActorProjectionAsync(
+                target.ActorId,
+                context.CommandId,
                 sink,
                 ct);
 
-            if (projectionLease == null)
+            if (attachment == null)
             {
-                sink.Complete();
-                await sink.DisposeAsync();
-                throw new InvalidOperationException("GAgent draft-run projection pipeline is unavailable.");
+                await _terminalProjectionPort.ReleaseProjectionAsync(terminalProjectionLease, ct);
+                target.BindTerminalProjection(null);
+                return await FailProjectionUnavailableAsync(sink);
             }
 
-            target.BindLiveObservation(projectionLease, sink);
-            return CommandTargetBindingResult<GAgentDraftRunStartError>.Success();
+            target.BindLiveObservation(
+                attachment.ProjectionLease,
+                attachment.LiveSinkLease,
+                sink,
+                ResolveSessionId(command, context));
+            return CommandObservationBindingResult<GAgentDraftRunStartError>.Success();
         }
         catch
         {
+            if (terminalProjectionLease != null)
+            {
+                await _terminalProjectionPort.ReleaseProjectionAsync(terminalProjectionLease, ct);
+                target.BindTerminalProjection(null);
+            }
+
             sink.Complete();
             await sink.DisposeAsync();
             throw;
         }
     }
+
+    private static async Task<CommandObservationBindingResult<GAgentDraftRunStartError>> FailProjectionUnavailableAsync(
+        IEventSink<AGUIEvent> sink)
+    {
+        sink.Complete();
+        await sink.DisposeAsync();
+        return CommandObservationBindingResult<GAgentDraftRunStartError>.Failure(
+            GAgentDraftRunStartError.ProjectionUnavailable);
+    }
+
+    private static string ResolveSessionId(
+        GAgentDraftRunCommand command,
+        CommandContext context) =>
+        string.IsNullOrWhiteSpace(command.SessionId)
+            ? (command.UseCorrelationIdAsFallbackSessionId ? context.CorrelationId : string.Empty)
+            : command.SessionId.Trim();
 }
 
 internal sealed class GAgentDraftRunCommandEnvelopeFactory
@@ -273,13 +440,18 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
             ScopeId = command.ScopeId,
         };
 
-        AppendMetadata(chatRequest.Metadata, context.Headers);
-        if (!string.IsNullOrWhiteSpace(command.NyxIdAccessToken))
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = command.NyxIdAccessToken.Trim();
-        if (!string.IsNullOrWhiteSpace(command.ModelOverride))
-            chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = command.ModelOverride.Trim();
-        if (!string.IsNullOrWhiteSpace(command.PreferredLlmRoute))
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = command.PreferredLlmRoute.Trim();
+        CopyHeaders(chatRequest.Headers, context.Headers);
+        // Refactor (iter1353/cluster-001): Old pattern: ChatRequestEvent control was rebuilt from Metadata or legacy command scalars.
+        // New principle: command-level ToolContext and LlmControl are serialized directly into the event payload.
+        chatRequest.ToolContext = (command.ToolContext ?? AgentToolExecutionContext.Empty).ToPayload();
+        chatRequest.LlmControl = (command.LlmControl ?? new LLMControlContext(
+            NyxIdAccessToken: Normalize(command.NyxIdAccessToken),
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: Normalize(command.ModelOverride),
+            NyxIdRoutePreference: Normalize(command.PreferredLlmRoute),
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null)).ToPayload();
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
 
@@ -295,6 +467,9 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
             },
         };
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static ChatContentPart ToProto(GAgentDraftRunInputPart source)
     {
@@ -318,7 +493,7 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
         };
     }
 
-    private static void AppendMetadata(
+    private static void CopyHeaders(
         Google.Protobuf.Collections.MapField<string, string> destination,
         IReadOnlyDictionary<string, string>? source)
     {
@@ -351,7 +526,8 @@ internal sealed class GAgentDraftRunAcceptedReceiptFactory
             target.ActorId,
             target.ActorTypeName,
             context.CommandId,
-            context.CorrelationId);
+            context.CorrelationId,
+            target.SessionId);
     }
 }
 
@@ -407,6 +583,8 @@ internal sealed class GAgentDraftRunFinalizeEmitter
                 {
                     ThreadId = receipt.ActorId,
                     RunId = receipt.CommandId,
+                    // Refactor (iter98/cluster-790): Old: terminal RunFinished carried no typed result, so consumers needed backend text-frame synthesis for missed live deltas. New: result packs GAgentDraftRunResultPayload and consumers use result.output fallback.
+                    Result = Any.Pack(new GAgentDraftRunResultPayload()),
                 },
             },
             ct).AsTask();
@@ -416,12 +594,58 @@ internal sealed class GAgentDraftRunFinalizeEmitter
 internal sealed class GAgentDraftRunDurableCompletionResolver
     : ICommandDurableCompletionResolver<GAgentDraftRunAcceptedReceipt, GAgentDraftRunCompletionStatus>
 {
-    public Task<CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>> ResolveAsync(
+    private readonly IGAgentRunTerminalQueryPort _queryPort;
+
+    public GAgentDraftRunDurableCompletionResolver(
+        IGAgentRunTerminalQueryPort queryPort)
+    {
+        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+    }
+
+    public async Task<CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>> ResolveAsync(
         GAgentDraftRunAcceptedReceipt receipt,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        _ = ct;
-        return Task.FromResult(CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>.Incomplete);
+
+        try
+        {
+            var snapshot = await _queryPort.GetByCorrelationIdAsync(receipt.ActorId, receipt.CorrelationId, ct);
+            if (!MatchesReceipt(snapshot, receipt))
+                snapshot = null;
+            if (snapshot == null && !string.IsNullOrWhiteSpace(receipt.SessionId))
+            {
+                var sessionSnapshot = await _queryPort.GetBySessionIdAsync(receipt.ActorId, receipt.SessionId, ct);
+                if (MatchesReceipt(sessionSnapshot, receipt))
+                    snapshot = sessionSnapshot;
+            }
+            return Map(snapshot);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>.Incomplete;
+        }
     }
+
+    private static bool MatchesReceipt(
+        GAgentRunTerminalSnapshot? snapshot,
+        GAgentDraftRunAcceptedReceipt receipt) =>
+        snapshot != null &&
+        string.Equals(snapshot.ActorId, receipt.ActorId, StringComparison.Ordinal) &&
+        string.Equals(snapshot.CorrelationId, receipt.CorrelationId, StringComparison.Ordinal) &&
+        snapshot.InteractionKind == GAgentRunTerminalInteractionKind.DraftRun;
+
+    private static CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus> Map(
+        GAgentRunTerminalSnapshot? snapshot) =>
+        snapshot?.Status switch
+        {
+            GAgentRunTerminalStatus.TextMessageCompleted => new(true, GAgentDraftRunCompletionStatus.TextMessageCompleted),
+            GAgentRunTerminalStatus.RunFinished => new(true, GAgentDraftRunCompletionStatus.RunFinished),
+            GAgentRunTerminalStatus.Failed => new(true, GAgentDraftRunCompletionStatus.Failed),
+            _ => CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>.Incomplete,
+        };
 }

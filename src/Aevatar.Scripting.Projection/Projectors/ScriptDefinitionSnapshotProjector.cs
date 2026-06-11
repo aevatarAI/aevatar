@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;
@@ -11,6 +11,9 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptDefinitionSnapshotProjector
     : ICurrentStateProjectionMaterializer<ScriptAuthorityProjectionContext>
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     private readonly IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
@@ -49,7 +52,6 @@ public sealed class ScriptDefinitionSnapshotProjector
                 ScriptId = state.ScriptId ?? string.Empty,
                 DefinitionActorId = context.RootActorId,
                 Revision = state.Revision ?? string.Empty,
-                SourceText = state.SourceText ?? string.Empty,
                 SourceHash = state.SourceHash ?? string.Empty,
                 StateTypeUrl = state.StateTypeUrl ?? string.Empty,
                 ReadModelTypeUrl = state.ReadModelTypeUrl ?? string.Empty,

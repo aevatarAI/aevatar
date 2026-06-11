@@ -26,6 +26,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     private readonly IEventStoreCompactionScheduler? _compactionScheduler;
     private readonly bool _enableEventCompaction;
     private readonly int _retainedEventsAfterSnapshot;
+    private readonly bool _recoverFromVersionDriftOnReplay;
     private readonly ILogger<EventSourcingBehavior<TState>> _logger;
     private readonly List<IMessage> _pending = [];
     private readonly string _agentId;
@@ -39,7 +40,8 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         ILogger<EventSourcingBehavior<TState>>? logger = null,
         bool enableEventCompaction = false,
         int retainedEventsAfterSnapshot = 0,
-        IEventStoreCompactionScheduler? compactionScheduler = null)
+        IEventStoreCompactionScheduler? compactionScheduler = null,
+        bool recoverFromVersionDriftOnReplay = false)
     {
         _eventStore = eventStore;
         _agentId = agentId;
@@ -48,6 +50,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         _compactionScheduler = compactionScheduler;
         _enableEventCompaction = enableEventCompaction;
         _retainedEventsAfterSnapshot = Math.Max(0, retainedEventsAfterSnapshot);
+        _recoverFromVersionDriftOnReplay = recoverFromVersionDriftOnReplay;
         _logger = logger ?? NullLogger<EventSourcingBehavior<TState>>.Instance;
     }
 
@@ -101,6 +104,68 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 "ok");
             return commitResult;
         }
+        catch (EventStoreOptimisticConcurrencyException ex)
+        {
+            // In-memory _currentVersion is behind the store's authoritative
+            // version. Without refreshing, every retry would rebuild the same
+            // stateEvents at the same expectedVersion and conflict again,
+            // wedging the actor until it deactivates. Update to the store's
+            // version so the next ConfirmEventsAsync (typically driven by the
+            // runtime envelope retry policy) recomputes versions and commits
+            // cleanly.
+            //
+            // Drop the prefix that was supposed to commit in this batch from
+            // _pending. The runtime envelope retry replays the same envelope,
+            // which re-executes the handler — the handler will call
+            // RaiseEvent again for the same logical events, so leaving the
+            // committed-prefix in _pending would duplicate them on the next
+            // commit. The suffix raised mid-flight (existing
+            // ConfirmEventsAsync_WhenNewEventIsRaisedDuringAppend contract)
+            // is preserved.
+            //
+            // This trims based on the assumption that the store guarantees
+            // full-batch atomicity on conflict (Garnet's AppendScript Lua
+            // transaction; InMemoryEventStore's lock-and-check) — no events
+            // from this batch made it to the store, and the entire prefix
+            // will be re-raised by the handler on retry. A future store with
+            // partial-commit semantics would need to compute the actual
+            // committed-prefix length (e.g. ex.ActualVersion - fromVersion)
+            // and trim only that many entries.
+            //
+            // Guard against a malformed exception that reports an
+            // ActualVersion behind the in-memory _currentVersion: silently
+            // accepting it would rewind the actor and likely corrupt the
+            // event sequence on the next commit. Keep _currentVersion as the
+            // higher of the two values and log loudly so the underlying
+            // contract violation surfaces.
+            var refreshed = Math.Max(_currentVersion, ex.ActualVersion);
+            if (refreshed != ex.ActualVersion)
+            {
+                _logger.LogError(
+                    ex,
+                    "Event sourcing commit hit optimistic concurrency conflict reporting an ActualVersion below in-memory _currentVersion. Keeping the larger value to avoid rewinding state. agentId={AgentId} eventType={EventType} expectedVersion={ExpectedVersion} actualVersion={ActualVersion} currentVersion={CurrentVersion}",
+                    _agentId,
+                    eventType,
+                    ex.ExpectedVersion,
+                    ex.ActualVersion,
+                    _currentVersion);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Event sourcing commit hit optimistic concurrency conflict; refreshing _currentVersion and dropping the rejected batch from _pending so handler re-execution can replay it. agentId={AgentId} eventType={EventType} expectedVersion={ExpectedVersion} actualVersion={ActualVersion} droppedFromPending={DroppedFromPending} elapsedMs={ElapsedMs}",
+                    _agentId,
+                    eventType,
+                    ex.ExpectedVersion,
+                    ex.ActualVersion,
+                    pendingEvents.Length,
+                    Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+            }
+            _currentVersion = refreshed;
+            RemoveCommittedPendingPrefix(pendingEvents.Length);
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(
@@ -151,19 +216,25 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     }
 
     /// <inheritdoc />
+    public void DiscardPendingEvents() => _pending.Clear();
+
+    /// <inheritdoc />
     public async Task<TState?> ReplayAsync(string agentId, CancellationToken ct = default)
     {
         var snapshot = await TryLoadSnapshotAsync(agentId, ct);
         long? fromVersion = snapshot?.Version;
         var events = await _eventStore.GetEventsAsync(agentId, fromVersion, ct);
-        if (events.Count == 0)
-        {
-            if (snapshot == null)
-                return null;
 
-            _currentVersion = snapshot.Version;
-            return snapshot.State;
-        }
+        // Always probe the store's authoritative version key. Partial
+        // compaction can leave the events sorted set with valid (but
+        // trailing) entries while the version key is ahead —
+        // events[^1].Version < storeVersion is a real shape, not just the
+        // empty-events case. Skipping the probe in the events.Count > 0
+        // branch would miss it. The cost is one extra store read per
+        // activation; for Garnet that's a single Redis GET co-located with
+        // the events query, which is negligible relative to the actor
+        // activation envelope.
+        var storeVersion = await _eventStore.GetVersionAsync(agentId, ct);
 
         var state = snapshot?.State ?? new TState();
         foreach (var stateEvent in events)
@@ -172,8 +243,47 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 state = TransitionState(state, stateEvent.EventData);
         }
 
-        _currentVersion = events[^1].Version;
-        return state;
+        var replayedVersion = events.Count > 0
+            ? events[^1].Version
+            : (snapshot?.Version ?? 0);
+
+        if (storeVersion > replayedVersion)
+        {
+            // Drift: trailing committed events are missing from the events
+            // sequence (interrupted Lua append, partial compaction that
+            // wiped events but left the version key, externally-seeded
+            // store, etc.). Activating at replayedVersion would
+            // permanently conflict on every AppendAsync; activating at
+            // storeVersion would silently build new authoritative state on
+            // top of facts that were never applied. Default to throwing so
+            // the operator decides; only recover automatically when the
+            // host has opted into RecoverFromVersionDriftOnReplay (see
+            // EventSourcingRuntimeOptions for the safety contract).
+            if (!_recoverFromVersionDriftOnReplay)
+            {
+                _logger.LogError(
+                    "Event sourcing replay detected version drift and recovery is disabled. agentId={AgentId} replayedVersion={ReplayedVersion} storeVersion={StoreVersion} eventsCount={EventsCount} hasSnapshot={HasSnapshot}",
+                    agentId,
+                    replayedVersion,
+                    storeVersion,
+                    events.Count,
+                    snapshot != null);
+                throw new EventStoreVersionDriftException(agentId, replayedVersion, storeVersion);
+            }
+
+            _logger.LogWarning(
+                "Event sourcing replay recovering from version drift; activating at the store version with stale state. agentId={AgentId} replayedVersion={ReplayedVersion} storeVersion={StoreVersion} eventsCount={EventsCount} hasSnapshot={HasSnapshot}",
+                agentId,
+                replayedVersion,
+                storeVersion,
+                events.Count,
+                snapshot != null);
+            _currentVersion = storeVersion;
+            return events.Count == 0 && snapshot == null ? null : state;
+        }
+
+        _currentVersion = replayedVersion;
+        return events.Count == 0 && snapshot == null ? null : state;
     }
 
     /// <summary>

@@ -1,7 +1,7 @@
-using System.Security.Cryptography;
-using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Microsoft.Extensions.Options;
 
@@ -32,19 +32,25 @@ public sealed class ScopeScriptCommandApplicationService : IScopeScriptCommandPo
 
         var normalizedScopeId = ScopeScriptCapabilityOptions.NormalizeRequired(request.ScopeId, nameof(request.ScopeId));
         var normalizedScriptId = ScopeScriptCapabilityConventions.NormalizeScriptId(request.ScriptId);
-        var sourceText = ScopeScriptCapabilityOptions.NormalizeRequired(request.SourceText, nameof(request.SourceText));
+        var scriptPackage = request.ScriptPackage?.Clone()
+            ?? throw new InvalidOperationException("Script package is required.");
+        ScopeScriptCapabilityOptions.NormalizeRequired(
+            scriptPackage.GetPrimaryCSharpSource(),
+            nameof(request.ScriptPackage));
         var revisionId = ScopeScriptCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var expectedBaseRevision = ScopeScriptCapabilityConventions.ResolveExpectedBaseRevision(request.ExpectedBaseRevision);
         var definitionActorId = _options.BuildDefinitionActorId(normalizedScopeId, normalizedScriptId, revisionId);
         var catalogActorId = _options.BuildCatalogActorId(normalizedScopeId);
-        var sourceHash = ComputeSha256(sourceText);
+        var sourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
         var proposalId = BuildProposalId(normalizedScopeId, normalizedScriptId, revisionId);
 
+        // Refactor (iter49/issue-882-script-command-readmodel-activation):
+        //   Old pattern: ScopeScriptCommandApplicationService.UpsertAsync explicitly activated definition/catalog readmodels via ActivateAsync before write commands.
+        //   New principle: Command service dispatches accepted-only write commands; readmodel activation is owned by scripting committed-state projection activation plan provider.
         var definitionUpsert = await _definitionCommandPort.UpsertDefinitionWithSnapshotAsync(
             normalizedScriptId,
             revisionId,
-            sourceText,
-            sourceHash,
+            scriptPackage,
             definitionActorId,
             normalizedScopeId,
             ct);
@@ -89,10 +95,4 @@ public sealed class ScopeScriptCommandApplicationService : IScopeScriptCommandPo
             ? DateTimeOffset.UtcNow
             : receipt.AcceptedAt;
 
-    private static string ComputeSha256(string value)
-    {
-        var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
-        var hash = SHA256.HashData(bytes);
-        return Convert.ToHexString(hash).ToLowerInvariant();
-    }
 }

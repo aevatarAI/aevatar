@@ -14,13 +14,15 @@ namespace Aevatar.AI.Core.Middleware;
 /// 工具审批中间件。检查 tool 的 ApprovalMode 并执行对应策略。
 /// 应插入到 tool call middleware 链最前面，确保安全策略不可绕过。
 /// </summary>
+// Refactor (iter1/cluster-005):
+//   Old pattern: instance dictionary kept denial counts across tool calls without an actor-owned fact source.
+//   New principle: denial counts are explicit request-scoped inputs or actor-owned facts, never hidden service state.
 public sealed class ToolApprovalMiddleware : IToolCallMiddleware
 {
     private const int MaxConsecutiveDenials = 3;
 
     private readonly IToolApprovalHandler _handler;
     private readonly AgentHookPipeline? _hooks;
-    private readonly Dictionary<string, int> _denialCounts = new(StringComparer.OrdinalIgnoreCase);
 
     public ToolApprovalMiddleware(IToolApprovalHandler handler, AgentHookPipeline? hooks = null)
     {
@@ -66,11 +68,13 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
             // IsDestructive → 继续走审批流程
         }
 
-        // 检查 denial tracking — 连续拒绝过多则自动阻断
-        if (_denialCounts.TryGetValue(context.ToolName, out var count) && count >= MaxConsecutiveDenials)
+        // Denial tracking is caller-supplied request/session state. This middleware
+        // only consumes and returns the count carried on this tool-call context.
+        var denialCount = GetRequestScopedDenialCount(context);
+        if (denialCount >= MaxConsecutiveDenials)
         {
             context.Terminate = true;
-            context.Result = $"Tool '{context.ToolName}' has been denied {count} times consecutively. " +
+            context.Result = $"Tool '{context.ToolName}' has been denied {denialCount} times consecutively. " +
                              "Automatic block applied. Consider using a different approach.";
             return;
         }
@@ -108,13 +112,12 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
         switch (result.Decision)
         {
             case ToolApprovalDecision.Approved:
-                // 重置该 tool 的 denial counter
-                _denialCounts.Remove(context.ToolName);
+                context.Items[DenialCountItemKey] = 0;
                 await next();
                 return;
 
             case ToolApprovalDecision.Denied:
-                _denialCounts[context.ToolName] = (_denialCounts.TryGetValue(context.ToolName, out var dc) ? dc : 0) + 1;
+                context.Items[DenialCountItemKey] = denialCount + 1;
                 context.Terminate = true;
                 context.Result = !string.IsNullOrWhiteSpace(result.Reason)
                     ? $"Tool '{context.ToolName}' execution denied: {result.Reason}"
@@ -131,6 +134,14 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                 // 非阻塞 yield：返回 pending result，不增加 denial counter。
                 // Actor 层检测此 result 后持久化 pending state 并走事件化续传。
                 context.Terminate = true;
+                context.PendingApproval = new ToolApprovalPendingContext(
+                    request.RequestId,
+                    request.ToolName,
+                    request.ToolCallId,
+                    request.ArgumentsJson,
+                    request.ApprovalMode,
+                    request.IsReadOnly,
+                    request.IsDestructive);
                 context.Result = BuildApprovalPendingResult(request);
                 return;
         }
@@ -138,6 +149,23 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
 
     /// <summary>Approval pending marker key in tool result JSON.</summary>
     public const string ApprovalRequiredKey = "approval_required";
+
+    /// <summary>Request-scoped consecutive denial count carried by the caller.</summary>
+    public const string DenialCountItemKey = "approval_denial_count";
+
+    private static int GetRequestScopedDenialCount(ToolCallContext context)
+    {
+        if (!context.Items.TryGetValue(DenialCountItemKey, out var value))
+            return 0;
+
+        return value switch
+        {
+            int count when count > 0 => count,
+            long count when count > 0 && count <= int.MaxValue => (int)count,
+            string text when int.TryParse(text, out var count) && count > 0 => count,
+            _ => 0,
+        };
+    }
 
     private static string BuildApprovalPendingResult(ToolApprovalRequest request) =>
         System.Text.Json.JsonSerializer.Serialize(new

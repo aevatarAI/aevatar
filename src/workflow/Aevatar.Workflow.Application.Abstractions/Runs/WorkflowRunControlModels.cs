@@ -68,10 +68,10 @@ public interface IWorkflowRunControlCommand : ICommandContextSeed
 public abstract record WorkflowRunControlCommandBase(
     string ActorId,
     string RunId,
-    string? CommandId) : IWorkflowRunControlCommand
+    string? CommandId,
+    // Refactor (issue1326): Old pattern: Workflow control commands reused command identity as the run/session trace identity. New principle: Keep workflow control correlation explicit and separate from command identity.
+    string? CorrelationId = null) : IWorkflowRunControlCommand
 {
-    public string? CorrelationId => string.IsNullOrWhiteSpace(CommandId) ? null : CommandId;
-
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
@@ -84,7 +84,8 @@ public sealed record WorkflowResumeCommand(
     string? UserInput,
     IReadOnlyDictionary<string, string>? Metadata = null,
     string? EditedContent = null,
-    string? Feedback = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
+    string? Feedback = null,
+    string? CorrelationId = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId, CorrelationId);
 
 public sealed record WorkflowSignalCommand(
     string ActorId,
@@ -92,13 +93,15 @@ public sealed record WorkflowSignalCommand(
     string SignalName,
     string? CommandId,
     string? Payload,
-    string? StepId = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
+    string? StepId = null,
+    string? CorrelationId = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId, CorrelationId);
 
 public sealed record WorkflowStopCommand(
     string ActorId,
     string RunId,
     string? CommandId,
-    string? Reason = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
+    string? Reason = null,
+    string? CorrelationId = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId, CorrelationId);
 
 public sealed record WorkflowRunControlAcceptedReceipt(
     string ActorId,

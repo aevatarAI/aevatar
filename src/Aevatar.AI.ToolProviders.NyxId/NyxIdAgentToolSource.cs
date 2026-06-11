@@ -13,34 +13,34 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
 {
     private readonly NyxIdToolOptions _options;
     private readonly NyxIdApiClient _client;
-    private readonly NyxIdSpecCatalog _specCatalog;
-    private readonly IServiceDiscoveryCache _cache;
     private readonly ILogger _logger;
+    private readonly bool _toolApprovalHandlerAvailable;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
-        NyxIdSpecCatalog specCatalog,
-        IServiceDiscoveryCache? cache = null,
+        IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
-        _specCatalog = specCatalog;
-        _cache = cache ?? new InMemoryServiceDiscoveryCache();
+        _toolApprovalHandlerAvailable = approvalHandler is not null;
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
         if (string.IsNullOrWhiteSpace(_options.BaseUrl))
         {
             _logger.LogDebug("NyxID base URL not configured, skipping NyxID tools");
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
         }
 
-        IReadOnlyList<IAgentTool> tools =
-        [
+        var tools = new List<IAgentTool>
+        {
             new NyxIdAccountTool(_client),
             new NyxIdStatusTool(_client),
             new NyxIdProfileTool(_client),
@@ -48,7 +48,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdSessionsTool(_client),
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
-            new NyxIdProxyTool(_client, _cache, _logger),
+            new NyxIdProxyTool(_client, _logger),
             new NyxIdCodeExecuteTool(_client, _logger),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
@@ -62,14 +62,33 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdOrgTool(_client),
             new NyxIdChannelEventsTool(_client),
             new NyxIdAdminTool(_client),
-            new NyxIdSearchCapabilitiesTool(_specCatalog),
-            new NyxIdProxyExecuteTool(_specCatalog, _client, _logger as ILogger<NyxIdProxyExecuteTool>),
-        ];
+        };
+
+        // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
+        //   Old pattern: NyxID remote fallback registration could be mistaken for local execution gating.
+        //   New principle: ssh_exec exposure requires a local approval handler/middleware; remote fallback is separate.
+        // ssh_exec is opt-in. The tool's Auto/RequiresApproval=true contract relies on the
+        // host wiring an approval middleware around tool execution; without that middleware,
+        // a host would let the LLM run remote shell commands directly. Make hosts opt in
+        // explicitly so that exposure is a deliberate decision. A deployment may also opt
+        // into BypassSshExecApproval, in which case this source does not require a local
+        // approval handler because the tool deliberately returns RequiresApproval=false.
+        if (_options.EnableSshExecTool)
+        {
+            if (!_options.BypassSshExecApproval && !_toolApprovalHandlerAvailable)
+            {
+                throw new InvalidOperationException(
+                    "NyxID ssh_exec is enabled but no IToolApprovalHandler is registered. " +
+                    "Register a local approval handler or explicitly set BypassSshExecApproval before exposing ssh_exec.");
+            }
+
+            tools.Add(new NyxIdSshExecTool(_client, _options, _logger));
+        }
 
         _logger.LogInformation(
-            "NyxID tools registered ({Count} tools, base URL: {BaseUrl})",
-            tools.Count, _options.BaseUrl);
+            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled})",
+            tools.Count, _options.BaseUrl, _options.EnableSshExecTool);
 
-        return Task.FromResult(tools);
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
     }
 }

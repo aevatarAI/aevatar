@@ -5,28 +5,25 @@
     <Project Path="agents/Aevatar.GAgents.Registry/Aevatar.GAgents.Registry.csproj" />
     <Project Path="agents/Aevatar.GAgents.ConnectorCatalog/Aevatar.GAgents.ConnectorCatalog.csproj" />
     <Project Path="agents/Aevatar.GAgents.RoleCatalog/Aevatar.GAgents.RoleCatalog.csproj" />
-    <Project Path="agents/Aevatar.GAgents.StreamingProxyParticipant/Aevatar.GAgents.StreamingProxyParticipant.csproj" />
     <Project Path="agents/Aevatar.GAgents.UserConfig/Aevatar.GAgents.UserConfig.csproj" />
     <Project Path="agents/Aevatar.GAgents.UserMemory/Aevatar.GAgents.UserMemory.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChatbotClassifier\Aevatar.GAgents.ChatbotClassifier.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
+    <Project Path="agents\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
+    <Project Path="agents\Aevatar.GAgents.Channel.Identity\Aevatar.GAgents.Channel.Identity.csproj" />
     <Project Path="agents\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
     <Project Path="agents\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
     <Project Path="agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
+    <Project Path="agents\Aevatar.GAgents.StatusDashboard\Aevatar.GAgents.StatusDashboard.csproj" />
     <Project Path="agents\Aevatar.GAgents.Device\Aevatar.GAgents.Device.csproj" />
     <Project Path="agents\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
     <Project Path="agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
-  </Folder>
-  <Folder Name="/demos/">
-    <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
-    <Project Path="demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
-    <Project Path="demos\Aevatar.Demos.Workflow\Aevatar.Demos.Workflow.csproj" />
-    <Project Path="demos\Aevatar.Demos.Workflow.Web\Aevatar.Demos.Workflow.Web.csproj" />
-    <File Path="demos\README.md" />
+    <Project Path="agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
+    <Project Path="agents/Aevatar.GAgents.ChatRouting/Aevatar.GAgents.ChatRouting.csproj" />
   </Folder>
   <Folder Name="/docs/">
     <File Path="docs\FOUNDATION.md" />
@@ -46,8 +43,10 @@
     <Project Path="src/Aevatar.AI.ToolProviders.Binding/Aevatar.AI.ToolProviders.Binding.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ChronoStorage/Aevatar.AI.ToolProviders.ChronoStorage.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.AgentCatalog/Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
+    <Project Path="src/Aevatar.AI.ToolProviders.AevatarInvocation/Aevatar.AI.ToolProviders.AevatarInvocation.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Channel/Aevatar.AI.ToolProviders.Channel.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ChannelAdmin/Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />
+    <Project Path="src/Aevatar.AI.ToolProviders.ToolSetRegistry/Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Lark/Aevatar.AI.ToolProviders.Lark.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Telegram/Aevatar.AI.ToolProviders.Telegram.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.NyxId/Aevatar.AI.ToolProviders.NyxId.csproj" />
@@ -56,9 +55,6 @@
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans/Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
-    <Project Path="src/Aevatar.Interop.A2A.Abstractions/Aevatar.Interop.A2A.Abstractions.csproj" />
-    <Project Path="src/Aevatar.Interop.A2A.Application/Aevatar.Interop.A2A.Application.csproj" />
-    <Project Path="src/Aevatar.Interop.A2A.Hosting/Aevatar.Interop.A2A.Hosting.csproj" />
     <Project Path="src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <Project Path="src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <Project Path="src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
@@ -75,6 +71,8 @@
     <Project Path="src\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
     <Project Path="src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
+    <Project Path="src\Aevatar.ChatRouting.Abstractions\Aevatar.ChatRouting.Abstractions.csproj" />
+    <Project Path="src\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />
     <Project Path="src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <Project Path="src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <Project Path="src\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
@@ -98,7 +96,7 @@
     <Project Path="src\Aevatar.Foundation.VoicePresence.OpenAI\Aevatar.Foundation.VoicePresence.OpenAI.csproj" />
     <Project Path="src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
     <Project Path="src\Aevatar.Mainnet.Host.Api\Aevatar.Mainnet.Host.Api.csproj" />
-	    <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
+	    <Project Path="src\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
 	    <Project Path="src\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
 	    <Project Path="src\Aevatar.Scripting.Application\Aevatar.Scripting.Application.csproj" />
 	    <Project Path="src\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
@@ -139,6 +137,8 @@
     <Project Path="src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Host.Api/Aevatar.Workflow.Host.Api.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" />
+    <Project Path="src/workflow/Aevatar.Workflow.Integration.AI/Aevatar.Workflow.Integration.AI.csproj" />
+    <Project Path="src/workflow/Aevatar.Workflow.Studio/Aevatar.Workflow.Studio.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Sdk/Aevatar.Workflow.Sdk.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
@@ -147,13 +147,18 @@
   <Folder Name="/src/workflow/extensions/">
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/Aevatar.Workflow.Extensions.Hosting.csproj" />
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/Aevatar.Workflow.Extensions.Maker.csproj" />
-    <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Bridge/Aevatar.Workflow.Extensions.Bridge.csproj" />
   </Folder>
   <Folder Name="/test/">
-    <Project Path="test/Aevatar.Interop.A2A.Tests/Aevatar.Interop.A2A.Tests.csproj" />
     <Project Path="test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj" />
+    <Project Path="test/Aevatar.ChatRouting.Core.Tests/Aevatar.ChatRouting.Core.Tests.csproj" />
+    <Project Path="test/Aevatar.ChatRouting.Voice.Integration.Tests/Aevatar.ChatRouting.Voice.Integration.Tests.csproj" />
+    <Project Path="test/Aevatar.Foundation.ExternalLinks.WebSocket.Tests/Aevatar.Foundation.ExternalLinks.WebSocket.Tests.csproj" />
+    <Project Path="test/Aevatar.GAgents.ChatRouting.Tests/Aevatar.GAgents.ChatRouting.Tests.csproj" />
+    <Project Path="test/Aevatar.AI.ToolProviders.ToolSetRegistry.Tests/Aevatar.AI.ToolProviders.ToolSetRegistry.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
+    <Project Path="test/Aevatar.AI.ToolProviders.AevatarInvocation.Tests/Aevatar.AI.ToolProviders.AevatarInvocation.Tests.csproj" />
+    <Project Path="test\Aevatar.AI.ToolProviders.Ornn.Tests\Aevatar.AI.ToolProviders.Ornn.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.ServiceInvoke.Tests\Aevatar.AI.ToolProviders.ServiceInvoke.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Lark.Tests\Aevatar.AI.ToolProviders.Lark.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Telegram.Tests\Aevatar.AI.ToolProviders.Telegram.Tests.csproj" />
@@ -172,7 +177,6 @@
     <Project Path="test\Aevatar.Hosting.Tests\Aevatar.Hosting.Tests.csproj" />
 	    <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
 	    <Project Path="test\Aevatar.Scripting.Core.Tests\Aevatar.Scripting.Core.Tests.csproj" />
-    <Project Path="test\Aevatar.Tools.Cli.Tests\Aevatar.Tools.Cli.Tests.csproj" />
     <Project Path="test\Aevatar.GAgentService.Tests\Aevatar.GAgentService.Tests.csproj" />
     <Project Path="test\Aevatar.GAgentService.Integration.Tests\Aevatar.GAgentService.Integration.Tests.csproj" />
 	    <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />
@@ -186,10 +190,7 @@
     <Project Path="test\Aevatar.GAgents.Platform.Telegram.Tests\Aevatar.GAgents.Platform.Telegram.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Channel.Testing\Aevatar.GAgents.Channel.Testing.csproj" />
     <Project Path="test\Aevatar.GAgents.ChannelRuntime.Tests\Aevatar.GAgents.ChannelRuntime.Tests.csproj" />
+    <Project Path="test\Aevatar.GAgents.StatusDashboard.Tests\Aevatar.GAgents.StatusDashboard.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Household.Tests\Aevatar.GAgents.Household.Tests.csproj" />
-  </Folder>
-  <Folder Name="/tools/">
-    <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />
-    <Project Path="tools\Aevatar.Tools.Cli\Aevatar.Tools.Cli.csproj" />
   </Folder>
 </Solution>

@@ -5,9 +5,10 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Core.Serialization;
+using Aevatar.Scripting.Projection.Materialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -36,8 +37,7 @@ public class ClaimReplayTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             "claim-recompile-script",
             revision,
-            persistedDefinitionSource,
-            ScriptingCommandEnvelopeTestKit.ComputeSourceHash(persistedDefinitionSource),
+            ScriptPackageSpecExtensions.CreateSingleSource(persistedDefinitionSource),
             definitionActorId,
             CancellationToken.None);
 
@@ -135,9 +135,7 @@ public class ClaimReplayTests
         await using var provider = ClaimIntegrationTestKit.BuildProvider();
         var eventStore = provider.GetRequiredService<IEventStore>();
         var runtime = provider.GetRequiredService<IActorRuntime>();
-        var definitionSnapshotPort = provider.GetRequiredService<IScriptDefinitionSnapshotPort>();
-        var artifactResolver = provider.GetRequiredService<Aevatar.Scripting.Core.Runtime.IScriptBehaviorArtifactResolver>();
-        var codec = provider.GetRequiredService<IProtobufMessageCodec>();
+        var payloadMaterializer = provider.GetRequiredService<IScriptProjectionPayloadMaterializer>();
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestrator = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
 
@@ -195,6 +193,7 @@ public class ClaimReplayTests
         var dispatcher1 = new InMemoryReadModelDispatcher();
         var projector1 = new ScriptReadModelProjector(
             dispatcher1,
+            payloadMaterializer,
             new FixedProjectionClock(projectionNow));
         foreach (var envelope in committedEvents)
             await projector1.ProjectAsync(context, envelope, CancellationToken.None);
@@ -203,6 +202,7 @@ public class ClaimReplayTests
         var dispatcher2 = new InMemoryReadModelDispatcher();
         var projector2 = new ScriptReadModelProjector(
             dispatcher2,
+            payloadMaterializer,
             new FixedProjectionClock(projectionNow));
         foreach (var envelope in committedEvents)
             await projector2.ProjectAsync(context, envelope, CancellationToken.None);

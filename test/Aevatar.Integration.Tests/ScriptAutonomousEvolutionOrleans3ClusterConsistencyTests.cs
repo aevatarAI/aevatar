@@ -6,6 +6,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
@@ -125,30 +126,20 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                 "orleans_generated",
                 "1");
 
-            await definitionPortNode1.UpsertDefinitionAsync(
+            var workerADefinition = await definitionPortNode1.UpsertDefinitionWithSnapshotAsync(
                 workerAScriptId,
                 "rev-a-1",
-                ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "OrleansWorkerARev1Runtime",
-                    "ORLEANS-A-V1",
-                    "orleans_worker_a",
-                    "1"),
-                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                ScriptPackageSpecExtensions.CreateSingleSource(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
                     "OrleansWorkerARev1Runtime",
                     "ORLEANS-A-V1",
                     "orleans_worker_a",
                     "1")),
                 workerADefinitionActorId,
                 CancellationToken.None);
-            await definitionPortNode1.UpsertDefinitionAsync(
+            var workerBDefinition = await definitionPortNode1.UpsertDefinitionWithSnapshotAsync(
                 workerBScriptId,
                 "rev-b-1",
-                ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "OrleansWorkerBRev1Runtime",
-                    "ORLEANS-B-V1",
-                    "orleans_worker_b",
-                    "1"),
-                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                ScriptPackageSpecExtensions.CreateSingleSource(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
                     "OrleansWorkerBRev1Runtime",
                     "ORLEANS-B-V1",
                     "orleans_worker_b",
@@ -158,8 +149,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             var orchestratorDefinition = await definitionPortNode1.UpsertDefinitionWithSnapshotAsync(
                 $"orleans-orchestrator-script-{scopeId}",
                 "rev-orchestrator-1",
-                ScriptEvolutionIntegrationSources.OrleansClusterOrchestratorSource,
-                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(ScriptEvolutionIntegrationSources.OrleansClusterOrchestratorSource),
+                ScriptPackageSpecExtensions.CreateSingleSource(ScriptEvolutionIntegrationSources.OrleansClusterOrchestratorSource),
                 orchestratorDefinitionActorId,
                 CancellationToken.None);
 
@@ -183,12 +173,12 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                 orchestratorDefinition.Snapshot,
                 CancellationToken.None);
 
-            var lease = await executionProjectionNode1.EnsureActorProjectionAsync(
+            var lease = await node1.Services.EnsureScriptExecutionProjectionAsync(
                 orchestratorRuntimeActorId,
                 CancellationToken.None);
             lease.Should().NotBeNull();
             await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-            await executionProjectionNode1.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+            var liveSinkLease = await executionProjectionNode1.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
 
             try
             {
@@ -211,6 +201,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                                 TempBRuntimeId = tempBRuntimeId,
                                 GeneratedRuntimeId = generatedRuntimeId,
                                 GeneratedDefinitionActorId = generatedDefinitionActorId,
+                                WorkerADefinitionSnapshot = workerADefinition.Snapshot.ToBindingSpec(),
+                                WorkerBDefinitionSnapshot = workerBDefinition.Snapshot.ToBindingSpec(),
                             }),
                             ScriptRevision = "rev-orchestrator-1",
                             DefinitionActorId = orchestratorDefinitionActorId,
@@ -232,7 +224,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             }
             finally
             {
-                await executionProjectionNode1.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+                await executionProjectionNode1.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
                 await executionProjectionNode1.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
             }
 
@@ -368,6 +360,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     options.TopicPartitionCount = 4;
                 });
                 services.AddScriptCapability(context.Configuration);
+                services.AddAuthorityActivatingScriptEvolutionApplicationService();
             })
             .Build();
 

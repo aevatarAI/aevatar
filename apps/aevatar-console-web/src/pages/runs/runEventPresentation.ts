@@ -12,6 +12,7 @@ import {
   parseWaitingSignalData,
 } from '@/shared/agui/customEventData';
 import { formatDateTime } from '@/shared/datetime/dateTime';
+import { t } from '@/shared/i18n/messages';
 
 export type RunTransport = 'sse' | 'ws';
 export type RunEventStatus = 'processing' | 'success' | 'error' | 'default';
@@ -60,23 +61,73 @@ const PAYLOAD_PREVIEW_LIMIT = 180;
 
 type JsonRecord = Record<string, unknown>;
 
-export const eventStatusValueEnum = {
-  processing: { text: 'Processing', status: 'Processing' },
-  success: { text: 'Completed', status: 'Success' },
-  error: { text: 'Error', status: 'Error' },
-  default: { text: 'Observed', status: 'Default' },
-} as const;
+const eventStatusLabelMessages: Record<RunEventStatus, { id: string; defaultMessage: string }> = {
+  default: {
+    id: 'pages.runs.runeventpresentation.observed',
+    defaultMessage: 'Observed',
+  },
+  error: {
+    id: 'pages.runs.runeventpresentation.error',
+    defaultMessage: 'Error',
+  },
+  processing: {
+    id: 'pages.runs.runeventpresentation.processing',
+    defaultMessage: 'Processing',
+  },
+  success: {
+    id: 'pages.runs.runeventpresentation.completed',
+    defaultMessage: 'Completed',
+  },
+};
 
-export const eventCategoryValueEnum = {
-  lifecycle: { text: 'Lifecycle', status: 'Default' },
-  message: { text: 'Message', status: 'Processing' },
-  tool: { text: 'Tool', status: 'Processing' },
-  human_input: { text: 'Human input', status: 'Warning' },
-  human_approval: { text: 'Approval', status: 'Warning' },
-  wait_signal: { text: 'Wait signal', status: 'Warning' },
-  error: { text: 'Error', status: 'Error' },
-  state: { text: 'State', status: 'Success' },
-} as const;
+const eventCategoryLabelMessages: Record<RunEventCategory, { id: string; defaultMessage: string }> = {
+  error: {
+    id: 'pages.runs.runeventpresentation.error.2',
+    defaultMessage: 'Error',
+  },
+  human_approval: {
+    id: 'pages.runs.runeventpresentation.approval',
+    defaultMessage: 'Approval',
+  },
+  human_input: {
+    id: 'pages.runs.runeventpresentation.human.input',
+    defaultMessage: 'Human input',
+  },
+  lifecycle: {
+    id: 'pages.runs.runeventpresentation.lifecycle',
+    defaultMessage: 'Lifecycle',
+  },
+  message: {
+    id: 'pages.runs.runeventpresentation.message',
+    defaultMessage: 'Message',
+  },
+  state: {
+    id: 'pages.runs.runeventpresentation.state',
+    defaultMessage: 'State',
+  },
+  tool: {
+    id: 'pages.runs.runeventpresentation.tool',
+    defaultMessage: 'Tool',
+  },
+  wait_signal: {
+    id: 'pages.runs.runeventpresentation.wait.signal',
+    defaultMessage: 'Wait signal',
+  },
+};
+
+export function getEventStatusLabel(status: RunEventStatus): string {
+  return t(
+    eventStatusLabelMessages[status].id,
+    eventStatusLabelMessages[status].defaultMessage,
+  );
+}
+
+export function getEventCategoryLabel(category: RunEventCategory): string {
+  return t(
+    eventCategoryLabelMessages[category].id,
+    eventCategoryLabelMessages[category].defaultMessage,
+  );
+}
 
 export function isHumanApprovalSuspension(
   suspensionType?: string | null,
@@ -161,6 +212,7 @@ export function extractRunFinishedOutput(events: AGUIEvent[]): string {
     (latestRunFinished as unknown as Record<string, unknown>).result,
   );
 
+  // Refactor (iter98/cluster-790): Old: missed-live fallback expected generic result keys after backend text synthesis. New: RunFinished.result is typed GAgentDraftRunResultPayload, and consumers read result.output directly.
   return (
     readOptionalRecordString(result, 'output') ||
     readOptionalRecordString(result, 'Output') ||

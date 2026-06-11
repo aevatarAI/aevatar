@@ -2,8 +2,10 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Metadata;
@@ -11,7 +13,7 @@ using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -80,6 +82,36 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             static context => new ServiceProjectionRuntimeLease<ServiceRunCurrentStateProjectionContext>(context.RootActorId, context));
+        services.AddServiceProjectionRuntime<GAgentRunTerminalProjectionContext, ProjectionMaterializationScopeGAgent<GAgentRunTerminalProjectionContext>>(
+            static scopeKey => new GAgentRunTerminalProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                CorrelationId = scopeKey.SessionId,
+                InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+            },
+            static context => new ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>(context.RootActorId, context));
+        services.AddServiceProjectionRuntime<LlmSessionCurrentStateProjectionContext, ProjectionMaterializationScopeGAgent<LlmSessionCurrentStateProjectionContext>>(
+            static scopeKey => new LlmSessionCurrentStateProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ServiceProjectionRuntimeLease<LlmSessionCurrentStateProjectionContext>(context.RootActorId, context));
+        services.AddServiceProjectionRuntime<ResponsesAgentToolStateCurrentStateProjectionContext, ProjectionMaterializationScopeGAgent<ResponsesAgentToolStateCurrentStateProjectionContext>>(
+            static scopeKey => new ResponsesAgentToolStateCurrentStateProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ServiceProjectionRuntimeLease<ResponsesAgentToolStateCurrentStateProjectionContext>(context.RootActorId, context));
+        services.AddServiceProjectionRuntime<ScheduledDispatchProjectionContext, ProjectionMaterializationScopeGAgent<ScheduledDispatchProjectionContext>>(
+            static scopeKey => new ScheduledDispatchProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ServiceProjectionRuntimeLease<ScheduledDispatchProjectionContext>(context.RootActorId, context));
         services.AddEventSinkProjectionRuntimeCore<
             GAgentDraftRunProjectionContext,
             GAgentDraftRunRuntimeLease,
@@ -92,17 +124,32 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             static context => new GAgentDraftRunRuntimeLease(context));
+        services.AddEventSinkProjectionRuntimeCore<
+            ScriptServiceAguiProjectionContext,
+            ScriptServiceAguiRuntimeLease,
+            AGUIEvent,
+            ProjectionSessionScopeGAgent<ScriptServiceAguiProjectionContext>>(
+            static scopeKey => new ScriptServiceAguiProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ScriptServiceAguiRuntimeLease(context));
 
-        services.TryAddSingleton<IServiceCatalogProjectionPort, ServiceCatalogProjectionPort>();
-        services.TryAddSingleton<IServiceDeploymentCatalogProjectionPort, ServiceDeploymentCatalogProjectionPort>();
-        services.TryAddSingleton<IServiceServingSetProjectionPort, ServiceServingSetProjectionPort>();
-        services.TryAddSingleton<IServiceRolloutProjectionPort, ServiceRolloutProjectionPort>();
-        services.TryAddSingleton<IServiceTrafficViewProjectionPort, ServiceTrafficViewProjectionPort>();
-        services.TryAddSingleton<IServiceRevisionCatalogProjectionPort, ServiceRevisionCatalogProjectionPort>();
-        services.TryAddSingleton<IServiceRunCurrentStateProjectionPort, ServiceRunCurrentStateProjectionPort>();
+        services.TryAddSingleton<IGAgentRunTerminalProjectionPort, GAgentRunTerminalProjectionPort>();
+        services.TryAddSingleton<IGAgentDraftRunObservationScopeActivationPort, GAgentDraftRunObservationScopeActivationPort>();
         services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, GAgentDraftRunSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
         services.TryAddSingleton<IGAgentDraftRunProjectionPort, GAgentDraftRunProjectionPort>();
+        services.TryAddSingleton<IScriptServiceAguiProjectionPort, ScriptServiceAguiProjectionPort>();
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            ServiceCommittedStateProjectionActivationPlanProvider>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceCatalogReadModel>, ServiceCatalogReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceDeploymentCatalogReadModel>, ServiceDeploymentCatalogReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceServingSetReadModel>, ServiceServingSetReadModelMetadataProvider>();
@@ -111,6 +158,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceTrafficViewReadModel>, ServiceTrafficViewReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceRevisionCatalogReadModel>, ServiceRevisionCatalogReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceRunCurrentStateReadModel>, ServiceRunCurrentStateReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<GAgentRunTerminalReadModel>, GAgentRunTerminalReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<LlmSessionCurrentStateReadModel>, LlmSessionCurrentStateReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ResponsesAgentToolStateCurrentStateReadModel>, ResponsesAgentToolStateCurrentStateReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScheduledDispatchDocument>, ScheduledDispatchDocumentMetadataProvider>();
         services.TryAddSingleton<IServiceCatalogQueryReader, ServiceCatalogQueryReader>();
         services.TryAddSingleton<IServiceDeploymentCatalogQueryReader, ServiceDeploymentCatalogQueryReader>();
         services.TryAddSingleton<IServiceServingSetQueryReader, ServiceServingSetQueryReader>();
@@ -119,6 +170,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceTrafficViewQueryReader, ServiceTrafficViewQueryReader>();
         services.TryAddSingleton<IServiceRevisionCatalogQueryReader, ServiceRevisionCatalogQueryReader>();
         services.TryAddSingleton<IServiceRunQueryPort, ServiceRunQueryReader>();
+        services.TryAddSingleton<IGAgentRunTerminalQueryPort, GAgentRunTerminalQueryReader>();
+        services.TryAddSingleton<ILlmSessionQueryPort, LlmSessionQueryReader>();
+        services.TryAddSingleton<IResponsesAgentToolStateQueryPort, ResponsesAgentToolStateQueryReader>();
+        services.TryAddSingleton<ScheduledDispatchQueryPort>();
+        services.TryAddSingleton<IScheduledDispatchQueryPort>(sp => sp.GetRequiredService<ScheduledDispatchQueryPort>());
         services.AddProjectionArtifactMaterializer<
             ServiceCatalogProjectionContext,
             ServiceCatalogProjector>();
@@ -143,9 +199,24 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             ServiceRunCurrentStateProjectionContext,
             ServiceRunCurrentStateProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            GAgentRunTerminalProjectionContext,
+            GAgentRunTerminalProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            LlmSessionCurrentStateProjectionContext,
+            LlmSessionCurrentStateProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ResponsesAgentToolStateCurrentStateProjectionContext,
+            ResponsesAgentToolStateCurrentStateProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ScheduledDispatchProjectionContext,
+            ScheduledDispatchCurrentStateProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<GAgentDraftRunProjectionContext>,
             GAgentDraftRunSessionEventProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ScriptServiceAguiProjectionContext>,
+            ScriptServiceAguiSessionEventProjector>());
 
         return services;
     }

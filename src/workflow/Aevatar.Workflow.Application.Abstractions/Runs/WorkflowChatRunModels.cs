@@ -1,3 +1,6 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using System.Text.Json.Serialization;
+
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 public enum WorkflowChatInputPartKind
@@ -19,16 +22,136 @@ public sealed record WorkflowChatInputPart
     public string? Name { get; init; }
 }
 
+public sealed record WorkflowLlmControl(
+    string? ModelOverride = null,
+    int? MaxToolRoundsOverride = null,
+    string? UserMemoryPrompt = null,
+    string? SenderNyxIdAccessToken = null);
+
+public enum WorkflowChatSourceKind
+{
+    Unspecified = 0,
+    CatalogWorkflow = 1,
+    DefinitionActor = 2,
+    InlineYamlBundle = 3,
+    Direct = 4,
+}
+
+public sealed record WorkflowChatCatalogNameSource(string WorkflowName);
+
+public sealed record WorkflowChatDefinitionActorSource(string ActorId, string? WorkflowName = null);
+
+public sealed record WorkflowChatInlineYamlDocument(string Name, string Yaml);
+
+public sealed record WorkflowChatInlineYamlBundleSource(
+    string? EntryName,
+    IReadOnlyList<WorkflowChatInlineYamlDocument> YamlDocuments,
+    string? ActorId = null);
+
+// Refactor (iter165/cluster-007):
+//   Old pattern: InlineYamlBundle reused WorkflowName, ActorId, and WorkflowYamls on the parent source, so one field meant lookup identity or inline content depending on Kind.
+//   New principle: each source variant owns a single-purpose typed submessage; legacy parent properties are read-only migration views.
+public sealed record WorkflowChatSource
+{
+    public WorkflowChatSource(
+        WorkflowChatSourceKind kind,
+        WorkflowChatCatalogNameSource? catalogName = null,
+        WorkflowChatDefinitionActorSource? definitionActorSource = null,
+        WorkflowChatInlineYamlBundleSource? inlineBundle = null)
+    {
+        Kind = kind;
+        CatalogName = catalogName;
+        DefinitionActorSource = definitionActorSource;
+        InlineBundle = inlineBundle;
+    }
+
+    public WorkflowChatSourceKind Kind { get; init; }
+    public WorkflowChatCatalogNameSource? CatalogName { get; init; }
+    public WorkflowChatDefinitionActorSource? DefinitionActorSource { get; init; }
+    public WorkflowChatInlineYamlBundleSource? InlineBundle { get; init; }
+
+    public string? WorkflowName => Kind switch
+    {
+        WorkflowChatSourceKind.CatalogWorkflow => CatalogName?.WorkflowName,
+        WorkflowChatSourceKind.DefinitionActor => DefinitionActorSource?.WorkflowName,
+        WorkflowChatSourceKind.InlineYamlBundle => InlineBundle?.EntryName,
+        _ => null,
+    };
+
+    public string? ActorId => Kind switch
+    {
+        WorkflowChatSourceKind.DefinitionActor => DefinitionActorSource?.ActorId,
+        WorkflowChatSourceKind.InlineYamlBundle => InlineBundle?.ActorId,
+        _ => null,
+    };
+
+    public IReadOnlyList<string>? WorkflowYamls =>
+        InlineBundle?.YamlDocuments.Select(static document => document.Yaml).ToArray();
+
+    public static WorkflowChatSource CatalogWorkflow(string workflowName) =>
+        new(
+            WorkflowChatSourceKind.CatalogWorkflow,
+            catalogName: new WorkflowChatCatalogNameSource(workflowName));
+
+    public static WorkflowChatSource DefinitionActor(string actorId, string? workflowName = null) =>
+        new(
+            WorkflowChatSourceKind.DefinitionActor,
+            definitionActorSource: new WorkflowChatDefinitionActorSource(actorId, workflowName));
+
+    public static WorkflowChatSource InlineYamlBundle(
+        string? entryName,
+        IReadOnlyList<WorkflowChatInlineYamlDocument> yamlDocuments,
+        string? actorId = null) =>
+        new(
+            WorkflowChatSourceKind.InlineYamlBundle,
+            inlineBundle: new WorkflowChatInlineYamlBundleSource(entryName, yamlDocuments, actorId));
+
+    public static WorkflowChatSource InlineYamlBundle(IReadOnlyList<string> workflowYamls, string? workflowName = null, string? actorId = null) =>
+        InlineYamlBundle(
+            workflowName,
+            workflowYamls.Select(static (yaml, index) => new WorkflowChatInlineYamlDocument(
+                string.Empty,
+                yaml)).ToArray(),
+            actorId);
+
+    // Refactor (phase9/cluster-349):
+    //   Old pattern: Direct reused DefinitionActorSource to smuggle an actor address.
+    //   New principle: Direct is address-free; actor-targeted execution uses DefinitionActor.
+    public static WorkflowChatSource Direct() =>
+        new(WorkflowChatSourceKind.Direct);
+}
+
+// Refactor (iter112/cluster-3): Old pattern: application commands carried typed source plus legacy mirror fields. New principle: Application owns one typed WorkflowChatSource representation.
 public sealed record WorkflowChatRunRequest(
     string Prompt,
-    string? WorkflowName,
-    string? ActorId,
+    WorkflowChatSource Source,
     string? SessionId = null,
     IReadOnlyList<WorkflowChatInputPart>? InputParts = null,
-    // Inline workflow YAML bundle; first item is the entry workflow.
-    IReadOnlyList<string>? WorkflowYamls = null,
     IReadOnlyDictionary<string, string>? Metadata = null,
-    string? ScopeId = null);
+    // Refactor (iter15/cluster-029):
+    //   Old pattern: scope id / channel facts fell back to metadata bag string keys.
+    //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
+    string? ScopeId = null,
+    WorkflowLlmControl? LlmControl = null,
+    // Refactor (iter169/cluster-issue1551): Old pattern: trusted connector bearer was smuggled through Metadata. New principle: Host/Application pass connector HTTP authorization as a typed command scalar.
+    string? ConnectorHttpAuthorization = null,
+    IReadOnlyDictionary<string, string>? Headers = null,
+    string? CommandIdSeed = null,
+    string? CorrelationIdSeed = null,
+    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
+{
+    string? ICommandContextSeed.CommandId => CommandIdSeed;
+
+    string? ICommandContextSeed.CorrelationId => CorrelationIdSeed;
+
+    IReadOnlyDictionary<string, string>? ICommandContextSeed.Headers => Headers;
+}
+
+public sealed record WorkflowRunTargetSeed(
+    string ActorId,
+    string WorkflowNameForRun,
+    IReadOnlyList<string>? CreatedActorIds = null,
+    WorkflowChatSource? Source = null);
 
 public enum WorkflowChatRunStartError
 {
@@ -42,7 +165,7 @@ public enum WorkflowChatRunStartError
     InvalidWorkflowYaml = 7,
     WorkflowNameMismatch = 8,
     PromptRequired = 9,
-    ConflictingScopeId = 10,
+    ProjectionUnavailable = 10,
 }
 
 public enum WorkflowProjectionCompletionStatus

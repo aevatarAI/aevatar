@@ -1,7 +1,10 @@
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using FluentAssertions;
@@ -9,12 +12,14 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Net;
 using System.Text.Json;
 
 namespace Aevatar.Hosting.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHealthEndpointsTests
 {
     [Fact]
@@ -51,6 +56,12 @@ public sealed class MainnetHealthEndpointsTests
         {
             options.EnableMakerExtensions = true;
         });
+        builder.Services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.example.com";
+        });
+        builder.Services.AddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
+        builder.Services.AddSingleton<ResponsesWebSubstituteToolExecutionService>();
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
 
@@ -86,7 +97,10 @@ public sealed class MainnetHealthEndpointsTests
         apiHealthPayload.RootElement.GetProperty("ok").GetBoolean().Should().BeTrue();
         apiHealthPayload.RootElement.GetProperty("status").GetString().Should().Be("ready");
 
-        using var openApiDocument = JsonDocument.Parse(await client.GetStringAsync("/api/openapi.json"));
+        var openApiResponse = await client.GetAsync("/api/openapi.json");
+        var openApiBody = await openApiResponse.Content.ReadAsStringAsync();
+        openApiResponse.StatusCode.Should().Be(HttpStatusCode.OK, openApiBody);
+        using var openApiDocument = JsonDocument.Parse(openApiBody);
         var paths = openApiDocument.RootElement.GetProperty("paths");
         paths.TryGetProperty("/health/live", out _).Should().BeTrue();
         paths.TryGetProperty("/health/ready", out _).Should().BeTrue();

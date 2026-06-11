@@ -3,6 +3,8 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>
 /// Shared admission control logic for parallel execution modules (ParallelFanOut, ForEach, MapReduce).
 /// All mutable state lives in BackpressureQueueState (proto), not in this class.
+/// Refactor (iter11/cluster-021): Old drain removed Queue[0] and shifted the protobuf repeated field.
+/// Refactor (iter11/cluster-021): New drain advances the persisted HeadIndex cursor and compacts occasionally.
 /// </summary>
 internal static class BackpressureHelper
 {
@@ -47,13 +49,22 @@ internal static class BackpressureHelper
     {
         bp.ActiveWorkers = Math.Max(0, bp.ActiveWorkers - 1);
 
-        if (bp.Queue.Count == 0)
+        NormalizeHeadIndex(bp);
+
+        if (QueuedCount(bp) == 0)
             return null;
 
-        var next = bp.Queue[0];
-        bp.Queue.RemoveAt(0);
+        var next = bp.Queue[bp.HeadIndex];
+        bp.HeadIndex++;
         bp.ActiveWorkers++;
+        CompactIfNeeded(bp);
         return next;
+    }
+
+    public static int QueuedCount(BackpressureQueueState bp)
+    {
+        NormalizeHeadIndex(bp);
+        return bp.Queue.Count - bp.HeadIndex;
     }
 
     /// <summary>Converts a queued entry back to a StepRequestEvent for dispatch.</summary>
@@ -94,4 +105,29 @@ internal static class BackpressureHelper
         current != null && current.MaxConcurrentWorkers > 0
             ? current
             : Initialize(maxConcurrent);
+
+    private static void NormalizeHeadIndex(BackpressureQueueState bp)
+    {
+        if (bp.HeadIndex < 0 || bp.HeadIndex > bp.Queue.Count)
+            bp.HeadIndex = 0;
+    }
+
+    private static void CompactIfNeeded(BackpressureQueueState bp)
+    {
+        if (bp.HeadIndex <= 0)
+            return;
+
+        if (bp.HeadIndex <= bp.Queue.Count / 2)
+            return;
+
+        var consumed = bp.HeadIndex;
+        var remaining = bp.Queue.Count - consumed;
+        for (var i = 0; i < remaining; i++)
+            bp.Queue[i] = bp.Queue[consumed + i];
+
+        while (bp.Queue.Count > remaining)
+            bp.Queue.RemoveAt(bp.Queue.Count - 1);
+
+        bp.HeadIndex = 0;
+    }
 }

@@ -11,6 +11,7 @@ internal sealed class StreamingToolCallAccumulator
     private readonly Action<ToolCall>? _onToolCompleted;
     private int _anonymousCounter;
     private string? _activeAnonymousKey;
+    private string? _lastKnownKey;
 
     public StreamingToolCallAccumulator() { }
 
@@ -102,6 +103,12 @@ internal sealed class StreamingToolCallAccumulator
         if (!string.IsNullOrWhiteSpace(delta.Id))
             return ResolveKnownIdAggregate(delta.Id);
 
+        if (!string.IsNullOrWhiteSpace(_lastKnownKey) &&
+            _aggregates.TryGetValue(_lastKnownKey, out var knownAggregate))
+        {
+            return knownAggregate;
+        }
+
         return ResolveAnonymousAggregate();
     }
 
@@ -111,6 +118,7 @@ internal sealed class StreamingToolCallAccumulator
         if (TryPromoteActiveAnonymousAggregate(knownKey, id, out var promoted))
         {
             _activeAnonymousKey = null;
+            _lastKnownKey = knownKey;
             return promoted;
         }
 
@@ -124,6 +132,7 @@ internal sealed class StreamingToolCallAccumulator
             _order.Add(knownKey);
         }
 
+        _lastKnownKey = knownKey;
         return aggregate;
     }
 

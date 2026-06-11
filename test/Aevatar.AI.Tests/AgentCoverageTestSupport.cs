@@ -81,6 +81,7 @@ internal static class AgentCoverageTestSupport
 internal sealed class TestRecordingEventPublisher : IEventPublisher
 {
     public List<IMessage> Published { get; } = [];
+    public List<(string TargetActorId, IMessage Event)> Sent { get; } = [];
 
     public Task PublishAsync<TEvent>(
         TEvent evt,
@@ -106,8 +107,11 @@ internal sealed class TestRecordingEventPublisher : IEventPublisher
         EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
-        _ = targetActorId;
-        return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
+        _ = ct;
+        _ = sourceEnvelope;
+        _ = options;
+        Sent.Add((targetActorId, evt));
+        return Task.CompletedTask;
     }
 
     public Task PublishCommittedStateEventAsync(
@@ -123,7 +127,7 @@ internal sealed class TestRecordingEventPublisher : IEventPublisher
 }
 
 internal sealed class StubChatProviderFactory(
-    Func<LLMRequest, CancellationToken, Task<LLMResponse>> onChatAsync)
+    Func<LLMRequest, CancellationToken, Task<LLMResponse>> buildResponseAsync)
     : ILLMProviderFactory, ILLMProvider
 {
     public string Name => "test-provider";
@@ -138,18 +142,19 @@ internal sealed class StubChatProviderFactory(
 
     public IReadOnlyList<string> GetAvailableProviders() => [Name];
 
-    public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) => onChatAsync(request, ct);
-
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        _ = request;
-        ct.ThrowIfCancellationRequested();
-        await Task.Yield();
-        throw new InvalidOperationException("Streaming path should not be used in this test.");
-#pragma warning disable CS0162
-        yield break;
-#pragma warning restore CS0162
+        var response = await buildResponseAsync(request, ct);
+        if (!string.IsNullOrEmpty(response.Content))
+            yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+        yield return new LLMStreamChunk
+        {
+            IsLast = true,
+            Usage = response.Usage,
+            FinishReason = response.FinishReason,
+        };
     }
 }

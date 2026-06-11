@@ -30,6 +30,7 @@ import {
   buildMissionRuntimePlaceholderSnapshot,
   buildMissionSnapshotFromRuntime,
 } from '../runtimeAdapter';
+import { buildMissionActionFeedbackMessage } from '../runtimeHandoff';
 import type { MissionControlRuntimeArtifacts } from '../services/api';
 import {
   fetchMissionControlRuntimeArtifacts,
@@ -139,37 +140,20 @@ function buildConnectionMessage(
 function buildAcceptedFeedback(
   kind: MissionInterventionActionKind,
   accepted: boolean,
+  commandId?: string,
+  runId?: string,
   signalName?: string,
 ): MissionActionFeedback {
-  if (!accepted) {
-      return {
-        message: 'Runtime did not accept the intervention request. Please try again.',
-        tone: 'warning',
-      };
-  }
-
-  switch (kind) {
-    case 'signal':
-      return {
-        message: `Signal ${signalName || 'continue'} was accepted. Waiting for runtime to continue.`,
-        tone: 'success',
-      };
-    case 'approve':
-      return {
-        message: 'Approval was accepted. Waiting for the run to advance.',
-        tone: 'success',
-      };
-    case 'reject':
-      return {
-        message: 'Rejection was submitted. Waiting for runtime to confirm stop or rollback.',
-        tone: 'warning',
-      };
-    default:
-      return {
-        message: 'Resume was accepted. Waiting for the next runtime snapshot.',
-        tone: 'success',
-      };
-  }
+  return {
+    message: buildMissionActionFeedbackMessage({
+      accepted,
+      commandId,
+      kind,
+      runId,
+      signalName,
+    }),
+    tone: !accepted || kind === 'reject' ? 'warning' : 'success',
+  };
 }
 
 export function useMissionControlRuntime(): UseMissionControlRuntimeResult {
@@ -471,7 +455,13 @@ export function useMissionControlRuntime(): UseMissionControlRuntimeResult {
           action,
         );
         setActionFeedback(
-          buildAcceptedFeedback(action.kind, result.accepted, result.signalName),
+          buildAcceptedFeedback(
+            action.kind,
+            result.accepted,
+            result.commandId,
+            result.runId,
+            result.signalName,
+          ),
         );
         await queryClient.invalidateQueries({
           queryKey: buildMissionControlQueryKey(runtimeContext),

@@ -11,6 +11,8 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
     where TTarget : class, ICommandEventTarget<TEvent>, ICommandInteractionCleanupTarget<TReceipt, TCompletion>
 {
     private readonly ICommandDispatchPipeline<TCommand, TTarget, TReceipt, TError> _dispatchPipeline;
+    private readonly ICommandObservationLifecycle<TCommand, TTarget, TReceipt, TError> _observationLifecycle;
+    private readonly ICommandReceiptFactory<TTarget, TReceipt>? _receiptFactory;
     private readonly IEventOutputStream<TEvent, TFrame> _outputStream;
     private readonly ICommandCompletionPolicy<TEvent, TCompletion> _completionPolicy;
     private readonly ICommandFinalizeEmitter<TReceipt, TCompletion, TFrame> _finalizeEmitter;
@@ -23,9 +25,13 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         ICommandCompletionPolicy<TEvent, TCompletion> completionPolicy,
         ICommandFinalizeEmitter<TReceipt, TCompletion, TFrame> finalizeEmitter,
         ICommandDurableCompletionResolver<TReceipt, TCompletion> durableCompletionResolver,
-        ILogger<DefaultCommandInteractionService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>>? logger = null)
+        ILogger<DefaultCommandInteractionService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>>? logger = null,
+        ICommandObservationLifecycle<TCommand, TTarget, TReceipt, TError>? observationLifecycle = null,
+        ICommandReceiptFactory<TTarget, TReceipt>? receiptFactory = null)
     {
         _dispatchPipeline = dispatchPipeline ?? throw new ArgumentNullException(nameof(dispatchPipeline));
+        _observationLifecycle = observationLifecycle ?? new NoOpCommandObservationLifecycle<TCommand, TTarget, TReceipt, TError>();
+        _receiptFactory = receiptFactory;
         _outputStream = outputStream ?? throw new ArgumentNullException(nameof(outputStream));
         _completionPolicy = completionPolicy ?? throw new ArgumentNullException(nameof(completionPolicy));
         _finalizeEmitter = finalizeEmitter ?? throw new ArgumentNullException(nameof(finalizeEmitter));
@@ -42,13 +48,25 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        var dispatch = await _dispatchPipeline.DispatchAsync(command, ct);
-        if (!dispatch.Succeeded || dispatch.Target == null)
-            return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(dispatch.Error);
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: interaction execution called DispatchAsync and projection/live-sink binding could fail after the command had entered the actor inbox.
+        //   New principle: interaction observation starts before dispatch; failure prevents dispatch, and accepted is emitted only after mailbox admission.
+        var prepared = await _dispatchPipeline.PrepareAsync(command, ct);
+        if (!prepared.Succeeded || prepared.Target == null)
+            return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(prepared.Error);
 
-        var execution = dispatch.Target;
+        var execution = prepared.Target;
         var target = execution.Target;
-        var receipt = execution.Receipt;
+
+        var observation = await _observationLifecycle.BindAsync(command, execution, ct);
+        if (!observation.Succeeded)
+            return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(observation.Error);
+
+        _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct);
+
+        var receipt = _receiptFactory == null
+            ? execution.Receipt
+            : _receiptFactory.Create(target, execution.Context);
         var observedCompleted = false;
         var observedCompletion = _completionPolicy.IncompleteCompletion;
         var durableCompletion = CommandDurableCompletionObservation<TCompletion>.Incomplete;
@@ -138,5 +156,14 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                 }
             }
         }
+    }
+
+    async Task<RealtimeSessionResult<TReceipt, TError, TCompletion>> IRealtimeSession<TCommand, TReceipt, TError, TFrame, TCompletion>.ExecuteAsync(
+        TCommand inbound,
+        Func<TFrame, CancellationToken, ValueTask> emitAsync,
+        Func<TReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+        CancellationToken ct)
+    {
+        return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
     }
 }

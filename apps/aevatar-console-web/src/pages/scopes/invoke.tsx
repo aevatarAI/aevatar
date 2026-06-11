@@ -36,7 +36,7 @@ import {
 } from '@/shared/agui/runtimeEventSemantics';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
-import { servicesApi } from '@/shared/api/servicesApi';
+import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { history } from '@/shared/navigation/history';
 import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import {
@@ -52,7 +52,6 @@ import {
   isChatServiceEndpoint,
   nyxIdChatServiceId,
   scopeServiceAppId,
-  scopeServiceNamespace,
 } from '@/shared/runs/scopeConsole';
 import { studioApi } from '@/shared/studio/api';
 import type { ServiceCatalogSnapshot } from '@/shared/models/services';
@@ -83,6 +82,7 @@ import {
   readScopeQueryDraft,
   type ScopeQueryDraft,
 } from './components/scopeQuery';
+import { t } from "@/shared/i18n/messages";
 
 type InvokeResultState = {
   actorId: string;
@@ -536,10 +536,8 @@ const ScopeInvokePage: React.FC = () => {
     enabled: scopeId.length > 0,
     queryKey: ['scopes', 'invoke', 'services', scopeId],
     queryFn: () =>
-      servicesApi.listServices({
+      scopeRuntimeApi.listServices(scopeId, {
         appId: scopeServiceAppId,
-        namespace: scopeServiceNamespace,
-        tenantId: scopeId,
       }),
   });
 
@@ -1082,8 +1080,8 @@ const ScopeInvokePage: React.FC = () => {
         action: () => history.push(buildTeamWorkspaceRoute('')),
         actionLabel: 'Open Team Home',
         description:
-          'This legacy lab only becomes useful after you anchor the console to a team.',
-        title: 'Load a team first',
+          t("pages.scopes.invoke.this.legacy.lab.only.becomes", "This legacy lab only becomes useful after you anchor the console to a team."),
+        title: t("pages.scopes.invoke.load.team.first", "Load a team first"),
       }
     : services.length === 0
       ? {
@@ -1095,23 +1093,23 @@ const ScopeInvokePage: React.FC = () => {
             ),
           actionLabel: 'Open Team Builder',
           description:
-            'No published team services were discovered. Switch the live team setup before you keep probing this legacy lab.',
-          title: 'Fix the live team setup',
+            t("pages.scopes.invoke.no.published.team.services.were", "No published team services were discovered. Switch the live team setup before you keep probing this legacy lab."),
+          title: t("pages.scopes.invoke.fix.the.live.team.setup", "Fix the live team setup"),
         }
       : invokeResult.status === 'success'
         ? {
             action: handleOpenRuns,
             actionLabel: 'Continue in Runs',
             description:
-              'Promote the current session into runtime observation and keep the trace attached.',
-            title: 'Promote this session',
+              t("pages.scopes.invoke.promote.the.current.session.into", "Promote the current session into runtime observation and keep the trace attached."),
+            title: t("pages.scopes.invoke.promote.this.session", "Promote this session"),
           }
         : {
             action: () => setContextSurface('service'),
             actionLabel: 'Browse services',
             description:
-              'Inspect the published catalog when you need deeper runtime context.',
-            title: 'Open the service workbench',
+              t("pages.scopes.invoke.inspect.the.published.catalog.when", "Inspect the published catalog when you need deeper runtime context."),
+            title: t("pages.scopes.invoke.open.the.service.workbench", "Open the service workbench"),
           };
 
   const outputPanels = useMemo(
@@ -1119,7 +1117,7 @@ const ScopeInvokePage: React.FC = () => {
       [
         invokeResult.responseJson
           ? {
-              title: 'Invocation Receipt',
+              title: t("pages.scopes.invoke.invocation.receipt", "Invocation Receipt"),
               value: invokeResult.responseJson,
             }
           : null,
@@ -1152,7 +1150,7 @@ const ScopeInvokePage: React.FC = () => {
     (defaultRouteQuery.data?.available ? 'ready' : 'missing');
 
   return (
-    <AevatarPageShell pageHeaderRender={false} title="Legacy Invoke Lab">
+    <AevatarPageShell pageHeaderRender={false} title={t("pages.scopes.invoke.legacy.invoke.lab", "Legacy Invoke Lab")}>
       <div style={viewportShellStyle}>
         <style>
           {`
@@ -1176,8 +1174,7 @@ const ScopeInvokePage: React.FC = () => {
               onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
               type="text"
             >
-              Team Home
-            </Button>
+              {t("pages.scopes.invoke.team.home", "Team Home")}</Button>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <div
                 style={{
@@ -1189,8 +1186,7 @@ const ScopeInvokePage: React.FC = () => {
                 }}
               >
                 <Typography.Text strong style={{ fontSize: 16 }}>
-                  Legacy Invoke Lab
-                </Typography.Text>
+                  {t("pages.scopes.invoke.legacy.invoke.lab.2", "Legacy Invoke Lab")}</Typography.Text>
                 <AevatarHelpTooltip content="Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows." />
               </div>
             </div>
@@ -1203,8 +1199,7 @@ const ScopeInvokePage: React.FC = () => {
               </Typography.Text>
             ) : null}
             <Button onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}>
-              Open Team Home
-            </Button>
+              {t("pages.scopes.invoke.open.team.home", "Open Team Home")}</Button>
             <Button
               onClick={() =>
                 history.push(
@@ -1214,15 +1209,12 @@ const ScopeInvokePage: React.FC = () => {
                 )
               }
             >
-              Open Team Builder
-            </Button>
+              {t("pages.scopes.invoke.open.team.builder", "Open Team Builder")}</Button>
             <Button onClick={() => setContextSurface('service')}>
-              Browse services
-            </Button>
+              {t("pages.scopes.invoke.browse.services", "Browse services")}</Button>
             {invokeResult.status === 'success' ? (
               <Button onClick={handleOpenRuns} type="primary">
-                Continue in Runs
-              </Button>
+                {t("pages.scopes.invoke.continue.in.runs", "Continue in Runs")}</Button>
             ) : null}
           </Space>
         </div>
@@ -1232,7 +1224,7 @@ const ScopeInvokePage: React.FC = () => {
             <div style={columnStyle}>
               {scopeId ? (
                 <Alert
-                  description="Team home is now the primary surface. Use this legacy lab when you need direct endpoint probes, raw payload testing, or older deep links."
+                  description={t("pages.scopes.invoke.team.home.is.now.the", "Team home is now the primary surface. Use this legacy lab when you need direct endpoint probes, raw payload testing, or older deep links.")}
                   showIcon
                   type="warning"
                 />
@@ -1245,19 +1237,18 @@ const ScopeInvokePage: React.FC = () => {
                 title={
                   <PaneTitle
                     icon={<DeploymentUnitOutlined />}
-                    subtitle="Team selector and reset controls for the legacy lab."
-                    title="Legacy Lab Controls"
+                    subtitle={t("pages.scopes.invoke.team.selector.and.reset.controls", "Team selector and reset controls for the legacy lab.")}
+                    title={t("pages.scopes.invoke.legacy.lab.controls", "Legacy Lab Controls")}
                   />
                 }
               >
                 <div style={scrollColumnStyle}>
                   <div style={sectionStyle}>
                     <Typography.Text style={fieldLabelStyle}>
-                      Team ID
-                    </Typography.Text>
+                      {t("pages.scopes.invoke.team.id", "Team ID")}</Typography.Text>
                     <Input
                       allowClear
-                      placeholder="Enter team ID"
+                      placeholder={t("pages.scopes.invoke.enter.team.id", "Enter team ID")}
                       value={draft.scopeId}
                       onChange={(event) =>
                         setDraft({
@@ -1268,37 +1259,33 @@ const ScopeInvokePage: React.FC = () => {
                     />
                     <Space size={[8, 8]} wrap>
                       <Button type="primary" onClick={handleLoad}>
-                        Load legacy lab
-                      </Button>
-                      <Button onClick={handleReset}>Reset</Button>
+                        {t("pages.scopes.invoke.load.legacy.lab", "Load legacy lab")}</Button>
+                      <Button onClick={handleReset}>{t("pages.scopes.invoke.reset", "Reset")}</Button>
                     </Space>
                   </div>
 
                   <div style={sectionStyle}>
                     <Typography.Text style={fieldLabelStyle}>
-                      Resolved team
-                    </Typography.Text>
+                      {t("pages.scopes.invoke.resolved.team", "Resolved team")}</Typography.Text>
                     {resolvedScope?.scopeId ? (
                       <>
                         <Typography.Paragraph copyable style={codeBlockStyle}>
                           {resolvedScope.scopeId}
                         </Typography.Paragraph>
                         <Typography.Text type="secondary">
-                          Resolved from the current session via{' '}
+                          {t("pages.scopes.invoke.resolved.from.the.current.session", "Resolved from the current session via")}{' '}
                           {resolvedScope.scopeSource || 'session'}.
                         </Typography.Text>
                         {draft.scopeId.trim() !== resolvedScope.scopeId ? (
                           <div>
                             <Button size="small" onClick={handleUseResolvedScope}>
-                              Use resolved team
-                            </Button>
+                              {t("pages.scopes.invoke.use.resolved.team", "Use resolved team")}</Button>
                           </div>
                         ) : null}
                       </>
                     ) : (
                       <Typography.Text type="secondary">
-                        No team context was resolved from the current session.
-                      </Typography.Text>
+                        {t("pages.scopes.invoke.no.team.context.was.resolved", "No team context was resolved from the current session.")}</Typography.Text>
                     )}
                   </div>
                 </div>
@@ -1312,8 +1299,8 @@ const ScopeInvokePage: React.FC = () => {
                 title={
                   <PaneTitle
                     icon={<LinkOutlined />}
-                    subtitle="Current default route visible beside the playground."
-                    title="Current Default Route"
+                    subtitle={t("pages.scopes.invoke.current.default.route.visible.beside", "Current default route visible beside the playground.")}
+                    title={t("pages.scopes.invoke.current.default.route", "Current Default Route")}
                   />
                 }
               >
@@ -1321,7 +1308,7 @@ const ScopeInvokePage: React.FC = () => {
                 !currentDefaultRouteRevision ? (
                   <Alert
                     showIcon
-                    title="No published default route is active for this team yet."
+                    title={t("pages.scopes.invoke.no.published.default.route.is", "No published default route is active for this team yet.")}
                     type="info"
                   />
                 ) : (
@@ -1372,8 +1359,7 @@ const ScopeInvokePage: React.FC = () => {
                           )
                         }
                       >
-                        Open Member Runtime
-                      </Button>
+                        {t("pages.scopes.invoke.open.member.runtime", "Open Member Runtime")}</Button>
                     </div>
                   </div>
                 )}
@@ -1388,7 +1374,7 @@ const ScopeInvokePage: React.FC = () => {
               title={
                 <PaneTitle
                   icon={<CodeOutlined />}
-                  subtitle="Prompt and payload staging surface."
+                  subtitle={t("pages.scopes.invoke.prompt.and.payload.staging.surface", "Prompt and payload staging surface.")}
                   title="Playground"
                 />
               }
@@ -1410,8 +1396,7 @@ const ScopeInvokePage: React.FC = () => {
                     </Typography.Text>
                   ) : (
                     <Typography.Text type="secondary">
-                      No service selected
-                    </Typography.Text>
+                      {t("pages.scopes.invoke.no.service.selected", "No service selected")}</Typography.Text>
                   )}
                   {selectedEndpoint ? (
                     <Typography.Text type="secondary">
@@ -1431,13 +1416,13 @@ const ScopeInvokePage: React.FC = () => {
                           {!scopeId ? (
                             <Alert
                               showIcon
-                              title="Select a team to start chatting with a published service."
+                              title={t("pages.scopes.invoke.select.team.to.start.chatting", "Select a team to start chatting with a published service.")}
                               type="info"
                             />
                           ) : !selectedService || !selectedEndpoint ? (
                             <Alert
                               showIcon
-                              title="Choose a published service and chat endpoint first."
+                              title={t("pages.scopes.invoke.choose.published.service.and.chat", "Choose a published service and chat endpoint first.")}
                               type="info"
                             />
                           ) : chatMessages.length === 0 ? (
@@ -1503,12 +1488,9 @@ const ScopeInvokePage: React.FC = () => {
                           style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
                         >
                           <Typography.Text strong>
-                            Prompt / Payload
-                          </Typography.Text>
+                            {t("pages.scopes.invoke.prompt.payload", "Prompt / Payload")}</Typography.Text>
                           <Typography.Text type="secondary">
-                            Use the editor for operator input. Advanced typed payload
-                            stays in the inspector.
-                          </Typography.Text>
+                            {t("pages.scopes.invoke.use.the.editor.for.operator", "Use the editor for operator input. Advanced typed payload stays in the inspector.")}</Typography.Text>
                         </div>
                       </div>
                       <div style={editorViewportStyle}>
@@ -1516,22 +1498,21 @@ const ScopeInvokePage: React.FC = () => {
                           ariaLabel="Prompt or payload editor"
                           language="plaintext"
                           onChange={setPrompt}
-                          placeholder="Prompt or payload text"
+                          placeholder={t("pages.scopes.invoke.prompt.or.payload.text", "Prompt or payload text")}
                           value={prompt}
                         />
                       </div>
                       <div style={editorActionBarStyle}>
                         <Space size={[8, 8]} wrap>
                           <Button
-                            aria-label="Invoke endpoint"
+                            aria-label={t("pages.scopes.invoke.invoke.endpoint", "Invoke endpoint")}
                             disabled={!selectedEndpointId}
                             icon={<PlayCircleOutlined />}
                             loading={invokeResult.status === 'running'}
                             onClick={() => void handleInvoke()}
                             type="primary"
                           >
-                            Invoke endpoint
-                          </Button>
+                            {t("pages.scopes.invoke.invoke.endpoint.2", "Invoke endpoint")}</Button>
                           <Button
                             aria-label="Abort"
                             danger
@@ -1539,8 +1520,7 @@ const ScopeInvokePage: React.FC = () => {
                             icon={<StopOutlined />}
                             onClick={handleAbort}
                           >
-                            Abort
-                          </Button>
+                            {t("pages.scopes.invoke.abort", "Abort")}</Button>
                         </Space>
                       </div>
                     </div>
@@ -1567,7 +1547,7 @@ const ScopeInvokePage: React.FC = () => {
               title={
                 <PaneTitle
                   icon={<AppstoreOutlined />}
-                  subtitle="Service, endpoint, and execution context."
+                  subtitle={t("pages.scopes.invoke.service.endpoint.and.execution.context", "Service, endpoint, and execution context.")}
                   title="Inspector"
                 />
               }
@@ -1576,7 +1556,7 @@ const ScopeInvokePage: React.FC = () => {
                 <div style={sectionStyle}>
                   <SectionTitle
                     icon={<AppstoreOutlined />}
-                    title="Select Service"
+                    title={t("pages.scopes.invoke.select.service", "Select Service")}
                   />
                   <Select
                     onChange={(value) => {
@@ -1585,37 +1565,35 @@ const ScopeInvokePage: React.FC = () => {
                       setSelectedServiceId(value);
                     }}
                     options={serviceOptions}
-                    placeholder="Select published service"
+                    placeholder={t("pages.scopes.invoke.select.published.service", "Select published service")}
                     value={selectedServiceId || undefined}
                   />
                 </div>
 
                 <div style={sectionStyle}>
-                  <SectionTitle icon={<ApiOutlined />} title="Select Endpoint" />
+                  <SectionTitle icon={<ApiOutlined />} title={t("pages.scopes.invoke.select.endpoint", "Select Endpoint")} />
                   <Select
                     onChange={setSelectedEndpointId}
                     options={endpointOptions}
-                    placeholder="Select endpoint"
+                    placeholder={t("pages.scopes.invoke.select.endpoint.2", "Select endpoint")}
                     value={selectedEndpointId || undefined}
                   />
                   {selectedEndpoint && !isChatServiceEndpoint(selectedEndpoint) ? (
                     <>
                       <Typography.Text style={fieldLabelStyle}>
-                        Payload Type URL
-                      </Typography.Text>
+                        {t("pages.scopes.invoke.payload.type.url", "Payload Type URL")}</Typography.Text>
                       <Input
                         onChange={(event) =>
                           setPayloadTypeUrl(event.target.value)
                         }
-                        placeholder="Payload type URL"
+                        placeholder={t("pages.scopes.invoke.payload.type.url.2", "Payload type URL")}
                         value={payloadTypeUrl}
                       />
                       <Typography.Text style={fieldLabelStyle}>
-                        Payload Base64
-                      </Typography.Text>
+                        {t("pages.scopes.invoke.payload.base64", "Payload Base64")}</Typography.Text>
                       <Input.TextArea
                         onChange={(event) => setPayloadBase64(event.target.value)}
-                        placeholder="Payload base64"
+                        placeholder={t("pages.scopes.invoke.payload.base64.2", "Payload base64")}
                         rows={5}
                         style={{ fontFamily: monoFontFamily }}
                         value={payloadBase64}
@@ -1627,18 +1605,18 @@ const ScopeInvokePage: React.FC = () => {
                 <div style={sectionStyle}>
                   <SectionTitle
                     icon={<DeploymentUnitOutlined />}
-                    title="Execution Preview"
+                    title={t("pages.scopes.invoke.execution.preview", "Execution Preview")}
                   />
                   {!scopeId ? (
                     <Alert
                       showIcon
-                      title="Select a team to load its published services."
+                      title={t("pages.scopes.invoke.select.team.to.load.its", "Select a team to load its published services.")}
                       type="info"
                     />
                   ) : !selectedService ? (
                     <Alert
                       showIcon
-                      title="No published team service is selected yet."
+                      title={t("pages.scopes.invoke.no.published.team.service.is", "No published team service is selected yet.")}
                       type="warning"
                     />
                   ) : (
@@ -1682,12 +1660,12 @@ const ScopeInvokePage: React.FC = () => {
                       />
                       <MetricRow
                         icon={<CodeOutlined />}
-                        label="Run ID"
+                        label={t("pages.scopes.invoke.run.id", "Run ID")}
                         value={invokeResult.runId || 'n/a'}
                       />
                       <MetricRow
                         icon={<DeploymentUnitOutlined />}
-                        label="Actor ID"
+                        label={t("pages.scopes.invoke.actor.id", "Actor ID")}
                         value={invokeResult.actorId || 'n/a'}
                       />
                       <div
@@ -1719,8 +1697,7 @@ const ScopeInvokePage: React.FC = () => {
                             {recommendedNextStep.actionLabel}
                           </Button>
                           <Typography.Text type="secondary">
-                            {observedEventCount} observed events
-                          </Typography.Text>
+                            {observedEventCount} {t("pages.scopes.invoke.observed.events", "observed events")}</Typography.Text>
                         </Space>
                       </div>
                     </>
@@ -1919,7 +1896,7 @@ const InvokeLabConsole: React.FC<{
       }}
     >
       <Space size={[8, 8]} wrap>
-        <Typography.Text strong>Lab Console</Typography.Text>
+        <Typography.Text strong>{t("pages.scopes.invoke.lab.console", "Lab Console")}</Typography.Text>
         {chatPanel ? (
           <Button
             aria-label="Chat"
@@ -1927,17 +1904,15 @@ const InvokeLabConsole: React.FC<{
             onClick={() => onTabChange('chat')}
             type={activeTab === 'chat' ? 'primary' : 'default'}
           >
-            Chat
-          </Button>
+            {t("pages.scopes.invoke.chat", "Chat")}</Button>
         ) : null}
         <Button
-          aria-label="Observed Events"
+          aria-label={t("pages.scopes.invoke.observed.events.2", "Observed Events")}
           icon={<UnorderedListOutlined />}
           onClick={() => onTabChange('events')}
           type={activeTab === 'events' ? 'primary' : 'default'}
         >
-          Observed Events
-        </Button>
+          {t("pages.scopes.invoke.observed.events.3", "Observed Events")}</Button>
         {!chatPanel || outputPanels.length > 0 ? (
           <Button
             aria-label="Output"
@@ -1945,8 +1920,7 @@ const InvokeLabConsole: React.FC<{
             onClick={() => onTabChange('output')}
             type={activeTab === 'output' ? 'primary' : 'default'}
           >
-            Output
-          </Button>
+            {t("pages.scopes.invoke.output", "Output")}</Button>
         ) : null}
       </Space>
       <Space size={[8, 8]} wrap>
@@ -1955,8 +1929,7 @@ const InvokeLabConsole: React.FC<{
           icon={<ClearOutlined />}
           onClick={onClear}
         >
-          Clear
-        </Button>
+          {t("pages.scopes.invoke.clear", "Clear")}</Button>
       </Space>
     </div>
 
@@ -1964,7 +1937,7 @@ const InvokeLabConsole: React.FC<{
       {activeTab === 'chat' ? (
         chatPanel ?? (
           <Empty
-            description="No chat content has been observed yet."
+            description={t("pages.scopes.invoke.no.chat.content.has.been", "No chat content has been observed yet.")}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         )
@@ -1977,8 +1950,7 @@ const InvokeLabConsole: React.FC<{
             />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Typography.Text type="secondary">
-                Latest raw payloads
-              </Typography.Text>
+                {t("pages.scopes.invoke.latest.raw.payloads", "Latest raw payloads")}</Typography.Text>
               {events.slice(-6).map((event, index) => (
                 <div
                   key={getEventKey(event, index)}
@@ -2004,7 +1976,7 @@ const InvokeLabConsole: React.FC<{
           </div>
         ) : (
           <Empty
-            description="No events have been observed yet."
+            description={t("pages.scopes.invoke.no.events.have.been.observed", "No events have been observed yet.")}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         )
@@ -2020,7 +1992,7 @@ const InvokeLabConsole: React.FC<{
         </div>
       ) : (
         <Empty
-          description="Invocation output will appear here after you stream or invoke a service."
+          description={t("pages.scopes.invoke.invocation.output.will.appear.here", "Invocation output will appear here after you stream or invoke a service.")}
           image={Empty.PRESENTED_IMAGE_SIMPLE}
         />
       )}

@@ -1,10 +1,9 @@
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Runtime.ExceptionServices;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Core.Compatibility;
+using Aevatar.Foundation.Abstractions.Compatibility;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -15,6 +14,7 @@ internal sealed class StaticHandlerAdapter : IEventModule<IEventHandlerContext>
     private readonly EventHandlerMetadata _meta;
     private readonly IAgent _agent;
     private readonly Func<Any, IMessage>? _unpacker;
+    private readonly Func<IAgent, object, Task> _handler;
     private static readonly ConcurrentDictionary<System.Type, Func<Any, IMessage>?> UnpackerCache = new();
 
     public StaticHandlerAdapter(EventHandlerMetadata meta, IAgent agent)
@@ -22,6 +22,7 @@ internal sealed class StaticHandlerAdapter : IEventModule<IEventHandlerContext>
         _meta = meta;
         _agent = agent;
         _unpacker = meta.IsAllEventHandler ? null : UnpackerCache.GetOrAdd(meta.ParameterType, CompileUnpacker);
+        _handler = CompileHandler(meta.Method, meta.ParameterType);
     }
 
     public string Name => _meta.Method.Name;
@@ -36,20 +37,10 @@ internal sealed class StaticHandlerAdapter : IEventModule<IEventHandlerContext>
         return ProtobufContractCompatibility.MatchesPayload(envelope.Payload, _meta.ParameterType);
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
         object? arg = _meta.IsAllEventHandler ? envelope : Unpack(envelope);
-        if (arg == null) return;
-        try
-        {
-            var result = _meta.Method.Invoke(_agent, [arg]);
-            if (result is Task task) await task;
-        }
-        catch (TargetInvocationException ex) when (ex.InnerException != null)
-        {
-            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
-            throw;
-        }
+        return arg == null ? Task.CompletedTask : _handler(_agent, arg);
     }
 
     private object? Unpack(EventEnvelope envelope)
@@ -74,6 +65,25 @@ internal sealed class StaticHandlerAdapter : IEventModule<IEventHandlerContext>
             return Expression.Lambda<Func<Any, IMessage>>(Expression.Convert(call, typeof(IMessage)), p).Compile();
         }
         catch { return null; }
+    }
+
+    // Refactor (iter11/cluster-020):
+    // Old: per-message handler dispatch used MethodInfo.Invoke, allocating an argument array and wrapping exceptions.
+    // New: adapter construction compiles a direct typed call delegate; HandleAsync only invokes the cached delegate.
+    private static Func<IAgent, object, Task> CompileHandler(MethodInfo method, System.Type parameterType)
+    {
+        var agent = Expression.Parameter(typeof(IAgent), "agent");
+        var payload = Expression.Parameter(typeof(object), "payload");
+        var target = Expression.Convert(agent, method.DeclaringType ?? throw new InvalidOperationException(
+            $"Handler '{method.Name}' has no declaring type."));
+        var argument = Expression.Convert(payload, parameterType);
+        var call = Expression.Call(target, method, argument);
+
+        Expression body = typeof(Task).IsAssignableFrom(method.ReturnType)
+            ? Expression.Convert(call, typeof(Task))
+            : Expression.Block(call, Expression.Property(null, typeof(Task), nameof(Task.CompletedTask)));
+
+        return Expression.Lambda<Func<IAgent, object, Task>>(body, agent, payload).Compile();
     }
 
     private static IMessage UnpackCompatible<TMessage>(Any any)

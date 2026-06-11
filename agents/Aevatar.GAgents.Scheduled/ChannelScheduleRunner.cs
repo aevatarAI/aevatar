@@ -20,6 +20,8 @@ internal sealed class ChannelScheduleRunner
     private readonly Func<DateTimeOffset, Task> _persistNextRunEventAsync;
     private readonly Func<string, TimeSpan, IMessage, CancellationToken, Task<RuntimeCallbackLease>> _scheduleTimeoutAsync;
     private readonly Func<RuntimeCallbackLease, CancellationToken, Task> _cancelCallbackAsync;
+    private readonly IClock _clock;
+    private readonly ITimeZoneResolver _timeZoneResolver;
     private readonly ILogger _logger;
     private readonly string _ownerDescription;
 
@@ -32,6 +34,8 @@ internal sealed class ChannelScheduleRunner
         Func<DateTimeOffset, Task> persistNextRunEventAsync,
         Func<string, TimeSpan, IMessage, CancellationToken, Task<RuntimeCallbackLease>> scheduleTimeoutAsync,
         Func<RuntimeCallbackLease, CancellationToken, Task> cancelCallbackAsync,
+        IClock? clock,
+        ITimeZoneResolver? timeZoneResolver,
         ILogger logger,
         string ownerDescription)
     {
@@ -41,6 +45,8 @@ internal sealed class ChannelScheduleRunner
         _persistNextRunEventAsync = persistNextRunEventAsync ?? throw new ArgumentNullException(nameof(persistNextRunEventAsync));
         _scheduleTimeoutAsync = scheduleTimeoutAsync ?? throw new ArgumentNullException(nameof(scheduleTimeoutAsync));
         _cancelCallbackAsync = cancelCallbackAsync ?? throw new ArgumentNullException(nameof(cancelCallbackAsync));
+        _clock = clock ?? new SystemClock();
+        _timeZoneResolver = timeZoneResolver ?? new TimeZoneResolver();
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _ownerDescription = ownerDescription ?? string.Empty;
     }
@@ -48,36 +54,53 @@ internal sealed class ChannelScheduleRunner
     /// <summary>Revives the schedule after actor activation when the previous run window has lapsed.</summary>
     public Task BootstrapOnActivateAsync(CancellationToken ct)
     {
+        var nowUtc = _clock.UtcNow;
         var schedule = _schedulableSource().Schedule;
         if (!schedule.Enabled || string.IsNullOrWhiteSpace(schedule.Cron))
             return Task.CompletedTask;
 
         var nextRun = schedule.NextRunAt;
-        if (nextRun != null && nextRun.ToDateTimeOffset() > DateTimeOffset.UtcNow)
+        if (nextRun != null && nextRun.ToDateTimeOffset() > nowUtc)
             return Task.CompletedTask;
 
-        return ScheduleNextRunAsync(DateTimeOffset.UtcNow, ct);
+        return ScheduleNextRunAsync(nowUtc, ct);
+    }
+
+    /// <summary>Samples the wall clock once, then computes and schedules the next run.</summary>
+    public Task ScheduleNextRunAsync(CancellationToken ct)
+    {
+        var nowUtc = _clock.UtcNow;
+        return ScheduleNextRunAsync(nowUtc, ct);
     }
 
     /// <summary>Computes the next cron occurrence and (re)places the durable callback lease.</summary>
-    public async Task ScheduleNextRunAsync(DateTimeOffset fromUtc, CancellationToken ct)
+    public async Task ScheduleNextRunAsync(DateTimeOffset sampledUtc, CancellationToken ct)
     {
         var schedule = _schedulableSource().Schedule;
         if (!schedule.Enabled || string.IsNullOrWhiteSpace(schedule.Cron))
             return;
 
-        if (!ChannelScheduleCalculator.TryGetNextOccurrence(
-                schedule.Cron,
-                schedule.Timezone,
-                fromUtc,
-                out var nextRunAtUtc,
-                out var error))
+        // Refactor (iter89/cluster-089-scheduled-runner-wall-clock):
+        //   Old: cron helpers resolved OS timezones directly and due-time used a second DateTimeOffset.UtcNow read.
+        //   New: the runner receives clock/timezone dependencies and pure schedule math uses one sampled actor-turn time.
+        if (!_timeZoneResolver.TryResolve(schedule.Timezone, out var timeZone, out var error))
         {
             _logger.LogWarning("{Owner} could not compute next run: {Error}", _ownerDescription, error);
             return;
         }
 
-        var dueTime = ChannelScheduleCalculator.ComputeDueTime(nextRunAtUtc, DateTimeOffset.UtcNow);
+        if (!ChannelScheduleCalculator.TryGetNextOccurrence(
+                schedule.Cron,
+                timeZone,
+                sampledUtc,
+                out var nextRunAtUtc,
+                out error))
+        {
+            _logger.LogWarning("{Owner} could not compute next run: {Error}", _ownerDescription, error);
+            return;
+        }
+
+        var dueTime = ChannelScheduleCalculator.ComputeDueTime(nextRunAtUtc, sampledUtc);
 
         if (_lease != null)
             await _cancelCallbackAsync(_lease, ct);

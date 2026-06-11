@@ -6,11 +6,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.AI.ToolProviders.Web;
 
 /// <summary>HTTP client for web search and fetch operations.</summary>
-public sealed class WebApiClient
+public sealed class WebApiClient : IWebApiClient, IDisposable
 {
     private readonly HttpClient _http;
     private readonly WebToolOptions _options;
     private readonly ILogger _logger;
+    private readonly bool _ownsHttpClient;
 
     public WebApiClient(
         WebToolOptions options,
@@ -18,12 +19,16 @@ public sealed class WebApiClient
         ILogger<WebApiClient>? logger = null)
     {
         _options = options;
-        _http = httpClient ?? new HttpClient();
+        // Refactor (iter10/cluster-019):
+        // Old: singleton DI registration could self-create and pin a raw HttpClient.
+        // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
+        _http = httpClient ?? CreateDefaultHttpClient();
+        _ownsHttpClient = httpClient is null;
         _logger = logger ?? NullLogger<WebApiClient>.Instance;
     }
 
     /// <summary>Perform a web search via NyxID proxy or direct API.</summary>
-    public async Task<string> SearchAsync(
+    public async Task<WebSearchResult> SearchAsync(
         string token, string query, int maxResults, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(_options.NyxIdSearchSlug) &&
@@ -31,71 +36,124 @@ public sealed class WebApiClient
         {
             var path = $"/search?q={Uri.EscapeDataString(query)}&limit={maxResults}";
             var url = $"{_options.NyxIdBaseUrl.TrimEnd('/')}/api/v1/proxy/{Uri.EscapeDataString(_options.NyxIdSearchSlug)}{path}";
-            return await GetAsync(token, url, ct);
+            return WebToolResultBoundaryJson.ParseSearchPayload(await GetAsync(token, url, ct));
         }
 
         if (!string.IsNullOrWhiteSpace(_options.SearchApiBaseUrl))
         {
             var url = $"{_options.SearchApiBaseUrl.TrimEnd('/')}/search?q={Uri.EscapeDataString(query)}&limit={maxResults}";
-            return await GetAsync(token, url, ct);
+            return WebToolResultBoundaryJson.ParseSearchPayload(await GetAsync(token, url, ct));
         }
 
-        return """{"error":"No search backend configured. Set NyxIdSearchSlug or SearchApiBaseUrl in WebToolOptions."}""";
+        return ErrorResult("search_backend_not_configured", "No search backend configured. Set NyxIdSearchSlug or SearchApiBaseUrl in WebToolOptions.");
     }
 
     /// <summary>Fetch a URL and return the response body as text.</summary>
-    public async Task<FetchResult> FetchUrlAsync(string token, string url, CancellationToken ct)
+    public async Task<WebFetchResult> FetchUrlAsync(string token, string url, CancellationToken ct)
     {
         try
         {
+            var validation = await WebFetchUrlGuard.ValidateResolvedAsync(url, ct);
+            if (!validation.IsAllowed)
+            {
+                return new WebFetchResult(
+                    0,
+                    "rejected",
+                    validation.RejectionCode ?? "url_rejected",
+                    null,
+                    url);
+            }
+
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(_options.FetchTimeoutSeconds));
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/html"));
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/plain"));
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            request.Headers.UserAgent.ParseAdd("AevatarAgent/1.0");
-
-            if (!string.IsNullOrWhiteSpace(token))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            using var response = await _http.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-
-            var contentType = response.Content.Headers.ContentType?.MediaType ?? "text/html";
-            var statusCode = (int)response.StatusCode;
-
-            if (!response.IsSuccessStatusCode)
+            var originalUrl = validation.NormalizedUrl!;
+            var currentUrl = originalUrl;
+            for (var redirectCount = 0; redirectCount < 5; redirectCount++)
             {
-                var errorBody = await ReadLimitedAsync(response, cts.Token);
-                return new FetchResult(statusCode, contentType, errorBody, null, url);
+                using var request = BuildFetchRequest(token, currentUrl);
+                using var response = await _http.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+
+                var contentType = response.Content.Headers.ContentType?.MediaType ?? "text/html";
+                var statusCode = (int)response.StatusCode;
+
+                if (IsRedirect(statusCode) && response.Headers.Location != null)
+                {
+                    var redirectUri = ResolveRedirectUri(currentUrl, response.Headers.Location);
+                    var redirectValidation = await WebFetchUrlGuard.ValidateResolvedAsync(
+                        redirectUri.ToString(),
+                        cts.Token);
+                    if (!redirectValidation.IsAllowed)
+                    {
+                        return new WebFetchResult(
+                            statusCode,
+                            contentType,
+                            redirectValidation.RejectionCode ?? "url_rejected",
+                            redirectUri.ToString(),
+                            originalUrl);
+                    }
+
+                    if (!string.Equals(
+                            new Uri(currentUrl).Host,
+                            redirectUri.Host,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        return new WebFetchResult(statusCode, contentType, null, redirectUri.ToString(), originalUrl);
+                    }
+
+                    currentUrl = redirectValidation.NormalizedUrl!;
+                    continue;
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorBody = await ReadLimitedAsync(response, cts.Token);
+                    return new WebFetchResult(statusCode, contentType, errorBody, null, originalUrl);
+                }
+
+                var body = await ReadLimitedAsync(response, cts.Token);
+                return new WebFetchResult(statusCode, contentType, body, null, originalUrl);
             }
 
-            if (response.RequestMessage?.RequestUri != null &&
-                !string.Equals(
-                    new Uri(url).Host,
-                    response.RequestMessage.RequestUri.Host,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return new FetchResult(
-                    statusCode, contentType, null,
-                    response.RequestMessage.RequestUri.ToString(), url);
-            }
-
-            var body = await ReadLimitedAsync(response, cts.Token);
-            return new FetchResult(statusCode, contentType, body, null, url);
+            return new WebFetchResult(0, "redirect", "Too many redirects", null, originalUrl);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return new FetchResult(0, "timeout", $"Request timed out after {_options.FetchTimeoutSeconds}s", null, url);
+            return new WebFetchResult(0, "timeout", $"Request timed out after {_options.FetchTimeoutSeconds}s", null, url);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "WebFetch failed for {Url}", url);
-            return new FetchResult(0, "error", ex.Message, null, url);
+            return new WebFetchResult(0, "error", ex.Message, null, url);
         }
     }
+
+    private static HttpClient CreateDefaultHttpClient() =>
+        new(new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+        });
+
+    private static HttpRequestMessage BuildFetchRequest(string token, string url)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/html"));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/plain"));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("AevatarAgent/1.0");
+
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        return request;
+    }
+
+    private static Uri ResolveRedirectUri(string currentUrl, Uri location) =>
+        location.IsAbsoluteUri ? location : new Uri(new Uri(currentUrl), location);
+
+    private static bool IsRedirect(int statusCode) =>
+        statusCode is 301 or 302 or 303 or 307 or 308;
 
     private async Task<string> ReadLimitedAsync(HttpResponseMessage response, CancellationToken ct)
     {
@@ -129,15 +187,16 @@ public sealed class WebApiClient
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Web API request failed: {Url}", url);
-            return System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message });
+            return System.Text.Json.JsonSerializer.Serialize(new { error = "request_failed", message = ex.Message });
         }
     }
-}
 
-/// <summary>Result of a URL fetch operation.</summary>
-public sealed record FetchResult(
-    int StatusCode,
-    string ContentType,
-    string? Body,
-    string? RedirectUrl,
-    string OriginalUrl);
+    private static WebSearchResult ErrorResult(string code, string message) =>
+        new(Array.Empty<WebSearchResultItem>(), new WebToolError(code, message));
+
+    public void Dispose()
+    {
+        if (_ownsHttpClient)
+            _http.Dispose();
+    }
+}

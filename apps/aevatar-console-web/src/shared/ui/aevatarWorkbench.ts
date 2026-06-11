@@ -3,7 +3,7 @@ import type { ThemeConfig } from "antd";
 import type { CSSProperties } from "react";
 
 export const AEVATAR_GLOBAL_UI_SPEC = {
-  name: "Aevatar 全局 UI 统一规范（TS 版）",
+  name: "Aevatar global UI specification (TS)",
   philosophy: {
     viewport: "100vh viewport first, internal regions scroll independently",
     workspace:
@@ -163,7 +163,6 @@ export const aevatarProLayoutSettings: ProLayoutProps & {
   navTheme: "light",
   pwa: false,
   splitMenus: false,
-  title: "Aevatar Console",
 };
 
 export function formatAevatarStatusLabel(value: string) {

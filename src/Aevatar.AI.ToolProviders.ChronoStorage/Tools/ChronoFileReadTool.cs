@@ -43,7 +43,10 @@ public sealed class ChronoFileReadTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+        //   Old pattern: tool methods pulled NyxID credentials from generic Metadata keys.
+        //   New principle: credentials are typed request context fields, not internal Metadata.
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return "Error: No NyxID access token available. User must be authenticated.";
 

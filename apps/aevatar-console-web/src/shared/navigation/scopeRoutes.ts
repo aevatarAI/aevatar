@@ -10,16 +10,22 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
+function isTeamCreatePath(pathname: string): boolean {
+  const normalizedPathname = pathname.split(/[?#]/)[0]?.replace(/\/+$/, "") ?? "";
+  return normalizedPathname === "/teams/new";
+}
+
 function readTeamScopeId(pathname: string): string {
   const match = pathname.match(/^\/teams\/([^/?#]+)/);
   if (!match) {
     return "";
   }
 
+  const rawScopeId = match[1] ?? "";
   try {
-    return decodeURIComponent(match[1] ?? "").trim();
+    return decodeURIComponent(rawScopeId).trim();
   } catch {
-    return (match[1] ?? "").trim();
+    return rawScopeId.trim();
   }
 }
 
@@ -34,10 +40,17 @@ export function readScopeQueryDraft(
   pathname = typeof window === "undefined" ? "" : window.location.pathname,
 ): ScopeQueryDraft {
   const params = new URLSearchParams(search);
+  const isCreatePath = isTeamCreatePath(pathname);
   const queryScopeId = readString(params.get("scopeId"));
-  if (queryScopeId) {
+  if (queryScopeId && !(isCreatePath && queryScopeId === "new")) {
     return {
       scopeId: queryScopeId,
+    };
+  }
+
+  if (isCreatePath) {
+    return {
+      scopeId: "",
     };
   }
 

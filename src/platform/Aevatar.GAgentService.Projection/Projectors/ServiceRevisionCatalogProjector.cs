@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -78,6 +78,7 @@ public sealed class ServiceRevisionCatalogProjector
                 .OrderBy(x => x.EndpointId, StringComparer.Ordinal)
                 .ToList(),
             StaticActorTypeName = state.Spec?.StaticSpec?.ActorTypeName ?? string.Empty,
+            StaticAgentKind = state.Spec?.StaticSpec?.AgentKind ?? string.Empty,
             StaticPreferredActorId = state.Spec?.StaticSpec?.PreferredActorId ?? string.Empty,
             ScriptingScriptId = state.Spec?.ScriptingSpec?.ScriptId ?? string.Empty,
             ScriptingRevision = state.Spec?.ScriptingSpec?.Revision ?? string.Empty,
@@ -86,6 +87,7 @@ public sealed class ServiceRevisionCatalogProjector
             WorkflowName = state.Spec?.WorkflowSpec?.WorkflowName ?? string.Empty,
             WorkflowDefinitionActorId = state.Spec?.WorkflowSpec?.DefinitionActorId ?? string.Empty,
             WorkflowInlineWorkflowCount = state.Spec?.WorkflowSpec?.InlineWorkflowYamls?.Count ?? 0,
+            PreparedArtifact = state.PreparedArtifact?.Clone(),
         };
     }
 

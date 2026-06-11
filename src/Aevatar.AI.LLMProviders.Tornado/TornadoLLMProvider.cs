@@ -49,20 +49,12 @@ public sealed class TornadoLLMProvider : ILLMProvider
         _logger = logger ?? NullLogger.Instance;
     }
 
-    // ─── ILLMProvider.ChatAsync ───
-
-    /// <summary>单轮 LLM 调用。</summary>
-    public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-    {
-        var chatRequest = MapRequest(request);
-        _logger.LogDebug("Tornado ChatAsync: {Model}, {MsgCount} 条消息", _modelName, request.Messages.Count);
-        var result = await _api.Chat.CreateChatCompletion(chatRequest).WaitAsync(ct);
-        return MapResponse(result);
-    }
-
     // ─── ILLMProvider.ChatStreamAsync ───
 
     /// <summary>流式 LLM 调用。</summary>
+    // Refactor (iter18/cluster-001):
+    //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+    //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request, [EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -191,40 +183,6 @@ public sealed class TornadoLLMProvider : ILLMProvider
 
     // ─── 转换：LlmTornado → Aevatar ───
 
-    private static LLMResponse MapResponse(ChatResult? result)
-    {
-        if (result == null)
-            return new LLMResponse { Content = null, FinishReason = "error" };
-
-        var choice = result.Choices?.FirstOrDefault();
-        var content = choice?.Message?.Content;
-        List<AevatarToolCall>? toolCalls = null;
-
-        if (choice?.Message?.ToolCalls is { Count: > 0 })
-        {
-            toolCalls = choice.Message.ToolCalls
-                .Select(ConvertToolCall)
-                .ToList();
-        }
-
-        TokenUsage? usage = null;
-        if (result.Usage != null)
-        {
-            usage = new TokenUsage(
-                result.Usage.PromptTokens,
-                result.Usage.CompletionTokens,
-                result.Usage.TotalTokens);
-        }
-
-        return new LLMResponse
-        {
-            Content = content,
-            ToolCalls = toolCalls,
-            Usage = usage,
-            FinishReason = choice?.FinishReason?.ToString(),
-        };
-    }
-
     private static TokenUsage? MapUsage(ChatUsage? usage)
     {
         if (usage == null)
@@ -234,16 +192,6 @@ public sealed class TornadoLLMProvider : ILLMProvider
             usage.PromptTokens,
             usage.CompletionTokens,
             usage.TotalTokens);
-    }
-
-    private static AevatarToolCall ConvertToolCall(LlmTornado.ChatFunctions.ToolCall toolCall)
-    {
-        return new AevatarToolCall
-        {
-            Id = toolCall.Id ?? Guid.NewGuid().ToString("N"),
-            Name = toolCall.FunctionCall?.Name ?? string.Empty,
-            ArgumentsJson = toolCall.FunctionCall?.Arguments ?? "{}",
-        };
     }
 
     // Keep delta semantics: missing stream IDs should remain empty for downstream merge.
@@ -288,6 +236,7 @@ public sealed class TornadoLLMProvider : ILLMProvider
         {
             Role = m.Role,
             Content = fallbackContent,
+            ReasoningContent = m.ReasoningContent,
             ContentParts = null, // Tornado doesn't use ContentParts
             ToolCallId = m.ToolCallId,
             ToolCalls = m.ToolCalls,

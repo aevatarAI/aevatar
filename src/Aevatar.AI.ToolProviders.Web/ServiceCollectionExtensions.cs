@@ -14,12 +14,20 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<WebToolOptions>? configure = null)
     {
+        // Refactor (iter10/cluster-019):
+        // Old: WebApiClient was a singleton that could own a raw HttpClient forever.
+        // New: WebApiClient is an AddHttpClient<T> typed client with factory-managed handler lifetime.
         var options = new WebToolOptions();
         configure?.Invoke(options);
         services.TryAddSingleton(options);
-        services.TryAddSingleton<WebApiClient>();
+        services.AddHttpClient<WebApiClient>()
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+            });
+        services.TryAddTransient<IWebApiClient>(sp => sp.GetRequiredService<WebApiClient>());
         services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IAgentToolSource, WebAgentToolSource>());
+            ServiceDescriptor.Transient<IAgentToolSource, WebAgentToolSource>());
         return services;
     }
 }

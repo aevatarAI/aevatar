@@ -36,6 +36,37 @@ public class AgentToolVoiceCatalogTests
         source.DiscoverCalls.Should().Be(1);
     }
 
+    [Fact]
+    public async Task DiscoverAsync_ConcurrentFirstUse_ShouldStartSourceDiscoveryOnce()
+    {
+        using var source = new BlockingCountingToolSource(new FakeAgentTool("door.open", "fake", "{}"));
+        var catalog = new AgentToolVoiceCatalog([source]);
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readyCount = 0;
+
+        var tasks = Enumerable.Range(0, 32)
+            .Select(_ => Task.Run(async () =>
+            {
+                if (Interlocked.Increment(ref readyCount) == 32)
+                    ready.TrySetResult(true);
+
+                await start.Task;
+                return await catalog.DiscoverAsync();
+            }))
+            .ToArray();
+
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        start.SetResult(true);
+        await source.WaitForFirstDiscoveryAsync();
+        source.Release();
+
+        var results = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
+
+        source.DiscoverCalls.Should().Be(1);
+        results.Should().OnlyContain(result => result.Count == 1 && result[0].Name == "door.open");
+    }
+
     private sealed class StubToolSource(params IAgentTool[] tools) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
@@ -54,6 +85,32 @@ public class AgentToolVoiceCatalogTests
             _ = ct;
             DiscoverCalls++;
             return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+        }
+    }
+
+    private sealed class BlockingCountingToolSource(params IAgentTool[] tools) : IAgentToolSource, IDisposable
+    {
+        private readonly TaskCompletionSource<bool> _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _discoverCalls;
+
+        public int DiscoverCalls => Volatile.Read(ref _discoverCalls);
+
+        public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _discoverCalls);
+            _entered.TrySetResult(true);
+            await _release.Task.WaitAsync(ct);
+            return tools;
+        }
+
+        public Task WaitForFirstDiscoveryAsync() =>
+            _entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        public void Release() => _release.SetResult(true);
+
+        public void Dispose()
+        {
         }
     }
 

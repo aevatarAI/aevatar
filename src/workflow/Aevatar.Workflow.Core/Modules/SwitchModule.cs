@@ -33,8 +33,15 @@ public sealed class SwitchModule : IEventModule<IWorkflowExecutionContext>
 
         var branchKey = ResolveMatchingBranch(value, request.Parameters);
 
-        ctx.Logger.LogInformation("Switch {StepId}: on={Value} → branch={Branch}",
-            request.StepId, value.Length > 80 ? value[..80] + "..." : value, branchKey);
+        // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+        //   Old pattern: Information log included raw value/prompt/input preview
+        //   New principle: only stable id + length + status + redaction marker
+        ctx.Logger.LogInformation(
+            "Switch: run={RunId} step={StepId} status=branch_resolved value_len={ValueLen} value_redacted=true branch={Branch}",
+            request.RunId,
+            request.StepId,
+            value.Length,
+            branchKey);
 
         var completed = new StepCompletedEvent
         {

@@ -3,8 +3,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Infrastructure.Dispatch;
@@ -13,18 +13,18 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 {
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScriptRuntimeCommandPort _scriptRuntimeCommandPort;
-    private readonly IWorkflowRunActorPort _workflowRunActorPort;
+    private readonly IWorkflowRunProvisioningPort _workflowRunProvisioningPort;
     private readonly IServiceRunRegistrationPort _serviceRunRegistrationPort;
 
     public DefaultServiceInvocationDispatcher(
         IActorDispatchPort dispatchPort,
         IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        IWorkflowRunActorPort workflowRunActorPort,
+        IWorkflowRunProvisioningPort workflowRunProvisioningPort,
         IServiceRunRegistrationPort serviceRunRegistrationPort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scriptRuntimeCommandPort = scriptRuntimeCommandPort ?? throw new ArgumentNullException(nameof(scriptRuntimeCommandPort));
-        _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
+        _workflowRunProvisioningPort = workflowRunProvisioningPort ?? throw new ArgumentNullException(nameof(workflowRunProvisioningPort));
         _serviceRunRegistrationPort = serviceRunRegistrationPort ?? throw new ArgumentNullException(nameof(serviceRunRegistrationPort));
     }
 
@@ -57,7 +57,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         await RegisterRunAsync(target, request, runId, commandId, correlationId, target.Service.PrimaryActorId, ServiceImplementationKind.Static, ct);
         var envelope = CreateEnvelope(target.Service.PrimaryActorId, request.Payload, commandId, correlationId);
         await _dispatchPort.DispatchAsync(target.Service.PrimaryActorId, envelope, ct);
-        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId);
+        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId, runId);
     }
 
     private async Task<ServiceInvocationAcceptedReceipt> DispatchScriptingAsync(
@@ -79,7 +79,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             request.Payload?.TypeUrl ?? string.Empty,
             request.Identity?.TenantId,
             ct);
-        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId);
+        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId, runId);
     }
 
     private async Task<ServiceInvocationAcceptedReceipt> DispatchWorkflowAsync(
@@ -90,7 +90,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var chatRequest = request.Payload?.Unpack<ChatRequestEvent>()
             ?? throw new InvalidOperationException("Workflow services require ChatRequestEvent payload.");
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
-        var run = await _workflowRunActorPort.CreateRunAsync(
+        var run = await _workflowRunProvisioningPort.CreateRunAsync(
             new WorkflowDefinitionBinding(
                 target.Service.PrimaryActorId,
                 plan.WorkflowName,
@@ -101,10 +101,54 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
         var runId = ResolveRunId(request, commandId);
-        await RegisterRunAsync(target, request, runId, commandId, correlationId, run.Actor.Id, ServiceImplementationKind.Workflow, ct);
-        var envelope = CreateEnvelope(run.Actor.Id, Any.Pack(chatRequest), commandId, correlationId);
-        await _dispatchPort.DispatchAsync(run.Actor.Id, envelope, ct);
-        return CreateReceipt(target, run.Actor.Id, commandId, correlationId);
+        await RegisterRunAsync(target, request, runId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
+        var envelope = CreateEnvelope(run.ActorId, Any.Pack(ToWorkflowChatRequest(chatRequest)), commandId, correlationId);
+        await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
+        return CreateReceipt(target, run.ActorId, commandId, correlationId, runId);
+    }
+
+    private static WorkflowChatRequestEvent ToWorkflowChatRequest(ChatRequestEvent source)
+    {
+        var request = new WorkflowChatRequestEvent
+        {
+            Prompt = source.Prompt ?? string.Empty,
+            SessionId = source.SessionId ?? string.Empty,
+            TimeoutMs = source.TimeoutMs,
+            ScopeId = source.ScopeId ?? string.Empty,
+            ConnectorHttpAuthorization = source.ConnectorHttpAuthorization ?? string.Empty,
+        };
+        foreach (var part in source.InputParts)
+        {
+            request.InputParts.Add(new WorkflowChatInputPartPayload
+            {
+                Kind = part.Kind switch
+                {
+                    ChatContentPartKind.Text => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Text,
+                    ChatContentPartKind.Image => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image,
+                    ChatContentPartKind.Audio => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio,
+                    ChatContentPartKind.Video => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video,
+                    _ => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified,
+                },
+                Text = part.Text ?? string.Empty,
+                DataBase64 = part.DataBase64 ?? string.Empty,
+                MediaType = part.MediaType ?? string.Empty,
+                Uri = part.Uri ?? string.Empty,
+                Name = part.Name ?? string.Empty,
+            });
+        }
+        foreach (var (key, value) in source.Headers)
+            request.Headers[key] = value;
+        foreach (var (key, value) in source.Metadata)
+            request.Metadata[key] = value;
+        request.LlmControl = new WorkflowLlmControlContext
+        {
+            ModelOverride = source.LlmControl?.ModelOverride ?? string.Empty,
+            UserMemoryPrompt = source.LlmControl?.UserMemoryPrompt ?? string.Empty,
+            SenderNyxIdAccessToken = source.LlmControl?.SenderNyxIdAccessToken ?? string.Empty,
+        };
+        if (source.LlmControl?.HasMaxToolRoundsOverride == true)
+            request.LlmControl.MaxToolRoundsOverride = source.LlmControl.MaxToolRoundsOverride;
+        return request;
     }
 
     private async Task RegisterRunAsync(
@@ -171,7 +215,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         ServiceInvocationResolvedTarget target,
         string targetActorId,
         string commandId,
-        string correlationId)
+        string correlationId,
+        string runId)
     {
         return new ServiceInvocationAcceptedReceipt
         {
@@ -182,6 +227,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             EndpointId = target.Endpoint.EndpointId,
             CommandId = commandId,
             CorrelationId = correlationId,
+            RunId = runId,
         };
     }
 
@@ -204,41 +250,11 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
     {
         if (!string.IsNullOrWhiteSpace(request.Identity?.TenantId))
             return request.Identity.TenantId.Trim();
-        return ResolveScopeId(chatRequest);
-    }
 
-    private static string ResolveScopeId(ChatRequestEvent chatRequest)
-    {
-        ArgumentNullException.ThrowIfNull(chatRequest);
-
+        // Refactor (issue1543): Old pattern: Headers/Metadata scope fallback could override workflow binding authority.  New principle: only typed identity or typed chat payload scope can bind a workflow run.
         if (!string.IsNullOrWhiteSpace(chatRequest.ScopeId))
             return chatRequest.ScopeId.Trim();
 
-        return TryResolveScopeId(chatRequest.Headers, out var scopeId) ||
-               TryResolveScopeId(chatRequest.Metadata, out scopeId)
-            ? scopeId
-            : string.Empty;
-    }
-
-    private static bool TryResolveScopeId(MapField<string, string> values, out string scopeId)
-    {
-        ArgumentNullException.ThrowIfNull(values);
-
-        if (values.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
-            !string.IsNullOrWhiteSpace(workflowScopeId))
-        {
-            scopeId = workflowScopeId.Trim();
-            return true;
-        }
-
-        if (values.TryGetValue("scope_id", out var legacyScopeId) &&
-            !string.IsNullOrWhiteSpace(legacyScopeId))
-        {
-            scopeId = legacyScopeId.Trim();
-            return true;
-        }
-
-        scopeId = string.Empty;
-        return false;
+        return string.Empty;
     }
 }

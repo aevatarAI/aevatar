@@ -57,14 +57,13 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
     public void WorkflowRunAcceptedReceiptFactory_ShouldCreateReceiptFromTargetAndContext()
     {
         var projectionPort = new NoOpProjectionPort();
-        var actor = new FakeActor("actor-1");
         var target = new WorkflowRunCommandTarget(
-            actor,
+            "actor-1",
             "direct",
             createdActorIds: [],
             projectionPort,
-            projectionPort,
-            new NoOpWorkflowRunActorPort());
+            new NoOpWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -77,34 +76,45 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
         receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"));
     }
 
+    [Fact]
+    public void WorkflowRunAcceptedReceiptFactory_ShouldCreateReceiptFromAcceptedTargetAndContext()
+    {
+        var target = new WorkflowRunAcceptedCommandTarget("actor-accepted",
+            "direct",
+            createdActorIds: [],
+            new NoOpWorkflowRunActorPort());
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "actor-accepted",
+            "cmd-accepted",
+            "corr-accepted",
+            new Dictionary<string, string>());
+        var factory = new WorkflowRunAcceptedReceiptFactory();
+        var typedFactory = (Aevatar.CQRS.Core.Abstractions.Commands.ICommandReceiptFactory<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>)factory;
+
+        var receipt = typedFactory.Create(target, context);
+
+        receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-accepted", "direct", "cmd-accepted", "corr-accepted"));
+    }
+
     private sealed class NoOpProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
+            IWorkflowExecutionProjectionLease lease,
+            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default) =>
+            Task.FromResult<IAsyncDisposable?>(null);
 
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
-
-        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
+        public Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
             string rootActorId,
             string commandId,
-            CancellationToken ct = default) =>
-            Task.FromResult<IWorkflowExecutionProjectionLease?>(null);
-
-        public Task AttachLiveSinkAsync(
-            IWorkflowExecutionProjectionLease lease,
             Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
-            Task.CompletedTask;
+            Task.FromResult<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?>(null);
 
         public Task DetachLiveSinkAsync(
-            IWorkflowExecutionProjectionLease lease,
-            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
@@ -114,12 +124,9 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             Task.CompletedTask;
     }
 
-    private sealed class NoOpWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class NoOpWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;

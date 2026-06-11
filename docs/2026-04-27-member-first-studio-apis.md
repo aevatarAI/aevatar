@@ -20,8 +20,9 @@ The resolver is exposed through `IMemberPublishedServiceResolver`, so a later ac
 | Route | Purpose |
 |---|---|
 | `GET /api/scopes/{scopeId}/members/{memberId}/published-service` | Resolve the member-owned published service id. |
-| `GET /api/scopes/{scopeId}/members/{memberId}/binding` | Read current binding status for the member-owned published service. |
-| `PUT /api/scopes/{scopeId}/members/{memberId}/binding` | Publish workflow/script/GAgent implementation to the member-owned published service. |
+| `GET /api/scopes/{scopeId}/members/{memberId}/binding` | Read the member authority's last successful binding and current async binding run. |
+| `PUT /api/scopes/{scopeId}/members/{memberId}/binding` | Start an async workflow/script/GAgent binding run for the member-owned published service. Returns `202 Accepted`. |
+| `GET /api/scopes/{scopeId}/members/{memberId}/binding-runs/{bindingRunId}` | Read the eventually-consistent status read model for one binding run. |
 | `POST /api/scopes/{scopeId}/members/{memberId}/invoke/{endpointId}` | Invoke a typed endpoint by member id. |
 | `POST /api/scopes/{scopeId}/members/{memberId}/invoke/{endpointId}:stream` | Invoke an SSE endpoint by member id. |
 | `GET /api/scopes/{scopeId}/members/{memberId}/runs` | List read-model-backed runs for the member-owned published service. |
@@ -34,7 +35,11 @@ The resolver is exposed through `IMemberPublishedServiceResolver`, so a later ac
 ## Semantics
 
 - Member routes for Bind / Invoke / Observe-read / run lifecycle control do not require frontend callers to know or pass `serviceId`.
-- Binding and invoke still use the existing service command/runtime path after the resolver has produced `publishedServiceId`.
+- Binding writes are asynchronous. The `PUT /binding` response only means the command was accepted for dispatch and returns a stable `bindingRunId`; completion is observed through `GET /binding-runs/{bindingRunId}` or `GET /binding`.
+- Workflow binding requests must carry `workflow.workflowId` as the stable workflow identity. The first YAML document's `name` remains the runtime/display `workflowName` and may differ from `workflowId`; successful member binding returns the stable id in `implementationRef.workflow.workflowId`.
+- The binding-run `Location` is read-model backed and can be briefly unavailable immediately after `202 Accepted`. Clients should treat a short-lived `404` for the accepted run id as pending/read-model lag, not as terminal failure. Only explicit `failed` or `rejected` run status should surface as a binding error.
+- Binding execution still publishes through the existing service command/runtime path after the member actor has admitted the request and resolved its `publishedServiceId`.
 - Runs and run detail still read workflow run read models; they do not query actor state or replay events.
 - Responses use `publishedServiceId` instead of overloading `serviceId` in member-centric DTOs.
 - The member-first public contract does not accept an `appId` override or expose the fixed service namespace.
+- The legacy scope-service member binding routes under `Aevatar.GAgentService.Hosting` are intentionally removed; member binding uses the StudioMember async protocol so the member actor remains the single authority for `LastBinding`, active run status, and `BindReady`.

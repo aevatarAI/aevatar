@@ -4,7 +4,6 @@ using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
@@ -28,11 +27,9 @@ public sealed class ScriptBehaviorDispatcherTests
     {
         Action act = parameterName switch
         {
-            "artifactResolver" => () => _ = new ScriptBehaviorDispatcher(null!, new ScriptReadModelMaterializationCompiler(), new ScriptNativeProjectionBuilder(), new ProtobufMessageCodec()),
+            "artifactResolver" => () => _ = new ScriptBehaviorDispatcher(null!, new ProtobufMessageCodec()),
             "codec" => () => _ = new ScriptBehaviorDispatcher(
                 new StaticArtifactResolver(CreateArtifact(new UppercaseBehavior())),
-                new ScriptReadModelMaterializationCompiler(),
-                new ScriptNativeProjectionBuilder(),
                 null!),
             _ => throw new InvalidOperationException("Unexpected parameter name."),
         };
@@ -77,7 +74,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -102,12 +98,13 @@ public sealed class ScriptBehaviorDispatcherTests
         fact.ReadModelTypeUrl.Should().Be(SimpleTextReadModelTypeUrl);
         fact.DomainEventPayload.Should().NotBeNull();
         fact.DomainEventPayload.Unpack<SimpleTextEvent>().Current.Value.Should().Be("HELLO");
-        fact.ReadModelPayload.Should().NotBeNull();
-        fact.ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("HELLO");
+        fact.TryGetLegacyReadModelPayload().Should().BeNull();
+        fact.TryGetLegacyNativeDocument().Should().BeNull();
+        fact.TryGetLegacyNativeGraph().Should().BeNull();
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldEmitNativeMaterializations_WhenSchemaIsDeclared()
+    public async Task DispatchAsync_ShouldNotPersistDerivedNativeMaterializations_WhenSchemaIsDeclared()
     {
         var dispatcher = CreateDispatcher(
             new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())));
@@ -144,7 +141,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-structured-1",
                 ScriptId: "script-profile-1",
                 Revision: "rev-structured-1",
-                SourceText: ScriptSources.StructuredProfileBehavior,
                 SourceHash: ScriptSources.StructuredProfileBehaviorHash,
                 ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
                 StateTypeUrl: ScriptSources.StructuredProfileStateTypeUrl,
@@ -152,24 +148,15 @@ public sealed class ScriptBehaviorDispatcherTests
                 CurrentStateRoot: null,
                 CurrentStateVersion: 4,
                 Envelope: envelope,
-                Capabilities: new NoOpCapabilities())
-            {
-                ReadModelSchemaVersion = "3",
-                ReadModelSchemaHash = "structured-schema",
-            },
+                Capabilities: new NoOpCapabilities()),
             CancellationToken.None);
 
         facts.Should().ContainSingle();
         var fact = facts[0];
-        fact.NativeDocument.Should().NotBeNull();
-        fact.NativeGraph.Should().NotBeNull();
-        fact.NativeDocument!.SchemaId.Should().Be("script_profile");
-        fact.NativeDocument.FieldsValue.Fields["actor_id"].StringValue.Should().Be("actor-1");
-        fact.NativeGraph!.GraphScope.Should().Be("script-native-script_profile");
-        fact.NativeGraph.NodeEntries.Should().Contain(x => x.NodeId == "script:script_profile:profile-runtime-1");
-        fact.NativeGraph.EdgeEntries.Should().Contain(x =>
-            x.FromNodeId == "script:script_profile:profile-runtime-1" &&
-            x.EdgeType == "rel_policy");
+        fact.DomainEventPayload.Unpack<ScriptProfileUpdated>().Current.ActorId.Should().Be("actor-1");
+        fact.TryGetLegacyReadModelPayload().Should().BeNull();
+        fact.TryGetLegacyNativeDocument().Should().BeNull();
+        fact.TryGetLegacyNativeGraph().Should().BeNull();
     }
 
     [Fact]
@@ -184,7 +171,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -231,7 +217,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -275,7 +260,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -309,8 +293,6 @@ public sealed class ScriptBehaviorDispatcherTests
     private static ScriptBehaviorDispatcher CreateDispatcher(IScriptBehaviorArtifactResolver artifactResolver) =>
         new(
             artifactResolver,
-            new ScriptReadModelMaterializationCompiler(),
-            new ScriptNativeProjectionBuilder(),
             new ProtobufMessageCodec());
 
     [Fact]
@@ -325,7 +307,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -360,7 +341,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -390,7 +370,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -433,7 +412,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -458,7 +436,7 @@ public sealed class ScriptBehaviorDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldMaterializeEachFactFromItsOwnPostEventState()
+    public async Task DispatchAsync_ShouldProgressStateAcrossMultiEventCommandTurnWithoutPersistingDerivedPayload()
     {
         var dispatcher = CreateDispatcher(
             new StaticArtifactResolver(CreateArtifact(new SequentialProjectionBehavior())));
@@ -469,7 +447,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -492,10 +469,11 @@ public sealed class ScriptBehaviorDispatcherTests
         facts.Should().HaveCount(2);
         facts[0].EventSequence.Should().Be(1);
         facts[0].StateVersion.Should().Be(11);
-        facts[0].ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("FIRST");
+        facts[0].TryGetLegacyReadModelPayload().Should().BeNull();
         facts[1].EventSequence.Should().Be(2);
         facts[1].StateVersion.Should().Be(12);
-        facts[1].ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("SECOND");
+        facts[1].DomainEventPayload.Unpack<SimpleTextEvent>().Current.Value.Should().Be("SECOND");
+        facts[1].TryGetLegacyReadModelPayload().Should().BeNull();
     }
 
     [Fact]
@@ -511,7 +489,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -555,7 +532,6 @@ public sealed class ScriptBehaviorDispatcherTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "ignored",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
@@ -1103,12 +1079,6 @@ public sealed class ScriptBehaviorDispatcherTests
         public Task<RuntimeCallbackLease> ScheduleSelfDurableSignalAsync(string callbackId, TimeSpan dueTime, IMessage eventPayload, CancellationToken ct) =>
             Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 0, RuntimeCallbackBackend.InMemory));
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
-        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) => Task.FromResult(actorId ?? string.Empty);
-        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
-        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
-        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
-        public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) => Task.FromResult<ScriptReadModelSnapshot?>(null);
-        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
         public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct) =>
             Task.FromResult(new ScriptPromotionDecision(
                 false,
@@ -1121,9 +1091,9 @@ public sealed class ScriptBehaviorDispatcherTests
                 string.Empty,
                 string.Empty,
                 new ScriptEvolutionValidationReport(false, [])));
-        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
-            Task.FromResult(definitionActorId ?? string.Empty);
-        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
+        public Task<ScriptDefinitionUpsertResult> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
+            Task.FromResult(new ScriptDefinitionUpsertResult(definitionActorId ?? string.Empty, new ScriptDefinitionBindingSpec { ScriptId = scriptId, Revision = scriptRevision, SourceHash = sourceHash }));
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, ScriptDefinitionBindingSpec definitionSnapshot, CancellationToken ct) =>
             Task.FromResult(runtimeActorId ?? string.Empty);
         public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) =>
             Task.CompletedTask;

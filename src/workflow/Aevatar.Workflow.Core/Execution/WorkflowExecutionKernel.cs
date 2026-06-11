@@ -12,6 +12,7 @@ namespace Aevatar.Workflow.Core.Execution;
 internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContext>
 {
     private const string ModuleStateKey = "workflow_execution_kernel";
+    private const string WorkflowCallInvocationIdParameterKey = "workflow_call.invocation_id";
     private static readonly Regex TimeoutErrorPattern = new(
         @"\bTIMEOUT\b|(?:^|[^A-Za-z0-9])timed out after\s+\d+\s*(?:ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -91,6 +92,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 await ResumePendingCurrentStepDispatchAsync(state, ctx, ct);
                 return;
             }
+
+            if (IsDuplicateWorkflowCallStart(state, evt, runId))
+                return;
 
             await PublishWorkflowCompletedAsync(
                 ctx,
@@ -914,6 +918,24 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.Active &&
         !string.IsNullOrWhiteSpace(runId) &&
         string.Equals(state.RunId, runId, StringComparison.Ordinal);
+
+    private static bool IsDuplicateWorkflowCallStart(
+        WorkflowExecutionKernelState state,
+        StartWorkflowEvent evt,
+        string runId)
+    {
+        if (!IsActiveRun(state, runId))
+            return false;
+
+        if (!evt.Parameters.TryGetValue(WorkflowCallInvocationIdParameterKey, out var requestedInvocationId) ||
+            string.IsNullOrWhiteSpace(requestedInvocationId))
+        {
+            return false;
+        }
+
+        return state.Variables.TryGetValue(WorkflowCallInvocationIdParameterKey, out var activeInvocationId) &&
+               string.Equals(activeInvocationId, requestedInvocationId.Trim(), StringComparison.Ordinal);
+    }
 
     private static string ResolveRunIdOrCurrent(string? runId, IWorkflowExecutionContext ctx)
     {

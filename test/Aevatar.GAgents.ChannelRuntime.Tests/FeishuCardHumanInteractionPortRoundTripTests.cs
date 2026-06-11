@@ -4,16 +4,19 @@ using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Xunit;
 using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using System.Text;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.NyxidChat;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 /// <summary>
 /// The outbound approval card is parsed back on the inbound side by
 /// <c>NyxIdRelayTransport</c>, which normalizes the Lark callback <c>action.value</c> into the
-/// strongly typed <c>CardActionSubmission.Arguments</c> map and <c>action.form_value</c> into
-/// <c>CardActionSubmission.FormFields</c>. These tests pin that the composer output still carries
-/// the correlation keys in the exact locations the transport reads, so <c>ChannelCardActionRouting</c>
-/// can rebuild the workflow resume command end-to-end.
+/// <c>CardActionSubmission.WorkflowResume</c>. These tests pin that the composer output remains
+/// Lark/Nyx JSON-compatible at the adapter edge while internal routing consumes typed payloads.
 /// </summary>
 public sealed class FeishuCardHumanInteractionPortRoundTripTests
 {
@@ -59,6 +62,83 @@ public sealed class FeishuCardHumanInteractionPortRoundTripTests
         var rejectValue = rejectButton.GetProperty("behaviors")[0].GetProperty("value");
         rejectValue.GetProperty("actor_id").GetString().Should().Be("actor-A");
         rejectValue.GetProperty("approved").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public void Approval_card_round_trips_to_typed_workflow_resume_payload()
+    {
+        var card = FeishuCardHumanInteractionPort.BuildCardJson(new HumanInteractionRequest
+        {
+            ActorId = "actor-A",
+            RunId = "run-A",
+            StepId = "step-A",
+            SuspensionType = "human_approval",
+            Prompt = "Approve the draft",
+            Content = "draft body",
+            Options = ["approve", "reject"],
+        });
+
+        using var document = JsonDocument.Parse(card);
+        var formElements = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[1]
+            .GetProperty("elements");
+        var approveButton = formElements
+            .EnumerateArray()
+            .First(e => e.GetProperty("tag").GetString() == "button" &&
+                        e.GetProperty("text").GetProperty("content").GetString() == "Approve");
+        var callbackText = JsonSerializer.Serialize(new
+        {
+            value = approveButton.GetProperty("behaviors")[0].GetProperty("value"),
+            form_value = new Dictionary<string, string>
+            {
+                ["edited_content"] = "final draft",
+                ["user_input"] = "looks good",
+            },
+        });
+        var body = $$"""
+            {
+              "message_id": "msg-card-typed-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": {{JsonSerializer.Serialize(callbackText)}}
+              }
+            }
+            """;
+
+        var parsed = new NyxIdRelayTransport().Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.WorkflowResume.ActorId.Should().Be("actor-A");
+        cardAction.WorkflowResume.RunId.Should().Be("run-A");
+        cardAction.WorkflowResume.StepId.Should().Be("step-A");
+        cardAction.WorkflowResume.Approved.Should().BeTrue();
+        cardAction.WorkflowResume.EditedContent.Should().Be("final draft");
+        cardAction.WorkflowResume.UserInput.Should().Be("looks good");
+
+        var inbound = new InboundMessage
+        {
+            Platform = "lark",
+            ConversationId = "oc_chat_1",
+            SenderId = "ou_1",
+            SenderName = "User One",
+            Text = string.Empty,
+            MessageId = "evt-card-typed-1",
+            ChatType = "card_action",
+            CardAction = cardAction,
+        };
+        ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var command).Should().BeTrue();
+        command!.ActorId.Should().Be("actor-A");
+        command.RunId.Should().Be("run-A");
+        command.StepId.Should().Be("step-A");
+        command.Approved.Should().BeTrue();
+        command.UserInput.Should().Be("final draft");
+        command.Feedback.Should().Be("looks good");
     }
 
     [Fact]

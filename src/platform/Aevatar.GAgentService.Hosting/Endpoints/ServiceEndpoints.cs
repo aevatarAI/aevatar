@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Governance.Hosting.Endpoints;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -35,6 +36,7 @@ public static partial class ServiceEndpoints
         app.MapScopeWorkflowCapabilityEndpoints();
         app.MapScopeScriptCapabilityEndpoints();
         app.MapScopeGAgentCapabilityEndpoints();
+        ScheduledDispatchEndpoints.Map(app.MapGroup("/api"));
         return app;
     }
 
@@ -103,6 +105,7 @@ public static partial class ServiceEndpoints
                 spec.StaticSpec = new StaticServiceRevisionSpec
                 {
                     ActorTypeName = request.Static?.ActorTypeName ?? string.Empty,
+                    AgentKind = request.Static?.AgentKind ?? string.Empty,
                     PreferredActorId = request.Static?.PreferredActorId ?? string.Empty,
                     Endpoints = { (request.Static?.Endpoints ?? []).Select(ToEndpointDescriptor) },
                 };
@@ -361,7 +364,7 @@ public static partial class ServiceEndpoints
         [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
-        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         CancellationToken ct)
     {
         if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
@@ -384,7 +387,7 @@ public static partial class ServiceEndpoints
                 request,
                 identity,
                 catalogReader,
-                artifactStore,
+                revisionCatalogReader,
                 ct);
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException)
@@ -406,14 +409,24 @@ public static partial class ServiceEndpoints
             Payload = payload,
             Caller = ResolveInvocationCaller(identityResolver, request),
         }, ct);
-        return Results.Accepted($"/api/services/{serviceId}", receipt);
+        // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
+        //   Service invoke is accepted for dispatch; the run resource is the status surface for outcome.
+        //   Never point Location at the service definition root because that is not the command/run status.
+        receipt.StatusUrl = BuildServiceRunStatusUrl(identity, receipt);
+        return Results.Accepted(receipt.StatusUrl, receipt);
     }
+
+    private static string BuildServiceRunStatusUrl(ServiceIdentity identity, ServiceInvocationAcceptedReceipt receipt) =>
+        $"/api/scopes/{Uri.EscapeDataString(identity.TenantId)}/services/{Uri.EscapeDataString(identity.ServiceId)}/runs/{Uri.EscapeDataString(ResolveAcceptedRunId(receipt))}";
+
+    private static string ResolveAcceptedRunId(ServiceInvocationAcceptedReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.RunId) ? receipt.CommandId : receipt.RunId;
 
     private static async Task<(Any Payload, string RevisionId)> ResolveInvocationPayloadAsync(
         InvokeServiceHttpRequest request,
         ServiceIdentity identity,
         IServiceCatalogQueryReader catalogReader,
-        IServiceRevisionArtifactStore artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
         CancellationToken ct)
     {
         var typeUrl = request.PayloadTypeUrl ?? string.Empty;
@@ -437,8 +450,8 @@ public static partial class ServiceEndpoints
             }
 
             var packed = await ServiceJsonPayloads.PackJsonAsync(
-                artifactStore,
-                ServiceKeys.Build(identity),
+                revisionCatalogReader,
+                identity,
                 revisionId,
                 typeUrl,
                 request.PayloadJson!,
@@ -564,7 +577,8 @@ public static partial class ServiceEndpoints
     public sealed record StaticRevisionHttpRequest(
         string ActorTypeName,
         string? PreferredActorId,
-        IReadOnlyList<ServiceEndpointHttpRequest> Endpoints);
+        IReadOnlyList<ServiceEndpointHttpRequest> Endpoints,
+        string? AgentKind = null);
 
     public sealed record ScriptingRevisionHttpRequest(
         string ScriptId,

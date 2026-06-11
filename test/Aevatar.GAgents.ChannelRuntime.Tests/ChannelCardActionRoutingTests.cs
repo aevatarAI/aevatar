@@ -3,13 +3,14 @@ using Aevatar.GAgents.NyxidChat;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Xunit;
+using Aevatar.GAgents.Channel.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelCardActionRoutingTests
 {
     [Fact]
-    public void TryBuildWorkflowResumeCommand_should_build_command_for_complete_card_action()
+    public void TryBuildWorkflowResumeCommand_should_build_command_for_typed_card_action()
     {
         var inbound = new InboundMessage
         {
@@ -20,13 +21,16 @@ public sealed class ChannelCardActionRoutingTests
             Text = "{}",
             MessageId = "evt_card_1",
             ChatType = "card_action",
-            Extra = new Dictionary<string, string>
+            CardAction = new CardActionSubmission
             {
-                ["actor_id"] = "run-actor-1",
-                ["run_id"] = "run-1",
-                ["step_id"] = "approval-1",
-                ["approved"] = "false",
-                ["user_input"] = "need edits",
+                WorkflowResume = new WorkflowResumeActionPayload
+                {
+                    ActorId = "run-actor-1",
+                    RunId = "run-1",
+                    StepId = "approval-1",
+                    Approved = false,
+                    UserInput = "need edits",
+                },
             },
         };
 
@@ -48,6 +52,42 @@ public sealed class ChannelCardActionRoutingTests
     }
 
     [Fact]
+    public void TryBuildWorkflowResumeCommand_should_keep_deprecated_literal_key_fallback()
+    {
+        var inbound = new InboundMessage
+        {
+            Platform = "lark",
+            ConversationId = "oc_chat_1",
+            SenderId = "ou_user_1",
+            SenderName = string.Empty,
+            Text = "{}",
+            MessageId = "evt_card_legacy_1",
+            ChatType = "card_action",
+            Extra = new Dictionary<string, string>
+            {
+                ["actor_id"] = "run-actor-1",
+                ["run_id"] = "run-1",
+                ["step_id"] = "approval-1",
+                ["approved"] = "false",
+                ["user_input"] = "need edits",
+            },
+        };
+
+        var matched = ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var command);
+
+        matched.Should().BeTrue();
+        command.Should().NotBeNull();
+        command!.ActorId.Should().Be("run-actor-1");
+        command.RunId.Should().Be("run-1");
+        command.StepId.Should().Be("approval-1");
+        command.CommandId.Should().Be("evt_card_legacy_1");
+        command.Approved.Should().BeFalse();
+        command.UserInput.Should().Be("need edits");
+        command.EditedContent.Should().BeNull();
+        command.Feedback.Should().Be("need edits");
+    }
+
+    [Fact]
     public void TryBuildWorkflowResumeCommand_should_prefer_edited_content_when_approved()
     {
         var inbound = new InboundMessage
@@ -59,14 +99,17 @@ public sealed class ChannelCardActionRoutingTests
             Text = "{}",
             MessageId = "evt_card_approved_1",
             ChatType = "card_action",
-            Extra = new Dictionary<string, string>
+            CardAction = new CardActionSubmission
             {
-                ["actor_id"] = "run-actor-1",
-                ["run_id"] = "run-1",
-                ["step_id"] = "approval-1",
-                ["approved"] = "true",
-                ["edited_content"] = "Rewritten final draft",
-                ["user_input"] = "minor note",
+                WorkflowResume = new WorkflowResumeActionPayload
+                {
+                    ActorId = "run-actor-1",
+                    RunId = "run-1",
+                    StepId = "approval-1",
+                    Approved = true,
+                    EditedContent = "Rewritten final draft",
+                    UserInput = "minor note",
+                },
             },
         };
 
@@ -92,14 +135,17 @@ public sealed class ChannelCardActionRoutingTests
             Text = "{}",
             MessageId = "evt_card_rejected_1",
             ChatType = "card_action",
-            Extra = new Dictionary<string, string>
+            CardAction = new CardActionSubmission
             {
-                ["actor_id"] = "run-actor-1",
-                ["run_id"] = "run-1",
-                ["step_id"] = "approval-1",
-                ["approved"] = "false",
-                ["edited_content"] = "Edited but not accepted",
-                ["user_input"] = "Need stronger hook",
+                WorkflowResume = new WorkflowResumeActionPayload
+                {
+                    ActorId = "run-actor-1",
+                    RunId = "run-1",
+                    StepId = "approval-1",
+                    Approved = false,
+                    EditedContent = "Edited but not accepted",
+                    UserInput = "Need stronger hook",
+                },
             },
         };
 

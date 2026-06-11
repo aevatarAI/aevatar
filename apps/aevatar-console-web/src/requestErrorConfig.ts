@@ -1,6 +1,6 @@
 ﻿import { message, notification } from 'antd';
 
-// 错误处理方案： 错误类型
+// Error display policy.
 enum ErrorShowType {
   SILENT = 0,
   WARN_MESSAGE = 1,
@@ -8,7 +8,7 @@ enum ErrorShowType {
   NOTIFICATION = 3,
   REDIRECT = 9,
 }
-// 与后端约定的响应数据格式
+// Backend response envelope.
 interface ResponseStructure {
   success: boolean;
   data: unknown;
@@ -33,27 +33,27 @@ type RequestLikeError = Error & {
 };
 
 /**
- * @name 错误处理
- * pro 自带的错误处理， 可以在这里做自己的改动
- * @doc https://umijs.org/docs/max/request#配置
+ * @name error handling
+ * Request error handling hook used by the Umi request plugin.
+ * @doc https://umijs.org/docs/max/request#config
  */
 export const errorConfig = {
-  // 错误处理： umi@3 的错误处理方案。
+  // Umi request error handling.
   errorConfig: {
-    // 错误抛出
+    // Throw business errors from the backend envelope.
     errorThrower: (res: ResponseStructure) => {
       const { success, data, errorCode, errorMessage, showType } = res;
       if (!success) {
         const error = new Error(errorMessage) as RequestLikeError;
         error.name = 'BizError';
         error.info = { errorCode, errorMessage, showType, data };
-        throw error; // 抛出自制的错误
+        throw error;
       }
     },
-    // 错误接收及处理
+    // Receive and render errors.
     errorHandler: (error: RequestLikeError, opts: RequestErrorOptions) => {
       if (opts?.skipErrorHandler) throw error;
-      // 我们的 errorThrower 抛出的错误。
+      // Errors thrown by errorThrower above.
       if (error.name === 'BizError') {
         const errorInfo = error.info;
         if (errorInfo) {
@@ -82,16 +82,13 @@ export const errorConfig = {
           }
         }
       } else if (error.response) {
-        // Axios 的错误
-        // 请求成功发出且服务器也响应了状态码，但状态代码超出了 2xx 的范围
+        // Axios received a non-2xx response.
         message.error(`Response status:${error.response.status}`);
       } else if (error.request) {
-        // 请求已经成功发起，但没有收到响应
-        // \`error.request\` 在浏览器中是 XMLHttpRequest 的实例，
-        // 而在node.js中是 http.ClientRequest 的实例
+        // Request was sent but no response was received.
         message.error('None response! Please retry.');
       } else {
-        // 发送请求时出了点问题
+        // Request setup failed.
         message.error('Request error, please retry.');
       }
     },

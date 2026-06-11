@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.Lark.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
@@ -20,10 +21,10 @@ public class LarkToolsTests
             SendResponse = """{"code":0,"data":{"message_id":"om_123","chat_id":"oc_456","create_time":"1730000000"}}""",
         };
         var tool = new LarkMessagesSendTool(client);
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        });
 
         try
         {
@@ -34,13 +35,84 @@ public class LarkToolsTests
             document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
             document.RootElement.GetProperty("message_id").GetString().Should().Be("om_123");
             document.RootElement.GetProperty("target_type").GetString().Should().Be("chat_id");
+            client.LastSendToken.Should().Be("token-123");
             client.LastSendRequest.Should().NotBeNull();
             client.LastSendRequest!.MessageType.Should().Be("text");
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
+    }
+
+    [Fact]
+    public async Task LarkMessagesSendTool_PropagatesTypedCallerScope()
+    {
+        var client = new StubLarkNyxClient
+        {
+            SendResponse = """{"code":0,"data":{"message_id":"om_123"}}""",
+        };
+        var tool = new LarkMessagesSendTool(client);
+        using var _ = new AgentToolRequestContextScope(new AgentToolExecutionContext(
+            AgentToolRequestIdentity.Empty,
+            new AgentToolCredentials("caller-token", null, null),
+            AgentToolCallerContext.Empty,
+            AgentToolChannelContext.Empty,
+            AgentToolSenderBindingContext.Empty,
+            LLMRequestRoutingContext.Empty,
+            AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal)));
+
+        var result = await tool.ExecuteAsync(
+            """{"target_type":"chat_id","target_id":"oc_456","message_type":"text","text":"Hello from caller scope"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        client.LastSendToken.Should().Be("caller-token");
+        client.LastSendRequest.Should().NotBeNull();
+        client.LastSendRequest!.TargetId.Should().Be("oc_456");
+    }
+
+    [Fact]
+    public async Task LarkMessagesSendTool_DoesNotLetPayloadOrExternalMetadataOverrideCallerScope()
+    {
+        var client = new StubLarkNyxClient
+        {
+            SendResponse = """{"code":0,"data":{"message_id":"om_123"}}""",
+        };
+        var tool = new LarkMessagesSendTool(client);
+        using var _ = new AgentToolRequestContextScope(new AgentToolExecutionContext(
+            AgentToolRequestIdentity.Empty,
+            new AgentToolCredentials("trusted-caller-token", null, null),
+            AgentToolCallerContext.Empty,
+            AgentToolChannelContext.Empty,
+            AgentToolSenderBindingContext.Empty,
+            LLMRequestRoutingContext.Empty,
+            AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "external-metadata-token",
+            }));
+
+        var result = await tool.ExecuteAsync(
+            """
+            {
+              "target_type": "chat_id",
+              "target_id": "oc_456",
+              "message_type": "text",
+              "text": "Hello from caller scope",
+              "nyx_id_access_token": "payload-token",
+              "headers": {
+                "x-nyxid-access-token": "payload-header-token"
+              }
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        client.LastSendToken.Should().Be("trusted-caller-token");
     }
 
     [Fact]
@@ -95,7 +167,10 @@ public class LarkToolsTests
     }
 
     [Fact]
-    public async Task LarkMessagesReplyTool_ShouldDefaultToCurrentMessage_AndReplyInThread()
+    // Refactor (issue1378/first-slice):
+    //   Old pattern: ResolveOrCurrent hid missing message_id by replying to the current message.
+    //   New principle: reply tests require structured error and explicit external message_id.
+    public async Task LarkMessagesReplyTool_ShouldRejectMissingMessageId_AndKeepExplicitExternalReply()
     {
         var client = new StubLarkNyxClient
         {
@@ -110,15 +185,25 @@ public class LarkToolsTests
                 ["channel.platform_message_id"] = "om_current_2",
             });
 
-        var result = await tool.ExecuteAsync("""{"text":"收到，我继续看一下","reply_in_thread":true}""");
+        var missingResult = await tool.ExecuteAsync("""{"text":"收到，我继续看一下","reply_in_thread":true}""");
+        using (var missingDocument = JsonDocument.Parse(missingResult))
+        {
+            missingDocument.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+            missingDocument.RootElement.GetProperty("code").GetString().Should().Be("missing_message_id");
+            missingDocument.RootElement.GetProperty("error").GetString().Should().Be("message_id is required");
+            missingDocument.RootElement.GetProperty("recommended_action").GetString().Should().Be("final_answer");
+        }
+
+        client.LastReplyRequest.Should().BeNull();
+
+        var result = await tool.ExecuteAsync("""{"message_id":"om_external_2","text":"收到，我继续看一下","reply_in_thread":true}""");
 
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
         document.RootElement.GetProperty("message_id").GetString().Should().Be("om_reply_1");
         document.RootElement.GetProperty("reply_in_thread").GetBoolean().Should().BeTrue();
-        document.RootElement.GetProperty("used_current_message").GetBoolean().Should().BeTrue();
         client.LastReplyRequest.Should().NotBeNull();
-        client.LastReplyRequest!.MessageId.Should().Be("om_current_2");
+        client.LastReplyRequest!.MessageId.Should().Be("om_external_2");
         client.LastReplyRequest.ReplyInThread.Should().BeTrue();
         client.LastReplyRequest.MessageType.Should().Be("text");
     }
@@ -163,7 +248,10 @@ public class LarkToolsTests
     }
 
     [Fact]
-    public async Task LarkMessagesReactTool_ShouldDefaultToCurrentMessage_AndOkEmoji()
+    // Refactor (issue1378/first-slice):
+    //   Old pattern: ResolveOrCurrent hid missing message_id by reacting to the current message.
+    //   New principle: reaction tests require structured error and explicit external message_id.
+    public async Task LarkMessagesReactTool_ShouldRejectMissingMessageId_AndKeepExplicitExternalReaction()
     {
         var client = new StubLarkNyxClient
         {
@@ -194,16 +282,26 @@ public class LarkToolsTests
                 ["channel.message_id"] = "om_current_1",
             });
 
-        var result = await tool.ExecuteAsync("""{}""");
+        var missingResult = await tool.ExecuteAsync("""{}""");
+        using (var missingDocument = JsonDocument.Parse(missingResult))
+        {
+            missingDocument.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+            missingDocument.RootElement.GetProperty("code").GetString().Should().Be("missing_message_id");
+            missingDocument.RootElement.GetProperty("error").GetString().Should().Be("message_id is required");
+            missingDocument.RootElement.GetProperty("recommended_action").GetString().Should().Be("final_answer");
+        }
+
+        client.LastReactionRequest.Should().BeNull();
+
+        var result = await tool.ExecuteAsync("""{"message_id":"om_external_1"}""");
 
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
-        document.RootElement.GetProperty("message_id").GetString().Should().Be("om_current_1");
+        document.RootElement.GetProperty("message_id").GetString().Should().Be("om_external_1");
         document.RootElement.GetProperty("emoji_type").GetString().Should().Be("OK");
         document.RootElement.GetProperty("reaction_id").GetString().Should().Be("reaction_123");
-        document.RootElement.GetProperty("used_current_message").GetBoolean().Should().BeTrue();
         client.LastReactionRequest.Should().NotBeNull();
-        client.LastReactionRequest!.MessageId.Should().Be("om_current_1");
+        client.LastReactionRequest!.MessageId.Should().Be("om_external_1");
         client.LastReactionRequest.EmojiType.Should().Be("OK");
     }
 
@@ -233,7 +331,7 @@ public class LarkToolsTests
                    }))
         {
             (await tool.ExecuteAsync("""{}"""))
-                .Should().Contain("Current turn metadata did not expose a Lark platform message_id");
+                .Should().Contain("message_id is required");
         }
 
         var errorTool = new LarkMessagesReactTool(new StubLarkNyxClient
@@ -597,10 +695,10 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkChatsLookupTool(client);
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        });
 
         try
         {
@@ -614,7 +712,7 @@ public class LarkToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -691,10 +789,10 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkSheetsAppendRowsTool(client);
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        });
 
         try
         {
@@ -710,7 +808,7 @@ public class LarkToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -796,10 +894,10 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkApprovalsListTool(client);
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        });
 
         try
         {
@@ -816,7 +914,7 @@ public class LarkToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -901,19 +999,13 @@ public class LarkToolsTests
     public async Task LarkApprovalsActTool_ValidatesTransferTarget()
     {
         var tool = new LarkApprovalsActTool(new StubLarkNyxClient());
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
-
-        try
+            ["channel.lark.operator_user_id"] = "lark-user-1",
+        }))
         {
             var result = await tool.ExecuteAsync("""{"action":"transfer","instance_code":"inst_1","task_id":"task_1"}""");
             result.Should().Contain("transfer_user_id is required");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
         }
     }
 
@@ -925,12 +1017,10 @@ public class LarkToolsTests
             ApprovalActionResponse = """{"code":0,"data":{}}""",
         };
         var tool = new LarkApprovalsActTool(client);
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
-
-        try
+            ["channel.lark.operator_user_id"] = "lark-user-1",
+        }))
         {
             var result = await tool.ExecuteAsync(
                 """{"action":"approve","instance_code":"inst_1","task_id":"task_1","comment":"LGTM","form_json":"[{\"id\":\"field_1\",\"type\":\"input\",\"value\":\"ok\"}]"}""");
@@ -939,12 +1029,87 @@ public class LarkToolsTests
             document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
             client.LastApprovalActionRequest.Should().NotBeNull();
             client.LastApprovalActionRequest!.Action.Should().Be("approve");
+            client.LastApprovalActionRequest.UserId.Should().Be("lark-user-1");
             client.LastApprovalActionRequest.FormJson.Should().Contain("\"field_1\"");
         }
-        finally
+    }
+
+    [Fact]
+    public async Task LarkApprovalsActTool_UsesLarkOperatorUserIdFromTurnMetadataOverToolArgument()
+    {
+        var client = new StubLarkNyxClient
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            ApprovalActionResponse = """{"code":0,"data":{}}""",
+        };
+        var tool = new LarkApprovalsActTool(client);
+
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.lark.operator_user_id"] = "lark-user-1",
+            ["channel.lark.operator_open_id"] = "ou_4159cd4d1af9b836b0fb2dc05ef52efe",
+        }))
+        {
+            var result = await tool.ExecuteAsync(
+                """{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id":"ou_4159cd4d1af9b836b0fb2dc05ef52efe","comment":"LGTM"}""");
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+            client.LastApprovalActionRequest.Should().NotBeNull();
+            client.LastApprovalActionRequest!.UserId.Should().Be("lark-user-1");
+            client.LastApprovalActionRequest.UserId.Should().NotBe("ou_4159cd4d1af9b836b0fb2dc05ef52efe");
         }
+    }
+
+    [Fact]
+    public async Task LarkApprovalsActTool_UsesLarkOperatorUserIdFromProductionToolLoopMetadataBridge()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ApprovalActionResponse = """{"code":0,"data":{}}""",
+        };
+        var tools = new ToolManager();
+        tools.Register(new LarkApprovalsActTool(client));
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-lark-approval",
+                        Name = "lark_approvals_act",
+                        ArgumentsJson = """{"action":"approve","instance_code":"inst_1","task_id":"task_1","comment":"LGTM"}""",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var request = new LLMRequest
+        {
+            Messages = [],
+            RequestId = "session-lark-approval",
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["channel.lark.operator_user_id"] = "lark-user-1",
+                ["channel.lark.operator_open_id"] = "ou_operator_1",
+            },
+            ToolContext = AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials("token-123", null, null),
+            },
+        };
+
+        await new ToolCallLoop(tools).ExecuteAsync(
+            provider,
+            [ChatMessage.User("approve the task")],
+            request,
+            maxRounds: 2,
+            CancellationToken.None);
+
+        client.LastApprovalActionRequest.Should().NotBeNull();
+        client.LastApprovalActionRequest!.UserId.Should().Be("lark-user-1");
+        client.LastApprovalActionRequest.UserId.Should().NotBe("ou_operator_1");
     }
 
     [Fact]
@@ -966,13 +1131,15 @@ public class LarkToolsTests
                 .Should().Contain("instance_code is required");
             (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1"}"""))
                 .Should().Contain("task_id is required");
+            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1"}"""))
+                .Should().Contain("user_id is required");
             (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id_type":"email"}"""))
                 .Should().Contain("user_id_type must be one of");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","transfer_user_id":"ou_1"}"""))
+            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","transfer_user_id":"ou_1"}"""))
                 .Should().Contain("transfer_user_id is only allowed when action=transfer");
-            (await tool.ExecuteAsync("""{"action":"reject","instance_code":"inst_1","task_id":"task_1","form_json":"{}"}"""))
+            (await tool.ExecuteAsync("""{"action":"reject","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","form_json":"{}"}"""))
                 .Should().Contain("form_json is only supported when action=approve");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","form_json":"{bad json}"}"""))
+            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","form_json":"{bad json}"}"""))
                 .Should().Contain("form_json is not valid JSON");
         }
 
@@ -983,7 +1150,7 @@ public class LarkToolsTests
         using (new AgentToolRequestMetadataScope("token-123"))
         {
             var result = await errorTool.ExecuteAsync(
-                """{"action":"reject","instance_code":"inst_1","task_id":"task_1","comment":"nope"}""");
+                """{"action":"reject","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","comment":"nope"}""");
 
             result.Should().Contain("nyx_proxy_error status=409");
             result.Should().Contain("\"action\":\"reject\"");
@@ -1293,12 +1460,13 @@ public class LarkToolsTests
 
         await client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("transfer", "inst_1", "task_1", "reassign", null, "ou_target", "open_id"),
+            new LarkApprovalTaskActionRequest("transfer", "inst_1", "task_1", "lark-user-1", "reassign", null, "ou_target", "open_id"),
             CancellationToken.None);
 
         handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.RequestUri!.ToString()
             .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/forward?user_id_type=open_id");
+        handler.LastBody.Should().Contain("\"user_id\":\"lark-user-1\"");
         handler.LastBody.Should().Contain("\"transfer_user_id\":\"ou_target\"");
     }
 
@@ -1328,6 +1496,7 @@ public class LarkToolsTests
         public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
         public string ApprovalActionResponse { get; set; } = """{"code":0,"data":{}}""";
 
+        public string? LastSendToken { get; private set; }
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
         public LarkReplyMessageRequest? LastReplyRequest { get; private set; }
         public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
@@ -1342,6 +1511,7 @@ public class LarkToolsTests
 
         public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct)
         {
+            LastSendToken = token;
             LastSendRequest = request;
             return Task.FromResult(SendResponse);
         }
@@ -1407,6 +1577,43 @@ public class LarkToolsTests
         }
     }
 
+    private sealed class QueueLLMProvider : ILLMProvider
+    {
+        private readonly Queue<LLMResponse> _responses;
+
+        public QueueLLMProvider(IEnumerable<LLMResponse> responses)
+        {
+            _responses = new Queue<LLMResponse>(responses);
+        }
+
+        public string Name => "queue";
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var response = _responses.Count > 0 ? _responses.Dequeue() : new LLMResponse();
+
+            if (!string.IsNullOrEmpty(response.Content))
+                yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+            if (response.ToolCalls is { Count: > 0 })
+            {
+                foreach (var toolCall in response.ToolCalls)
+                    yield return new LLMStreamChunk { DeltaToolCall = toolCall };
+            }
+
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = response.Usage,
+                FinishReason = response.FinishReason,
+            };
+            await Task.CompletedTask;
+        }
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
@@ -1429,18 +1636,34 @@ public class LarkToolsTests
         }
     }
 
+    private sealed class AgentToolRequestContextScope : IDisposable
+    {
+        private readonly AgentToolExecutionContext? _previous;
+
+        public AgentToolRequestContextScope(AgentToolExecutionContext context)
+        {
+            _previous = AgentToolRequestContext.Current;
+            AgentToolRequestContext.Current = context;
+        }
+
+        public void Dispose()
+        {
+            AgentToolRequestContext.Current = _previous;
+        }
+    }
+
     private sealed class AgentToolRequestMetadataScope : IDisposable
     {
-        private readonly IReadOnlyDictionary<string, string>? _previous;
+        private readonly AgentToolExecutionContext? _previous;
 
         public AgentToolRequestMetadataScope(
             string? accessToken = null,
             IReadOnlyDictionary<string, string>? extraMetadata = null)
         {
-            _previous = AgentToolRequestContext.CurrentMetadata;
+            _previous = AgentToolRequestContext.Current;
             if (string.IsNullOrWhiteSpace(accessToken) && (extraMetadata == null || extraMetadata.Count == 0))
             {
-                AgentToolRequestContext.CurrentMetadata = null;
+                AgentToolRequestContext.Current = null;
                 return;
             }
 
@@ -1453,12 +1676,12 @@ public class LarkToolsTests
                     metadata[entry.Key] = entry.Value;
             }
 
-            AgentToolRequestContext.CurrentMetadata = metadata;
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
         }
 
         public void Dispose()
         {
-            AgentToolRequestContext.CurrentMetadata = _previous;
+            AgentToolRequestContext.Current = _previous;
         }
     }
 }

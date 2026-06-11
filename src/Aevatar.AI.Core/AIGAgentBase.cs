@@ -18,6 +18,9 @@ namespace Aevatar.AI.Core;
 /// <summary>AI Agent 配置。Provider、Model、Prompt、历史与 Tool 轮数等。</summary>
 public sealed class AIAgentConfig
 {
+    // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+    //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+    //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
     /// <summary>LLM Provider 名称。</summary>
     public string ProviderName { get; set; } = string.Empty;
 
@@ -38,9 +41,6 @@ public sealed class AIAgentConfig
 
     /// <summary>历史消息上限。</summary>
     public int MaxHistoryMessages { get; set; } = 100;
-
-    /// <summary>流式输出缓冲区容量（用于背压控制）。</summary>
-    public int StreamBufferCapacity { get; set; } = 256;
 
     /// <summary>Prompt token 预算上限。0 = 禁用上下文压缩（默认）。</summary>
     public int MaxPromptTokenBudget { get; set; } = 0;
@@ -116,6 +116,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
     protected sealed class AIAgentConfigStateOverrides
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+        //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
         public bool HasProviderName { get; init; }
         public string? ProviderName { get; init; }
 
@@ -136,9 +139,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
         public bool HasMaxHistoryMessages { get; init; }
         public int? MaxHistoryMessages { get; init; }
-
-        public bool HasStreamBufferCapacity { get; init; }
-        public int? StreamBufferCapacity { get; init; }
 
         public bool HasMaxPromptTokenBudget { get; init; }
         public int? MaxPromptTokenBudget { get; init; }
@@ -183,9 +183,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         if (overrides.HasMaxHistoryMessages && (overrides.MaxHistoryMessages ?? 0) > 0)
             merged.MaxHistoryMessages = overrides.MaxHistoryMessages!.Value;
 
-        if (overrides.HasStreamBufferCapacity && (overrides.StreamBufferCapacity ?? 0) > 0)
-            merged.StreamBufferCapacity = overrides.StreamBufferCapacity!.Value;
-
         if (overrides.HasMaxPromptTokenBudget)
             merged.MaxPromptTokenBudget = Math.Max(0, overrides.MaxPromptTokenBudget ?? 0);
 
@@ -199,39 +196,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         return merged;
     }
 
-    // ─── Chat 快捷方法 ───
-
-    /// <summary>单轮 Chat（含 Tool Calling 循环）。</summary>
-    protected Task<string?> ChatAsync(string userMessage, CancellationToken ct = default)
-    {
-        EnsureRuntime();
-        return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, ct);
-    }
-
-    /// <summary>单轮 Chat（含 Tool Calling 循环），显式传入稳定 request id 和 metadata。</summary>
-    protected Task<string?> ChatAsync(
-        string userMessage,
-        string? requestId,
-        IReadOnlyDictionary<string, string>? metadata = null,
-        CancellationToken ct = default)
-    {
-        EnsureRuntime();
-        var maxRounds = ResolveMaxToolRounds(metadata);
-        return _chat!.ChatAsync([ContentPart.TextPart(userMessage)], maxRounds, requestId, metadata, ct);
-    }
-
-    /// <summary>单轮 Chat（多模态内容），显式传入稳定 request id 和 metadata。</summary>
-    protected Task<string?> ChatAsync(
-        IReadOnlyList<ContentPart> userContent,
-        string? requestId,
-        IReadOnlyDictionary<string, string>? metadata = null,
-        CancellationToken ct = default)
-    {
-        EnsureRuntime();
-        var maxRounds = ResolveMaxToolRounds(metadata);
-        return _chat!.ChatAsync(userContent, maxRounds, requestId, metadata, ct);
-    }
-
+    // Refactor (iter15/cluster-024):
+    //   Old pattern: protected ChatAsync helpers let GAgents call the non-streaming executor as a formal conversation path.
+    //   New principle: GAgent subclasses use ChatStreamAsync; explicit offline aggregation is local to the caller that needs text.
     /// <summary>流式 Chat。</summary>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
@@ -261,6 +228,33 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         EnsureRuntime();
         var maxRounds = ResolveMaxToolRounds(metadata);
         return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, metadata, ct);
+    }
+
+    protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        string? requestId,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        var maxRounds = llmControl?.MaxToolRoundsOverride
+                        ?? toolContext?.Routing.MaxToolRoundsOverride
+                        ?? EffectiveConfig.MaxToolRounds;
+        return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, llmControl, toolContext, metadata, ct);
+    }
+
+    protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        string? requestId,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        var maxRounds = toolContext?.Routing.MaxToolRoundsOverride ?? ResolveMaxToolRounds(metadata);
+        return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, toolContext, metadata, ct);
     }
 
     /// <summary>
@@ -308,9 +302,10 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         }
 
         // 构建 Tool Call Middleware 链（审批中间件在最前面，不可绕过）
-        var effectiveToolMiddlewares = new List<IToolCallMiddleware>();
-        if (_approvalHandler != null)
-            effectiveToolMiddlewares.Add(new Middleware.ToolApprovalMiddleware(_approvalHandler, _hooks));
+        var effectiveToolMiddlewares = new List<IToolCallMiddleware>(_toolMiddlewares.Count + 1)
+        {
+            new Middleware.ToolApprovalMiddleware(_approvalHandler ?? Middleware.MissingApprovalHandler.Instance, _hooks),
+        };
         effectiveToolMiddlewares.AddRange(_toolMiddlewares);
 
         // 构建 Chat Runtime
@@ -329,7 +324,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             llmMiddlewares: _llmMiddlewares,
             agentId: Id,
             agentName: GetType().Name,
-            streamBufferCapacity: EffectiveConfig.StreamBufferCapacity,
             compressionConfig: compressionConfig);
     }
 
@@ -445,7 +439,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         MaxTokens = source.MaxTokens,
         MaxToolRounds = source.MaxToolRounds,
         MaxHistoryMessages = source.MaxHistoryMessages,
-        StreamBufferCapacity = source.StreamBufferCapacity,
         MaxPromptTokenBudget = source.MaxPromptTokenBudget,
         CompressionThreshold = source.CompressionThreshold,
         EnableSummarization = source.EnableSummarization,
@@ -460,8 +453,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             config.MaxToolRounds = 40;
         if (config.MaxHistoryMessages <= 0)
             config.MaxHistoryMessages = 100;
-        if (config.StreamBufferCapacity <= 0)
-            config.StreamBufferCapacity = 256;
         if (config.MaxPromptTokenBudget < 0)
             config.MaxPromptTokenBudget = 0;
         config.CompressionThreshold = Math.Clamp(config.CompressionThreshold, 0.5, 0.99);

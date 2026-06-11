@@ -14,24 +14,25 @@ internal sealed class ActorBackedGAgentRegistryPorts :
     IScopeResourceAdmissionPort
 {
     private const string WriteActorIdPrefix = "gagent-registry-";
+    private const string PublisherId = "aevatar.studio.infrastructure.gagent-registry";
 
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorRuntime _actorRuntime;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioActorCommandDispatch _commandDispatch;
     private readonly IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedGAgentRegistryPorts> _logger;
 
     public ActorBackedGAgentRegistryPorts(
         IStudioActorBootstrap bootstrap,
         IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
+        StudioActorCommandDispatch commandDispatch,
         IAppScopeResolver scopeResolver,
         IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedGAgentRegistryPorts> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
         _ = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -43,11 +44,11 @@ internal sealed class ActorBackedGAgentRegistryPorts :
     {
         var normalized = NormalizeRegistration(registration);
         var actor = await EnsureWriteActorAsync(normalized.ScopeId, cancellationToken);
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ActorRegisteredEvent
+        await _commandDispatch.DispatchAsync(actor, new ActorRegisteredEvent
         {
             GagentType = normalized.GAgentType,
             ActorId = normalized.ActorId,
-        }, cancellationToken);
+        }, PublisherId, cancellationToken);
         var stage = await VerifyAdmissionVisibleAsync(actor, normalized, cancellationToken)
             ? GAgentActorRegistryCommandStage.AdmissionVisible
             : GAgentActorRegistryCommandStage.AcceptedForDispatch;
@@ -62,11 +63,11 @@ internal sealed class ActorBackedGAgentRegistryPorts :
     {
         var normalized = NormalizeRegistration(registration);
         var actor = await EnsureWriteActorAsync(normalized.ScopeId, cancellationToken);
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ActorUnregisteredEvent
+        await _commandDispatch.DispatchAsync(actor, new ActorUnregisteredEvent
         {
             GagentType = normalized.GAgentType,
             ActorId = normalized.ActorId,
-        }, cancellationToken);
+        }, PublisherId, cancellationToken);
         return new GAgentActorRegistryCommandReceipt(
             normalized,
             GAgentActorRegistryCommandStage.AdmissionRemoved);
@@ -108,13 +109,13 @@ internal sealed class ActorBackedGAgentRegistryPorts :
             if (actor is null)
                 return ScopeResourceAdmissionResult.NotFound();
 
-            await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ScopeResourceAdmissionRequested
+            await _commandDispatch.DispatchAsync(actor, new ScopeResourceAdmissionRequested
             {
                 ScopeId = normalized.ScopeId,
                 GagentType = normalized.GAgentType,
                 ActorId = normalized.ActorId,
                 Operation = ToRegistryOperation(normalized.Operation),
-            }, cancellationToken);
+            }, PublisherId, cancellationToken);
             return ScopeResourceAdmissionResult.Allowed();
         }
         catch (GAgentRegistryAdmissionNotFoundException)
@@ -176,13 +177,13 @@ internal sealed class ActorBackedGAgentRegistryPorts :
     {
         try
         {
-            await ActorCommandDispatcher.SendAsync(_dispatchPort, registryActor, new ScopeResourceAdmissionRequested
+            await _commandDispatch.DispatchAsync(registryActor, new ScopeResourceAdmissionRequested
             {
                 ScopeId = registration.ScopeId,
                 GagentType = registration.GAgentType,
                 ActorId = registration.ActorId,
                 Operation = GAgentRegistryOperation.Use,
-            }, ct);
+            }, PublisherId, ct);
             return true;
         }
         catch (GAgentRegistryAdmissionNotFoundException)

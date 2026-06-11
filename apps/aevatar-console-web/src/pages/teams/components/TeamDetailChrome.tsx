@@ -1,4 +1,6 @@
-import { Button, Space, Typography, theme } from "antd";
+import { MoreOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { Button, Dropdown, Space, Typography, theme } from "antd";
+import { useIntl } from "@umijs/max";
 import React from "react";
 import type { TeamDetailTab } from "@/shared/navigation/teamRoutes";
 import {
@@ -14,14 +16,18 @@ export type TeamTabOption = {
 };
 
 type TeamActionRailProps = {
-  readonly conversationActionLabel: string;
-  readonly onOpenConversation: () => void;
-  readonly onOpenServiceMapping: () => void;
-  readonly onOpenTeamBuilder: () => void;
-  readonly serviceMappingDisabled?: boolean;
-  readonly serviceMappingHint?: string;
-  readonly serviceMappingActionLabel: string;
-  readonly teamBuilderActionLabel: string;
+  readonly archiveTeamActionLabel?: string;
+  readonly archiveTeamDisabled?: boolean;
+  readonly archiveTeamHint?: string;
+  readonly editTeamDisabled?: boolean;
+  readonly editTeamLabel: string;
+  readonly editTeamHint?: string;
+  readonly onArchiveTeam?: () => void;
+  readonly onOpenTeamEditor: () => void;
+  readonly onOpenTeamTest?: () => void;
+  readonly testTeamDisabled?: boolean;
+  readonly testTeamHint?: string;
+  readonly testTeamLabel?: string;
 };
 
 type TeamTabBarProps = {
@@ -51,54 +57,113 @@ const topActionButtonStyle: React.CSSProperties = {
   paddingInline: 18,
 };
 
-export const TeamDetailEmptyState: React.FC = () => (
-  <AevatarPageShell title="团队详情" content="请先进入一个具体团队，再查看详情。">
-    <AevatarPanel title="未选择团队">
-      <AevatarInspectorEmpty description="当前需要一个明确的 scope 才能渲染团队详情。" />
-    </AevatarPanel>
-  </AevatarPageShell>
-);
+export const TeamDetailEmptyState: React.FC = () => {
+  const intl = useIntl();
+
+  return (
+    <AevatarPageShell
+      title={intl.formatMessage({ id: "teams.detail.empty.title" })}
+      content={intl.formatMessage({ id: "teams.detail.empty.subtitle" })}
+    >
+      <AevatarPanel title={intl.formatMessage({ id: "teams.detail.empty.panel" })}>
+        <AevatarInspectorEmpty
+          description={intl.formatMessage({ id: "teams.detail.empty.description" })}
+        />
+      </AevatarPanel>
+    </AevatarPageShell>
+  );
+};
 
 export const TeamActionRail: React.FC<TeamActionRailProps> = ({
-  conversationActionLabel,
-  onOpenConversation,
-  onOpenServiceMapping,
-  onOpenTeamBuilder,
-  serviceMappingDisabled = false,
-  serviceMappingHint,
-  serviceMappingActionLabel,
-  teamBuilderActionLabel,
-}) => (
-  <Space key="team-detail-actions" wrap>
-    <Button
-      disabled={serviceMappingDisabled}
-      onClick={onOpenServiceMapping}
-      style={topActionButtonStyle}
-      title={serviceMappingDisabled ? serviceMappingHint : undefined}
-      type="primary"
-    >
-      {serviceMappingActionLabel}
-    </Button>
-    <Button onClick={onOpenConversation} style={topActionButtonStyle}>
-      {conversationActionLabel}
-    </Button>
-    <Button onClick={onOpenTeamBuilder} style={topActionButtonStyle}>
-      {teamBuilderActionLabel}
-    </Button>
-  </Space>
-);
+  archiveTeamActionLabel,
+  archiveTeamDisabled = false,
+  archiveTeamHint,
+  editTeamDisabled = false,
+  editTeamLabel,
+  editTeamHint,
+  onArchiveTeam,
+  onOpenTeamEditor,
+  onOpenTeamTest,
+  testTeamDisabled = false,
+  testTeamHint,
+  testTeamLabel,
+}) => {
+  const intl = useIntl();
+  const resolvedTestTeamLabel =
+    testTeamLabel || intl.formatMessage({ id: "teams.detail.actions.test" });
+  const archiveMenuItems =
+    archiveTeamActionLabel && onArchiveTeam
+      ? [
+          {
+            danger: true,
+            disabled: archiveTeamDisabled,
+            key: "archive-team",
+            label: archiveTeamActionLabel,
+          },
+        ]
+      : [];
+
+  return (
+    <Space key="team-detail-actions" wrap>
+      {onOpenTeamTest ? (
+        <Button
+          disabled={testTeamDisabled}
+          icon={<PlayCircleOutlined />}
+          onClick={onOpenTeamTest}
+          style={topActionButtonStyle}
+          title={testTeamDisabled ? testTeamHint : undefined}
+        >
+          {resolvedTestTeamLabel}
+        </Button>
+      ) : null}
+      <Button
+        disabled={editTeamDisabled}
+        onClick={onOpenTeamEditor}
+        style={topActionButtonStyle}
+        title={editTeamDisabled ? editTeamHint : undefined}
+        type="primary"
+      >
+        {editTeamLabel}
+      </Button>
+      {archiveMenuItems.length > 0 ? (
+        <Dropdown
+          menu={{
+            items: archiveMenuItems,
+            onClick: ({ key }) => {
+              if (key === "archive-team" && !archiveTeamDisabled) {
+                onArchiveTeam?.();
+              }
+            },
+          }}
+          trigger={["click"]}
+        >
+          <span title={archiveTeamDisabled ? archiveTeamHint : undefined}>
+            <Button
+              aria-label={intl.formatMessage({ id: "teams.detail.actions.moreAria" })}
+              disabled={archiveTeamDisabled}
+              icon={<MoreOutlined />}
+              style={{ ...topActionButtonStyle, paddingInline: 14 }}
+              title={intl.formatMessage({ id: "teams.detail.actions.more" })}
+            />
+          </span>
+        </Dropdown>
+      ) : null}
+    </Space>
+  );
+};
 
 export const TeamTabBar: React.FC<TeamTabBarProps> = ({
   activeTab,
   onSelectTab,
   tabOptions,
 }) => {
+  const intl = useIntl();
   const { token } = theme.useToken();
 
   return (
     <div
       role="tablist"
-      aria-label="团队详情标签"
+      aria-label={intl.formatMessage({ id: "teams.detail.tabList.label" })}
       style={{
         alignItems: "center",
         background: token.colorBgContainer,
@@ -155,6 +220,7 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
   teamTitle,
   teamsListHref,
 }) => {
+  const intl = useIntl();
   const { token } = theme.useToken();
 
   return (
@@ -182,7 +248,7 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
                 fontWeight: "inherit",
               }}
             >
-              Aevatar
+              {intl.formatMessage({ id: "common.appName" })}
             </Typography.Link>
             {" / "}
             <Typography.Link
@@ -197,9 +263,9 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
                 fontWeight: "inherit",
               }}
             >
-              Teams
+              {intl.formatMessage({ id: "teams.detail.breadcrumb.teams" })}
             </Typography.Link>
-            {` / 团队详情 / ${activeTabLabel}`}
+            {` / ${intl.formatMessage({ id: "teams.detail.breadcrumb.detail" })} / ${activeTabLabel}`}
           </Typography.Text>
           <div
             style={{
@@ -250,7 +316,9 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
         />
         {children}
         {initialLoading ? (
-          <Typography.Text type="secondary">正在加载团队详情...</Typography.Text>
+          <Typography.Text type="secondary">
+            {intl.formatMessage({ id: "teams.detail.loading" })}
+          </Typography.Text>
         ) : null}
       </div>
     </AevatarPageShell>

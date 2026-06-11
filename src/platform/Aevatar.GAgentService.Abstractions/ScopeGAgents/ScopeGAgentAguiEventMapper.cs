@@ -1,6 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -29,7 +29,7 @@ public static class ScopeGAgentAguiEventMapper
             var ai = payload.Unpack<AiTextStart>();
             return new AGUIEvent
             {
-                TextMessageStart = new Aevatar.Presentation.AGUI.TextMessageStartEvent
+                TextMessageStart = new Aevatar.AGUI.Contracts.TextMessageStartEvent
                 {
                     MessageId = ai.SessionId,
                     Role = "assistant",
@@ -42,7 +42,7 @@ public static class ScopeGAgentAguiEventMapper
             var ai = payload.Unpack<AiTextContent>();
             return new AGUIEvent
             {
-                TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                TextMessageContent = new Aevatar.AGUI.Contracts.TextMessageContentEvent
                 {
                     MessageId = ai.SessionId,
                     Delta = ai.Delta,
@@ -58,7 +58,7 @@ public static class ScopeGAgentAguiEventMapper
                 Custom = new CustomEvent
                 {
                     Name = "TEXT_MESSAGE_REASONING",
-                    Payload = Any.Pack(new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                    Payload = Any.Pack(new Aevatar.AGUI.Contracts.TextMessageContentEvent
                     {
                         MessageId = ai.SessionId,
                         Delta = ai.Delta,
@@ -70,40 +70,7 @@ public static class ScopeGAgentAguiEventMapper
         if (payload.Is(AiTextEnd.Descriptor))
         {
             var ai = payload.Unpack<AiTextEnd>();
-            if (!string.IsNullOrEmpty(ai.Content))
-            {
-                const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                const string llmFailedPrefix = "LLM request failed:";
-                if (ai.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                {
-                    return new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent
-                        {
-                            Message = ai.Content[llmErrorPrefix.Length..].Trim(),
-                        },
-                    };
-                }
-
-                if (ai.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                {
-                    return new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent
-                        {
-                            Message = ai.Content.Trim(),
-                        },
-                    };
-                }
-            }
-
-            return new AGUIEvent
-            {
-                TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent
-                {
-                    MessageId = ai.SessionId,
-                },
-            };
+            return MapTextCompletion(ai.SessionId, ai.Content);
         }
 
         if (payload.Is(AiToolCall.Descriptor))
@@ -160,6 +127,77 @@ public static class ScopeGAgentAguiEventMapper
             return payload.Unpack<AGUIEvent>();
 
         return null;
+    }
+
+    public static AGUIEvent? TryMapExplicitSessionObservation(EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        // Refactor (iter164/cluster-003-draft-run):
+        //   Old pattern: draft-run projection reused the broad live AI/tool mapper and treated raw frames as AGUI observations.
+        //   New principle: draft-run session projection only treats a wrapped AGUIEvent as an explicit observation contract.
+        var payload = envelope.Payload;
+        if (payload?.Is(AGUIEvent.Descriptor) != true)
+            return null;
+
+        return payload.Unpack<AGUIEvent>();
+    }
+
+    private static AGUIEvent MapTextCompletion(string sessionId, string? content)
+    {
+        if (!string.IsNullOrEmpty(content))
+        {
+            const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
+            const string llmFailedPrefix = "LLM request failed";
+            if (content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
+            {
+                return new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = content[llmErrorPrefix.Length..].Trim(),
+                    },
+                };
+            }
+
+            if (content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
+            {
+                return new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = NormalizeLlmFailureMessage(content),
+                    },
+                };
+            }
+        }
+
+        return new AGUIEvent
+        {
+            TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent
+            {
+                MessageId = sessionId,
+            },
+        };
+    }
+
+    public static string NormalizeLlmFailureMessage(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return "LLM request failed.";
+
+        var trimmed = content.Trim();
+        const string toolAnnotatedPrefix = "LLM request failed [tools=";
+        if (!trimmed.StartsWith(toolAnnotatedPrefix, StringComparison.Ordinal))
+            return trimmed;
+
+        var marker = "]: ";
+        var markerIndex = trimmed.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+            return trimmed;
+
+        var message = trimmed[(markerIndex + marker.Length)..].Trim();
+        return string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message;
     }
 
     public static Struct BuildToolApprovalStruct(Any payload)

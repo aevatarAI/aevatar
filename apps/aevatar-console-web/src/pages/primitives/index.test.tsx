@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { setLocale } from "@umijs/max";
 import React from "react";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
@@ -29,6 +30,14 @@ jest.mock("@/shared/api/runtimeQueryApi", () => ({
 }));
 
 describe("PrimitivesPage", () => {
+  beforeEach(() => {
+    setLocale("zh-CN", false);
+  });
+
+  afterEach(() => {
+    setLocale("en-US", false);
+  });
+
   it("keeps primitive examples inside runtime and scope surfaces", async () => {
     const { container } = renderWithQueryClient(
       React.createElement(PrimitivesPage),
@@ -40,7 +49,7 @@ describe("PrimitivesPage", () => {
         "Primitive definitions are now managed as a runtime library workbench. The main stage stays dedicated to discovery while parameter contracts and example workflows live in the inspector.",
       ),
     ).toBeNull();
-    expect(screen.getAllByRole("button", { name: "Show help" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "显示帮助" }).length).toBeGreaterThan(0);
     expect(container.textContent).toContain("可用连接器");
     expect(container.textContent).toContain("筛选连接器");
     expect(container.textContent).not.toContain("Legacy draft");

@@ -1,6 +1,4 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Queries;
-using Aevatar.Workflow.Application.Orchestration;
+using System.Text;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Application.Tests;
@@ -8,114 +6,162 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowExecutionTopologyResolverTests
 {
     [Fact]
-    public async Task ResolveAsync_ShouldReturnEmpty_WhenRootActorIdBlank()
+    public void WorkflowReportTopologySource_ShouldNotReintroduceRuntimeChildrenSideRead()
     {
-        var runtime = new FakeActorRuntime();
-        var resolver = new ActorRuntimeWorkflowExecutionTopologyResolver(runtime);
-
-        var result = await resolver.ResolveAsync(" ", CancellationToken.None);
-
-        result.Should().BeEmpty();
-        runtime.GetRequests.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ResolveAsync_ShouldReturnEmpty_WhenRootActorMissing()
-    {
-        var resolver = new ActorRuntimeWorkflowExecutionTopologyResolver(new FakeActorRuntime());
-
-        var result = await resolver.ResolveAsync("missing", CancellationToken.None);
-
-        result.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ResolveAsync_ShouldTraverseBreadthFirst_AndDeduplicateCycles()
-    {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["root"] = new FakeActor("root", ["child-1", "child-2"]);
-        runtime.StoredActors["child-1"] = new FakeActor("child-1", ["child-2", "child-3"]);
-        runtime.StoredActors["child-2"] = new FakeActor("child-2", ["root"]);
-        runtime.StoredActors["child-3"] = new FakeActor("child-3", []);
-        var resolver = new ActorRuntimeWorkflowExecutionTopologyResolver(runtime);
-
-        var result = await resolver.ResolveAsync("root", CancellationToken.None);
-
-        result.Should().Equal(
-            new WorkflowTopologyEdge("root", "child-1"),
-            new WorkflowTopologyEdge("root", "child-2"),
-            new WorkflowTopologyEdge("child-1", "child-2"),
-            new WorkflowTopologyEdge("child-1", "child-3"),
-            new WorkflowTopologyEdge("child-2", "root"));
-        runtime.GetRequests.Should().ContainInOrder("root", "root", "child-1", "child-2", "child-3");
-    }
-
-    [Fact]
-    public async Task ResolveAsync_ShouldHonorCancellation()
-    {
-        var resolver = new ActorRuntimeWorkflowExecutionTopologyResolver(new FakeActorRuntime());
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        var act = async () => await resolver.ResolveAsync("root", cts.Token);
-
-        await act.Should().ThrowAsync<OperationCanceledException>();
-    }
-
-    private sealed class FakeActorRuntime : IActorRuntime
-    {
-        public Dictionary<string, IActor> StoredActors { get; } = new(StringComparer.Ordinal);
-        public List<string> GetRequests { get; } = [];
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
-            throw new NotSupportedException();
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) => throw new NotSupportedException();
-
-        public Task<IActor?> GetAsync(string id)
+        var repositoryRoot = ResolveRepositoryRoot();
+        var removedSideReadFiles = new[]
         {
-            GetRequests.Add(id);
-            return Task.FromResult(StoredActors.TryGetValue(id, out var actor) ? actor : null);
+            "src/workflow/Aevatar.Workflow.Application/Orchestration/IWorkflowExecutionTopologyResolver.cs",
+            "src/workflow/Aevatar.Workflow.Application/Orchestration/WorkflowExecutionTopologyResolver.cs",
+        };
+        var productionFiles = new[]
+        {
+            "src/workflow/Aevatar.Workflow.Application/DependencyInjection/ServiceCollectionExtensions.cs",
+            "src/workflow/Aevatar.Workflow.Application.Abstractions/Queries/WorkflowExecutionQueryModels.cs",
+            "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionArtifactMaterializationSupport.cs",
+            "src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModelMapper.cs",
+            "src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunReadModels.Partial.cs",
+        };
+        var forbiddenLiveCodeTokens = new[]
+        {
+            "IWorkflowExecutionTopologyResolver",
+            "ActorRuntimeWorkflowExecutionTopologyResolver",
+            "RuntimeSnapshot",
+            "GetChildrenIdsAsync",
+        };
+
+        foreach (var relativePath in removedSideReadFiles)
+        {
+            File.Exists(Path.Combine(repositoryRoot, relativePath))
+                .Should().BeFalse($"{relativePath} was the runtime topology side-read surface");
         }
 
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(StoredActors.ContainsKey(id));
+        foreach (var relativePath in productionFiles)
+        {
+            var source = File.ReadAllText(Path.Combine(repositoryRoot, relativePath));
+            var sourceWithoutComments = StripCSharpComments(source);
 
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => throw new NotSupportedException();
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => throw new NotSupportedException();
+            foreach (var forbiddenToken in forbiddenLiveCodeTokens)
+            {
+                sourceWithoutComments.Should().NotContain(
+                    forbiddenToken,
+                    $"{relativePath} must keep workflow report topology on committed projection facts");
+            }
+        }
     }
 
-    private sealed class FakeActor(string id, IReadOnlyList<string> children) : IActor
+    private static string ResolveRepositoryRoot()
     {
-        public string Id { get; } = id;
-        public IAgent Agent { get; } = new FakeAgent(id + "-agent");
+        var current = AppContext.BaseDirectory;
+        while (!string.IsNullOrWhiteSpace(current))
+        {
+            if (File.Exists(Path.Combine(current, "aevatar.slnx")))
+                return current;
 
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+            current = Path.GetDirectoryName(current) ?? string.Empty;
+        }
 
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult(children);
+        throw new InvalidOperationException("Could not resolve repository root.");
     }
 
-    private sealed class FakeAgent(string id) : IAgent
+    private static string StripCSharpComments(string source)
     {
-        public string Id { get; } = id;
+        var result = new StringBuilder(source.Length);
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inString = false;
+        var inVerbatimString = false;
+        var inChar = false;
 
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        for (var i = 0; i < source.Length; i++)
+        {
+            var current = source[i];
+            var next = i + 1 < source.Length ? source[i + 1] : '\0';
 
-        public Task<string> GetDescriptionAsync() => Task.FromResult("fake");
+            if (inLineComment)
+            {
+                if (current == '\n')
+                {
+                    inLineComment = false;
+                    result.Append(current);
+                }
 
-        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+                continue;
+            }
 
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+            if (inBlockComment)
+            {
+                if (current == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
 
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+                continue;
+            }
+
+            if (!inString && !inChar && current == '/' && next == '/')
+            {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+
+            if (!inString && !inChar && current == '/' && next == '*')
+            {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            result.Append(current);
+
+            if (inString)
+            {
+                if (inVerbatimString && current == '"' && next == '"')
+                {
+                    result.Append(next);
+                    i++;
+                    continue;
+                }
+
+                if (current == '"' && (inVerbatimString || !IsEscaped(source, i)))
+                {
+                    inString = false;
+                    inVerbatimString = false;
+                }
+
+                continue;
+            }
+
+            if (inChar)
+            {
+                if (current == '\'' && !IsEscaped(source, i))
+                    inChar = false;
+
+                continue;
+            }
+
+            if (current == '"' && !IsEscaped(source, i))
+            {
+                inString = true;
+                inVerbatimString = i > 0 && source[i - 1] == '@';
+                continue;
+            }
+
+            if (current == '\'' && !IsEscaped(source, i))
+                inChar = true;
+        }
+
+        return result.ToString();
+    }
+
+    private static bool IsEscaped(string source, int index)
+    {
+        var slashCount = 0;
+        for (var i = index - 1; i >= 0 && source[i] == '\\'; i--)
+            slashCount++;
+
+        return slashCount % 2 == 1;
     }
 }

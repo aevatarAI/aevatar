@@ -4,6 +4,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Governance.Abstractions;
@@ -16,20 +17,20 @@ namespace Aevatar.GAgentService.Core.GAgents;
 public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymentState>
 {
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IServiceRevisionArtifactStore _artifactStore;
+    private readonly IServiceRevisionCatalogQueryReader _revisionCatalogQueryReader;
     private readonly IActivationCapabilityViewReader _capabilityViewReader;
     private readonly IActivationAdmissionEvaluator _admissionEvaluator;
     private readonly IServiceRuntimeActivator _runtimeActivator;
 
     public ServiceDeploymentManagerGAgent(
         IActorDispatchPort dispatchPort,
-        IServiceRevisionArtifactStore artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader,
         IActivationCapabilityViewReader capabilityViewReader,
         IActivationAdmissionEvaluator admissionEvaluator,
         IServiceRuntimeActivator runtimeActivator)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
+        _revisionCatalogQueryReader = revisionCatalogQueryReader ?? throw new ArgumentNullException(nameof(revisionCatalogQueryReader));
         _capabilityViewReader = capabilityViewReader ?? throw new ArgumentNullException(nameof(capabilityViewReader));
         _admissionEvaluator = admissionEvaluator ?? throw new ArgumentNullException(nameof(admissionEvaluator));
         _runtimeActivator = runtimeActivator ?? throw new ArgumentNullException(nameof(runtimeActivator));
@@ -44,9 +45,9 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         if (string.IsNullOrWhiteSpace(command.RevisionId))
             throw new InvalidOperationException("revision_id is required.");
 
-        var serviceKey = ServiceKeys.Build(command.Identity);
-        var artifact = await _artifactStore.GetAsync(serviceKey, command.RevisionId, CancellationToken.None)
-            ?? throw new InvalidOperationException($"Prepared artifact was not found for '{serviceKey}' revision '{command.RevisionId}'.");
+        var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(command.Identity, CancellationToken.None);
+        // Refactor (iter100/cluster-100): Old activation read prepared artifacts from a process-local store. / New activation consumes the projected revision readmodel catalog.
+        var artifact = revisionCatalog.GetRequiredPreparedArtifact(command.Identity, command.RevisionId);
         var currentState = State.Clone();
         var capabilityView = await _capabilityViewReader.GetAsync(command.Identity, command.RevisionId, CancellationToken.None);
         var admissionDecision = await _admissionEvaluator.EvaluateAsync(

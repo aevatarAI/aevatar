@@ -48,7 +48,7 @@ public sealed class BindingListTool : IAgentTool
             if (args.ParseError != null)
                 return JsonDefaults.Error(args.ParseError);
 
-            var scopeId = AgentToolRequestContext.TryGet("scope_id");
+            var scopeId = AgentToolRequestContext.ScopeId;
             if (string.IsNullOrWhiteSpace(scopeId))
                 return JsonDefaults.Error("scope_id not available in request context");
 

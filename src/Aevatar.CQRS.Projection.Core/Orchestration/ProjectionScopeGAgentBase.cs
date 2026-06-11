@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -11,6 +12,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 public abstract class ProjectionScopeGAgentBase<TContext>
     : GAgentBase<ProjectionScopeState>
+    , IEventSourcingVersionDriftRecoverableActor
     where TContext : class, IProjectionMaterializationContext
 {
     private ILogger _logger = NullLogger.Instance;
@@ -126,12 +128,17 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         {
             if (ProjectionObservationFailurePolicy.ShouldPropagate(ex))
             {
+                // ShouldPropagate currently only returns true for OCC (direct or
+                // wrapped). Discard stale pending events so the grain can deactivate
+                // cleanly; state will rebuild from the event store on next activation.
+                if (ProjectionObservationFailurePolicy.ContainsOcc(ex))
+                    EventSourcing?.DiscardPendingEvents();
+
                 _logger.LogWarning(
                     ex,
-                    "Projection scope observation handling hit a retryable failure. actorId={ActorId} projectionKind={ProjectionKind} sessionId={SessionId}",
+                    "Projection scope observation handling hit a retryable failure; pending events discarded. actorId={ActorId} projectionKind={ProjectionKind}",
                     Id,
-                    State.ProjectionKind,
-                    State.SessionId);
+                    State.ProjectionKind);
                 throw;
             }
 
@@ -215,18 +222,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
 
     private StreamForwardingBinding BuildObservationRelayBinding(string rootActorId)
     {
-        var typeUrl = $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}";
-        return new StreamForwardingBinding
-        {
-            SourceStreamId = rootActorId,
-            TargetStreamId = Id,
-            ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [],
-            EventTypeFilter = new HashSet<string>(StringComparer.Ordinal)
-            {
-                typeUrl,
-            },
-        };
+        return ProjectionScopeObservationRelayBinding.Create(rootActorId, Id);
     }
 
     protected ValueTask RecordDispatchFailureAsync(

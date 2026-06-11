@@ -8,7 +8,8 @@ public static class ProjectionRuntimeServiceCollectionExtensions
 {
     public static IServiceCollection AddProjectionReadModelRuntime(this IServiceCollection services)
     {
-        services.TryAddSingleton(typeof(IProjectionWriteDispatcher<>), typeof(ProjectionStoreDispatcher<>));
+        services.TryAddSingleton(typeof(ProjectionStoreDispatcher<>));
+        services.TryAddSingleton(typeof(IProjectionWriteDispatcher<>), typeof(ObservedProjectionWriteDispatcher<>));
         services.TryAddSingleton(typeof(IProjectionGraphWriter<>), typeof(ProjectionGraphWriter<>));
         services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(IProjectionWriteSink<>), typeof(ProjectionDocumentStoreBinding<>)));
         return services;

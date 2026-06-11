@@ -41,6 +41,13 @@ export default [
     menuGroupKey: "teams",
   },
   {
+    path: "/teams/:scopeId/:teamId",
+    name: "Team Details",
+    component: "./teams/detail",
+    hideInMenu: true,
+    parentKeys: ["/teams"],
+  },
+  {
     path: "/teams/:scopeId",
     name: "Team Details",
     component: "./teams/detail",

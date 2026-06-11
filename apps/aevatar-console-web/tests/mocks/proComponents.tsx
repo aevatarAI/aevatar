@@ -8,7 +8,6 @@ import {
   Space,
   Spin,
   Switch,
-  Typography,
 } from 'antd';
 import React from 'react';
 
@@ -129,6 +128,11 @@ function normalizeActionNode(action: React.ReactNode): React.ReactNode {
 export const enUSIntl = {
   getMessage: (_id: string, defaultMessage: string) => defaultMessage,
   locale: 'en-US',
+};
+
+export const zhCNIntl = {
+  getMessage: (_id: string, defaultMessage: string) => defaultMessage,
+  locale: 'zh-CN',
 };
 
 export const ProConfigProvider: React.FC<{ children?: React.ReactNode }> = ({

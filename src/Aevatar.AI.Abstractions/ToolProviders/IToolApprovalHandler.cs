@@ -1,14 +1,20 @@
 // ─────────────────────────────────────────────────────────────
-// IToolApprovalHandler — 工具审批处理器抽象
-// 支持不同审批后端（本地聊天窗口、NyxID 远程推送等）
+// IToolApprovalHandler — local tool-call approval/yield contract
+// Approval backends that require remote submit/status continuations use a
+// separate port so this contract does not hide asynchronous waits.
 // ─────────────────────────────────────────────────────────────
 
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
-/// <summary>工具审批处理器。不同审批渠道（本地 UI、NyxID 远程）实现此接口。</summary>
+/// <summary>
+/// Local tool approval decision contract.
+/// </summary>
 public interface IToolApprovalHandler
 {
-    /// <summary>请求审批并等待结果。</summary>
+    // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
+    //   Old pattern: remote NyxID approval hid submit-and-poll behind this local decision method.
+    //   New principle: local approval may approve, deny, timeout, or yield; remote status is actor continuation state.
+    /// <summary>Requests a local decision or yields the tool call to actor-owned continuation state.</summary>
     Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct);
 }
 

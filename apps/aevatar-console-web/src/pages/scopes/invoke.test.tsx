@@ -78,12 +78,6 @@ jest.mock('@/shared/ui/aevatarPageShells', () => {
   };
 });
 
-jest.mock('@/shared/api/servicesApi', () => ({
-  servicesApi: {
-    listServices: jest.fn(),
-  },
-}));
-
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
     bindScopeGAgent: jest.fn(async () => ({
@@ -147,6 +141,7 @@ jest.mock('@/shared/api/runtimeRunsApi', () => ({
 
 jest.mock('@/shared/api/scopeRuntimeApi', () => ({
   scopeRuntimeApi: {
+    listServices: jest.fn(),
     getServiceBindings: jest.fn(),
     createServiceBinding: jest.fn(),
     updateServiceBinding: jest.fn(),
@@ -243,7 +238,6 @@ jest.mock('./components/ScopeServiceRuntimeWorkbench', () => {
   };
 });
 
-import { servicesApi } from '@/shared/api/servicesApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
@@ -514,7 +508,7 @@ describe('ScopeInvokePage', () => {
   });
 
   it('invokes a non-chat endpoint for the selected scope service', async () => {
-    (servicesApi.listServices as jest.Mock).mockResolvedValue([
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([
       {
         serviceKey: 'scope-a:default:default:default',
         tenantId: 'scope-a',
@@ -549,10 +543,8 @@ describe('ScopeInvokePage', () => {
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
     await waitFor(() => {
-      expect(servicesApi.listServices).toHaveBeenCalledWith({
-        tenantId: 'scope-a',
+      expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith('scope-a', {
         appId: 'default',
-        namespace: 'default',
       });
     });
     expect(await screen.findByText('Lab Console')).toBeTruthy();
@@ -610,7 +602,7 @@ describe('ScopeInvokePage', () => {
   });
 
   it('streams a chat endpoint for the selected scope service', async () => {
-    (servicesApi.listServices as jest.Mock).mockResolvedValue([
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([
       {
         serviceKey: 'scope-a:default:default:default',
         tenantId: 'scope-a',
@@ -665,10 +657,8 @@ describe('ScopeInvokePage', () => {
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
     await waitFor(() => {
-      expect(servicesApi.listServices).toHaveBeenCalledWith({
-        tenantId: 'scope-a',
+      expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith('scope-a', {
         appId: 'default',
-        namespace: 'default',
       });
     });
     expect(await screen.findByText('Lab Console')).toBeTruthy();
@@ -734,7 +724,7 @@ describe('ScopeInvokePage', () => {
   });
 
   it('defaults to NyxID Chat when no published service is listed for the scope', async () => {
-    (servicesApi.listServices as jest.Mock).mockResolvedValue([]);
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([]);
     (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({ ok: true });
     (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
       yield {
@@ -806,7 +796,7 @@ describe('ScopeInvokePage', () => {
   });
 
   it('keeps the invoke lab workspace constrained so the chat composer stays visible', async () => {
-    (servicesApi.listServices as jest.Mock).mockResolvedValue([
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([
       {
         serviceKey: 'scope-a:default:default:default',
         tenantId: 'scope-a',
@@ -855,7 +845,7 @@ describe('ScopeInvokePage', () => {
   });
 
   it('renders semantic chat output for reasoning, steps, and tool activity', async () => {
-    (servicesApi.listServices as jest.Mock).mockResolvedValue([
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([
       {
         serviceKey: 'scope-a:default:default:default',
         tenantId: 'scope-a',
@@ -942,10 +932,8 @@ describe('ScopeInvokePage', () => {
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
     await waitFor(() => {
-      expect(servicesApi.listServices).toHaveBeenCalledWith({
-        tenantId: 'scope-a',
+      expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith('scope-a', {
         appId: 'default',
-        namespace: 'default',
       });
     });
     const promptInput = await screen.findByPlaceholderText('Send a message...');
@@ -971,7 +959,7 @@ describe('ScopeInvokePage', () => {
   });
 
   it('keeps the invoke lab empty after reset instead of auto-refilling a service', async () => {
-    (servicesApi.listServices as jest.Mock).mockResolvedValue([
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([
       {
         serviceKey: 'scope-a:default:default:default',
         tenantId: 'scope-a',
@@ -1017,7 +1005,7 @@ describe('ScopeInvokePage', () => {
   });
 
   it('opens the service runtime workbench with bindings, revisions, and runs', async () => {
-    (servicesApi.listServices as jest.Mock).mockResolvedValue([
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([
       {
         serviceKey: 'scope-a:default:default:default',
         tenantId: 'scope-a',

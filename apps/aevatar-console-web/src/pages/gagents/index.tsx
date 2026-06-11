@@ -59,8 +59,12 @@ import {
 } from '@/shared/ui/aevatarPageShells';
 import { describeError } from '@/shared/ui/errorText';
 import { resolveStudioScopeContext } from '@/pages/scopes/components/resolvedScope';
+import { t } from "@/shared/i18n/messages";
 
 type ActorReuseMode = 'new' | 'existing';
+const GAGENT_DRAFT_RUN_TIMEOUT_MS = 30_000;
+const GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS = GAGENT_DRAFT_RUN_TIMEOUT_MS + 5_000;
+
 type NoticeState = {
   message: string;
   type: 'success' | 'error';
@@ -278,6 +282,10 @@ function readQueryValue(name: string): string {
   }
 
   return new URLSearchParams(window.location.search).get(name)?.trim() ?? '';
+}
+
+function createDraftRunTimeoutError(): Error {
+  return new Error('GAgent draft run timed out before the backend returned any event.');
 }
 
 function readEventString(event: AGUIEvent, key: string): string {
@@ -630,7 +638,7 @@ const GAgentsPage: React.FC = () => {
     }
 
     if (!bindingQuery.data?.available || !currentBindingRevision) {
-      return 'This will create the first published default service for the current scope.';
+      return 'This will create the first published default service for the current workspace.';
     }
 
     if (currentBindingMatchesSelectedType) {
@@ -814,7 +822,7 @@ const GAgentsPage: React.FC = () => {
     setIsActorRegistryDrawerOpen(false);
     setRegistryNotice({
       type: 'success',
-      message: `Prepared ${actorId} for the next draft run.`,
+      message: t('pages.gagents.index.prepared.actor.for.next', 'Prepared {actorId} for the next draft run.', { actorId }),
     });
   };
 
@@ -825,7 +833,7 @@ const GAgentsPage: React.FC = () => {
     if (!normalizedScopeId) {
       setRegistryNotice({
         type: 'error',
-        message: 'Scope is required before removing a saved actor.',
+        message: t("pages.gagents.index.workspace.is.required.before.removing", "Workspace is required before removing a saved actor."),
       });
       return;
     }
@@ -850,7 +858,7 @@ const GAgentsPage: React.FC = () => {
       }
       setRegistryNotice({
         type: 'success',
-        message: `Removed ${actorId} from the saved actor registry.`,
+        message: t('pages.gagents.index.removed.actor.from.registry', 'Removed {actorId} from the saved actor registry.', { actorId }),
       });
     } catch (error) {
       setRegistryNotice({
@@ -986,7 +994,7 @@ const GAgentsPage: React.FC = () => {
       setBindingNotice({
         type: 'error',
         message:
-          'Resolve the current scope before publishing a GAgent binding.',
+          t("pages.gagents.index.resolve.the.current.workspace.before", "Resolve the current workspace before publishing a GAgent binding."),
       });
       return;
     }
@@ -994,7 +1002,7 @@ const GAgentsPage: React.FC = () => {
     if (!actorTypeName) {
       setBindingNotice({
         type: 'error',
-        message: 'Choose a discovered GAgent type before publishing a binding.',
+        message: t("pages.gagents.index.choose.discovered.gagent.type.before", "Choose a discovered GAgent type before publishing a binding."),
       });
       return;
     }
@@ -1004,7 +1012,7 @@ const GAgentsPage: React.FC = () => {
       setBindingNotice({
         type: 'error',
         message:
-          'Add at least one published endpoint before binding the selected GAgent.',
+          t("pages.gagents.index.add.at.least.one.published", "Add at least one published endpoint before binding the selected GAgent."),
       });
       return;
     }
@@ -1013,7 +1021,11 @@ const GAgentsPage: React.FC = () => {
       setActivePublishTab('endpoints');
       setBindingNotice({
         type: 'error',
-        message: `Endpoint id ${duplicateEndpointId} is duplicated. Published endpoints must be unique.`,
+        message: t(
+          'pages.gagents.index.endpoint.id.duplicated',
+          'Endpoint id {endpointId} is duplicated. Published endpoints must be unique.',
+          { endpointId: duplicateEndpointId },
+        ),
       });
       return;
     }
@@ -1023,7 +1035,7 @@ const GAgentsPage: React.FC = () => {
       setBindingNotice({
         type: 'error',
         message:
-          'Provide a preferred actor id when reusing a stable published actor.',
+          t("pages.gagents.index.provide.preferred.actor.id.when", "Provide a preferred actor id when reusing a stable published actor."),
       });
       return;
     }
@@ -1032,7 +1044,7 @@ const GAgentsPage: React.FC = () => {
       setBindingNotice({
         type: 'error',
         message:
-          'Acknowledge the replacement impact before publishing a new binding revision.',
+          t("pages.gagents.index.acknowledge.the.replacement.impact.before", "Acknowledge the replacement impact before publishing a new binding revision."),
       });
       return;
     }
@@ -1057,7 +1069,14 @@ const GAgentsPage: React.FC = () => {
       setPublishAcknowledged(false);
       setBindingNotice({
         type: 'success',
-        message: `Published ${result.displayName || result.targetName} on revision ${result.revisionId}.`,
+        message: t(
+          'pages.gagents.index.published.target.on.revision',
+          'Published {targetName} on revision {revisionId}.',
+          {
+            revisionId: result.revisionId,
+            targetName: result.displayName || result.targetName,
+          },
+        ),
       });
 
       if (options?.openRuns && selectedLaunchEndpoint) {
@@ -1091,7 +1110,14 @@ const GAgentsPage: React.FC = () => {
       setIsRevisionDrawerOpen(true);
       setBindingNotice({
         type: 'success',
-        message: `Scope ${result.scopeId} is now serving revision ${result.revisionId}.`,
+        message: t(
+          'pages.gagents.index.workspace.serving.revision',
+          'Workspace {scopeId} is now serving revision {revisionId}.',
+          {
+            revisionId: result.revisionId,
+            scopeId: result.scopeId,
+          },
+        ),
       });
     } catch (error) {
       setBindingNotice({
@@ -1119,7 +1145,11 @@ const GAgentsPage: React.FC = () => {
       setActiveWorkbenchTab('serving');
       setBindingNotice({
         type: 'success',
-        message: `Revision ${result.revisionId} was accepted for retirement.`,
+        message: t(
+          'pages.gagents.index.revision.accepted.for.retirement',
+          'Revision {revisionId} was accepted for retirement.',
+          { revisionId: result.revisionId },
+        ),
       });
     } catch (error) {
       setBindingNotice({
@@ -1144,7 +1174,7 @@ const GAgentsPage: React.FC = () => {
     if (!normalizedScopeId || !normalizedActorTypeName || !normalizedPrompt) {
       setRunState((current) => ({
         ...current,
-        error: 'Scope, GAgent type, and prompt are required before running.',
+        error: 'Workspace, GAgent type, and prompt are required before running.',
         status: 'error',
       }));
       return;
@@ -1153,6 +1183,11 @@ const GAgentsPage: React.FC = () => {
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(createDraftRunTimeoutError());
+      }
+    }, GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS);
     setActiveWorkbenchTab('draft');
     setActiveRunOutputTab('transcript');
     setRunState({
@@ -1172,6 +1207,7 @@ const GAgentsPage: React.FC = () => {
           actorTypeName: normalizedActorTypeName,
           prompt: normalizedPrompt,
           preferredActorId: normalizedPreferredActorId || undefined,
+          timeoutMs: GAGENT_DRAFT_RUN_TIMEOUT_MS,
         },
         controller.signal,
       );
@@ -1243,6 +1279,14 @@ const GAgentsPage: React.FC = () => {
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
+        const reason = controller.signal.reason;
+        if (reason instanceof Error) {
+          setRunState((current) => ({
+            ...current,
+            error: reason.message,
+            status: 'error',
+          }));
+        }
         return;
       }
 
@@ -1252,6 +1296,7 @@ const GAgentsPage: React.FC = () => {
         status: 'error',
       }));
     } finally {
+      window.clearTimeout(timeoutId);
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
@@ -1320,17 +1365,19 @@ const GAgentsPage: React.FC = () => {
   const rail = (
     <div style={cliRailShellStyle}>
       <div style={cliRailSectionStyle}>
-        <div style={cliCardLabelStyle}>Scope Context</div>
+        <div style={cliCardLabelStyle}>{t("pages.gagents.index.workspace.context", "Workspace Context")}</div>
         <Input
-          aria-label="Scope ID"
+          aria-label={t("pages.gagents.index.workspace.id", "Workspace ID")}
           onChange={(event) => setScopeId(event.target.value)}
-          placeholder="Scope ID"
+          placeholder={t("pages.gagents.index.workspace.id.2", "Workspace ID")}
           value={scopeId}
         />
         <Typography.Text type="secondary">
           {resolvedScope?.scopeId
-            ? `NyxID resolved scope: ${resolvedScope.scopeId}`
-            : 'No scope was resolved from the current session.'}
+            ? t("pages.gagents.index.nyxid.resolved.workspace", "NyxID resolved workspace: {scopeId}", {
+                scopeId: resolvedScope.scopeId,
+              })
+            : t("pages.gagents.index.no.workspace.resolved", "No workspace was resolved from the current session.")}
         </Typography.Text>
         {bindingQuery.data?.available ? (
           <div
@@ -1345,8 +1392,7 @@ const GAgentsPage: React.FC = () => {
             }}
           >
             <Typography.Text style={cliFieldLabelStyle}>
-              Current default
-            </Typography.Text>
+              {t("pages.gagents.index.current.default", "Current default")}</Typography.Text>
             <Typography.Text strong style={{ overflowWrap: 'anywhere' }}>
               {bindingQuery.data.displayName || bindingQuery.data.serviceId}
             </Typography.Text>
@@ -1381,20 +1427,19 @@ const GAgentsPage: React.FC = () => {
               justifyContent: 'space-between',
             }}
           >
-            <div style={cliCardLabelStyle}>GAgent Types</div>
+            <div style={cliCardLabelStyle}>{t("pages.gagents.index.gagent.types", "GAgent Types")}</div>
             <Button
               icon={<ReloadOutlined />}
               onClick={() => void gAgentTypesQuery.refetch()}
               size="small"
               type="text"
             >
-              Refresh
-            </Button>
+              {t("pages.gagents.index.refresh", "Refresh")}</Button>
           </div>
           <Input
-            aria-label="Filter GAgent types"
+            aria-label={t("pages.gagents.index.filter.gagent.types", "Filter GAgent types")}
             onChange={(event) => setTypeFilter(event.target.value)}
-            placeholder="Filter GAgent types"
+            placeholder={t("pages.gagents.index.filter.gagent.types.2", "Filter GAgent types")}
             value={typeFilter}
           />
           {gAgentTypesQuery.error ? (
@@ -1472,8 +1517,8 @@ const GAgentsPage: React.FC = () => {
                         {buildRuntimeGAgentTypeLabel(descriptor)}
                       </Typography.Text>
                     </Space>
-                    {isActiveBindingType ? <Tag color="success">Serving</Tag> : null}
-                    {actorCount > 0 ? <Tag>{actorCount} actors</Tag> : null}
+                    {isActiveBindingType ? <Tag color="success">{t("pages.gagents.index.serving", "Serving")}</Tag> : null}
+                    {actorCount > 0 ? <Tag>{actorCount} {t("pages.gagents.index.actors", "actors")}</Tag> : null}
                   </Space>
                   <Typography.Text
                     style={{
@@ -1496,7 +1541,7 @@ const GAgentsPage: React.FC = () => {
 
   const selectedTypePanel = (
     <WorkbenchCard
-      description="Current type selection that drives both draft runs and published bindings."
+      description={t("pages.gagents.index.current.type.selection.that.drives", "Current type selection that drives both draft runs and published bindings.")}
       eyebrow="Selected Type"
       extra={
         <Space size={[8, 8]} wrap>
@@ -1505,19 +1550,18 @@ const GAgentsPage: React.FC = () => {
             onClick={() => setIsActorRegistryDrawerOpen(true)}
             size="small"
           >
-            Manage actors
-          </Button>
+            {t("pages.gagents.index.manage.actors", "Manage actors")}</Button>
           {selectedType ? (
             <>
               {currentBindingMatchesSelectedType ? (
-                <Tag color="success">Active binding</Tag>
+                <Tag color="success">{t("pages.gagents.index.active.binding", "Active binding")}</Tag>
               ) : null}
               {savedActorIds.length > 0 ? (
-                <Tag>{savedActorIds.length} actors</Tag>
+                <Tag>{savedActorIds.length} {t("pages.gagents.index.actors.2", "actors")}</Tag>
               ) : null}
             </>
           ) : (
-            <Tag>Choose a type</Tag>
+            <Tag>{t("pages.gagents.index.choose.type", "Choose a type")}</Tag>
           )}
         </Space>
       }
@@ -1532,45 +1576,49 @@ const GAgentsPage: React.FC = () => {
           }}
         >
           <div style={summaryMetricStyle}>
-            <Typography.Text type="secondary">Type</Typography.Text>
+            <Typography.Text type="secondary">{t("pages.gagents.index.type", "Type")}</Typography.Text>
             <Typography.Paragraph style={wrappedTextStyle}>
               {selectedType.fullName}
             </Typography.Paragraph>
           </div>
           <div style={summaryMetricStyle}>
-            <Typography.Text type="secondary">Assembly</Typography.Text>
+            <Typography.Text type="secondary">{t("pages.gagents.index.assembly", "Assembly")}</Typography.Text>
             <Typography.Paragraph style={wrappedTextStyle}>
               {selectedType.assemblyName}
             </Typography.Paragraph>
           </div>
           <div style={summaryMetricStyle}>
-            <Typography.Text type="secondary">Saved actors</Typography.Text>
+            <Typography.Text type="secondary">{t("pages.gagents.index.saved.actors", "Saved actors")}</Typography.Text>
             <Typography.Paragraph style={wrappedTextStyle}>
               {savedActorIds.length}
             </Typography.Paragraph>
           </div>
           <div style={summaryMetricStyle}>
-            <Typography.Text type="secondary">Published target</Typography.Text>
+            <Typography.Text type="secondary">{t("pages.gagents.index.published.target", "Published target")}</Typography.Text>
             <Typography.Paragraph style={wrappedTextStyle}>
               {currentBindingMatchesSelectedType
                 ? describeRuntimeGAgentBindingRevisionTarget(
                     currentBindingRevision,
                   )
-                : 'Not serving this type yet'}
+                : t("pages.gagents.index.not.serving.this.type.yet", "Not serving this type yet")}
             </Typography.Paragraph>
           </div>
         </div>
       ) : (
-        <AevatarInspectorEmpty description="Choose a discovered GAgent type from the left rail to prepare draft runs or published bindings." />
+        <AevatarInspectorEmpty description={t("pages.gagents.index.choose.discovered.gagent.type.from", "Choose a discovered GAgent type from the left rail to prepare draft runs or published bindings.")} />
       )}
     </WorkbenchCard>
   );
 
   const selectedRevisionPanel = (
     <WorkbenchCard
-      description="Inspect the selected published revision."
-      eyebrow="Selected Revision"
-      title={selectedRevision ? selectedRevision.revisionId : 'No revision selected'}
+      description={t("pages.gagents.index.inspect.the.selected.published.revision", "Inspect the selected published revision.")}
+      eyebrow={t("pages.gagents.index.selected.revision", "Selected Revision")}
+      title={
+        selectedRevision
+          ? selectedRevision.revisionId
+          : t("pages.gagents.index.no.revision.selected", "No revision selected")
+      }
     >
       {selectedRevision ? (
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
@@ -1592,26 +1640,25 @@ const GAgentsPage: React.FC = () => {
           <div style={{ display: 'grid', gap: 12 }}>
             <div>
               <Typography.Text type="secondary">
-                Preferred actor
-              </Typography.Text>
+                {t("pages.gagents.index.preferred.actor", "Preferred actor")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
                 {selectedRevision.staticPreferredActorId || 'n/a'}
               </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text type="secondary">Primary actor</Typography.Text>
+              <Typography.Text type="secondary">{t("pages.gagents.index.primary.actor", "Primary actor")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
                 {selectedRevision.primaryActorId || 'n/a'}
               </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text type="secondary">Deployment</Typography.Text>
+              <Typography.Text type="secondary">{t("pages.gagents.index.deployment", "Deployment")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
                 {selectedRevision.deploymentId || 'draft'}
               </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text type="secondary">Published</Typography.Text>
+              <Typography.Text type="secondary">{t("pages.gagents.index.published", "Published")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
                 {formatTimestamp(selectedRevision.publishedAt)}
               </Typography.Paragraph>
@@ -1619,14 +1666,14 @@ const GAgentsPage: React.FC = () => {
           </div>
         </Space>
       ) : (
-        <AevatarInspectorEmpty description="Publish or select a revision to inspect its serving details." />
+        <AevatarInspectorEmpty description={t("pages.gagents.index.publish.or.select.revision.to", "Publish or select a revision to inspect its serving details.")} />
       )}
     </WorkbenchCard>
   );
 
   const runOutputPanel = (
     <WorkbenchCard
-      description="Transcript and runtime events from the most recent draft run."
+      description={t("pages.gagents.index.transcript.and.runtime.events.from", "Transcript and runtime events from the most recent draft run.")}
       eyebrow="Run Output"
       extra={
         <Space size={[8, 8]} wrap>
@@ -1655,15 +1702,15 @@ const GAgentsPage: React.FC = () => {
                 {runState.assistantText}
               </Typography.Paragraph>
             ) : (
-              <AevatarInspectorEmpty description="Run a draft prompt to watch the streamed GAgent response here." />
+              <AevatarInspectorEmpty description={t("pages.gagents.index.run.draft.prompt.to.watch", "Run a draft prompt to watch the streamed GAgent response here.")} />
             ),
           },
           {
             key: 'events',
-            label: `Event Feed (${runState.events.length})`,
+            label: t('pages.gagents.index.event.feed.count', 'Event Feed ({count})', { count: runState.events.length }),
             children:
               runState.events.length === 0 ? (
-                <AevatarInspectorEmpty description="No events captured yet." />
+                <AevatarInspectorEmpty description={t("pages.gagents.index.no.events.captured.yet", "No events captured yet.")} />
               ) : (
                 <div style={{ ...scrollColumnStyle, maxHeight: 360 }}>
                   {runState.events.slice(-12).map((event, index) => (
@@ -1704,8 +1751,8 @@ const GAgentsPage: React.FC = () => {
     <WorkbenchCard
       description={
         selectedType
-          ? `Reusable actor ids saved for ${selectedType.typeName} in this scope.`
-          : 'Reusable actor ids saved for this scope.'
+          ? `Reusable actor ids saved for ${selectedType.typeName} in this workspace.`
+          : 'Reusable actor ids saved for this workspace.'
       }
       eyebrow="Actor Registry"
       extra={
@@ -1715,10 +1762,9 @@ const GAgentsPage: React.FC = () => {
           size="small"
           type="text"
         >
-          Refresh
-        </Button>
+          {t("pages.gagents.index.refresh.2", "Refresh")}</Button>
       }
-      title="Actor Registry"
+      title={t("pages.gagents.index.actor.registry", "Actor Registry")}
     >
       <Space orientation="vertical" size={12} style={{ width: '100%' }}>
         {registryNotice ? (
@@ -1742,16 +1788,15 @@ const GAgentsPage: React.FC = () => {
             description={
               gAgentActorsQuery.isLoading
                 ? 'Loading actor registry.'
-                : 'No saved actors were found for this scope.'
+                : 'No saved actors were found for this workspace.'
             }
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         ) : (
           <div style={compactListStyle}>
             <Typography.Text type="secondary">
-              {totalSavedActors} saved actor{totalSavedActors === 1 ? '' : 's'}{' '}
-              across {actorGroups.length} type
-              {actorGroups.length === 1 ? '' : 's'}.
+              {totalSavedActors} {t("pages.gagents.index.saved.actor", "saved actor")}{totalSavedActors === 1 ? '' : 's'}{' '}
+              {t("pages.gagents.index.across", "across")}{actorGroups.length} {t("pages.gagents.index.type.2", "type")}{actorGroups.length === 1 ? '' : 's'}.
             </Typography.Text>
             {actorGroups.map((group) => {
               const descriptor = (gAgentTypesQuery.data ?? []).find((entry) =>
@@ -1784,7 +1829,7 @@ const GAgentsPage: React.FC = () => {
                   <Space size={[8, 8]} wrap>
                     <Typography.Text strong>{groupLabel}</Typography.Text>
                     <Tag>{group.actorIds.length}</Tag>
-                    {isSelectedGroup ? <Tag color="blue">Selected</Tag> : null}
+                    {isSelectedGroup ? <Tag color="blue">{t("pages.gagents.index.selected", "Selected")}</Tag> : null}
                   </Space>
                   <Typography.Text
                     style={{
@@ -1840,8 +1885,7 @@ const GAgentsPage: React.FC = () => {
                               }
                               size="small"
                             >
-                              Use
-                            </Button>
+                              {t("pages.gagents.index.use", "Use")}</Button>
                             <Button
                               danger
                               loading={registryPendingKey === removeKey}
@@ -1853,8 +1897,7 @@ const GAgentsPage: React.FC = () => {
                               }
                               size="small"
                             >
-                              Remove
-                            </Button>
+                              {t("pages.gagents.index.remove", "Remove")}</Button>
                           </Space>
                         </div>
                       );
@@ -1871,8 +1914,8 @@ const GAgentsPage: React.FC = () => {
 
   const currentBindingPanel = (
     <WorkbenchCard
-      description="Current default service for this scope."
-      eyebrow="Current Scope Binding"
+      description={t("pages.gagents.index.current.default.service.for.this", "Current default service for this workspace.")}
+      eyebrow="Current Workspace Binding"
       extra={
         <Space size={[8, 8]} wrap>
           <Button
@@ -1880,16 +1923,14 @@ const GAgentsPage: React.FC = () => {
             onClick={() => setIsRevisionDrawerOpen(true)}
             size="small"
           >
-            Revision details
-          </Button>
+            {t("pages.gagents.index.revision.details", "Revision details")}</Button>
           <Button
             icon={<ReloadOutlined />}
             onClick={() => void bindingQuery.refetch()}
             size="small"
             type="text"
           >
-            Refresh
-          </Button>
+            {t("pages.gagents.index.refresh.3", "Refresh")}</Button>
         </Space>
       }
       title={
@@ -1906,9 +1947,9 @@ const GAgentsPage: React.FC = () => {
             title={describeError(bindingQuery.error)}
           />
         ) : bindingQuery.isLoading ? (
-          <AevatarInspectorEmpty description="Loading the current published binding." />
+          <AevatarInspectorEmpty description={t("pages.gagents.index.loading.the.current.published.binding", "Loading the current published binding.")} />
         ) : !bindingQuery.data?.available ? (
-          <AevatarInspectorEmpty description="No default scope service has been published yet." />
+          <AevatarInspectorEmpty description={t("pages.gagents.index.no.default.scope.service.has", "No default scope service has been published yet.")} />
         ) : (
           <>
             <div
@@ -1919,15 +1960,14 @@ const GAgentsPage: React.FC = () => {
               }}
             >
               <div style={infoCardStyle}>
-                <Typography.Text type="secondary">Display name</Typography.Text>
+                <Typography.Text type="secondary">{t("pages.gagents.index.display.name", "Display name")}</Typography.Text>
                 <Typography.Paragraph style={wrappedTextStyle}>
                   {bindingQuery.data.displayName || bindingQuery.data.serviceId}
                 </Typography.Paragraph>
               </div>
               <div style={infoCardStyle}>
                 <Typography.Text type="secondary">
-                  Implementation
-                </Typography.Text>
+                  {t("pages.gagents.index.implementation", "Implementation")}</Typography.Text>
                 <Space orientation="vertical" size={4} style={{ marginTop: 4 }}>
                   <Tag color={getBindingTone(currentBindingRevision)}>
                     {formatRuntimeGAgentBindingImplementationKind(
@@ -1947,15 +1987,14 @@ const GAgentsPage: React.FC = () => {
                 </Space>
               </div>
               <div style={infoCardStyle}>
-                <Typography.Text type="secondary">Serving</Typography.Text>
+                <Typography.Text type="secondary">{t("pages.gagents.index.serving.2", "Serving")}</Typography.Text>
                 <Typography.Paragraph style={wrappedTextStyle}>
                   {bindingQuery.data.deploymentStatus || 'n/a'}
                 </Typography.Paragraph>
               </div>
               <div style={infoCardStyle}>
                 <Typography.Text type="secondary">
-                  Default revision
-                </Typography.Text>
+                  {t("pages.gagents.index.default.revision", "Default revision")}</Typography.Text>
                 <Typography.Paragraph style={wrappedTextStyle}>
                   {bindingQuery.data.defaultServingRevisionId || 'n/a'}
                 </Typography.Paragraph>
@@ -1970,15 +2009,14 @@ const GAgentsPage: React.FC = () => {
               }}
             >
               <div>
-                <Typography.Text type="secondary">Service key</Typography.Text>
+                <Typography.Text type="secondary">{t("pages.gagents.index.service.key", "Service key")}</Typography.Text>
                 <Typography.Paragraph copyable style={wrappedTextStyle}>
                   {bindingQuery.data.serviceKey || 'n/a'}
                 </Typography.Paragraph>
               </div>
               <div>
                 <Typography.Text type="secondary">
-                  Primary actor
-                </Typography.Text>
+                  {t("pages.gagents.index.primary.actor.2", "Primary actor")}</Typography.Text>
                 <Typography.Paragraph copyable style={wrappedTextStyle}>
                   {bindingQuery.data.primaryActorId ||
                     currentBindingRevision?.primaryActorId ||
@@ -1986,7 +2024,7 @@ const GAgentsPage: React.FC = () => {
                 </Typography.Paragraph>
               </div>
               <div>
-                <Typography.Text type="secondary">Updated</Typography.Text>
+                <Typography.Text type="secondary">{t("pages.gagents.index.updated.2", "Updated")}</Typography.Text>
                 <Typography.Paragraph style={wrappedTextStyle}>
                   {formatTimestamp(bindingQuery.data.updatedAt)}
                 </Typography.Paragraph>
@@ -2000,7 +2038,7 @@ const GAgentsPage: React.FC = () => {
 
   const publishBindingPanel = (
     <WorkbenchCard
-      description="Publish the selected GAgent type as this scope's default service."
+      description={t("pages.gagents.index.publish.the.selected.gagent.type", "Publish the selected GAgent type as this workspace's default service.")}
       eyebrow="Publish Binding"
       extra={
         <Button
@@ -2008,8 +2046,7 @@ const GAgentsPage: React.FC = () => {
           onClick={() => setIsActorRegistryDrawerOpen(true)}
           size="small"
         >
-          Manage actors
-        </Button>
+          {t("pages.gagents.index.manage.actors.2", "Manage actors")}</Button>
       }
       title={
         selectedType
@@ -2019,7 +2056,7 @@ const GAgentsPage: React.FC = () => {
     >
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         {!selectedType ? (
-          <AevatarInspectorEmpty description="Choose a discovered GAgent type before configuring a published binding." />
+          <AevatarInspectorEmpty description={t("pages.gagents.index.choose.discovered.gagent.type.before.2", "Choose a discovered GAgent type before configuring a published binding.")} />
         ) : (
           <>
             <Tabs
@@ -2027,7 +2064,7 @@ const GAgentsPage: React.FC = () => {
               items={[
                 {
                   key: 'settings',
-                  label: 'Service settings',
+                  label: t("pages.gagents.index.service.settings", "Service settings"),
                   children: (
                     <Space orientation="vertical" size={16} style={{ width: '100%' }}>
                       <div
@@ -2040,14 +2077,13 @@ const GAgentsPage: React.FC = () => {
                       >
                         <div>
                           <Typography.Text type="secondary">
-                            Selected type
-                          </Typography.Text>
+                            {t("pages.gagents.index.selected.type", "Selected type")}</Typography.Text>
                           <Typography.Paragraph style={wrappedTextStyle}>
                             {selectedType.fullName}
                           </Typography.Paragraph>
                         </div>
                         <div>
-                          <Typography.Text type="secondary">Assembly</Typography.Text>
+                          <Typography.Text type="secondary">{t("pages.gagents.index.assembly.2", "Assembly")}</Typography.Text>
                           <Typography.Paragraph style={wrappedTextStyle}>
                             {selectedType.assemblyName}
                           </Typography.Paragraph>
@@ -2055,7 +2091,7 @@ const GAgentsPage: React.FC = () => {
                       </div>
 
                       <Input
-                        aria-label="Binding display name"
+                        aria-label={t("pages.gagents.index.binding.display.name", "Binding display name")}
                         onChange={(event) => {
                           setBindingDraft((current) => ({
                             ...current,
@@ -2064,12 +2100,12 @@ const GAgentsPage: React.FC = () => {
                           setPublishAcknowledged(false);
                           setBindingNotice(null);
                         }}
-                        placeholder="Published display name"
+                        placeholder={t("pages.gagents.index.published.display.name", "Published display name")}
                         value={bindingDraft.displayName}
                       />
 
                       <Select
-                        aria-label="Binding actor reuse mode"
+                        aria-label={t("pages.gagents.index.binding.actor.reuse.mode", "Binding actor reuse mode")}
                         onChange={(value) => {
                           setBindingActorReuseMode(value);
                           if (value === 'new') {
@@ -2082,8 +2118,8 @@ const GAgentsPage: React.FC = () => {
                           setBindingNotice(null);
                         }}
                         options={[
-                          { label: 'Allocate actor on activation', value: 'new' },
-                          { label: 'Reuse a stable actor id', value: 'existing' },
+                          { label: t("pages.gagents.index.allocate.actor.on.activation", "Allocate actor on activation"), value: 'new' },
+                          { label: t("pages.gagents.index.reuse.stable.actor.id", "Reuse a stable actor id"), value: 'existing' },
                         ]}
                         value={bindingActorReuseMode}
                       />
@@ -2096,7 +2132,7 @@ const GAgentsPage: React.FC = () => {
                         >
                           <Select
                             allowClear
-                            aria-label="Published actor id"
+                            aria-label={t("pages.gagents.index.published.actor.id", "Published actor id")}
                             onChange={(value) => {
                               setBindingDraft((current) => ({
                                 ...current,
@@ -2120,7 +2156,7 @@ const GAgentsPage: React.FC = () => {
                             value={bindingSavedActorId}
                           />
                           <Input
-                            aria-label="Binding preferred actor id"
+                            aria-label={t("pages.gagents.index.binding.preferred.actor.id", "Binding preferred actor id")}
                             onChange={(event) => {
                               setBindingDraft((current) => ({
                                 ...current,
@@ -2129,22 +2165,20 @@ const GAgentsPage: React.FC = () => {
                               setPublishAcknowledged(false);
                               setBindingNotice(null);
                             }}
-                            placeholder="Preferred actor id"
+                            placeholder={t("pages.gagents.index.preferred.actor.id", "Preferred actor id")}
                             value={bindingDraft.preferredActorId}
                           />
                         </Space>
                       ) : (
                         <Typography.Text type="secondary">
-                          Activation allocates the serving actor when this revision
-                          starts receiving traffic.
-                        </Typography.Text>
+                          {t("pages.gagents.index.activation.allocates.the.serving.actor", "Activation allocates the serving actor when this revision starts receiving traffic.")}</Typography.Text>
                       )}
                     </Space>
                   ),
                 },
                 {
                   key: 'endpoints',
-                  label: `Endpoints (${bindingDraft.endpoints.length})`,
+                  label: t('pages.gagents.index.endpoints.count', 'Endpoints ({count})', { count: bindingDraft.endpoints.length }),
                   children: (
                     <Space orientation="vertical" size={16} style={{ width: '100%' }}>
                       <div
@@ -2161,23 +2195,19 @@ const GAgentsPage: React.FC = () => {
                         >
                           <div style={{ minWidth: 0 }}>
                             <Typography.Text strong>
-                              Published endpoints
-                            </Typography.Text>
+                              {t("pages.gagents.index.published.endpoints", "Published endpoints")}</Typography.Text>
                             <Typography.Paragraph
                               style={{ marginBottom: 0 }}
                               type="secondary"
                             >
-                              Endpoint id, kind, and payload contract define how
-                              Runs invoke the published service.
-                            </Typography.Paragraph>
+                              {t("pages.gagents.index.endpoint.id.kind.and.payload", "Endpoint id, kind, and payload contract define how Runs invoke the published service.")}</Typography.Paragraph>
                           </div>
                           <Button
                             onClick={addBindingEndpointDraft}
                             size="small"
                             type="default"
                           >
-                            Add endpoint
-                          </Button>
+                            {t("pages.gagents.index.add.endpoint", "Add endpoint")}</Button>
                         </Space>
 
                         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
@@ -2193,7 +2223,7 @@ const GAgentsPage: React.FC = () => {
                             >
                               <Space size={[8, 8]} wrap>
                                 <Typography.Text strong>
-                                  Endpoint {index + 1}
+                                  {t("pages.gagents.index.endpoint", "Endpoint")}{index + 1}
                                 </Typography.Text>
                                 <Tag>{endpoint.kind}</Tag>
                               </Space>
@@ -2212,7 +2242,7 @@ const GAgentsPage: React.FC = () => {
                                       endpointId: event.target.value,
                                     })
                                   }
-                                  placeholder="endpoint id"
+                                  placeholder={t("pages.gagents.index.endpoint.id", "endpoint id")}
                                   value={endpoint.endpointId}
                                 />
                                 <Input
@@ -2222,7 +2252,7 @@ const GAgentsPage: React.FC = () => {
                                       displayName: event.target.value,
                                     })
                                   }
-                                  placeholder="Display name"
+                                  placeholder={t("pages.gagents.index.display.name.2", "Display name")}
                                   value={endpoint.displayName}
                                 />
                                 <Select
@@ -2245,7 +2275,7 @@ const GAgentsPage: React.FC = () => {
                                       requestTypeUrl: event.target.value,
                                     })
                                   }
-                                  placeholder="request type url"
+                                  placeholder={t("pages.gagents.index.request.type.url", "request type url")}
                                   value={endpoint.requestTypeUrl}
                                 />
                                 <Input
@@ -2255,7 +2285,7 @@ const GAgentsPage: React.FC = () => {
                                       responseTypeUrl: event.target.value,
                                     })
                                   }
-                                  placeholder="response type url"
+                                  placeholder={t("pages.gagents.index.response.type.url", "response type url")}
                                   value={endpoint.responseTypeUrl}
                                 />
                               </div>
@@ -2267,7 +2297,7 @@ const GAgentsPage: React.FC = () => {
                                     description: event.target.value,
                                   })
                                 }
-                                placeholder="Describe when users should invoke this endpoint"
+                                placeholder={t("pages.gagents.index.describe.when.users.should.invoke", "Describe when users should invoke this endpoint")}
                                 value={endpoint.description}
                               />
                               <Space size={[8, 8]} wrap>
@@ -2277,12 +2307,11 @@ const GAgentsPage: React.FC = () => {
                                   onClick={() => removeBindingEndpointDraft(index)}
                                   size="small"
                                 >
-                                  Remove endpoint
-                                </Button>
+                                  {t("pages.gagents.index.remove.endpoint", "Remove endpoint")}</Button>
                                 <Typography.Text type="secondary">
                                   {endpoint.kind === 'chat'
-                                    ? 'Chat endpoints can open Runs with a prompt.'
-                                    : 'Command endpoints can open Runs with a typed payload contract.'}
+                                    ? t("pages.gagents.index.chat.endpoints.open.runs", "Chat endpoints can open Runs with a prompt.")
+                                    : t("pages.gagents.index.command.endpoints.open.runs", "Command endpoints can open Runs with a typed payload contract.")}
                                 </Typography.Text>
                               </Space>
                             </div>
@@ -2292,7 +2321,7 @@ const GAgentsPage: React.FC = () => {
 
                       {launchableBindingEndpoints.length > 0 ? (
                         <Select
-                          aria-label="Open Runs endpoint"
+                          aria-label={t("pages.gagents.index.open.runs.endpoint", "Open Runs endpoint")}
                           onChange={(value) =>
                             setBindingDraft((current) => ({
                               ...current,
@@ -2300,7 +2329,7 @@ const GAgentsPage: React.FC = () => {
                             }))
                           }
                           options={launchableBindingEndpoints.map((endpoint) => ({
-                            label: `${endpoint.displayName} (${endpoint.endpointId})`,
+                            label: t("pages.gagents.index.copy", "{value1} ({value2})", { value1: endpoint.displayName, value2: endpoint.endpointId }),
                             value: endpoint.endpointId,
                           }))}
                           value={
@@ -2320,15 +2349,14 @@ const GAgentsPage: React.FC = () => {
               showIcon
               type={bindingQuery.data?.available ? 'warning' : 'info'}
               title={bindingImpactMessage}
-              description="Type = template. Binding = published default service. Actor = runtime instance created by activation or invocation."
+              description={t("pages.gagents.index.type.template.binding.published.default", "Type = template. Binding = published default service. Actor = runtime instance created by activation or invocation.")}
             />
 
             <Checkbox
               checked={publishAcknowledged}
               onChange={(event) => setPublishAcknowledged(event.target.checked)}
             >
-              I understand this changes the scope's published default service.
-            </Checkbox>
+              {t("pages.gagents.index.understand.this.changes.the.workspace", "I understand this changes the workspace's published default service.")}</Checkbox>
 
             <Space size={[8, 8]} wrap>
               <Button
@@ -2337,8 +2365,7 @@ const GAgentsPage: React.FC = () => {
                 onClick={() => void handlePublishBinding()}
                 type="primary"
               >
-                Publish binding
-              </Button>
+                {t("pages.gagents.index.publish.binding", "Publish binding")}</Button>
               <Button
                 disabled={
                   !selectedType || !normalizedScopeId || !selectedLaunchEndpoint
@@ -2346,8 +2373,7 @@ const GAgentsPage: React.FC = () => {
                 loading={bindingPendingKey === 'publish:runs'}
                 onClick={() => void handlePublishBinding({ openRuns: true })}
               >
-                Publish and open Runs
-              </Button>
+                {t("pages.gagents.index.publish.and.open.runs", "Publish and open Runs")}</Button>
             </Space>
           </>
         )}
@@ -2357,7 +2383,7 @@ const GAgentsPage: React.FC = () => {
 
   const bindingRevisionsPanel = (
     <WorkbenchCard
-      description="Activate or retire published revisions."
+      description={t("pages.gagents.index.activate.or.retire.published.revisions", "Activate or retire published revisions.")}
       eyebrow="Binding Revisions"
       extra={
         <Button
@@ -2365,8 +2391,7 @@ const GAgentsPage: React.FC = () => {
           onClick={() => setIsRevisionDrawerOpen(true)}
           size="small"
         >
-          Revision details
-        </Button>
+          {t("pages.gagents.index.revision.details.2", "Revision details")}</Button>
       }
       title={
         bindingQuery.data?.available
@@ -2382,10 +2407,10 @@ const GAgentsPage: React.FC = () => {
             title={describeError(bindingQuery.error)}
           />
         ) : bindingQuery.isLoading ? (
-          <AevatarInspectorEmpty description="Loading binding revisions." />
+          <AevatarInspectorEmpty description={t("pages.gagents.index.loading.binding.revisions", "Loading binding revisions.")} />
         ) : !bindingQuery.data?.available ||
           bindingQuery.data.revisions.length === 0 ? (
-          <AevatarInspectorEmpty description="Publish the selected GAgent to create the first revision." />
+          <AevatarInspectorEmpty description={t("pages.gagents.index.publish.the.selected.gagent.to", "Publish the selected GAgent to create the first revision.")} />
         ) : (
           <div style={compactListStyle}>
             {bindingQuery.data.revisions.map((revision) => {
@@ -2440,12 +2465,12 @@ const GAgentsPage: React.FC = () => {
                         {revision.status || 'unknown'}
                       </Tag>
                       {revision.isDefaultServing ? (
-                        <Tag color="success">default</Tag>
+                        <Tag color="success">{t("pages.gagents.index.default", "default")}</Tag>
                       ) : null}
                       {revision.isActiveServing ? (
-                        <Tag color="processing">active</Tag>
+                        <Tag color="processing">{t("pages.gagents.index.active", "active")}</Tag>
                       ) : null}
-                      {revision.retiredAt ? <Tag>retired</Tag> : null}
+                      {revision.retiredAt ? <Tag>{t("pages.gagents.index.retired", "retired")}</Tag> : null}
                     </Space>
                     <Typography.Text
                       style={{
@@ -2462,11 +2487,11 @@ const GAgentsPage: React.FC = () => {
                       }}
                       type="secondary"
                     >
-                      Deployment {revision.deploymentId || 'draft'} · Actor{' '}
+                      {t("pages.gagents.index.deployment.2", "Deployment")}{revision.deploymentId || 'draft'} {t("pages.gagents.index.actor", "· Actor")}{' '}
                       {revision.primaryActorId ||
                         revision.staticPreferredActorId ||
                         'n/a'}{' '}
-                      · Updated{' '}
+                      {t("pages.gagents.index.updated", "· Updated")}{' '}
                       {formatTimestamp(
                         revision.publishedAt ||
                           revision.preparedAt ||
@@ -2492,7 +2517,9 @@ const GAgentsPage: React.FC = () => {
                       }}
                       type={canActivate ? 'primary' : 'default'}
                     >
-                      {revision.isDefaultServing ? 'Serving' : 'Activate'}
+                      {revision.isDefaultServing
+                        ? t("pages.gagents.index.serving", "Serving")
+                        : t("pages.gagents.index.activate", "Activate")}
                     </Button>
                     <Button
                       danger
@@ -2505,8 +2532,7 @@ const GAgentsPage: React.FC = () => {
                         void handleRetireRevision(revision.revisionId);
                       }}
                     >
-                      Retire
-                    </Button>
+                      {t("pages.gagents.index.retire", "Retire")}</Button>
                   </Space>
                 </div>
               );
@@ -2519,7 +2545,7 @@ const GAgentsPage: React.FC = () => {
 
   const draftRunPanel = (
     <WorkbenchCard
-      description="Test the selected GAgent type before publishing."
+      description={t("pages.gagents.index.test.the.selected.gagent.type", "Test the selected GAgent type before publishing.")}
       eyebrow="Draft Run"
       extra={
         <Space size={[8, 8]} wrap>
@@ -2539,34 +2565,34 @@ const GAgentsPage: React.FC = () => {
             }}
           >
             <div>
-              <Typography.Text type="secondary">Type</Typography.Text>
+              <Typography.Text type="secondary">{t("pages.gagents.index.type.3", "Type")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
                 {selectedType.fullName}
               </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text type="secondary">Saved actors</Typography.Text>
+              <Typography.Text type="secondary">{t("pages.gagents.index.saved.actors.2", "Saved actors")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
                 {savedActorIds.length}
               </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text type="secondary">Observed actor</Typography.Text>
+              <Typography.Text type="secondary">{t("pages.gagents.index.observed.actor", "Observed actor")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
                 {runState.actorId || 'n/a'}
               </Typography.Paragraph>
             </div>
           </div>
         ) : (
-          <AevatarInspectorEmpty description="Select a discovered GAgent type before drafting a direct run." />
+          <AevatarInspectorEmpty description={t("pages.gagents.index.select.discovered.gagent.type.before", "Select a discovered GAgent type before drafting a direct run.")} />
         )}
 
         <Select
-          aria-label="Actor reuse mode"
+          aria-label={t("pages.gagents.index.actor.reuse.mode", "Actor reuse mode")}
           onChange={(value) => setActorReuseMode(value)}
           options={[
-            { label: 'Create new actor', value: 'new' },
-            { label: 'Reuse existing actor', value: 'existing' },
+            { label: t("pages.gagents.index.create.new.actor", "Create new actor"), value: 'new' },
+            { label: t("pages.gagents.index.reuse.existing.actor", "Reuse existing actor"), value: 'existing' },
           ]}
           value={actorReuseMode}
         />
@@ -2575,7 +2601,7 @@ const GAgentsPage: React.FC = () => {
           <Space orientation="vertical" size={12} style={{ width: '100%' }}>
             <Select
               allowClear
-              aria-label="Saved actor id"
+              aria-label={t("pages.gagents.index.saved.actor.id", "Saved actor id")}
               onChange={(value) => setPreferredActorId(value ?? '')}
               optionFilterProp="label"
               options={savedActorIds.map((actorId) => ({
@@ -2592,9 +2618,9 @@ const GAgentsPage: React.FC = () => {
               value={selectedSavedActorId}
             />
             <Input
-              aria-label="Preferred actor id"
+              aria-label={t("pages.gagents.index.preferred.actor.id.2", "Preferred actor id")}
               onChange={(event) => setPreferredActorId(event.target.value)}
-              placeholder="Preferred actor id"
+              placeholder={t("pages.gagents.index.preferred.actor.id.3", "Preferred actor id")}
               value={preferredActorId}
             />
             {gAgentActorsQuery.error ? (
@@ -2605,23 +2631,19 @@ const GAgentsPage: React.FC = () => {
               />
             ) : (
               <Typography.Text type="secondary">
-                Leave the saved actor selector empty if you want to type a known
-                actor id manually.
-              </Typography.Text>
+                {t("pages.gagents.index.leave.the.saved.actor.selector", "Leave the saved actor selector empty if you want to type a known actor id manually.")}</Typography.Text>
             )}
           </Space>
         ) : (
           <Typography.Text type="secondary">
-            New actor mode lets the runtime allocate a fresh actor and persist
-            it for future reuse.
-          </Typography.Text>
+            {t("pages.gagents.index.new.actor.mode.lets.the", "New actor mode lets the runtime allocate a fresh actor and persist it for future reuse.")}</Typography.Text>
         )}
 
         <Input.TextArea
-          aria-label="Draft prompt"
+          aria-label={t("pages.gagents.index.draft.prompt", "Draft prompt")}
           autoSize={{ minRows: 4, maxRows: 8 }}
           onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Enter a direct prompt for the selected GAgent type"
+          placeholder={t("pages.gagents.index.enter.direct.prompt.for.the", "Enter a direct prompt for the selected GAgent type")}
           value={prompt}
         />
 
@@ -2632,23 +2654,20 @@ const GAgentsPage: React.FC = () => {
             onClick={() => void handleRun()}
             type="primary"
           >
-            Run draft prompt
-          </Button>
+            {t("pages.gagents.index.run.draft.prompt", "Run draft prompt")}</Button>
           <Button
             danger
             disabled={runState.status !== 'running'}
             icon={<StopOutlined />}
             onClick={handleStop}
           >
-            Stop run
-          </Button>
+            {t("pages.gagents.index.stop.run", "Stop run")}</Button>
           <Button
             disabled={runState.events.length === 0}
             icon={<EyeOutlined />}
             onClick={handleOpenRuns}
           >
-            Continue in Runs
-          </Button>
+            {t("pages.gagents.index.continue.in.runs", "Continue in Runs")}</Button>
         </Space>
 
         {runState.error ? (
@@ -2661,7 +2680,7 @@ const GAgentsPage: React.FC = () => {
   const workbenchTabs = [
     {
       key: 'draft',
-      label: 'Draft Run',
+      label: t("pages.gagents.index.draft.run", "Draft Run"),
       children: (
         <div style={workbenchColumnStyle}>
           {draftRunPanel}
@@ -2671,7 +2690,7 @@ const GAgentsPage: React.FC = () => {
     },
     {
       key: 'publish',
-      label: 'Publish',
+      label: t("pages.gagents.index.publish", "Publish"),
       children: (
         <div style={workbenchColumnStyle}>
           {publishBindingPanel}
@@ -2680,7 +2699,7 @@ const GAgentsPage: React.FC = () => {
     },
     {
       key: 'serving',
-      label: 'Serving',
+      label: t("pages.gagents.index.serving", "Serving"),
       children: (
         <div style={workbenchColumnStyle}>
           {currentBindingPanel}
@@ -2722,14 +2741,16 @@ const GAgentsPage: React.FC = () => {
       layoutMode="document"
       extra={
         <Space size={[8, 8]} wrap>
-          <Typography.Text type="secondary">Scope</Typography.Text>
+          <Typography.Text type="secondary">{t("pages.gagents.index.workspace.id.3", "Workspace ID")}</Typography.Text>
           <Typography.Text style={{ maxWidth: 320 }} strong>
-            {normalizedScopeId || resolvedScope?.scopeId || 'Not resolved'}
+            {normalizedScopeId ||
+              resolvedScope?.scopeId ||
+              t("pages.gagents.index.not.resolved", "Not resolved")}
           </Typography.Text>
         </Space>
       }
-      title="团队成员"
-      titleHelp="这里保留原有 GAgent runtime 能力，但统一对外表述为团队成员管理与绑定工作台。"
+      title={t("pages.gagents.index.team.member", "team member")}
+      titleHelp={t("pages.gagents.index.the.original.gagent.runtime", "The original GAgent runtime capabilities are retained here, but are unified and externally described as a team member management and binding workbench.")}
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
@@ -2740,7 +2761,7 @@ const GAgentsPage: React.FC = () => {
       <AevatarContextDrawer
         onClose={() => setIsActorRegistryDrawerOpen(false)}
         open={isActorRegistryDrawerOpen}
-        title="成员注册表"
+        title={t("pages.gagents.index.member.registration.form", "Member registration form")}
         width={screens.xl ? 680 : 520}
       >
         {actorRegistryPanel}
@@ -2753,7 +2774,7 @@ const GAgentsPage: React.FC = () => {
             ? describeRuntimeGAgentBindingRevisionTarget(selectedRevision)
             : undefined
         }
-        title="版本详情"
+        title={t("pages.gagents.index.version.details", "Version details")}
         width={screens.xl ? 620 : 480}
       >
         {selectedRevisionPanel}

@@ -29,6 +29,26 @@ public sealed class ProjectionObservationFailurePolicyTests
     }
 
     [Fact]
+    public void ShouldPropagate_ShouldReturnTrue_ForProjectionDispatchAggregateContainingNonFirstOptimisticConcurrencyException()
+    {
+        var aggregate = new ProjectionDispatchAggregateException(
+        [
+            new ProjectionDispatchFailure(
+                "projector-a",
+                1,
+                new InvalidOperationException("deterministic")),
+            new ProjectionDispatchFailure(
+                "projector-b",
+                2,
+                new EventStoreOptimisticConcurrencyException("actor-2", 7, 8)),
+        ]);
+
+        ProjectionObservationFailurePolicy.ShouldPropagate(aggregate).Should().BeTrue();
+        ProjectionObservationFailurePolicy.ContainsOcc(aggregate).Should().BeTrue();
+        aggregate.InnerException.Should().BeOfType<AggregateException>();
+    }
+
+    [Fact]
     public void ShouldPropagate_ShouldReturnFalse_ForDeterministicProjectionFailure()
     {
         var aggregate = new ProjectionDispatchAggregateException(
@@ -84,6 +104,32 @@ public sealed class ProjectionObservationFailurePolicyTests
     public void ShouldPropagate_ShouldReturnFalse_ForDeterministicExceptionWithoutInner()
     {
         ProjectionObservationFailurePolicy.ShouldPropagate(new InvalidOperationException("boom"))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void ContainsOcc_ShouldReturnTrue_ForDirectOcc()
+    {
+        var exception = new EventStoreOptimisticConcurrencyException("actor-1", 4, 5);
+        ProjectionObservationFailurePolicy.ContainsOcc(exception).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ContainsOcc_ShouldReturnTrue_ForWrappedOcc()
+    {
+        var wrapped = new ProjectionDispatchAggregateException(
+        [
+            new ProjectionDispatchFailure(
+                "projector", 1,
+                new EventStoreOptimisticConcurrencyException("actor-2", 7, 8)),
+        ]);
+        ProjectionObservationFailurePolicy.ContainsOcc(wrapped).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ContainsOcc_ShouldReturnFalse_ForNonOccException()
+    {
+        ProjectionObservationFailurePolicy.ContainsOcc(new InvalidOperationException("boom"))
             .Should().BeFalse();
     }
 }

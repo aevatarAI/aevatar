@@ -87,6 +87,7 @@ public sealed record LarkApprovalTaskActionRequest(
     string Action,
     string InstanceCode,
     string TaskId,
+    string UserId,
     string? Comment,
     string? FormJson,
     string? TransferUserId,

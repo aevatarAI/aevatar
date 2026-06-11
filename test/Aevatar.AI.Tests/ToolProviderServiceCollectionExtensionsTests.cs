@@ -34,6 +34,8 @@ public class ToolProviderServiceCollectionExtensionsTests
         var sources = provider.GetServices<IAgentToolSource>().ToList();
 
         sources.Count(x => x is SkillsAgentToolSource).Should().Be(1);
+        sources.OfType<SkillsAgentToolSource>().Should().ContainSingle()
+            .Which.Should().BeSameAs(provider.GetRequiredService<SkillsAgentToolSource>());
     }
 
     [Fact]
@@ -50,4 +52,5 @@ public class ToolProviderServiceCollectionExtensionsTests
         sources.Should().ContainSingle(x => x is MCPAgentToolSource);
         sources.Should().ContainSingle(x => x is SkillsAgentToolSource);
     }
+
 }

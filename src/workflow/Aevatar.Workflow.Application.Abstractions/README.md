@@ -26,7 +26,7 @@ Aevatar.Workflow.Application.Abstractions/
 
 | 类型 | 说明 |
 |------|------|
-| `WorkflowChatRunRequest` | 请求：prompt、workflow、workflowYamls、agentId |
+| `WorkflowChatRunRequest` | 请求：prompt + typed `WorkflowChatSource` |
 | `WorkflowChatRunAcceptedReceipt` | accepted receipt：`actorId + workflowName + commandId + correlationId` |
 | `WorkflowRunEventEnvelope` | 输出事件包络：SSE/WS 直接透传的稳定流事件 |
 | `WorkflowChatRunStartError` | 启动错误枚举 |

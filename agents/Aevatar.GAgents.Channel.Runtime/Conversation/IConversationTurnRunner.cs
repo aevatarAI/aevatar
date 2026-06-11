@@ -48,35 +48,87 @@ public interface IConversationTurnRunner
         string? currentPlatformMessageId,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct);
+
+    /// <summary>
+    /// Post-reply hook invoked once the user-visible reply has landed via a path the runner does
+    /// not orchestrate end-to-end — currently the streaming completion path in
+    /// <see cref="ConversationGAgent"/> finalizes its own reply through <c>RunStreamChunkAsync</c>
+    /// + persistence, never touching <see cref="RunLlmReplyAsync"/>. Implementations use this hook
+    /// to do platform-specific post-reply housekeeping (e.g. swap the Lark "Typing" reaction to
+    /// "DONE"). Default no-op so adapters that have nothing to do here need no opt-in.
+    /// </summary>
+    Task OnReplyDeliveredAsync(ChatActivity activity, CancellationToken ct) => Task.CompletedTask;
 }
 
 /// <summary>
 /// Outcome of one progressive streaming chunk dispatch.
 /// </summary>
+// Refactor (iter1535/cluster-issue-1535):
+//   Old pattern: streaming chunk failures exposed only string summaries plus edit_unsupported.
+//   New principle: turn runners return typed failure classification and sanitized adapter diagnostics.
 public sealed record ConversationStreamChunkResult(
     bool Success,
     string? PlatformMessageId,
     bool EditUnsupported,
     string ErrorCode,
-    string ErrorSummary)
+    string ErrorSummary,
+    FailureKind FailureKind,
+    TimeSpan? RetryAfter,
+    int HttpStatus,
+    string RawErrorKey,
+    int RawErrorCode)
 {
     public static ConversationStreamChunkResult Succeeded(string? platformMessageId) =>
-        new(true, platformMessageId, false, string.Empty, string.Empty);
+        new(
+            true,
+            platformMessageId,
+            false,
+            string.Empty,
+            string.Empty,
+            FailureKind.Unspecified,
+            null,
+            0,
+            string.Empty,
+            0);
 
     public static ConversationStreamChunkResult Failed(
         string errorCode,
         string errorSummary,
-        bool editUnsupported = false) =>
-        new(false, null, editUnsupported, errorCode, errorSummary);
+        bool editUnsupported = false,
+        FailureKind failureKind = FailureKind.Unspecified,
+        TimeSpan? retryAfter = null,
+        int httpStatus = 0,
+        string? rawErrorKey = null,
+        int rawErrorCode = 0) =>
+        new(
+            false,
+            null,
+            editUnsupported,
+            errorCode,
+            errorSummary,
+            failureKind,
+            retryAfter,
+            httpStatus,
+            string.IsNullOrWhiteSpace(rawErrorKey) ? string.Empty : rawErrorKey.Trim(),
+            rawErrorCode);
 }
 
+// Refactor (iter17/cluster-038):
+//   Old pattern: relay reply/user credentials both rode on persisted ChatActivity transport extras.
+//   New principle: same-turn Nyx credentials are runtime-only context while durable activity copies stay sanitized.
 public sealed record NyxRelayReplyTokenContext(
     string CorrelationId,
     string ReplyToken,
     string ReplyMessageId,
-    DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset ExpiresAtUtc,
+    string? NyxUserAccessToken = null);
 
-public sealed record ConversationTurnRuntimeContext(NyxRelayReplyTokenContext? NyxRelayReplyToken)
+// Refactor (iter17/cluster-038):
+//   Old pattern: concrete turn runners re-read transient relay credentials from durable activity payloads.
+//   New principle: ConversationGAgent passes non-persisted credentials explicitly through per-turn runtime context.
+public sealed record ConversationTurnRuntimeContext(
+    NyxRelayReplyTokenContext? NyxRelayReplyToken,
+    string? NyxUserAccessToken = null)
 {
     public static ConversationTurnRuntimeContext Empty { get; } = new(NyxRelayReplyToken: null);
 }
@@ -84,6 +136,9 @@ public sealed record ConversationTurnRuntimeContext(NyxRelayReplyTokenContext? N
 /// <summary>
 /// Describes the outcome of one bot turn (either inbound-activity-driven or proactive-command-driven).
 /// </summary>
+// Refactor (iter1535/cluster-issue-1535):
+//   Old pattern: turn failures forced downstream actors to infer retry intent from error strings.
+//   New principle: bot turn outcomes carry the typed failure kind used by continuation policy.
 public sealed record ConversationTurnResult(
     bool Success,
     string SentActivityId,

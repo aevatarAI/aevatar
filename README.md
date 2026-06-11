@@ -28,7 +28,6 @@ Aevatar 是一个 **多 Agent 协作系统（Multi-Agent Collaboration System）
 |------|------|
 | **环境变量** | 终端里执行：`export DEEPSEEK_API_KEY="sk-..."` 或 `export OPENAI_API_KEY="sk-..."`。 |
 | **配置文件** | 在 `~/.aevatar/secrets.json` 里写 Provider 与 API Key，详见 [配置说明](src/Aevatar.Configuration/README.md)。 |
-| **配置工具（推荐）** | 运行 `dotnet run --project tools/Aevatar.Tools.Cli -- config`（或安装后直接 `aevatar config`），在浏览器里填 API Key 并保存。 |
 
 ### 2. 启动 API 服务
 
@@ -38,17 +37,19 @@ Aevatar 是一个 **多 Agent 协作系统（Multi-Agent Collaboration System）
 dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 ```
 
-服务会加载根目录下的 `workflows/` 以及 `~/.aevatar` 中的配置与工作流。  
+服务会加载应用目录与 `~/.aevatar` 中的配置与工作流。
 生产/统一入口推荐直接启动 Mainnet：
 
 ```bash
 dotnet run --project src/Aevatar.Mainnet.Host.Api
 ```
 
+Mainnet 仍保留旧 `/api/scopes/{scopeId}/streaming-proxy/...` route 以兼容既有客户端，但该 route 已软废弃并声明 `Sunset: Wed, 25 Nov 2026 00:00:00 GMT`。新的直接模型 streaming / tool / continuation 接入请使用 `/v1/responses`；StreamingProxy 的 room/fan-out/participant 语义不等价于 `/v1/responses`，不要为新客户端继续接入旧 route。
+
 ### 3. 发一次 Chat 请求
 
-- 查看可用工作流：`GET http://localhost:5000/api/workflows`
-- 发起对话：`POST http://localhost:5000/api/chat`，请求体示例：
+- 查看可用工作流：`GET http://localhost:5100/api/workflows`
+- 发起对话：`POST http://localhost:5100/api/chat`，请求体示例：
 
 ```json
 { "prompt": "你的问题或长文本", "workflow": "simple_qa" }
@@ -58,7 +59,7 @@ dotnet run --project src/Aevatar.Mainnet.Host.Api
 示例（命令行）：
 
 ```bash
-curl -X POST http://localhost:5000/api/chat \
+curl -X POST http://localhost:5100/api/chat \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -d '{"prompt": "什么是 MAKER 模式？", "workflow": "simple_qa"}'
@@ -324,10 +325,7 @@ sequenceDiagram
   - `src/workflow/Aevatar.Workflow.Host.Api`：Workflow 独立宿主（能力隔离入口）
   - `src/Aevatar.Bootstrap` / `src/Aevatar.Bootstrap.Extensions.AI`：能力装配入口
 - **配套目录**
-  - `workflows/`：YAML 工作流定义
-  - `tools/Aevatar.Tools.Cli`：统一工具入口（`aevatar config` / `aevatar app`）
-  - `tools/Aevatar.Tools.Config`：兼容的 `aevatar-config` 配置工具
-  - `demos/`：演示工程
+  - `apps/aevatar-console-web`：前端控制台工作目录
   - `test/`：单元、集成、宿主测试
 
 ### 依赖边界速记
@@ -338,7 +336,7 @@ sequenceDiagram
 - Projection 相关运行态由 Actor/分布式状态承载，避免中间层进程内事实态字典。
 - 扩展（如 Maker）通过插件挂载，不允许 Workflow 主能力反向依赖扩展。
 
-你主要会接触：**`workflows/`**（改或加 YAML）、**`src/Aevatar.Mainnet.Host.Api`** 或 **`src/workflow/Aevatar.Workflow.Host.Api`**（启动服务）、**`~/.aevatar/`**（配置与 Connector）。其余目录在二次开发或排查问题时按上面模块地图定位即可。
+你主要会接触：**`src/Aevatar.Mainnet.Host.Api`** 或 **`src/workflow/Aevatar.Workflow.Host.Api`**（启动服务）、**`apps/aevatar-console-web`**（前端控制台）、**`~/.aevatar/`**（配置、Connector 与工作流）。其余目录在二次开发或排查问题时按上面模块地图定位即可。
 
 ---
 
@@ -352,7 +350,6 @@ sequenceDiagram
 - **Role 与 Connector**： [docs/canon/role-model.md](docs/canon/role-model.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
 - **Event Sourcing**： [docs/canon/event-sourcing.md](docs/canon/event-sourcing.md) — 如何开启事件溯源。
 - **Connector 配置详解**： [docs/canon/connector.md](docs/canon/connector.md) — 配置格式与示例。
-- **Maker 示例**： [demos/Aevatar.Demos.Maker](demos/Aevatar.Demos.Maker) — 自定义步骤类型与 MAKER 工作流。
 - **项目拆分策略**： [docs/adr/0001-project-split-strategy.md](docs/adr/0001-project-split-strategy.md) — 分片与拆仓路径。
 
 ---
@@ -361,13 +358,5 @@ sequenceDiagram
 
 - **运行测试**：`dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj`
 - **默认全量测试**：`dotnet test aevatar.slnx --nologo`
-  说明：默认全量回归不包含脚本自治演化慢测，当前本地口径约 `8.5s` 结束。
-- **分片守卫**：`bash tools/ci/solution_split_guards.sh`
-- **分片测试守卫**：`bash tools/ci/solution_split_test_guards.sh`
-- **慢测守卫**：`bash tools/ci/slow_test_guards.sh`
-  说明：单独执行 `Aevatar.Integration.Slow.Tests`，包含脚本自治演化与 3-node Orleans 一致性慢测。
 - **按域构建**：`dotnet build aevatar.foundation.slnf` / `dotnet build aevatar.ai.slnf` / `dotnet build aevatar.cqrs.slnf` / `dotnet build aevatar.workflow.slnf` / `dotnet build aevatar.hosting.slnf`
-- **CLI 演示**（不看 LLM，只看事件流）：  
-  `dotnet run --project demos/Aevatar.Demos.Cli -- run hierarchy --web artifacts/demo/hierarchy.html`
-- **统一工具入口**：`dotnet run --project tools/Aevatar.Tools.Cli -- config|app`（安装后命令为 `aevatar`）
 - **Agent 命名约定**：带 **GAgent** 的类负责框架能力（事件分发、状态、路由）；业务逻辑放在基于 GAgent 的扩展或自定义步骤/Connector 里。

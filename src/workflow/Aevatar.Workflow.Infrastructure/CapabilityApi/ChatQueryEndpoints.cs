@@ -10,6 +10,7 @@ public static class ChatQueryEndpoints
     public static void Map(RouteGroupBuilder group)
     {
         group.MapGet("/agents", ListAgents)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/primitives", ListPrimitives)
@@ -28,21 +29,26 @@ public static class ChatQueryEndpoints
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
-        group.MapGet("/actors/{actorId}", GetActorSnapshot)
+        group.MapGet("/workflow-actors/{actorId}/current-state", GetWorkflowActorCurrentState)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
-        group.MapGet("/actors/{actorId}/timeline", ListActorTimeline)
+        group.MapGet("/workflow-runs/{workflowRunId}/timeline-export", ListWorkflowRunTimelineExport)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 
-        group.MapGet("/actors/{actorId}/graph-edges", ListActorGraphEdges)
+        group.MapGet("/workflow-runs/{workflowRunId}/graph-export/edges", ListWorkflowRunGraphExportEdges)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 
-        group.MapGet("/actors/{actorId}/graph-enriched", GetActorGraphEnriched)
+        group.MapGet("/workflow-runs/{workflowRunId}/graph-export/enriched", GetWorkflowRunGraphExportEnriched)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
-        group.MapGet("/actors/{actorId}/graph-subgraph", GetActorGraphSubgraph)
+        group.MapGet("/workflow-runs/{workflowRunId}/graph-export/subgraph", GetWorkflowRunGraphExportSubgraph)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 
     }
@@ -55,11 +61,13 @@ public static class ChatQueryEndpoints
         return Results.Ok(agents);
     }
 
-    internal static IResult ListPrimitives(IWorkflowExecutionQueryApplicationService queryService)
+    internal static async Task<IResult> ListPrimitives(
+        IWorkflowExecutionQueryApplicationService queryService,
+        CancellationToken ct = default)
     {
-        var capabilities = queryService.GetCapabilities();
-        var exampleWorkflowsByPrimitive = queryService
-            .ListWorkflowCatalog()
+        var capabilities = await queryService.GetCapabilitiesAsync(ct);
+        var catalog = await queryService.ListWorkflowCatalogAsync(ct);
+        var exampleWorkflowsByPrimitive = catalog
             .Where(static item => item.IsPrimitiveExample)
             .SelectMany(item => item.Primitives.Select(primitive => new { Primitive = primitive, Workflow = item.Name }))
             .GroupBy(static item => item.Primitive, StringComparer.OrdinalIgnoreCase)
@@ -83,41 +91,53 @@ public static class ChatQueryEndpoints
     internal static IResult ListWorkflows(IWorkflowExecutionQueryApplicationService queryService) =>
         Results.Ok(queryService.ListWorkflows());
 
-    internal static IResult ListWorkflowCatalog(IWorkflowExecutionQueryApplicationService queryService) =>
-        Results.Ok(queryService.ListWorkflowCatalog());
+    internal static async Task<IResult> ListWorkflowCatalog(
+        IWorkflowExecutionQueryApplicationService queryService,
+        CancellationToken ct = default) =>
+        Results.Ok(await queryService.ListWorkflowCatalogAsync(ct));
 
-    internal static IResult GetCapabilities(IWorkflowExecutionQueryApplicationService queryService) =>
-        Results.Ok(queryService.GetCapabilities());
+    internal static async Task<IResult> GetCapabilities(
+        IWorkflowExecutionQueryApplicationService queryService,
+        CancellationToken ct = default) =>
+        Results.Ok(await queryService.GetCapabilitiesAsync(ct));
 
-    internal static IResult GetWorkflowDetail(
+    internal static async Task<IResult> GetWorkflowDetail(
         string workflowName,
-        IWorkflowExecutionQueryApplicationService queryService)
+        IWorkflowExecutionQueryApplicationService queryService,
+        CancellationToken ct = default)
     {
-        var detail = queryService.GetWorkflowDetail(workflowName);
+        var detail = await queryService.GetWorkflowDetailAsync(workflowName, ct);
         return detail == null ? Results.NotFound() : Results.Ok(detail);
     }
 
-    internal static async Task<IResult> GetActorSnapshot(
+    // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
+    //   Old pattern: HTTP query exposed /actors/{actorId} as actor snapshot inspection.
+    //   New principle: HTTP query exposes /workflow-actors/{actorId}/current-state as a readmodel resource.
+    internal static async Task<IResult> GetWorkflowActorCurrentState(
         string actorId,
         IWorkflowExecutionQueryApplicationService queryService,
         CancellationToken ct = default)
     {
-        var snapshot = await queryService.GetActorSnapshotAsync(actorId, ct);
-        return snapshot == null ? Results.NotFound() : Results.Ok(MapSnapshot(snapshot));
+        var currentState = await queryService.GetWorkflowActorCurrentStateAsync(actorId, ct);
+        return currentState == null ? Results.NotFound() : Results.Ok(MapCurrentState(currentState));
     }
 
-    internal static async Task<IResult> ListActorTimeline(
-        string actorId,
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: workflow history / report / graph are treated as current-state readmodels (current-state query path enriches actor snapshots by reading report artifacts; duplicate WorkflowRunTimelineDocument and WorkflowRunGraphArtifactDocument shells copy WorkflowRunInsightReportDocument; public application/query/tool/HTTP surfaces expose them as actor current-state queries instead of workflow-run artifacts)
+    //   New principle: Workflow history / report / graph are workflow-run artifacts (or aggregate-owned views), NOT actor current-state readmodels: keep existing WorkflowRunInsightReportDocument adapter/name workflow-local as the single report artifact source; delete duplicate WorkflowRunTimelineDocument / WorkflowRunGraphArtifactDocument shells (timeline derived from report artifact, graph materialization derived from report artifact); stop current-state query paths from reading report/history artifacts to enrich actor snapshots; rename public application/query/tool/HTTP surfaces so report/timeline/graph are explicit workflow-run artifact / export, not current-state readmodel surfaces; WorkflowExecutionCurrentStateDocument remains the only workflow actor-scoped current-state readmodel; NO CLAUDE.md change, NO new core abstraction, NO generic CQRS Projection artifact storage seam, NO new actor type
+    //   New pattern: workflow history/report/graph are artifacts or aggregate-owned views, not current-state readmodels.
+    internal static async Task<IResult> ListWorkflowRunTimelineExport(
+        string workflowRunId,
         IWorkflowExecutionQueryApplicationService queryService,
         int take = 200,
         CancellationToken ct = default)
     {
-        var timeline = await queryService.ListActorTimelineAsync(actorId, take, ct);
+        var timeline = await queryService.ListWorkflowRunTimelineExportAsync(workflowRunId, take, ct);
         return Results.Ok(timeline.Select(MapTimelineItem));
     }
 
-    internal static async Task<IResult> ListActorGraphEdges(
-        string actorId,
+    internal static async Task<IResult> ListWorkflowRunGraphExportEdges(
+        string workflowRunId,
         IWorkflowExecutionQueryApplicationService queryService,
         int take = 200,
         string? direction = null,
@@ -125,30 +145,12 @@ public static class ChatQueryEndpoints
         CancellationToken ct = default)
     {
         var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
-        var edges = await queryService.ListActorGraphEdgesAsync(actorId, take, graphOptions, ct);
+        var edges = await queryService.ListWorkflowRunGraphExportEdgesAsync(workflowRunId, take, graphOptions, ct);
         return Results.Ok(edges.Select(MapGraphEdge));
     }
 
-    internal static async Task<IResult> GetActorGraphEnriched(
-        string actorId,
-        IWorkflowExecutionQueryApplicationService queryService,
-        int depth = 2,
-        int take = 200,
-        string? direction = null,
-        string[]? edgeTypes = null,
-        CancellationToken ct = default)
-    {
-        var snapshot = await queryService.GetActorSnapshotAsync(actorId, ct);
-        if (snapshot == null)
-            return Results.NotFound();
-
-        var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
-        var subgraph = await queryService.GetActorGraphSubgraphAsync(actorId, depth, take, graphOptions, ct);
-        return Results.Ok(new WorkflowActorGraphEnrichedHttpResponse(MapSnapshot(snapshot), MapGraphSubgraph(subgraph)));
-    }
-
-    internal static async Task<IResult> GetActorGraphSubgraph(
-        string actorId,
+    internal static async Task<IResult> GetWorkflowRunGraphExportEnriched(
+        string workflowRunId,
         IWorkflowExecutionQueryApplicationService queryService,
         int depth = 2,
         int take = 200,
@@ -157,29 +159,43 @@ public static class ChatQueryEndpoints
         CancellationToken ct = default)
     {
         var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
-        var subgraph = await queryService.GetActorGraphSubgraphAsync(actorId, depth, take, graphOptions, ct);
+        var subgraph = await queryService.GetWorkflowRunGraphExportSubgraphAsync(workflowRunId, depth, take, graphOptions, ct);
         return Results.Ok(MapGraphSubgraph(subgraph));
     }
 
-    private static WorkflowActorGraphQueryOptions BuildGraphQueryOptions(
+    internal static async Task<IResult> GetWorkflowRunGraphExportSubgraph(
+        string workflowRunId,
+        IWorkflowExecutionQueryApplicationService queryService,
+        int depth = 2,
+        int take = 200,
+        string? direction = null,
+        string[]? edgeTypes = null,
+        CancellationToken ct = default)
+    {
+        var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
+        var subgraph = await queryService.GetWorkflowRunGraphExportSubgraphAsync(workflowRunId, depth, take, graphOptions, ct);
+        return Results.Ok(MapGraphSubgraph(subgraph));
+    }
+
+    private static WorkflowRunGraphExportQueryOptions BuildGraphQueryOptions(
         string? direction,
         string[]? edgeTypes)
     {
-        return new WorkflowActorGraphQueryOptions
+        return new WorkflowRunGraphExportQueryOptions
         {
             Direction = ParseDirection(direction),
             EdgeTypes = NormalizeEdgeTypes(edgeTypes),
         };
     }
 
-    private static WorkflowActorGraphDirection ParseDirection(string? direction)
+    private static WorkflowRunGraphExportDirection ParseDirection(string? direction)
     {
         if (string.IsNullOrWhiteSpace(direction))
-            return WorkflowActorGraphDirection.Both;
+            return WorkflowRunGraphExportDirection.Both;
 
-        return Enum.TryParse<WorkflowActorGraphDirection>(direction.Trim(), ignoreCase: true, out var parsed)
+        return Enum.TryParse<WorkflowRunGraphExportDirection>(direction.Trim(), ignoreCase: true, out var parsed)
             ? parsed
-            : WorkflowActorGraphDirection.Both;
+            : WorkflowRunGraphExportDirection.Both;
     }
 
     private static IReadOnlyList<string> NormalizeEdgeTypes(IReadOnlyList<string>? edgeTypes)
@@ -194,7 +210,7 @@ public static class ChatQueryEndpoints
             .ToArray();
     }
 
-    private static WorkflowActorSnapshotHttpResponse MapSnapshot(WorkflowActorSnapshot snapshot) =>
+    private static WorkflowActorCurrentStateHttpResponse MapCurrentState(WorkflowActorSnapshot snapshot) =>
         new(
             snapshot.ActorId,
             snapshot.WorkflowName,
@@ -211,7 +227,7 @@ public static class ChatQueryEndpoints
             snapshot.CompletedSteps,
             snapshot.RoleReplyCount);
 
-    private static WorkflowActorTimelineItemHttpResponse MapTimelineItem(WorkflowActorTimelineItem item) =>
+    private static WorkflowRunTimelineExportItemHttpResponse MapTimelineItem(WorkflowRunTimelineExportItem item) =>
         new(
             item.Timestamp,
             item.Stage,
@@ -222,14 +238,14 @@ public static class ChatQueryEndpoints
             item.EventType,
             item.Data.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal));
 
-    private static WorkflowActorGraphNodeHttpResponse MapGraphNode(WorkflowActorGraphNode node) =>
+    private static WorkflowRunGraphExportNodeHttpResponse MapGraphNode(WorkflowRunGraphExportNode node) =>
         new(
             node.NodeId,
             node.NodeType,
             node.UpdatedAt,
             node.Properties.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal));
 
-    private static WorkflowActorGraphEdgeHttpResponse MapGraphEdge(WorkflowActorGraphEdge edge) =>
+    private static WorkflowRunGraphExportEdgeHttpResponse MapGraphEdge(WorkflowRunGraphExportEdge edge) =>
         new(
             edge.EdgeId,
             edge.FromNodeId,
@@ -238,7 +254,7 @@ public static class ChatQueryEndpoints
             edge.UpdatedAt,
             edge.Properties.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal));
 
-    private static WorkflowActorGraphSubgraphHttpResponse MapGraphSubgraph(WorkflowActorGraphSubgraph subgraph) =>
+    private static WorkflowRunGraphExportSubgraphHttpResponse MapGraphSubgraph(WorkflowRunGraphExportSubgraph subgraph) =>
         new(
             subgraph.RootNodeId,
             subgraph.Nodes.Select(MapGraphNode).ToList(),
@@ -276,7 +292,10 @@ public static class ChatQueryEndpoints
                 .ToList());
 }
 
-public sealed record WorkflowActorSnapshotHttpResponse(
+// Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
+//   Old pattern: HTTP response was named WorkflowActorSnapshotHttpResponse and serialized actorId.
+//   New principle: HTTP response is workflow actor current-state shaped and serializes actorId.
+public sealed record WorkflowActorCurrentStateHttpResponse(
     string ActorId,
     string WorkflowName,
     string LastCommandId,
@@ -292,7 +311,10 @@ public sealed record WorkflowActorSnapshotHttpResponse(
     int CompletedSteps,
     int RoleReplyCount);
 
-public sealed record WorkflowActorTimelineItemHttpResponse(
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: HTTP timeline responses exposed actor timeline readmodel names.
+//   New principle: HTTP timeline responses expose workflow-run artifact export semantics.
+public sealed record WorkflowRunTimelineExportItemHttpResponse(
     DateTimeOffset Timestamp,
     string Stage,
     string Message,
@@ -302,13 +324,19 @@ public sealed record WorkflowActorTimelineItemHttpResponse(
     string EventType,
     Dictionary<string, string> Data);
 
-public sealed record WorkflowActorGraphNodeHttpResponse(
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: HTTP graph responses exposed actor graph readmodel names.
+//   New principle: HTTP graph responses expose workflow-run graph export artifact semantics.
+public sealed record WorkflowRunGraphExportNodeHttpResponse(
     string NodeId,
     string NodeType,
     DateTimeOffset UpdatedAt,
     Dictionary<string, string> Properties);
 
-public sealed record WorkflowActorGraphEdgeHttpResponse(
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: HTTP graph responses exposed actor graph readmodel names.
+//   New principle: HTTP graph responses expose workflow-run graph export artifact semantics.
+public sealed record WorkflowRunGraphExportEdgeHttpResponse(
     string EdgeId,
     string FromNodeId,
     string ToNodeId,
@@ -316,14 +344,13 @@ public sealed record WorkflowActorGraphEdgeHttpResponse(
     DateTimeOffset UpdatedAt,
     Dictionary<string, string> Properties);
 
-public sealed record WorkflowActorGraphSubgraphHttpResponse(
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: HTTP graph responses exposed actor graph readmodel names.
+//   New principle: HTTP graph responses expose workflow-run graph export artifact semantics.
+public sealed record WorkflowRunGraphExportSubgraphHttpResponse(
     string RootNodeId,
-    List<WorkflowActorGraphNodeHttpResponse> Nodes,
-    List<WorkflowActorGraphEdgeHttpResponse> Edges);
-
-public sealed record WorkflowActorGraphEnrichedHttpResponse(
-    WorkflowActorSnapshotHttpResponse Snapshot,
-    WorkflowActorGraphSubgraphHttpResponse Subgraph);
+    List<WorkflowRunGraphExportNodeHttpResponse> Nodes,
+    List<WorkflowRunGraphExportEdgeHttpResponse> Edges);
 
 public sealed record WorkflowPrimitiveParameterDescriptorHttpResponse(
     string Name,

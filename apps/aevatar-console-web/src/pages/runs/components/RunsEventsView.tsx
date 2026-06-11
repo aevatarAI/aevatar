@@ -2,8 +2,8 @@ import { Badge, Empty, Space, Tag, Typography } from "antd";
 import React from "react";
 import { cardListStyle, codeBlockStyle } from "@/shared/ui/proComponents";
 import {
-  eventCategoryValueEnum,
-  eventStatusValueEnum,
+  getEventCategoryLabel,
+  getEventStatusLabel,
   type RunEventCategory,
   type RunEventRow,
   type RunEventStatus,
@@ -12,6 +12,7 @@ import {
   workbenchConsoleScrollStyle,
   workbenchConsoleSurfaceStyle,
 } from "../runWorkbenchConfig";
+import { t } from "@/shared/i18n/messages";
 
 type RunsEventsViewProps = {
   onSelectItem?: (item: RunEventRow) => void;
@@ -188,8 +189,8 @@ const RunsEventsView: React.FC<RunsEventsViewProps> = ({
   <div style={workbenchConsoleSurfaceStyle}>
     <div style={panelHeaderStyle}>
       <Space wrap size={[8, 8]}>
-        <Typography.Text type="secondary">Live event log</Typography.Text>
-        <Tag>{rows.length} observed</Tag>
+        <Typography.Text type="secondary">{t("pages.runs.runseventsview.live.event.log", "Live event log")}</Typography.Text>
+        <Tag>{rows.length} {t("pages.runs.runseventsview.observed", "observed")}</Tag>
       </Space>
     </div>
     <div style={workbenchConsoleScrollStyle}>
@@ -241,12 +242,12 @@ const RunsEventsView: React.FC<RunsEventsViewProps> = ({
                     </div>
                     <Space size={[6, 6]} wrap>
                       <Tag color={categoryTagToneMap[item.eventCategory]}>
-                        {eventCategoryValueEnum[item.eventCategory].text}
+                        {getEventCategoryLabel(item.eventCategory)}
                       </Tag>
                       <Tag color={statusTagToneMap[item.eventStatus]}>
-                        {eventStatusValueEnum[item.eventStatus].text}
+                        {getEventStatusLabel(item.eventStatus)}
                       </Tag>
-                      {selected ? <Tag color="processing">Selected</Tag> : null}
+                      {selected ? <Tag color="processing">{t("pages.runs.runseventsview.selected", "Selected")}</Tag> : null}
                     </Space>
                   </div>
 
@@ -289,7 +290,7 @@ const RunsEventsView: React.FC<RunsEventsViewProps> = ({
       ) : (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="No events observed yet."
+          description={t("pages.runs.runseventsview.no.events.observed.yet", "No events observed yet.")}
         />
       )}
     </div>

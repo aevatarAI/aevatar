@@ -60,6 +60,8 @@ public sealed class InvokeServiceTool : IAgentTool
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
 
+    public bool? RequiresApproval(string argumentsJson) => !_options.BypassInvokeApproval;
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         try
@@ -150,7 +152,7 @@ public sealed class InvokeServiceTool : IAgentTool
         if (_options.EnableDynamicScopeResolution &&
             string.IsNullOrWhiteSpace(tenantId))
         {
-            tenantId = AgentToolRequestContext.TryGet("scope_id");
+            tenantId = AgentToolRequestContext.ScopeId;
             if (!string.IsNullOrWhiteSpace(tenantId))
             {
                 appId = string.IsNullOrWhiteSpace(appId) ? "default" : appId;

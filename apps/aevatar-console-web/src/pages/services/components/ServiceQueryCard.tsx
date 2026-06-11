@@ -1,6 +1,7 @@
 import { Button, Input, InputNumber, Typography, theme } from 'antd';
 import React from 'react';
 import type { ServiceQueryDraft } from './serviceQuery';
+import { t } from "@/shared/i18n/messages";
 
 type ServiceQueryCardProps = {
   draft: ServiceQueryDraft;
@@ -16,7 +17,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
   onChange,
   onLoad,
   onReset,
-  loadLabel = '筛选服务',
+  loadLabel = t('pages.services.servicequerycard.filter.services', 'Filter services'),
   variant = 'card',
 }) => {
   const { token } = theme.useToken();
@@ -56,20 +57,20 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
         {[
           {
             key: 'tenantId',
-            label: 'Team / Tenant',
-            placeholder: '团队 ID',
+            label: t("pages.services.servicequerycard.team.tenant", "Team / Tenant"),
+            placeholder: t("pages.services.servicequerycard.team.id", "team ID"),
             value: draft.tenantId,
           },
           {
             key: 'appId',
             label: 'App',
-            placeholder: '应用 ID',
+            placeholder: t("pages.services.servicequerycard.application.id", "Application ID"),
             value: draft.appId,
           },
           {
             key: 'namespace',
             label: 'Namespace',
-            placeholder: '命名空间',
+            placeholder: t("pages.services.servicequerycard.namespace", "namespace"),
             value: draft.namespace,
           },
         ].map((field) => (
@@ -109,7 +110,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
             width: '100%',
           }}
         >
-          <Typography.Text style={fieldLabelStyle}>Result window</Typography.Text>
+          <Typography.Text style={fieldLabelStyle}>{t("pages.services.servicequerycard.result.window", "Result window")}</Typography.Text>
           <InputNumber
             controls={false}
             min={1}
@@ -140,7 +141,14 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
           <Button onClick={onLoad} type="primary">
             {loadLabel}
           </Button>
-          {onReset ? <Button onClick={onReset}>重置</Button> : null}
+          {onReset ? (
+            <Button
+              aria-label={t("pages.services.servicequerycard.reset", "Reset")}
+              onClick={onReset}
+            >
+              {t("pages.services.servicequerycard.reset", "Reset")}
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

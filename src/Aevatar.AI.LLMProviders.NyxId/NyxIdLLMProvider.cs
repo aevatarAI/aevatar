@@ -47,20 +47,9 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     public string Name { get; }
 
-    public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-    {
-        var route = await ResolveRouteAsync(request, ct);
-        var provider = CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken);
-        try
-        {
-            return await provider.ChatAsync(route.Request, ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            throw TranslateUpstreamFailure(ex, route);
-        }
-    }
-
+    // Refactor (iter18/cluster-001):
+    //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+    //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         CancellationToken ct = default)
@@ -243,8 +232,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         _ = ct;
         var normalizedRequest = NormalizeRequest(request);
         var accessToken = ResolveAccessToken(normalizedRequest);
-        var routePreference = NormalizeRoutePreference(
-            TryGetMetadataValue(normalizedRequest, LLMRequestMetadataKeys.NyxIdRoutePreference));
+        var routePreference = NormalizeRoutePreference(ResolveRoutePreference(normalizedRequest));
         var route = ResolvePreferredRoute(normalizedRequest, accessToken, routePreference);
 
         _logger.LogDebug(
@@ -299,6 +287,10 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             Messages = request.Messages,
             RequestId = request.RequestId,
             Metadata = request.Metadata,
+            CallerContext = request.CallerContext,
+            ToolContext = request.ToolContext,
+            RoutingContext = request.RoutingContext,
+            LlmControl = request.LlmControl,
             Tools = request.Tools,
             Model = model,
             Temperature = NormalizeTemperatureForModel(model, request.Temperature),
@@ -343,7 +335,8 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveModel(LLMRequest request)
     {
-        var metadataModel = TryGetMetadataValue(request, LLMRequestMetadataKeys.ModelOverride);
+        var metadataModel = request.LlmControl?.ModelOverride
+                            ?? request.RoutingContext?.ModelOverride;
         var requestedModel = request.Model?.Trim();
 
         return !string.IsNullOrWhiteSpace(metadataModel)
@@ -355,9 +348,13 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveAccessToken(LLMRequest request)
     {
-        var userToken = TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdAccessToken);
-        if (!string.IsNullOrWhiteSpace(userToken))
-            return userToken;
+        var typedToken = request.CallerContext?.Credentials?.NyxIdBearer?.Trim();
+        if (!string.IsNullOrWhiteSpace(typedToken))
+            return typedToken;
+
+        var controlToken = request.LlmControl?.NyxIdAccessToken?.Trim();
+        if (!string.IsNullOrWhiteSpace(controlToken))
+            return controlToken;
 
         var configuredToken = _accessTokenAccessor()?.Trim();
         if (!string.IsNullOrWhiteSpace(configuredToken))
@@ -366,10 +363,9 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         throw new NyxIdAuthenticationRequiredException(Name);
     }
 
-    private static string? TryGetMetadataValue(LLMRequest request, string key) =>
-        request.Metadata != null && request.Metadata.TryGetValue(key, out var value)
-            ? value?.Trim()
-            : null;
+    private static string? ResolveRoutePreference(LLMRequest request) =>
+        request.LlmControl?.NyxIdRoutePreference
+        ?? request.RoutingContext?.NyxIdRoutePreference;
 
     private static string NormalizeRoutePreference(string? value)
     {

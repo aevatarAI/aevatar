@@ -1,4 +1,5 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import React from 'react';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import ServicesPage from './index';
@@ -103,6 +104,14 @@ jest.mock('@/shared/api/servicesApi', () => ({
   },
 }));
 
+const { servicesApi: mockServicesApi } = jest.requireMock(
+  '@/shared/api/servicesApi',
+) as {
+  servicesApi: {
+    listServices: jest.Mock;
+  };
+};
+
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
     getAuthSession: jest.fn(async () => ({
@@ -115,6 +124,8 @@ jest.mock('@/shared/studio/api', () => ({
 
 describe('ServicesPage', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
+    setLocale('zh-CN', false);
     window.history.replaceState({}, '', '/services');
   });
 
@@ -124,12 +135,15 @@ describe('ServicesPage', () => {
     expect(await screen.findByText('Aevatar / Platform')).toBeTruthy();
     expect(screen.getAllByText('Services').length).toBeGreaterThan(0);
     expect(await screen.findByText('可见服务')).toBeTruthy();
-    expect((await screen.findAllByText('已挂 Serving')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('已挂服务态')).length).toBeGreaterThan(0);
     expect(await screen.findByText('缺主 Actor')).toBeTruthy();
-    expect(await screen.findByText('无公开入口')).toBeTruthy();
+    expect(await screen.findByText('没有公开 Endpoint')).toBeTruthy();
     expect(await screen.findByText('查找服务')).toBeTruthy();
     expect(await screen.findByText('Service Alpha')).toBeTruthy();
-    expect(screen.getByText('Services 是 Platform 的权威服务目录，回答当前范围内有什么服务、它当前挂到哪、由谁承载，并指引你继续进入 Governance、Deployments 或 Topology。')).toBeTruthy();
+    expect(screen.getByText('团队/租户')).toBeTruthy();
+    expect(screen.getByText('结果窗口')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '重置' })).toBeTruthy();
+    expect(screen.getByText('Services 是 Platform 的权威服务目录，回答当前范围内有什么服务、它当前挂到哪、由谁承载，并指引你继续进入 Governance、部署或 Topology。')).toBeTruthy();
     expect(screen.getByText('服务目录')).toBeTruthy();
     expect(screen.getByText('按行扫描状态、部署和入口，点击行或按钮在抽屉里查看详情。')).toBeTruthy();
     expect(screen.getByText('状态')).toBeTruthy();
@@ -138,6 +152,58 @@ describe('ServicesPage', () => {
     expect(screen.getByRole('button', { name: '打开治理' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '筛选服务' })).toBeTruthy();
     expect(screen.queryByText('对象摘要')).toBeNull();
+    expect(screen.queryByText('当前范围没有服务')).toBeNull();
+  });
+
+  it('keeps the services inventory in a loading state until the first response resolves', async () => {
+    let resolveServices: (value: unknown[]) => void = () => {};
+    mockServicesApi.listServices.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveServices = resolve;
+        }),
+    );
+
+    renderWithQueryClient(React.createElement(ServicesPage));
+
+    expect(await screen.findByText('正在加载服务目录')).toBeTruthy();
+    expect(screen.getByText('服务目录请求仍在进行，指标会在返回后更新。')).toBeTruthy();
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4);
+    expect(screen.queryByText('当前范围没有服务')).toBeNull();
+
+    resolveServices([]);
+
+    expect(await screen.findByText('当前范围没有服务')).toBeTruthy();
+  });
+
+  it('separates services inventory failures from a true empty scope', async () => {
+    mockServicesApi.listServices.mockRejectedValueOnce(
+      new Error('service catalog unavailable'),
+    );
+
+    renderWithQueryClient(React.createElement(ServicesPage));
+
+    expect(await screen.findByText('服务目录暂不可用')).toBeTruthy();
+    expect(screen.getByText('service catalog unavailable')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '重试服务目录' })).toBeTruthy();
+    expect(screen.queryByText('当前范围没有服务')).toBeNull();
+  });
+
+  it('shows an actionable services empty state only after an empty response', async () => {
+    mockServicesApi.listServices.mockResolvedValueOnce([]);
+
+    renderWithQueryClient(React.createElement(ServicesPage));
+
+    expect(await screen.findByText('当前范围没有服务')).toBeTruthy();
+    expect(
+      screen.getByText('当前团队、App 和 Namespace 下没有可见服务。可以调整范围后重新加载。'),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '调整服务范围' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/services');
+    });
   });
 
   it('renders authority detail in drawer after selecting a service', async () => {
@@ -148,10 +214,10 @@ describe('ServicesPage', () => {
     expect(await screen.findByText('对象摘要')).toBeTruthy();
     expect(await screen.findByText('服务工作区')).toBeTruthy();
     expect(screen.getByRole('button', { name: '打开 Governance' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '打开 Deployments' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开部署' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '打开 Topology' })).toBeTruthy();
     expect(screen.getAllByText('tenant-a/app-a/default/service-alpha').length).toBeGreaterThan(0);
-    expect(screen.getByText('当前 serving 版本')).toBeTruthy();
+    expect(screen.getByText('当前服务态版本')).toBeTruthy();
     expect(screen.getByText('权威对象')).toBeTruthy();
     expect(screen.getByRole('tab', { name: '入口' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: '版本与部署' })).toBeTruthy();

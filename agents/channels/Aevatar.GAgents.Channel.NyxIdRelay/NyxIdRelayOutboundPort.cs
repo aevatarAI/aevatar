@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
@@ -140,17 +141,27 @@ public sealed class NyxIdRelayOutboundPort
         if (!result.Succeeded)
         {
             _logger.LogWarning(
-                "Nyx relay reply update failed: platform={Platform}, platformMessageId={PlatformMessageId}, detail={Detail}, editUnsupported={EditUnsupported}",
+                "Nyx relay reply update failed: platform={Platform}, platformMessageId={PlatformMessageId}, detail={Detail}, editUnsupported={EditUnsupported}, failureKind={FailureKind}, httpStatus={HttpStatus}, rawErrorKey={RawErrorKey}, rawErrorCode={RawErrorCode}",
                 platform,
                 platformMessageId,
                 result.Detail,
-                result.EditUnsupported);
+                result.EditUnsupported,
+                result.FailureKind,
+                result.HttpStatus,
+                result.RawErrorKey,
+                result.RawErrorCode);
             var errorCode = result.EditUnsupported
                 ? "relay_reply_edit_unsupported"
                 : "relay_reply_update_rejected";
             return EmitResult.Failed(
                 errorCode,
-                result.Detail ?? "Nyx relay reply update rejected.");
+                result.Detail ?? "Nyx relay reply update rejected.",
+                result.RetryAfter,
+                ComposeCapability.Unsupported,
+                result.FailureKind,
+                result.HttpStatus,
+                result.RawErrorKey,
+                result.RawErrorCode);
         }
 
         return EmitResult.Sent(
@@ -191,6 +202,19 @@ public sealed class NyxIdRelayOutboundPort
                 $"Relay outbound composer for platform '{normalizedPlatform}' cannot express the requested message content.");
         }
 
+        if (ShouldUseLarkTextOnlyFallback(normalizedPlatform, content))
+        {
+            replyText = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(content);
+            if (string.IsNullOrWhiteSpace(replyText))
+            {
+                return EmitResult.Failed(
+                    "empty_reply",
+                    "Relay outbound could not render a non-empty reply payload.");
+            }
+
+            return null;
+        }
+
         if (composer.Compose(content, composeContext) is not IPlainTextComposedMessage plainTextPayload)
         {
             return EmitResult.Failed(
@@ -213,4 +237,8 @@ public sealed class NyxIdRelayOutboundPort
         string.IsNullOrWhiteSpace(value)
             ? string.Empty
             : value.Trim().ToLowerInvariant();
+
+    private static bool ShouldUseLarkTextOnlyFallback(string normalizedPlatform, MessageContent content) =>
+        string.Equals(normalizedPlatform, "lark", StringComparison.OrdinalIgnoreCase) &&
+        (content.Actions.Count > 0 || content.Cards.Count > 0);
 }

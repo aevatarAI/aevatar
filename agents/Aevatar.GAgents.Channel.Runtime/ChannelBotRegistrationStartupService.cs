@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -6,79 +5,44 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 /// <summary>
 /// Activates the projection scope for the channel bot registration store
-/// at application startup, then re-emits the authoritative state root so the
-/// query-side read model can be rebuilt after a restart.
+/// at application startup so the query-side read model can catch up through
+/// the committed-state projection activation path after a restart.
 ///
-/// StartAsync awaits the activation with retries so the host does not
-/// accept HTTP requests until the registration projection binder is active and
-/// the refresh command has been accepted. Request paths must not activate or
-/// prime this projection themselves.
+/// StartAsync dispatches one activation attempt. Retry/backoff belongs to
+/// actor/runtime scheduling infrastructure, and request paths must not
+/// activate or prime this projection themselves.
 /// </summary>
-public sealed class ChannelBotRegistrationStartupService : IHostedService
+internal sealed class ChannelBotRegistrationStartupService : IHostedService
 {
-    private const int MaxRetries = 5;
-    private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
+    // Refactor (iter99/cluster-099): Old pattern: ChannelBotRegistrationStartupService dispatched ChannelBotRebuildProjectionCommand; actor wrote no-op ChannelBotProjectionRebuildRequestedEvent to trigger projection refresh. New principle: committed-state publication + projection activation cover cold-start refresh natively; no synthetic event needed.
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual projection refresh surface, new=host startup projection activation
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=operator-triggered rebuild, new=activation-only startup warm-up
+    // Refactor (iter165/cluster-001): Old pattern: startup owned a Task.Delay retry loop for projection activation. New principle: startup dispatches one bootstrap activation attempt; retry/backoff belongs to actor/runtime scheduling infrastructure, not this hosted service.
 
-    private readonly ChannelBotRegistrationProjectionPort _projectionPort;
-    private readonly IActorRuntime _actorRuntime;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly ChannelBotRegistrationProjectionBootstrapActivator _projectionActivator;
     private readonly ILogger<ChannelBotRegistrationStartupService> _logger;
 
     public ChannelBotRegistrationStartupService(
-        ChannelBotRegistrationProjectionPort projectionPort,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
+        ChannelBotRegistrationProjectionBootstrapActivator projectionActivator,
         ILogger<ChannelBotRegistrationStartupService> logger)
     {
-        _projectionPort = projectionPort;
-        _actorRuntime = actorRuntime;
-        _dispatchPort = dispatchPort;
+        _projectionActivator = projectionActivator;
         _logger = logger;
     }
 
     public async Task StartAsync(CancellationToken ct)
     {
-        var delay = InitialDelay;
-        for (var attempt = 1; attempt <= MaxRetries; attempt++)
+        try
         {
-            try
-            {
-                await _projectionPort.EnsureProjectionForActorAsync(
-                    ChannelBotRegistrationGAgent.WellKnownId, ct);
-                await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
-                    _actorRuntime,
-                    _dispatchPort,
-                    "startup_projection_rebuild",
-                    ct);
-                _logger.LogInformation(
-                    "Channel bot registration projection scope activated and rebuild dispatched for {ActorId} (attempt {Attempt})",
-                    ChannelBotRegistrationGAgent.WellKnownId, attempt);
-                return;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to activate or rebuild channel bot registration projection scope (attempt {Attempt}/{MaxRetries})",
-                    attempt, MaxRetries);
-
-                if (attempt < MaxRetries)
-                    await Task.Delay(delay, ct);
-                delay *= 2; // exponential backoff
-            }
+            await _projectionActivator.ActivateWellKnownCatalogAsync(ct);
+            _logger.LogInformation(
+                "Channel bot registration projection scope activated for {ActorId}",
+                ChannelBotRegistrationGAgent.WellKnownId);
         }
-
-        // All retries exhausted — let the host start in degraded mode.
-        // Registrations may appear missing until the projection binder and
-        // authoritative refresh are re-triggered by a later host restart or
-        // operator intervention.
-        _logger.LogError(
-            "Channel bot registration projection activation/rebuild failed after {MaxRetries} attempts — " +
-            "registrations may not be visible until the refresh path is re-triggered",
-            MaxRetries);
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;

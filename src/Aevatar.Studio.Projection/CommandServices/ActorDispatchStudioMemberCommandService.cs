@@ -1,10 +1,11 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
+using Aevatar.GAgents.StudioTeam;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Projection.Mapping;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Security.Cryptography;
 
 namespace Aevatar.Studio.Projection.CommandServices;
 
@@ -12,22 +13,23 @@ namespace Aevatar.Studio.Projection.CommandServices;
 /// Dispatches StudioMember command events to the per-member
 /// <see cref="StudioMemberGAgent"/> actor. Uses the canonical actor-id
 /// convention (<c>studio-member:{scopeId}:{memberId}</c>) and ensures the
-/// actor + projection scope are activated before dispatch via
+/// target actor exists before dispatch via
 /// <see cref="IStudioActorBootstrap"/>.
 /// </summary>
 internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCommandPort
 {
-    private const string DirectRoute = "aevatar.studio.projection.studio-member";
+    private const string MemberPublisherId = "aevatar.studio.projection.studio-member";
+    private const string BindingRunPublisherId = "aevatar.studio.projection.studio-member-binding-run";
 
     private readonly IStudioActorBootstrap _bootstrap;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioProjectionActorCommandDispatch _commandDispatch;
 
     public ActorDispatchStudioMemberCommandService(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort)
+        StudioProjectionActorCommandDispatch commandDispatch)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
     }
 
     public async Task<StudioMemberSummaryResponse> CreateAsync(
@@ -68,6 +70,28 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
 
         await DispatchAsync(normalizedScopeId, memberId, evt, ct);
 
+        // Two-event create-with-team protocol (ADR-0017 §Locked Rule 3).
+        // When the request carries a non-empty teamId, dispatch a
+        // Reassigned event after the Created event to the member actor only.
+        // The durable projection materializer later fans the committed
+        // reassignment fact out to the Team actor inbox. That keeps command
+        // ACK semantics honest and lets projection replay recover roster
+        // fanout without this command service driving team roster updates.
+        if (!string.IsNullOrEmpty(request.TeamId))
+        {
+            var initialTeamId = StudioTeamConventions.NormalizeTeamId(request.TeamId);
+            await ReassignTeamInternalAsync(
+                normalizedScopeId,
+                memberId,
+                fromTeamIdNormalized: null,
+                toTeamIdNormalized: initialTeamId,
+                ct);
+        }
+
+        var responseTeamId = string.IsNullOrEmpty(request.TeamId)
+            ? null
+            : StudioTeamConventions.NormalizeTeamId(request.TeamId);
+
         return new StudioMemberSummaryResponse(
             MemberId: memberId,
             ScopeId: normalizedScopeId,
@@ -78,7 +102,67 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             PublishedServiceId: publishedServiceId,
             LastBoundRevisionId: null,
             CreatedAt: createdAt,
-            UpdatedAt: createdAt);
+            UpdatedAt: createdAt)
+        { TeamId = responseTeamId };
+    }
+
+    public async Task PatchTeamAssignmentAsync(
+        string scopeId,
+        string memberId,
+        string? targetTeamId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+        var targetNormalized = targetTeamId == null
+            ? null
+            : StudioTeamConventions.NormalizeTeamId(targetTeamId);
+
+        var evt = new StudioMemberTeamAssignmentPatchRequested
+        {
+            MemberId = normalizedMemberId,
+            ScopeId = normalizedScopeId,
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        if (targetNormalized != null)
+            evt.TargetTeamId = targetNormalized;
+
+        // Refactor (iter96/cluster-545):
+        //   Old: application layer derived from_team_id and dispatched reassignment/fanout semantics.
+        //   New: PATCH intent enters StudioMemberGAgent; member actor commits the reassignment event, materializer fans out.
+        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
+    }
+
+    private async Task ReassignTeamInternalAsync(
+        string normalizedScopeId,
+        string normalizedMemberId,
+        string? fromTeamIdNormalized,
+        string? toTeamIdNormalized,
+        CancellationToken ct)
+    {
+        // Refactor (iter96/cluster-544):
+        //   Old: command service dispatch 后顺序 fanout 到 team service(不可靠,无 durable)
+        //   New: committed state event -> StudioTeamRosterFanoutMaterializer 投递 team actor inbox(durable + actor retry)
+        var reassignedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var evt = new StudioMemberReassignedEvent
+        {
+            MemberId = normalizedMemberId,
+            ScopeId = normalizedScopeId,
+            ReassignedAtUtc = reassignedAt,
+        };
+        if (fromTeamIdNormalized != null)
+            evt.FromTeamId = fromTeamIdNormalized;
+        if (toTeamIdNormalized != null)
+            evt.ToTeamId = toTeamIdNormalized;
+
+        // Dispatch only the authority change to the member actor. Durable
+        // Team roster fanout is driven from the committed member event by
+        // the Studio materialization projection scope, not by this command
+        // service. That keeps the command ACK honest: member reassignment was
+        // accepted for dispatch, while Team roster visibility is recovered
+        // from committed facts and projection watermarks.
+        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
     public async Task UpdateImplementationAsync(
@@ -103,38 +187,37 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
-    public async Task RecordBindingAsync(
-        string scopeId,
-        string memberId,
-        string publishedServiceId,
-        string revisionId,
-        string implementationKindName,
+    public async Task StartBindingRunAsync(
+        StudioMemberBindingRunStartRequest request,
         CancellationToken ct = default)
     {
-        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
-        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+        ArgumentNullException.ThrowIfNull(request);
 
-        if (string.IsNullOrWhiteSpace(publishedServiceId))
-        {
-            throw new InvalidOperationException(
-                $"member '{normalizedMemberId}' bind: publishedServiceId is required to record binding.");
-        }
+        var normalizedBindingRunId = StudioMemberConventions.NormalizeBindingRunId(request.BindingRunId);
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(request.ScopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(request.MemberId);
+        var actorId = StudioMemberConventions.BuildBindingRunActorId(normalizedBindingRunId);
+        // Refactor (iter56/cluster-910-projection-activation-cleanup):
+        //   old=command-path pre-dispatch activation
+        //   new=committed-state plan provider
+        //   binding-run command ACK does not imply readmodel materialization.
+        var actor = await _bootstrap.EnsureAsync<StudioMemberBindingRunGAgent>(actorId, ct);
+        await _bootstrap.EnsureAsync<StudioMemberGAgent>(
+            StudioMemberConventions.BuildActorId(normalizedScopeId, normalizedMemberId),
+            ct);
 
-        if (string.IsNullOrWhiteSpace(revisionId))
+        var payload = new StudioMemberBindingRunRequested
         {
-            throw new InvalidOperationException(
-                $"member '{normalizedMemberId}' bind: revisionId is required to record binding.");
-        }
-
-        var evt = new StudioMemberBoundEvent
-        {
-            PublishedServiceId = publishedServiceId,
-            RevisionId = revisionId,
-            ImplementationKind = MemberImplementationKindMapper.Parse(implementationKindName),
-            BoundAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Request = BuildBindingRequest(
+                normalizedBindingRunId,
+                normalizedScopeId,
+                normalizedMemberId,
+                request.ImplementationKind,
+                request.Binding),
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
-        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
+        await _commandDispatch.DispatchAsync(actor, payload, BindingRunPublisherId, ct: ct);
     }
 
     private static StudioMemberImplementationRef BuildImplementationRefMessage(
@@ -171,20 +254,91 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         return message;
     }
 
+    private static StudioMemberBindingRequest BuildBindingRequest(
+        string bindingRunId,
+        string scopeId,
+        string memberId,
+        string implementationKindName,
+        UpdateStudioMemberBindingRequest binding)
+    {
+        var request = new StudioMemberBindingRequest
+        {
+            BindingRunId = bindingRunId,
+            ScopeId = scopeId,
+            MemberId = memberId,
+        };
+        if (!string.IsNullOrWhiteSpace(binding.RevisionId))
+            request.RevisionId = binding.RevisionId;
+
+        switch (implementationKindName)
+        {
+            case MemberImplementationKindNames.Workflow:
+                request.Workflow = new StudioMemberWorkflowBindingRequest
+                {
+                    WorkflowId = binding.Workflow?.WorkflowId ?? string.Empty,
+                };
+                request.Workflow.WorkflowYamls.Add(binding.Workflow?.WorkflowYamls ?? []);
+                break;
+            case MemberImplementationKindNames.Script:
+                request.Script = new StudioMemberScriptBindingRequest
+                {
+                    ScriptId = binding.Script?.ScriptId ?? string.Empty,
+                };
+                if (!string.IsNullOrWhiteSpace(binding.Script?.ScriptRevision))
+                    request.Script.ScriptRevision = binding.Script.ScriptRevision;
+                break;
+            case MemberImplementationKindNames.GAgent:
+                request.Gagent = new StudioMemberGAgentBindingRequest
+                {
+                    ActorTypeName = binding.GAgent?.ActorTypeName ?? string.Empty,
+                };
+                foreach (var endpoint in binding.GAgent?.Endpoints ?? [])
+                {
+                    request.Gagent.Endpoints.Add(new StudioMemberGAgentEndpointBindingRequest
+                    {
+                        EndpointId = endpoint.EndpointId ?? string.Empty,
+                        DisplayName = endpoint.DisplayName ?? string.Empty,
+                        Kind = ParseGAgentEndpointKind(endpoint.Kind),
+                        RequestTypeUrl = endpoint.RequestTypeUrl ?? string.Empty,
+                        ResponseTypeUrl = endpoint.ResponseTypeUrl ?? string.Empty,
+                        Description = endpoint.Description ?? string.Empty,
+                    });
+                }
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"Unknown implementationKind '{implementationKindName}'.");
+        }
+
+        request.RequestHash = ComputeRequestHash(request);
+        return request;
+    }
+
+    private static StudioMemberGAgentEndpointKind ParseGAgentEndpointKind(string? rawValue) =>
+        rawValue?.Trim().ToLowerInvariant() switch
+        {
+            null or "" => throw new InvalidOperationException("gagent endpoint kind is required."),
+            "command" => StudioMemberGAgentEndpointKind.Command,
+            "chat" => StudioMemberGAgentEndpointKind.Chat,
+            _ => throw new InvalidOperationException($"Unsupported gagent endpoint kind '{rawValue}'."),
+        };
+
+    private static string ComputeRequestHash(StudioMemberBindingRequest request)
+    {
+        var normalized = request.Clone();
+        normalized.RequestHash = string.Empty;
+        return Convert.ToHexString(SHA256.HashData(normalized.ToByteArray())).ToLowerInvariant();
+    }
+
     private async Task DispatchAsync(string scopeId, string memberId, IMessage payload, CancellationToken ct)
     {
         var actorId = StudioMemberConventions.BuildActorId(scopeId, memberId);
+        // Refactor (iter56/cluster-910-projection-activation-cleanup):
+        //   old=command-path pre-dispatch activation
+        //   new=committed-state plan provider
+        //   member commands only provision actor and dispatch accepted work.
         var actor = await _bootstrap.EnsureAsync<StudioMemberGAgent>(actorId, ct);
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect(DirectRoute, actor.Id),
-        };
-
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await _commandDispatch.DispatchAsync(actor, payload, MemberPublisherId, ct: ct);
     }
 
     private static string GenerateMemberId()

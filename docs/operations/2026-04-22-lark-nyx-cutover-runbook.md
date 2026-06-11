@@ -13,7 +13,7 @@ This runbook reflects the post-`#308` production contract.
 
 ## Goal
 
-Cut production Lark webhook ingress over to `Lark -> NyxID -> Aevatar` and retire the direct Aevatar Lark callback with `410 Gone`.
+Cut production Lark webhook ingress over to `Lark -> NyxID -> Aevatar` and remove the direct Aevatar Lark callback from the supported runtime surface.
 
 ## Preconditions
 
@@ -51,7 +51,7 @@ Operationally:
 5. Observe:
    - Nyx -> Aevatar relay callback success
    - Aevatar -> Nyx `channel-relay/reply` success
-   - `POST /api/channels/lark/callback/{registrationId}` returns `410 Gone`
+   - no direct Aevatar Lark callback route is registered
 
 ## Backfill Notes
 
@@ -62,8 +62,8 @@ Operationally:
 - New Lark provisioning goes through Nyx only.
 - `POST /api/channels/registrations` no longer accepts direct Lark registrations.
 - `channel_registrations action=register` no longer accepts `platform=lark`.
-- `POST /api/channels/lark/callback/{registrationId}` returns `410 Gone`.
-- direct platform callback/test-reply flows are retired from ChannelRuntime.
+- the direct Aevatar Lark callback path is no longer exposed.
+- direct platform callback flows are retired from ChannelRuntime.
 - `update_token` is retired; ChannelRuntime does not store or refresh channel credentials.
 - ChannelRuntime registration queries return only non-secret routing/identity/status handles.
 - ChannelRuntime no longer requires `ICredentialProvider` / `SecretsStoreCredentialProvider` composition for channel registration or reply delivery.

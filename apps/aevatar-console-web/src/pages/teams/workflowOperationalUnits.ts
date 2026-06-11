@@ -327,7 +327,7 @@ function deriveAttention(input: {
     return {
       attention: "no-bound-service",
       attentionDetail:
-        "This workflow advertises a service key, but no matching bound service is visible in the current scope.",
+        "This workflow advertises a service key, but no matching bound service is visible in the current workspace.",
       attentionLabel: "No bound service",
       isDraftOnly: false,
     };

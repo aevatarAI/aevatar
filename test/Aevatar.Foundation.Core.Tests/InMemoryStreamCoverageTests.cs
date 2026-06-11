@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Threading.Channels;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -135,22 +136,23 @@ public sealed class InMemoryStreamCoverageTests
 
         await stream.ProduceAsync(new PingEvent { Message = "first" });
         await firstDispatchObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await GetDispatchLoop(stream).WaitAsync(TimeSpan.FromSeconds(2));
 
         Func<Task> act = async () => await stream.ProduceAsync(new PingEvent { Message = "second" });
         await act.Should().ThrowAsync<Exception>();
     }
 
     [Fact]
-    public async Task DispatchSubscribersConcurrently_True_ShouldNotBlockFastSubscriber()
+    public async Task ProduceAsync_ShouldInvokeSubscribersSequentially()
     {
-        var stream = new InMemoryStream(
-            "s-concurrent",
-            new InMemoryStreamOptions { DispatchSubscribersConcurrently = true });
+        var stream = new InMemoryStream("s-sequential");
         var fast = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slowStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var slowGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var slow = await stream.SubscribeAsync<PingEvent>(async _ =>
         {
+            slowStarted.TrySetResult(true);
             await slowGate.Task.WaitAsync(TimeSpan.FromSeconds(2));
         });
         await using var quick = await stream.SubscribeAsync<PingEvent>(_ =>
@@ -160,18 +162,21 @@ public sealed class InMemoryStreamCoverageTests
         });
 
         await stream.ProduceAsync(new PingEvent { Message = "x" });
-        await fast.Task.WaitAsync(TimeSpan.FromMilliseconds(200));
+        await slowStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        fast.Task.IsCompleted.Should().BeFalse("the second subscriber must not run until the first subscriber completes");
+
         slowGate.TrySetResult(true);
+        await fast.Task.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
     [Fact]
-    public async Task DispatchSubscribersConcurrently_True_ShouldStillRunPostDispatchCallback()
+    public async Task ProduceAsync_ShouldRunPostDispatchCallbackAfterSubscribersComplete()
     {
         var forwarded = new TaskCompletionSource<EventEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slowStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var slowGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var stream = new InMemoryStream(
-            "s-concurrent-forward",
-            new InMemoryStreamOptions { DispatchSubscribersConcurrently = true },
+            "s-sequential-forward",
             onDispatchedAsync: envelope =>
             {
                 forwarded.TrySetResult(envelope);
@@ -180,15 +185,19 @@ public sealed class InMemoryStreamCoverageTests
 
         await using var slow = await stream.SubscribeAsync<PingEvent>(async _ =>
         {
+            slowStarted.TrySetResult(true);
             await slowGate.Task.WaitAsync(TimeSpan.FromSeconds(2));
         });
 
         await stream.ProduceAsync(new PingEvent { Message = "forward" });
-        var envelope = await forwarded.Task.WaitAsync(TimeSpan.FromMilliseconds(300));
+        await slowStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        forwarded.Task.IsCompleted.Should().BeFalse("post-dispatch forwarding must wait for sequential subscriber completion");
+
+        slowGate.TrySetResult(true);
+        var envelope = await forwarded.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         envelope.Payload.Should().NotBeNull();
         envelope.Payload!.Unpack<PingEvent>().Message.Should().Be("forward");
-        slowGate.TrySetResult(true);
     }
 
     [Fact]
@@ -249,5 +258,51 @@ public sealed class InMemoryStreamCoverageTests
         Action act = () => provider.GetStream("actor-best-effort");
         act.Should().NotThrow();
         called.Should().BeTrue();
+    }
+
+    [Fact]
+    public void InMemoryStream_must_not_reintroduce_fire_and_forget_concurrent_dispatch()
+    {
+        var sourceFiles = new[]
+        {
+            FindRepoFile("src/Aevatar.Foundation.Runtime/Streaming/InMemoryStream.cs"),
+            FindRepoFile("src/Aevatar.Foundation.Runtime/Streaming/InMemoryStreamOptions.cs"),
+        };
+
+        foreach (var sourceFile in sourceFiles)
+        {
+            var source = File.ReadAllText(sourceFile);
+
+            source.Should().NotContain(
+                "DispatchSubscribersConcurrently",
+                "deleted per iter109/cluster-109-inmemory-stream-inline-dispatch; fire-and-forget concurrent dispatch must not return");
+            source.Should().NotContain(
+                "Task.Run(static state => subscriber",
+                "no fire-and-forget subscriber Task.Run");
+        }
+    }
+
+    private static Task GetDispatchLoop(InMemoryStream stream)
+    {
+        var field = typeof(InMemoryStream).GetField("_dispatchLoop", BindingFlags.Instance | BindingFlags.NonPublic);
+        field.Should().NotBeNull();
+        var dispatchLoop = field!.GetValue(stream);
+        dispatchLoop.Should().BeAssignableTo<Task>();
+        return (Task)dispatchLoop!;
+    }
+
+    private static string FindRepoFile(string relativePath)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            var candidate = Path.Combine(dir.FullName, relativePath);
+            if (File.Exists(candidate))
+                return candidate;
+
+            dir = dir.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate repository file '{relativePath}'.");
     }
 }

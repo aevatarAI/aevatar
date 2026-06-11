@@ -153,11 +153,11 @@ block-beta
     block:host ["Host Layer"]
         H1["Aevatar.Mainnet.Host.Api"]
         H2["Aevatar.Workflow.Host.Api"]
+        H3["Aevatar.GAgentService.Hosting"]
     end
 
     block:presentation ["Presentation"]
-        P1["Aevatar.Presentation.AGUI"]
-        P2["Aevatar.Workflow.Presentation.AGUIAdapter"]
+        P1["Aevatar.Workflow.Presentation.AGUIAdapter"]
     end
 
     block:infra ["Infrastructure"]
@@ -196,8 +196,8 @@ block-beta
 
 | 层 | 职责 | 关键项目 |
 |---|---|---|
-| Host | API 组合与宿主，不承载核心业务逻辑 | `Aevatar.Mainnet.Host.Api`、`Aevatar.Workflow.Host.Api` |
-| Presentation | 协议适配（AGUI / SSE / WebSocket） | `Aevatar.Presentation.AGUI`、`Aevatar.Workflow.Presentation.AGUIAdapter` |
+| Host | API 组合与宿主，不承载核心业务逻辑 | `Aevatar.Mainnet.Host.Api`、`Aevatar.Workflow.Host.Api`、`Aevatar.GAgentService.Hosting` |
+| Presentation | 投影输出协议适配 | `Aevatar.Workflow.Presentation.AGUIAdapter` |
 | Infrastructure | 持久化、文件 I/O、连接器引导 | `Aevatar.Workflow.Infrastructure`、`Aevatar.Bootstrap`、`Aevatar.Configuration` |
 | Application | 编排、查询门面、工作流注册表、投影协调 | `Aevatar.Workflow.Application`、`Aevatar.Workflow.Projection` |
 | Domain / Core | GAgent、RoleGAgent、WorkflowGAgent、模块系统 | `Aevatar.Foundation.Core`、`Aevatar.AI.Core`、`Aevatar.Workflow.Core` |

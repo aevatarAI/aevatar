@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Infrastructure.Middleware;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -71,16 +72,15 @@ public class ConnectedServicesContextMiddlewareTests
     [Fact]
     public async Task InvokeAsync_NoSystemMessage_PassesThrough()
     {
-        var metadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.ConnectedServicesContext] = "some context"
-        };
         var context = new LLMCallContext
         {
             Request = new LLMRequest
             {
                 Messages = [ChatMessage.User("hello")],
-                Metadata = metadata,
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    ConnectedServices = new AgentToolConnectedServicesContext("some context"),
+                },
             },
             Provider = null!,
         };
@@ -93,10 +93,6 @@ public class ConnectedServicesContextMiddlewareTests
 
     private static LLMCallContext BuildContext(string systemPrompt, string? connectedServices)
     {
-        var metadata = new Dictionary<string, string>();
-        if (connectedServices is not null)
-            metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = connectedServices;
-
         return new LLMCallContext
         {
             Request = new LLMRequest
@@ -106,7 +102,12 @@ public class ConnectedServicesContextMiddlewareTests
                     ChatMessage.System(systemPrompt),
                     ChatMessage.User("hello"),
                 ],
-                Metadata = metadata,
+                ToolContext = connectedServices is null
+                    ? null
+                    : AgentToolExecutionContext.Empty with
+                    {
+                        ConnectedServices = new AgentToolConnectedServicesContext(connectedServices),
+                    },
             },
             Provider = null!,
         };

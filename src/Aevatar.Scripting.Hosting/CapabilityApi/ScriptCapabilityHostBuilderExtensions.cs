@@ -1,8 +1,6 @@
 using Aevatar.Hosting;
-using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Scripting.Hosting.CapabilityApi;
 
@@ -19,13 +17,13 @@ public static class ScriptCapabilityHostBuilderExtensions
             RequiredRoutes =
             [
                 "/api/scripts/evolutions/proposals",
-                "/api/scripts/runtimes",
-                "/api/scripts/runtimes/{actorId}/readmodel",
             ],
             ProbeAsync = static async (serviceProvider, cancellationToken) =>
             {
-                var queryService = serviceProvider.GetRequiredService<IScriptReadModelQueryApplicationService>();
-                _ = await queryService.ListSnapshotsAsync(1, cancellationToken);
+                // Refactor (iter56/cluster-928-script-any-public-delete): old=public Any → JSON readmodel surface,
+                // new=removed (keep internal semantic Any).
+                // Studio activity now uses native AppScriptReadModel data.
+                await Task.CompletedTask.WaitAsync(cancellationToken);
                 return AevatarHealthContributorResult.Healthy("Scripting capability is ready.");
             },
         });

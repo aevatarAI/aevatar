@@ -20,7 +20,6 @@ public sealed class WorkflowActorBindingProjectorTests
         var dispatcher = new FakeStoreDispatcher();
         var projector = new WorkflowActorBindingProjector(
             dispatcher,
-            dispatcher,
             new StaticClock(new DateTimeOffset(2026, 3, 14, 12, 0, 0, TimeSpan.Zero)));
         var context = new WorkflowBindingProjectionContext
         {
@@ -59,7 +58,7 @@ public sealed class WorkflowActorBindingProjectorTests
     public async Task ProjectAsync_ShouldCaptureRunBinding_AndNormalizeRunId()
     {
         var dispatcher = new FakeStoreDispatcher();
-        var projector = new WorkflowActorBindingProjector(dispatcher, dispatcher, new StaticClock(DateTimeOffset.UtcNow));
+        var projector = new WorkflowActorBindingProjector(dispatcher, new StaticClock(DateTimeOffset.UtcNow));
         var context = new WorkflowBindingProjectionContext
         {
             RootActorId = "actor-2",
@@ -96,7 +95,7 @@ public sealed class WorkflowActorBindingProjectorTests
     public async Task ProjectAsync_ShouldIgnoreUnrelatedEvents()
     {
         var dispatcher = new FakeStoreDispatcher();
-        var projector = new WorkflowActorBindingProjector(dispatcher, dispatcher, new StaticClock(DateTimeOffset.UtcNow));
+        var projector = new WorkflowActorBindingProjector(dispatcher, new StaticClock(DateTimeOffset.UtcNow));
         var context = new WorkflowBindingProjectionContext
         {
             RootActorId = "actor-3",
@@ -118,11 +117,67 @@ public sealed class WorkflowActorBindingProjectorTests
         dispatcher.Documents.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldOverwriteBindingDocument_FromCommittedPayloadOnly()
+    {
+        var dispatcher = new FakeStoreDispatcher();
+        var projector = new WorkflowActorBindingProjector(
+            dispatcher,
+            new StaticClock(new DateTimeOffset(2026, 3, 14, 13, 0, 0, TimeSpan.Zero)));
+        var context = new WorkflowBindingProjectionContext
+        {
+            RootActorId = "actor-4",
+            ProjectionKind = "workflow-binding",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            WrapCommitted(
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = " first ",
+                    WorkflowYaml = "name: first",
+                    ScopeId = " scope-a ",
+                    InlineWorkflowYamls =
+                    {
+                        ["kept-only-if-replayed"] = "old-yaml",
+                    },
+                },
+                version: 4,
+                id: "evt-first",
+                utcTimestamp: new DateTime(2026, 3, 14, 13, 0, 0, DateTimeKind.Utc)),
+            CancellationToken.None);
+
+        await projector.ProjectAsync(
+            context,
+            WrapCommitted(
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = " second ",
+                    WorkflowYaml = "name: second",
+                    ScopeId = " scope-b ",
+                },
+                version: 5,
+                id: "evt-second",
+                utcTimestamp: new DateTime(2026, 3, 14, 13, 1, 0, DateTimeKind.Utc)),
+            CancellationToken.None);
+
+        var document = dispatcher.Documents["actor-4"];
+        document.WorkflowName.Should().Be("second");
+        document.WorkflowYaml.Should().Be("name: second");
+        document.ScopeId.Should().Be("scope-b");
+        document.InlineWorkflowYamls.Should().BeEmpty();
+        document.CreatedAt.Should().Be(new DateTimeOffset(2026, 3, 14, 13, 1, 0, TimeSpan.Zero));
+        document.UpdatedAt.Should().Be(new DateTimeOffset(2026, 3, 14, 13, 1, 0, TimeSpan.Zero));
+        document.LastEventId.Should().Be("evt-second");
+        dispatcher.ReadCount.Should().Be(0);
+    }
+
     private sealed class FakeStoreDispatcher
-        : IProjectionWriteDispatcher<WorkflowActorBindingDocument>,
-          IProjectionDocumentReader<WorkflowActorBindingDocument, string>
+        : IProjectionWriteDispatcher<WorkflowActorBindingDocument>
     {
         public Dictionary<string, WorkflowActorBindingDocument> Documents { get; } = new(StringComparer.Ordinal);
+        public int ReadCount { get; private set; }
 
         public Task<ProjectionWriteResult> UpsertAsync(WorkflowActorBindingDocument readModel, CancellationToken ct = default)
         {
@@ -138,26 +193,6 @@ public sealed class WorkflowActorBindingProjectorTests
             return Task.FromResult(removed
                 ? ProjectionWriteResult.Applied()
                 : ProjectionWriteResult.Duplicate());
-        }
-
-        public Task<WorkflowActorBindingDocument?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(Documents.TryGetValue(key, out var document) ? document.Clone() : null);
-        }
-
-        public Task<ProjectionDocumentQueryResult<WorkflowActorBindingDocument>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new ProjectionDocumentQueryResult<WorkflowActorBindingDocument>
-            {
-                Items = Documents.Values
-                    .Take(query.Take <= 0 ? 50 : query.Take)
-                    .Select(static x => x.Clone())
-                    .ToList(),
-            });
         }
     }
 

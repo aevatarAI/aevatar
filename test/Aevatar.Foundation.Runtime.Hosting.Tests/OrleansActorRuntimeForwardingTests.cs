@@ -8,6 +8,8 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans;
 using Orleans.Runtime;
@@ -17,6 +19,37 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class OrleansActorRuntimeForwardingTests
 {
     [Fact]
+    public async Task CreateByKindAsync_WithExplicitId_ShouldInitializeTrimmedKindAndReturnOrleansActor()
+    {
+        var runtime = CreateRuntime(out _, out var grains, out _);
+
+        var actor = await runtime.CreateByKindAsync("  workflow.assistant-role  ", "role:assistant");
+
+        actor.Should().BeOfType<OrleansActor>();
+        actor.Id.Should().Be("role:assistant");
+        grains.Should().ContainKey("role:assistant");
+        grains["role:assistant"].InitializedKinds.Should()
+            .ContainSingle()
+            .Which.Should().Be("workflow.assistant-role");
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_WhenInitializationFails_ShouldThrow()
+    {
+        var runtime = CreateRuntime(out _, out var grains, out _);
+        await runtime.ExistsAsync("role:assistant");
+        grains["role:assistant"].InitializeAgentByKindResult = false;
+
+        var act = () => runtime.CreateByKindAsync("workflow.assistant-role", "role:assistant");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Failed to initialize Orleans actor role:assistant for kind 'workflow.assistant-role'.*");
+        grains["role:assistant"].InitializedKinds.Should()
+            .ContainSingle()
+            .Which.Should().Be("workflow.assistant-role");
+    }
+
+    [Fact]
     public async Task LinkAsync_ShouldRegisterForwardingBinding_AndUpdateTopology()
     {
         var runtime = CreateRuntime(out var registry, out var grains, out _);
@@ -25,10 +58,61 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         grains["parent"].Children.Should().Contain("child");
         grains["child"].ParentId.Should().Be("parent");
-        var bindings = await registry.ListBySourceAsync("parent", CancellationToken.None);
-        var binding = bindings.Should().ContainSingle(x => x.TargetStreamId == "child").Subject;
-        binding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
-        binding.DirectionFilter.SetEquals([TopologyAudience.Children, TopologyAudience.ParentAndChildren]).Should().BeTrue();
+        var parentBindings = await registry.ListBySourceAsync("parent", CancellationToken.None);
+        var hierarchyBinding = parentBindings.Should().ContainSingle(x => x.TargetStreamId == "child").Subject;
+        hierarchyBinding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
+        hierarchyBinding.DirectionFilter.SetEquals([TopologyAudience.Children, TopologyAudience.ParentAndChildren]).Should().BeTrue();
+
+        var childBindings = await registry.ListBySourceAsync("child", CancellationToken.None);
+        var committedObservationBinding = childBindings.Should().ContainSingle(x => x.TargetStreamId == "parent").Subject;
+        committedObservationBinding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
+        committedObservationBinding.DirectionFilter.SetEquals([TopologyAudience.Unspecified]).Should().BeTrue();
+        committedObservationBinding.EventTypeFilter.Should().ContainSingle()
+            .Which.Should().Be($"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}");
+    }
+
+    [Fact]
+    public async Task LinkAsync_ShouldForwardChildCommittedFactsObserverPublicationsToParent()
+    {
+        var runtime = CreateRuntime(out _, out var grains, out _);
+        await runtime.LinkAsync("parent", "child");
+
+        var committed = new EventEnvelope
+        {
+            Id = "committed-facts-publication",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    AgentId = "child",
+                    EventId = "event-1",
+                    Version = 1,
+                    EventType = "test.committed",
+                    EventData = Any.Pack(new StringValue { Value = "done" }),
+                },
+            }),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("child", ObserverAudience.CommittedFacts),
+        };
+
+        var parentReceived = new TaskCompletionSource<EventEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await grains["parent"].SubscribeOwnStreamAsync(envelope =>
+        {
+            if (string.Equals(envelope.Id, "committed-facts-publication", StringComparison.Ordinal))
+                parentReceived.TrySetResult(envelope);
+
+            return Task.CompletedTask;
+        }, CancellationToken.None);
+
+        await grains["child"].PublishToOwnStreamAsync(committed, CancellationToken.None);
+
+        var forwarded = await parentReceived.Task;
+        forwarded.Route!.IsObserverPublication().Should().BeTrue();
+        forwarded.Route.GetObserverAudience().Should().Be(ObserverAudience.CommittedFacts);
+        forwarded.Payload!.Unpack<CommittedStateEventPublished>()
+            .StateEvent.EventData.Unpack<StringValue>().Value.Should().Be("done");
+        StreamForwardingEnvelopeState.GetSourceStreamId(forwarded).Should().Be("child");
+        StreamForwardingEnvelopeState.GetTargetStreamId(forwarded).Should().Be("parent");
     }
 
     [Fact]
@@ -42,6 +126,7 @@ public sealed class OrleansActorRuntimeForwardingTests
         grains["parent"].Children.Should().NotContain("child");
         grains["child"].ParentId.Should().BeNull();
         (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
+        (await registry.ListBySourceAsync("child", CancellationToken.None)).Should().BeEmpty();
     }
 
     [Fact]
@@ -88,6 +173,8 @@ public sealed class OrleansActorRuntimeForwardingTests
         grains["child-2"].ParentId.Should().BeNull();
         (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
         (await registry.ListBySourceAsync("middle", CancellationToken.None)).Should().BeEmpty();
+        (await registry.ListBySourceAsync("child-1", CancellationToken.None)).Should().BeEmpty();
+        (await registry.ListBySourceAsync("child-2", CancellationToken.None)).Should().BeEmpty();
         grains["middle"].Calls.Should().ContainInOrder("Purge", "Deactivate");
     }
 
@@ -119,10 +206,12 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         grains["parent"].Children.Should().Contain("child");
         grains["child"].ParentId.Should().Be("parent");
-        grains["parent"].IsInitializedCallCount.Should().Be(1); // only from ExistsAsync above
-        grains["child"].IsInitializedCallCount.Should().Be(2); // ExistsAsync + LinkAsync guard
+        grains["parent"].IsInitializedCallCount.Should().Be(1);
+        grains["child"].IsInitializedCallCount.Should().Be(2);
         (await registry.ListBySourceAsync("parent", CancellationToken.None))
             .Should().ContainSingle(x => x.TargetStreamId == "child");
+        (await registry.ListBySourceAsync("child", CancellationToken.None))
+            .Should().ContainSingle(x => x.TargetStreamId == "parent");
     }
 
     [Fact]
@@ -173,12 +262,17 @@ public sealed class OrleansActorRuntimeForwardingTests
     {
         var grainMap = new Dictionary<string, RecordingRuntimeActorGrain>(StringComparer.Ordinal);
         var callbackSchedulerGrainMap = new Dictionary<string, RecordingCallbackSchedulerGrain>(StringComparer.Ordinal);
+        registry = new InMemoryStreamForwardingRegistry();
+        var streams = new InMemoryStreamProvider(
+            new InMemoryStreamOptions { ThrowOnSubscriberError = true },
+            NullLoggerFactory.Instance,
+            registry);
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         ((GrainFactoryProxy)(object)grainFactory).ResolveGrain = actorId =>
         {
             if (!grainMap.TryGetValue(actorId, out var grain))
             {
-                grain = new RecordingRuntimeActorGrain();
+                grain = new RecordingRuntimeActorGrain(streams, actorId);
                 grainMap[actorId] = grain;
             }
 
@@ -195,8 +289,6 @@ public sealed class OrleansActorRuntimeForwardingTests
             return grain;
         };
 
-        registry = new InMemoryStreamForwardingRegistry();
-        var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
         grains = grainMap;
         callbackSchedulerGrains = callbackSchedulerGrainMap;
         return new OrleansActorRuntime(
@@ -242,14 +334,28 @@ public sealed class OrleansActorRuntimeForwardingTests
 
     private sealed class RecordingRuntimeActorGrain : IRuntimeActorGrain
     {
+        private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
+        private readonly string _actorId;
+        private IAsyncDisposable? _selfStreamSubscription;
+
+        public RecordingRuntimeActorGrain(Aevatar.Foundation.Abstractions.IStreamProvider streams, string actorId)
+        {
+            _streams = streams;
+            _actorId = actorId;
+        }
+
         public string? ParentId { get; private set; }
 
         public HashSet<string> Children { get; } = new(StringComparer.Ordinal);
 
         public bool Initialized { get; set; } = true;
 
+        public bool InitializeAgentByKindResult { get; set; } = true;
+
         public List<string> Calls { get; } = [];
         public List<Guid> ObservedReentrancyIds { get; } = [];
+        public List<string> InitializedKinds { get; } = [];
+        public List<EventEnvelope> HandledEnvelopes { get; } = [];
 
         public int IsInitializedCallCount { get; private set; }
 
@@ -257,7 +363,27 @@ public sealed class OrleansActorRuntimeForwardingTests
         {
             _ = agentTypeName;
             ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
-            return Task.FromResult(true);
+            return SubscribeSelfStreamOnceAsync();
+        }
+
+        private async Task<bool> SubscribeSelfStreamOnceAsync()
+        {
+            if (_selfStreamSubscription == null)
+            {
+                _selfStreamSubscription = await _streams.GetStream(_actorId)
+                    .SubscribeAsync<EventEnvelope>(envelope => HandleEnvelopeAsync(envelope.ToByteArray()));
+            }
+
+            return true;
+        }
+
+        public Task<bool> InitializeAgentByKindAsync(string kind)
+        {
+            InitializedKinds.Add(kind);
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
+            return InitializeAgentByKindResult
+                ? SubscribeSelfStreamOnceAsync()
+                : Task.FromResult(false);
         }
 
         public Task<bool> IsInitializedAsync()
@@ -269,10 +395,19 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task HandleEnvelopeAsync(byte[] envelopeBytes)
         {
-            _ = envelopeBytes;
             ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
+            var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
+            HandledEnvelopes.Add(envelope);
             return Task.CompletedTask;
         }
+
+        public Task PublishToOwnStreamAsync(EventEnvelope envelope, CancellationToken ct) =>
+            _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
+
+        public Task<IAsyncDisposable> SubscribeOwnStreamAsync(
+            Func<EventEnvelope, Task> handler,
+            CancellationToken ct) =>
+            _streams.GetStream(_actorId).SubscribeAsync(handler, ct);
 
         public Task AddChildAsync(string childId)
         {
@@ -320,6 +455,9 @@ public sealed class OrleansActorRuntimeForwardingTests
         public Task<string> GetAgentTypeNameAsync() =>
             Task.FromResult(string.Empty);
 
+        public Task<string> GetAgentKindAsync() =>
+            Task.FromResult(string.Empty);
+
         public Task DeactivateAsync()
         {
             Calls.Add("Deactivate");
@@ -351,12 +489,12 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task<long> ScheduleTimeoutAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
+            _ = triggerEnvelope;
             _ = dueTimeMs;
             _ = deliveryMode;
             throw new NotSupportedException();
@@ -364,23 +502,27 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task<long> ScheduleTimerAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             int periodMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
+            _ = triggerEnvelope;
             _ = dueTimeMs;
             _ = periodMs;
             _ = deliveryMode;
             throw new NotSupportedException();
         }
 
-        public Task CancelAsync(string callbackId, long expectedGeneration = 0)
+        public Task CancelAsync(
+            string callbackId,
+            long expectedGeneration = 0,
+            int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
         {
             _ = callbackId;
             _ = expectedGeneration;
+            _ = expectedSlotEpoch;
             return Task.CompletedTask;
         }
 

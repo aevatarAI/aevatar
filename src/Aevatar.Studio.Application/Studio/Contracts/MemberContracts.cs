@@ -1,5 +1,7 @@
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
+using System.Text.Json.Serialization;
+
 /// <summary>
 /// Wire-format implementation kind for HTTP/JSON. Uses lowercase strings so
 /// Studio's HTTP surface stays member-centric and frontend-friendly. Mapped
@@ -24,6 +26,40 @@ public static class MemberLifecycleStageNames
     public const string BuildReady = "build_ready";
     public const string BindReady = "bind_ready";
 }
+
+public static class StudioMemberBindingRunStatusNames
+{
+    public const string Accepted = "accepted";
+    public const string AdmissionPending = "admission_pending";
+    public const string Admitted = "admitted";
+    public const string PlatformBindingPending = "platform_binding_pending";
+    public const string MemberNotificationPending = "member_notification_pending";
+    public const string Succeeded = "succeeded";
+    public const string Failed = "failed";
+    public const string Rejected = "rejected";
+    public const string Unknown = "unknown";
+}
+
+public static class StudioMemberInvocationReadinessStatusNames
+{
+    public const string Ready = "ready";
+    public const string ServiceCatalogMissing = "service_catalog_missing";
+    public const string ServingSetMissing = "serving_set_missing";
+    public const string EligibleServingTargetMissing = "eligible_serving_target_missing";
+    public const string ServiceCatalogTargetMissing = "service_catalog_target_missing";
+    public const string TrafficViewTargetMissing = "traffic_view_target_missing";
+    public const string PreparedArtifactMissing = "prepared_artifact_missing";
+    public const string Unknown = "unknown";
+}
+
+public sealed record StudioMemberInvocationReadinessResponse(
+    bool CanInvoke,
+    string Status,
+    string ReasonCode,
+    string Message,
+    string? RevisionId = null,
+    string? DeploymentId = null,
+    DateTimeOffset? ObservedAtUtc = null);
 
 /// <summary>
 /// Wire-format status values returned in
@@ -60,12 +96,32 @@ public sealed record StudioMemberSummaryResponse(
     string PublishedServiceId,
     string? LastBoundRevisionId,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt)
+{
+    /// <summary>
+    /// Optional team assignment (ADR-0017). Null means the member is not
+    /// currently in any team. Added as a non-positional <c>init</c> property
+    /// so existing callers that construct the record positionally are not
+    /// broken; the query port populates it from the read model document and
+    /// the create/patch flows pass it through unchanged.
+    /// </summary>
+    public string? TeamId { get; init; }
+
+    /// <summary>
+    /// Typed implementation identity shared by scope and team roster
+    /// summaries. Null means the member read model has not yet observed an
+    /// implementation reference.
+    /// </summary>
+    public StudioMemberImplementationRefResponse? ImplementationRef { get; init; }
+}
 
 public sealed record StudioMemberDetailResponse(
     StudioMemberSummaryResponse Summary,
     StudioMemberImplementationRefResponse? ImplementationRef,
-    StudioMemberBindingContractResponse? LastBinding);
+    StudioMemberBindingContractResponse? LastBinding)
+{
+    public StudioMemberBindingRunStatusResponse? CurrentBindingRun { get; init; }
+}
 
 public sealed record StudioMemberBindingContractResponse(
     string PublishedServiceId,
@@ -80,22 +136,62 @@ public sealed record StudioMemberBindingContractResponse(
 /// "member missing" (typed 404 STUDIO_MEMBER_NOT_FOUND).
 /// </summary>
 public sealed record StudioMemberBindingViewResponse(
-    StudioMemberBindingContractResponse? LastBinding);
+    StudioMemberBindingContractResponse? LastBinding)
+{
+    public StudioMemberBindingRunStatusResponse? CurrentBindingRun { get; init; }
+}
+
+public sealed record StudioMemberBindingFailureResponse(
+    string Code,
+    string Message,
+    DateTimeOffset FailedAt);
+
+// Refactor (iter159/cluster-594-first):
+//   Old pattern: Studio member binding-run status response 未暴露 StateVersion
+//   New principle: 暴露 readmodel 已有的 StateVersion; 前端用 freshness marker 诚实表达 not-yet-materialized 状态
+public sealed record StudioMemberBindingRunStatusResponse(
+    string BindingRunId,
+    string ScopeId,
+    string MemberId,
+    string Status,
+    long StateVersion,
+    StudioMemberBindingFailureResponse? Failure = null,
+    DateTimeOffset? UpdatedAt = null)
+{
+    public string? PlatformBindingCommandId { get; init; }
+}
 
 public sealed record StudioMemberRosterResponse(
     string ScopeId,
     IReadOnlyList<StudioMemberSummaryResponse> Members,
     string? NextPageToken = null);
 
+// Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+//   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+//   New principle: ReadModel query port owns scope_id+team_id filter before pagination
 public sealed record StudioMemberRosterPageRequest(
     int? PageSize = null,
-    string? PageToken = null);
+    string? PageToken = null,
+    string? TeamId = null);
 
 public sealed record CreateStudioMemberRequest(
     string DisplayName,
     string ImplementationKind,
     string? Description = null,
-    string? MemberId = null);
+    string? MemberId = null,
+    // Optional initial team assignment (ADR-0017). Empty string is rejected
+    // at the application boundary; null / absent means "do not assign".
+    string? TeamId = null);
+
+/// <summary>
+/// Wire body for <c>PATCH /api/scopes/{scopeId}/members/{memberId}</c> when
+/// the caller wants to change the member's team assignment (ADR-0017 §Q6).
+/// Uses <see cref="PatchValue{T}"/> so the application layer can distinguish
+/// "absent" (no change) from "explicit null" (unassign) without a sentinel
+/// empty-string value reaching the actor.
+/// </summary>
+public sealed record UpdateStudioMemberRequest(
+    PatchValue<string> TeamId = default);
 
 public sealed record PatchStudioMemberRequest(
     StudioMemberImplementationRefResponse? ImplementationRef = null);
@@ -123,8 +219,26 @@ public sealed record UpdateStudioMemberBindingRequest(
     StudioMemberScriptBindingSpec? Script = null,
     StudioMemberGAgentBindingSpec? GAgent = null);
 
-public sealed record StudioMemberWorkflowBindingSpec(
-    IReadOnlyList<string> WorkflowYamls);
+public sealed record StudioMemberWorkflowBindingSpec
+{
+    [JsonConstructor]
+    public StudioMemberWorkflowBindingSpec(
+        string WorkflowId,
+        IReadOnlyList<string> WorkflowYamls)
+    {
+        this.WorkflowId = WorkflowId;
+        this.WorkflowYamls = WorkflowYamls;
+    }
+
+    public StudioMemberWorkflowBindingSpec(IReadOnlyList<string> WorkflowYamls)
+        : this(string.Empty, WorkflowYamls)
+    {
+    }
+
+    public string WorkflowId { get; init; }
+
+    public IReadOnlyList<string> WorkflowYamls { get; init; }
+}
 
 public sealed record StudioMemberScriptBindingSpec(
     string ScriptId,
@@ -142,13 +256,18 @@ public sealed record StudioMemberGAgentBindingSpec(
     string ActorTypeName,
     IReadOnlyList<StudioMemberGAgentEndpointSpec>? Endpoints = null);
 
-public sealed record StudioMemberBindingResponse(
-    string MemberId,
-    string PublishedServiceId,
-    string RevisionId,
-    string ImplementationKind,
+public sealed record StudioMemberBindingAcceptedResponse(
+    string Status,
+    string BindingRunId,
     string ScopeId,
-    string ExpectedActorId);
+    string MemberId);
+
+public sealed record StudioMemberBindingRunStartRequest(
+    string BindingRunId,
+    string ScopeId,
+    string MemberId,
+    string ImplementationKind,
+    UpdateStudioMemberBindingRequest Binding);
 
 /// <summary>
 /// Member-first endpoint contract. Mirrors the existing scope-default
@@ -179,6 +298,7 @@ public sealed record StudioMemberEndpointContractResponse(
     string? SampleRequestJson,
     string DeploymentStatus,
     string RevisionId,
+    StudioMemberInvocationReadinessResponse InvocationReadiness,
     string? CurlExample = null,
     string? FetchExample = null);
 

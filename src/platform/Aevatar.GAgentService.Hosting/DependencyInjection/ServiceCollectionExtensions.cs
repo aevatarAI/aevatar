@@ -1,31 +1,44 @@
-using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Application.Scripts;
+using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
+using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
 using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Infrastructure.Adapters;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
+using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgentService.Hosting.Demo;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.Workflow.Projection.Metadata;
+using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -56,9 +69,14 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
         services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
         services.TryAddSingleton<IServiceCommandTargetProvisioner, DefaultServiceCommandTargetProvisioner>();
-        services.TryAddSingleton<IServiceRevisionArtifactStore, ConfiguredServiceRevisionArtifactStore>();
         services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
+        services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
+        services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
+        services.TryAddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
+        services.AddToolSetRegistry();
+        services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, StaticServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());
@@ -68,13 +86,22 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
+        services.AddScheduledCredentialExchangePort();
+        services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
+        services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
+        services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
+        services.TryAddTransient<ScheduledDispatchGAgent>();
+        services.TryAddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>, StaticGAgentStreamInvocationApplicationService>();
         services.AddScopeGAgentDraftRunInteraction();
+        services.AddScriptServiceRunInteraction();
         services.AddOptions<ScopeWorkflowCapabilityOptions>()
             .Bind(configuration.GetSection(ScopeWorkflowCapabilityOptions.SectionName));
         services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();
         services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
         services.TryAddSingleton<IScopeBindingCommandPort, ScopeBindingCommandApplicationService>();
+        services.TryAddSingleton<IScopeBindingReadinessQueryPort, ScopeBindingReadinessQueryService>();
         services.TryAddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
         services.AddOptions<ScopeScriptCapabilityOptions>()
             .Bind(configuration.GetSection(ScopeScriptCapabilityOptions.SectionName));
@@ -86,6 +113,39 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    public static IServiceCollection AddScheduledDispatchCapability(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.AddGAgentServiceProjection();
+        services.AddGAgentServiceProjectionReadModelProviders(configuration);
+        services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
+        services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
+        services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
+        services.TryAddSingleton<ServiceInvocationResolutionService>();
+        services.TryAddSingleton<IInvokeAdmissionAuthorizer, ScheduledDispatchInvokeAdmissionAuthorizer>();
+        services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
+        services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
+        services.AddScheduledCredentialExchangePort();
+        services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
+        services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
+        services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
+        services.TryAddTransient<ScheduledDispatchGAgent>();
+        return services;
+    }
+
+    private static void AddScheduledCredentialExchangePort(this IServiceCollection services) =>
+        services.TryAddSingleton<IScheduledServiceInvocationCredentialExchangePort>(sp =>
+            sp.GetService<INyxIdCapabilityBroker>() is { } broker
+                ? new NyxIdScheduledServiceInvocationCredentialExchangePort(
+                    broker,
+                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdScheduledServiceInvocationCredentialExchangePort>>())
+                : new NoopScheduledServiceInvocationCredentialExchangePort());
+
     public static IServiceCollection AddGAgentServiceProjectionReadModelProviders(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -93,24 +153,15 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
-        var inMemoryEnabled = ResolveOptionalBool(
-            configuration["Projection:Document:Providers:InMemory:Enabled"],
-            fallbackValue: !elasticsearchEnabled);
-        var providerCount = (elasticsearchEnabled ? 1 : 0) + (inMemoryEnabled ? 1 : 0);
-        if (providerCount != 1)
-        {
-            throw new InvalidOperationException(
-                "Exactly one document projection provider must be enabled for GAgentService.");
-        }
-
-        var selectedDocumentProvider = elasticsearchEnabled
-            ? DocumentProviderKind.Elasticsearch
-            : DocumentProviderKind.InMemory;
-        if (HasAllGAgentServiceProjectionReaders(services, selectedDocumentProvider))
+        var documentProvider = ProjectionDocumentProviderConfiguration.Resolve(configuration, "GAgentService");
+        if (HasAllGAgentServiceProjectionReaders(services, documentProvider.Kind))
             return services;
 
-        if (elasticsearchEnabled)
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<WorkflowCatalogCurrentStateDocument>,
+            WorkflowCatalogCurrentStateDocumentMetadataProvider>();
+
+        if (documentProvider.ElasticsearchEnabled)
         {
             TryAddElasticsearchDocumentProjectionStore<ServiceCatalogReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceRevisionCatalogReadModel>(services, configuration, static readModel => readModel.Id);
@@ -120,7 +171,12 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<ServiceRolloutCommandObservationReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceTrafficViewReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceRunCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<GAgentRunTerminalReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ScheduledDispatchDocument>(services, configuration, static readModel => readModel.ScheduleId);
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
         }
         else
         {
@@ -132,7 +188,12 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<ServiceRolloutCommandObservationReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceTrafficViewReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceRunCurrentStateReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<GAgentRunTerminalReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ScheduledDispatchDocument>(services, static readModel => readModel.ScheduleId);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, static readModel => readModel.Id);
         }
 
         return services;
@@ -140,7 +201,7 @@ public static class ServiceCollectionExtensions
 
     private static bool HasAllGAgentServiceProjectionReaders(
         IServiceCollection services,
-        DocumentProviderKind providerKind)
+        ProjectionDocumentProviderKind providerKind)
     {
         return HasProjectionDocumentReaderForProvider<ServiceCatalogReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceRevisionCatalogReadModel>(services, providerKind)
@@ -150,7 +211,12 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<ServiceRolloutCommandObservationReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceTrafficViewReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceRunCurrentStateReadModel>(services, providerKind)
-               && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind);
+               && HasProjectionDocumentReaderForProvider<GAgentRunTerminalReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<LlmSessionCurrentStateReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ResponsesAgentToolStateCurrentStateReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ScheduledDispatchDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind);
     }
 
     private static bool HasAnyProjectionDocumentReader<TReadModel>(IServiceCollection services)
@@ -161,20 +227,20 @@ public static class ServiceCollectionExtensions
 
     private static bool HasProjectionDocumentReaderForProvider<TReadModel>(
         IServiceCollection services,
-        DocumentProviderKind providerKind)
+        ProjectionDocumentProviderKind providerKind)
         where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
         return providerKind switch
         {
-            DocumentProviderKind.Elasticsearch => services.Any(x => x.ServiceType == typeof(ElasticsearchProjectionDocumentStore<TReadModel, string>)),
-            DocumentProviderKind.InMemory => services.Any(x => x.ServiceType == typeof(InMemoryProjectionDocumentStore<TReadModel, string>)),
+            ProjectionDocumentProviderKind.Elasticsearch => services.Any(x => x.ServiceType == typeof(ElasticsearchProjectionDocumentStore<TReadModel, string>)),
+            ProjectionDocumentProviderKind.InMemory => services.Any(x => x.ServiceType == typeof(InMemoryProjectionDocumentStore<TReadModel, string>)),
             _ => false,
         };
     }
 
     private static void EnsureCompatibleProjectionDocumentReaderProvider<TReadModel>(
         IServiceCollection services,
-        DocumentProviderKind providerKind)
+        ProjectionDocumentProviderKind providerKind)
         where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
         if (!HasAnyProjectionDocumentReader<TReadModel>(services))
@@ -192,12 +258,12 @@ public static class ServiceCollectionExtensions
         Func<TReadModel, string> keySelector)
         where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
-        EnsureCompatibleProjectionDocumentReaderProvider<TReadModel>(services, DocumentProviderKind.Elasticsearch);
-        if (HasProjectionDocumentReaderForProvider<TReadModel>(services, DocumentProviderKind.Elasticsearch))
+        EnsureCompatibleProjectionDocumentReaderProvider<TReadModel>(services, ProjectionDocumentProviderKind.Elasticsearch);
+        if (HasProjectionDocumentReaderForProvider<TReadModel>(services, ProjectionDocumentProviderKind.Elasticsearch))
             return;
 
         services.AddElasticsearchDocumentProjectionStore<TReadModel, string>(
-            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<TReadModel>>().Metadata,
             keySelector: keySelector,
             keyFormatter: static key => key);
@@ -208,8 +274,8 @@ public static class ServiceCollectionExtensions
         Func<TReadModel, string> keySelector)
         where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
-        EnsureCompatibleProjectionDocumentReaderProvider<TReadModel>(services, DocumentProviderKind.InMemory);
-        if (HasProjectionDocumentReaderForProvider<TReadModel>(services, DocumentProviderKind.InMemory))
+        EnsureCompatibleProjectionDocumentReaderProvider<TReadModel>(services, ProjectionDocumentProviderKind.InMemory);
+        if (HasProjectionDocumentReaderForProvider<TReadModel>(services, ProjectionDocumentProviderKind.InMemory))
             return;
 
         services.AddInMemoryDocumentProjectionStore<TReadModel, string>(
@@ -218,45 +284,19 @@ public static class ServiceCollectionExtensions
             defaultSortSelector: static readModel => readModel.UpdatedAt);
     }
 
-    private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)
+}
+
+internal sealed class ScheduledDispatchInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer
+{
+    public Task AuthorizeAsync(
+        string serviceKey,
+        string deploymentId,
+        PreparedServiceRevisionArtifact artifact,
+        ServiceEndpointDescriptor endpoint,
+        ServiceInvocationRequest request,
+        CancellationToken ct = default)
     {
-        var section = configuration.GetSection("Projection:Document:Providers:Elasticsearch");
-        var explicitEnabled = section["Enabled"];
-        var hasEndpoints = section
-            .GetSection("Endpoints")
-            .GetChildren()
-            .Select(x => x.Value?.Trim() ?? string.Empty)
-            .Any(x => x.Length > 0);
-        return ResolveOptionalBool(explicitEnabled, hasEndpoints);
-    }
-
-    private static ElasticsearchProjectionDocumentStoreOptions BuildElasticsearchDocumentOptions(
-        IConfiguration configuration)
-    {
-        var options = new ElasticsearchProjectionDocumentStoreOptions();
-        configuration.GetSection("Projection:Document:Providers:Elasticsearch").Bind(options);
-        if (options.Endpoints.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Projection:Document:Providers:Elasticsearch is enabled but Endpoints is empty.");
-        }
-
-        return options;
-    }
-
-    private static bool ResolveOptionalBool(string? rawValue, bool fallbackValue)
-    {
-        if (string.IsNullOrWhiteSpace(rawValue))
-            return fallbackValue;
-        if (!bool.TryParse(rawValue, out var parsed))
-            throw new InvalidOperationException($"Invalid boolean value '{rawValue}'.");
-
-        return parsed;
-    }
-
-    private enum DocumentProviderKind
-    {
-        InMemory,
-        Elasticsearch,
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
     }
 }

@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
@@ -11,6 +12,12 @@ using System.Runtime.CompilerServices;
 
 namespace Aevatar.Workflow.Application.Tests;
 
+// Test-add (test-coverage/cluster-036):
+//   Covers refactor-introduced behavior in WorkflowRunCommandTarget.cs:116-122,286-290,293-309.
+//   Cluster intent: workflow target owns detached durable fallback and cleanup decisions.
+// Test-add (test-coverage/cluster-035):
+//   Covers refactor-introduced behavior in WorkflowRunCommandTarget.cs:76-189.
+//   Cluster intent: workflow run targets detach explicit live-sink leases without process-local lookup state.
 public sealed class WorkflowRunCommandTargetAndPolicyTests
 {
     [Fact]
@@ -25,6 +32,21 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     }
 
     [Fact]
+    public void Constructor_ShouldRejectMissingDurableCompletionResolver()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var act = () => new WorkflowRunCommandTarget("run-1",
+            "direct",
+            [],
+            projectionPort,
+            new FakeWorkflowRunActorPort(),
+            durableCompletionResolver: null!);
+
+        act.Should().Throw<ArgumentNullException>()
+            .WithParameterName("durableCompletionResolver");
+    }
+
+    [Fact]
     public async Task ReleaseAsync_ShouldDetachReleaseDisposeAndDestroyCreatedActors()
     {
         var projectionPort = new FakeProjectionPort();
@@ -33,7 +55,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             projectionPort: projectionPort,
             actorPort: actorPort,
             createdActorIds: ["definition-1", "run-1"]);
-        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
         var detached = false;
 
         await target.ReleaseAsync(
@@ -60,7 +82,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             projectionPort: projectionPort,
             createdActorIds: ["definition-1", "run-1"]);
         var lease = new FakeProjectionLease("run-1", "cmd-1");
-        target.BindLiveObservation(lease, new FakeEventSink());
+        target.BindLiveObservation(lease, new FakeLiveSinkLease("run-1"), new FakeEventSink());
 
         await target.ReleaseAfterInteractionAsync(
             new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1"),
@@ -76,14 +98,132 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     }
 
     [Fact]
+    public async Task PublishDetachedCommandSignalAsync_WhenCompleted_ShouldReleaseDestroyActorsAndSkipDurableQuery()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var queryPort = new FakeCurrentStateQueryPort
+        {
+            Snapshot = new WorkflowActorSnapshot { CompletionStatus = WorkflowRunCompletionStatus.Completed },
+        };
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            currentStateQueryPort: queryPort,
+            createdActorIds: ["definition-1", "run-1"]);
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
+        var receipt = new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1");
+
+        await target.PublishDetachedCommandSignalAsync(
+            new DetachedCommandCompleted<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>(
+                receipt,
+                WorkflowProjectionCompletionStatus.Completed),
+            CancellationToken.None);
+
+        projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
+        actorPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+        queryPort.ActorIds.Should().BeEmpty();
+        target.ProjectionLease.Should().BeNull();
+        target.LiveSink.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PublishDetachedCommandSignalAsync_WhenTimeoutDurableIncomplete_ShouldReleaseWithoutDestroyingActors()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var queryPort = new FakeCurrentStateQueryPort
+        {
+            Snapshot = new WorkflowActorSnapshot { CompletionStatus = WorkflowRunCompletionStatus.Running },
+        };
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            currentStateQueryPort: queryPort,
+            createdActorIds: ["definition-1", "run-1"]);
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
+        var receipt = new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1");
+
+        await target.PublishDetachedCommandSignalAsync(
+            new DetachedCommandTimeout<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>(
+                receipt,
+                WorkflowProjectionCompletionStatus.Unknown),
+            CancellationToken.None);
+
+        projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
+        actorPort.DestroyCalls.Should().BeEmpty();
+        queryPort.ActorIds.Should().Equal("run-1");
+        target.ProjectionLease.Should().BeNull();
+        target.LiveSink.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PublishDetachedCommandSignalAsync_WhenTimeoutDurableTerminal_ShouldReleaseAndDestroyActors()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var queryPort = new FakeCurrentStateQueryPort
+        {
+            Snapshot = new WorkflowActorSnapshot { CompletionStatus = WorkflowRunCompletionStatus.Failed },
+        };
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            currentStateQueryPort: queryPort,
+            createdActorIds: ["definition-1", "run-1"]);
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
+        var receipt = new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1");
+
+        await target.PublishDetachedCommandSignalAsync(
+            new DetachedCommandTimeout<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>(
+                receipt,
+                WorkflowProjectionCompletionStatus.Unknown),
+            CancellationToken.None);
+
+        projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
+        actorPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+        queryPort.ActorIds.Should().Equal("run-1");
+        target.ProjectionLease.Should().BeNull();
+        target.LiveSink.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PublishDetachedCommandSignalAsync_WhenUnknownDetachedSignal_ShouldUseUnknownAndDurableFallback()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var queryPort = new FakeCurrentStateQueryPort
+        {
+            Snapshot = new WorkflowActorSnapshot { CompletionStatus = WorkflowRunCompletionStatus.Stopped },
+        };
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            currentStateQueryPort: queryPort,
+            createdActorIds: ["definition-1", "run-1"]);
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
+        var receipt = new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1");
+
+        await target.PublishDetachedCommandSignalAsync(
+            new UnknownDetachedSignal(receipt),
+            CancellationToken.None);
+
+        queryPort.ActorIds.Should().Equal("run-1");
+        projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
+        actorPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+        target.ProjectionLease.Should().BeNull();
+        target.LiveSink.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ReleaseAsync_ShouldDisposeSinkAndReleaseLease_WhenOnlyOneSideBound()
     {
         var projectionPort = new FakeProjectionPort();
         var target = CreateTarget(projectionPort);
         var lease = new FakeProjectionLease("run-1", "cmd-1");
         var sink = new FakeEventSink();
-        target.BindLiveObservation(lease, sink);
-        target.BindLiveObservation(lease, sink);
+        target.BindLiveObservation(lease, new FakeLiveSinkLease("run-1"), sink);
+        target.BindLiveObservation(lease, new FakeLiveSinkLease("run-1"), sink);
 
         await target.ReleaseAsync(destroyCreatedActors: false, ct: CancellationToken.None);
 
@@ -98,11 +238,41 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         var target = CreateTarget(projectionPort);
         var lease = new FakeProjectionLease("run-1", "cmd-1");
         var sink = new FakeEventSink();
-        target.BindLiveObservation(lease, sink);
+        target.BindLiveObservation(lease, new FakeLiveSinkLease("run-1"), sink);
 
         await target.DetachLiveObservationAsync(CancellationToken.None);
 
         projectionPort.Events.Should().Equal("detach:run-1");
+        sink.DisposeCalls.Should().Be(1);
+        target.LiveSink.Should().BeNull();
+        target.ProjectionLease.Should().BeSameAs(lease);
+    }
+
+    [Fact]
+    public async Task DetachLiveObservationAsync_WhenNoLiveSinkIsBound_ShouldNoopWithoutProjectionCalls()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var target = CreateTarget(projectionPort);
+
+        await target.DetachLiveObservationAsync(CancellationToken.None);
+
+        projectionPort.Events.Should().BeEmpty();
+        target.LiveSink.Should().BeNull();
+        target.ProjectionLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DetachLiveObservationAsync_WhenLiveSinkLeaseIsNull_ShouldDetachWithExplicitNullLease()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var sink = new FakeEventSink();
+        var lease = new FakeProjectionLease("run-1", "cmd-1");
+        var target = CreateTarget(projectionPort);
+        target.BindLiveObservation(lease, null, sink);
+
+        await target.DetachLiveObservationAsync(CancellationToken.None);
+
+        projectionPort.Events.Should().Equal("detach:");
         sink.DisposeCalls.Should().Be(1);
         target.LiveSink.Should().BeNull();
         target.ProjectionLease.Should().BeSameAs(lease);
@@ -123,7 +293,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             projectionPort: projectionPort,
             actorPort: actorPort,
             createdActorIds: ["definition-1"]);
-        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
 
         var act = async () => await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
 
@@ -201,44 +371,41 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     private static WorkflowRunCommandTarget CreateTarget(
         FakeProjectionPort? projectionPort = null,
         FakeWorkflowRunActorPort? actorPort = null,
+        FakeCurrentStateQueryPort? currentStateQueryPort = null,
         IReadOnlyList<string>? createdActorIds = null)
     {
         projectionPort ??= new FakeProjectionPort();
         actorPort ??= new FakeWorkflowRunActorPort();
-        return new WorkflowRunCommandTarget(
-            new FakeActor("run-1"),
+        currentStateQueryPort ??= new FakeCurrentStateQueryPort();
+        return new WorkflowRunCommandTarget("run-1",
             "direct",
             createdActorIds ?? [],
             projectionPort,
-            projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(currentStateQueryPort));
     }
 
     private sealed class FakeProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
         public Exception? DetachException { get; set; }
         public Exception? ReleaseException { get; set; }
         public List<string> Events { get; } = [];
-
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
-
-        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(string rootActorId, string commandId, CancellationToken ct = default) =>
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(IWorkflowExecutionProjectionLease lease, IEventSink<WorkflowRunEventEnvelope> sink, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task AttachLiveSinkAsync(IWorkflowExecutionProjectionLease lease, IEventSink<WorkflowRunEventEnvelope> sink, CancellationToken ct = default) =>
+        public Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task DetachLiveSinkAsync(IWorkflowExecutionProjectionLease lease, IEventSink<WorkflowRunEventEnvelope> sink, CancellationToken ct = default)
+        public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
         {
-            Events.Add($"detach:{lease.ActorId}");
+            var actorId = liveSinkLease is FakeLiveSinkLease fakeLease ? fakeLease.ActorId : string.Empty;
+            Events.Add($"detach:{actorId}");
             if (DetachException != null)
                 throw DetachException;
             return Task.CompletedTask;
@@ -284,15 +451,16 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         }
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed record FakeLiveSinkLease(string ActorId) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public Exception? DestroyException { get; set; }
         public List<string> DestroyCalls { get; } = [];
-
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)
@@ -302,10 +470,6 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
                 throw DestroyException;
             return Task.CompletedTask;
         }
-
-        public Task BindWorkflowDefinitionAsync(IActor actor, string workflowYaml, string workflowName, IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null, string? scopeId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
         public Task MarkStoppedAsync(
             string actorId,
             string runId,
@@ -314,6 +478,29 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed record UnknownDetachedSignal(WorkflowChatRunAcceptedReceipt Receipt)
+        : DetachedCommandSignal<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>(Receipt);
+
+    private sealed class FakeCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
+    {
+        public WorkflowActorSnapshot? Snapshot { get; set; }
+        public List<string> ActorIds { get; } = [];
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
+
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ActorIds.Add(actorId);
+            return Task.FromResult(Snapshot);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

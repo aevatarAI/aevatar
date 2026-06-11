@@ -119,9 +119,9 @@
 ## 项目结构与模块组织
 - `src/`：生产代码，按能力与分层组织（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
 - `test/`：与 `src/` 对应的测试项目（单元、集成、API）。
-- `docs/`：架构与设计文档；`workflows/`：YAML 工作流定义。
-- `tools/`：开发工具；`demos/`：示例与演示程序。
-- **CLI 项目**：`tools/Aevatar.Tools.Cli`——提到"CLI 项目"或"cli 项目"时，均指此路径。
+- `docs/`：架构与设计文档。
+- `tools/ci/`：CI 门禁脚本；`tools/docs/`：文档 lint 与索引工具。
+- `apps/aevatar-console-web/`：前端控制台工作目录，必须保留。
 
 ## 构建、测试与本地运行
 - `dotnet restore aevatar.slnx --nologo`：还原依赖。
@@ -134,9 +134,14 @@
 - `bash tools/ci/projection_state_version_guard.sh`：校验 current-state readmodel 路径不发明本地 state version。
 - `bash tools/ci/projection_state_mirror_current_state_guard.sh`：校验新的 `*CurrentState*Projector` 不回读同类 readmodel。
 - `bash tools/ci/projection_route_mapping_guard.sh`：单独执行“事件类型 -> reducer 路由映射正确性”静态门禁。
-- `bash tools/ci/playground_asset_drift_guard.sh`：校验 CLI playground 与 Demo Web 静态资源漂移。
 - `bash tools/ci/solution_split_guards.sh`：执行分片构建门禁（Foundation/AI/CQRS/Workflow/Hosting）。
-- `bash tools/ci/solution_split_test_guards.sh`：执行分片测试门禁（Foundation/AI/CQRS/Workflow/Hosting/Distributed）。
+- `bash tools/ci/test_solution_ownership_guard.sh`：校验测试项目只由 `aevatar.slnx` 或慢测守卫拥有。
+- `bash tools/ci/slow_test_guards.sh`：执行独立慢测门禁。
+- `bash tools/docs/lint.sh`：执行文档 lint（也由架构门禁调用）。
+- `pnpm --dir apps/aevatar-console-web install --frozen-lockfile`：还原前端依赖。
+- `pnpm --dir apps/aevatar-console-web tsc`：前端类型检查。
+- `pnpm --dir apps/aevatar-console-web test --runInBand`：前端测试。
+- `pnpm --dir apps/aevatar-console-web build`：前端生产构建。
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
 - `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 
@@ -208,3 +213,10 @@
 2. 若目录存在，阅读相关源代码（重点关注接口定义、proto 文件、SDK 公开 API）以理解真实契约。
 3. 基于外部仓库的实际实现进行本仓库的开发、调试或问题排查，禁止仅依赖本仓库内的抽象猜测行为。
 4. 若目录不存在，向用户说明缺少对应仓库，询问是否需要 clone 或提供替代方案。
+
+### 外部仓库改动权（强制）
+- **本仓库的功能实现禁止依赖外部仓库的新增 / 修改**。NyxID、chrono-storage、chrono-ornn 等都是独立产品，aevatar 的需求不是它们的功能路线图。
+- NyxID 不是 aevatar 的 LLM provider 后端、不是 aevatar 的存储后端、不是 aevatar 的任何专用基础设施——它"恰好能"服务这些用途，aevatar 必须**只使用其当前已发布的公开能力**实现自己的功能。
+- 出方案时禁止包含"在 NyxID/chrono-* 加端点"、"在 NyxID/chrono-* 改 schema"、"等外部仓库支持新协议"等步骤。如果当前外部能力不足，方案必须改成"在本仓库内绕开"或"不做这个功能"，不能成为对外部团队的 feature request。
+- **唯一允许给外部仓库提 issue 的情况**：在外部仓库中观察到明确的 bug（行为与其文档/代码注释/已发布契约不一致，或导致明显错误状态）。提之前先确认本仓库这边没有用错。
+- review/方案讨论时如果对方建议改外部仓库，先反问"现有 surface 能不能做到？"，倾向于在本仓库内部解决；只有把所有本仓库内的可行路径都排除后，才能讨论外部 issue。

@@ -2,7 +2,9 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
@@ -166,7 +168,10 @@ public class ScriptEvolutionSessionGAgentTests
         });
 
         definitionPort.Requests.Should().ContainSingle();
-        catalogCommandPort.PromoteCalls.Should().ContainSingle();
+        var promotedSourceHash = catalogCommandPort.PromoteCalls.Should().ContainSingle().Subject.SourceHash;
+        promotedSourceHash.Should().Be(ScriptPackageModel.ComputePackageHash(
+            ScriptPackageSpecExtensions.CreateSingleSource("source-v2")));
+        promotedSourceHash.Should().NotBe("hash-v2");
         agent.State.ProposalId.Should().Be("proposal-1");
         agent.State.Completed.Should().BeTrue();
         agent.State.Accepted.Should().BeTrue();
@@ -234,7 +239,8 @@ public class ScriptEvolutionSessionGAgentTests
         completed.DefinitionSnapshot.Should().NotBeNull();
         completed.DefinitionSnapshot.ScriptId.Should().Be("script-1");
         completed.DefinitionSnapshot.Revision.Should().Be("rev-2");
-        completed.DefinitionSnapshot.SourceHash.Should().Be("hash-v2");
+        completed.DefinitionSnapshot.SourceHash.Should().Be(ScriptPackageModel.ComputePackageHash(
+            ScriptPackageSpecExtensions.CreateSingleSource("source-v2")));
     }
 
     [Fact]
@@ -1532,22 +1538,21 @@ public class ScriptEvolutionSessionGAgentTests
         public virtual Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
-            string sourceText,
-            string sourceHash,
+            ScriptPackageSpec scriptPackage,
             string? definitionActorId,
             CancellationToken ct)
         {
-            _ = sourceText;
             _ = definitionActorId;
             ct.ThrowIfCancellationRequested();
+            var sourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
             Requests.Add((scriptId, scriptRevision, sourceHash));
             return Task.FromResult(new ScriptDefinitionUpsertResult(
                 DefinitionActorId,
                 new ScriptDefinitionSnapshot(
                     scriptId,
                     scriptRevision,
-                    sourceText,
                     sourceHash,
+                    scriptPackage,
                     "type.googleapis.com/example.State",
                     "type.googleapis.com/example.ReadModel",
                     "1",
@@ -1561,15 +1566,13 @@ public class ScriptEvolutionSessionGAgentTests
         public override Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
-            string sourceText,
-            string sourceHash,
+            ScriptPackageSpec scriptPackage,
             string? definitionActorId,
             CancellationToken ct)
         {
             _ = scriptId;
             _ = scriptRevision;
-            _ = sourceText;
-            _ = sourceHash;
+            _ = scriptPackage;
             _ = definitionActorId;
             ct.ThrowIfCancellationRequested();
             throw new InvalidOperationException(message);
@@ -1578,7 +1581,7 @@ public class ScriptEvolutionSessionGAgentTests
 
     private class RecordingCatalogCommandPort : IScriptCatalogCommandPort
     {
-        public List<(string ScriptId, string Revision, string DefinitionActorId)> PromoteCalls { get; } = [];
+        public List<(string ScriptId, string Revision, string DefinitionActorId, string SourceHash)> PromoteCalls { get; } = [];
         public List<(string ScriptId, string TargetRevision)> RollbackCalls { get; } = [];
 
         public virtual Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
@@ -1593,10 +1596,9 @@ public class ScriptEvolutionSessionGAgentTests
         {
             _ = catalogActorId;
             _ = expectedBaseRevision;
-            _ = sourceHash;
             _ = proposalId;
             ct.ThrowIfCancellationRequested();
-            PromoteCalls.Add((scriptId, revision, definitionActorId));
+            PromoteCalls.Add((scriptId, revision, definitionActorId, sourceHash));
             return Task.FromResult(new ScriptingCommandAcceptedReceipt(
                 catalogActorId ?? "catalog-1",
                 "catalog-command-1",

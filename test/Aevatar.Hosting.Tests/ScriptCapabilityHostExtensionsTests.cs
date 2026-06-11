@@ -157,7 +157,7 @@ public class ScriptCapabilityHostExtensionsTests
     }
 
     [Fact]
-    public void AddScriptingCapabilityBundle_ShouldMapEvolutionAndReadModelEndpoints()
+    public void AddScriptingCapabilityBundle_ShouldMapEvolutionEndpointOnly()
     {
         var builder = WebApplication.CreateBuilder();
         builder.AddScriptingCapabilityBundle();
@@ -173,8 +173,8 @@ public class ScriptCapabilityHostExtensionsTests
             .ToList();
 
         routeEndpoints.Should().Contain("/api/scripts/evolutions/proposals");
-        routeEndpoints.Should().Contain("/api/scripts/runtimes");
-        routeEndpoints.Should().Contain("/api/scripts/runtimes/{actorId}/readmodel");
+        routeEndpoints.Should().NotContain("/api/scripts/runtimes");
+        routeEndpoints.Should().NotContain("/api/scripts/runtimes/{actorId}/readmodel");
     }
 
     private static string NormalizeRoute(string? route)

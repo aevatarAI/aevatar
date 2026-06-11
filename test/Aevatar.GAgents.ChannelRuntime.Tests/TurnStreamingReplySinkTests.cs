@@ -11,10 +11,10 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class TurnStreamingReplySinkTests
 {
     [Fact]
-    public async Task OnDeltaAsync_FirstDelta_DispatchesChunkEventToActor()
+    public async Task OnDeltaAsync_DispatchesActorApprovedChunkEvent()
     {
         var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
+        var sink = CreateSink(dispatchPort, out _);
 
         await sink.OnDeltaAsync("hello", CancellationToken.None);
 
@@ -22,165 +22,43 @@ public sealed class TurnStreamingReplySinkTests
         var chunk = envelopes[0].Payload.Unpack<LlmReplyStreamChunkEvent>();
         chunk.CorrelationId.Should().Be("corr-1");
         chunk.AccumulatedText.Should().Be("hello");
+        chunk.ReplyToken.Should().Be("runtime-reply-token");
+        chunk.ReplyTokenExpiresAtUnixMs.Should().Be(1770000000000);
         sink.ChunksEmitted.Should().Be(1);
     }
 
     [Fact]
-    public async Task OnDeltaAsync_WithinThrottle_DefersUntilTimerFires()
+    public async Task FinalizeAsync_DispatchesActorApprovedFinalChunk()
     {
         var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
+        var sink = CreateSink(dispatchPort, out _);
 
-        await sink.OnDeltaAsync("chunk 1", CancellationToken.None);
-        time.Advance(TimeSpan.FromMilliseconds(200));
-        await sink.OnDeltaAsync("chunk 1 more", CancellationToken.None);
-        time.Advance(TimeSpan.FromMilliseconds(200));
-        await sink.OnDeltaAsync("chunk 1 more text", CancellationToken.None);
-
-        // Still inside the throttle window: only the first delta has dispatched. The subsequent
-        // two are stashed; the deferred flush timer has not yet fired.
-        envelopes.Should().ContainSingle();
-        sink.ChunksEmitted.Should().Be(1);
-
-        // Cross the throttle boundary so the deferred timer fires; only the latest stashed text
-        // should publish (collapse-on-latest), not every individual delta.
-        time.Advance(TimeSpan.FromMilliseconds(400));
-
-        envelopes.Should().HaveCount(2);
-        envelopes[1].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText
-            .Should().Be("chunk 1 more text");
-        sink.ChunksEmitted.Should().Be(2);
-    }
-
-    [Fact]
-    public async Task OnDeltaAsync_AfterThrottleElapses_DispatchesAgain()
-    {
-        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
-
-        await sink.OnDeltaAsync("chunk one", CancellationToken.None);
-        time.Advance(TimeSpan.FromMilliseconds(800));
-        await sink.OnDeltaAsync("chunk one two", CancellationToken.None);
-
-        envelopes.Should().HaveCount(2);
-        envelopes[1].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText.Should().Be("chunk one two");
-    }
-
-    [Fact]
-    public async Task FinalizeAsync_BypassesThrottle()
-    {
-        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
-
-        await sink.OnDeltaAsync("chunk one", CancellationToken.None);
-        time.Advance(TimeSpan.FromMilliseconds(100));
         await sink.FinalizeAsync("final text", CancellationToken.None);
 
-        envelopes.Should().HaveCount(2);
-        envelopes[1].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText.Should().Be("final text");
+        envelopes.Should().ContainSingle();
+        envelopes[0].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText.Should().Be("final text");
     }
 
     [Fact]
-    public async Task FinalizeAsync_NoNewText_DoesNotEmitRedundantChunk()
+    public async Task OnDeltaAsync_CardMode_DispatchesCardChunkEvent()
     {
         var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
+        var sink = CreateSink(dispatchPort, out _, cardMode: true);
 
-        await sink.OnDeltaAsync("same text", CancellationToken.None);
-        await sink.FinalizeAsync("same text", CancellationToken.None);
+        await sink.OnDeltaAsync("card text", CancellationToken.None);
 
         envelopes.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task FinalizeAsync_CancelsPendingFlushTimer()
-    {
-        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
-
-        await sink.OnDeltaAsync("chunk one", CancellationToken.None);
-        time.Advance(TimeSpan.FromMilliseconds(200));
-        await sink.OnDeltaAsync("chunk one two", CancellationToken.None);
-        await sink.FinalizeAsync("final text", CancellationToken.None);
-
-        // Finalize should publish the final text immediately and prevent the deferred timer from
-        // firing afterwards (otherwise we'd see an extra "chunk one two" emission).
-        envelopes.Should().HaveCount(2);
-        envelopes[1].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText.Should().Be("final text");
-
-        time.Advance(TimeSpan.FromMilliseconds(2000));
-        envelopes.Should().HaveCount(2);
-    }
-
-    [Fact]
-    public async Task FinalizeAsync_DispatchInFlight_WaitsForFinalChunkOnWire()
-    {
-        // Regression for the race where FinalizeAsync would return as soon as the final text
-        // was stashed (while a prior dispatch was still in flight), letting the inbox runtime
-        // send LlmReplyReadyEvent past the late final chunk and triggering the
-        // ConversationGAgent processed-command guard to drop it.
-        var firstDispatchGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var envelopes = new List<EventEnvelope>();
-        var dispatchCount = 0;
-
-        var dispatchPort = Substitute.For<IActorDispatchPort>();
-        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                envelopes.Add(call.Arg<EventEnvelope>());
-                dispatchCount++;
-                return dispatchCount == 1 ? firstDispatchGate.Task : Task.CompletedTask;
-            });
-
-        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
-
-        // First dispatch enters the actor and suspends on firstDispatchGate.
-        var deltaTask = sink.OnDeltaAsync("first", CancellationToken.None);
-
-        // FinalizeAsync must observe _dispatchInProgress and wait for the dispatch loop's drain
-        // signal — not return immediately after stashing the final text.
-        var finalizeTask = sink.FinalizeAsync("first plus final", CancellationToken.None);
-
-        deltaTask.IsCompleted.Should().BeFalse();
-        finalizeTask.IsCompleted.Should().BeFalse();
-        envelopes.Should().ContainSingle("only the gated first chunk has been dispatched");
-
-        // Releasing the gate lets the loop dispatch the stashed final text; only then should
-        // FinalizeAsync complete.
-        firstDispatchGate.SetResult();
-
-        await deltaTask;
-        await finalizeTask;
-
-        envelopes.Should().HaveCount(2);
-        envelopes[1].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText
-            .Should().Be("first plus final");
-        sink.ChunksEmitted.Should().Be(2);
-    }
-
-    [Fact]
-    public async Task PendingTimerEqualsLastEmitted_DoesNotEmitDuplicate()
-    {
-        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
-
-        await sink.OnDeltaAsync("hello", CancellationToken.None);
-        time.Advance(TimeSpan.FromMilliseconds(100));
-        // A duplicate "hello" inside the throttle window should clear any deferred copy and not
-        // schedule a duplicate emission when the timer fires.
-        await sink.OnDeltaAsync("hello", CancellationToken.None);
-
-        time.Advance(TimeSpan.FromMilliseconds(1000));
-
-        envelopes.Should().ContainSingle();
-        sink.ChunksEmitted.Should().Be(1);
+        var chunk = envelopes[0].Payload.Unpack<LlmReplyCardStreamChunkEvent>();
+        chunk.AccumulatedText.Should().Be("card text");
+        chunk.ReplyToken.Should().Be("runtime-reply-token");
+        chunk.ReplyTokenExpiresAtUnixMs.Should().Be(1770000000000);
     }
 
     [Fact]
     public async Task OnDeltaAsync_EmptyText_IsIgnored()
     {
         var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
+        var sink = CreateSink(dispatchPort, out _);
 
         await sink.OnDeltaAsync("   ", CancellationToken.None);
         await sink.OnDeltaAsync(string.Empty, CancellationToken.None);
@@ -189,25 +67,12 @@ public sealed class TurnStreamingReplySinkTests
     }
 
     [Fact]
-    public async Task OnDeltaAsync_SameAsPreviousText_IsIgnored()
-    {
-        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
-
-        await sink.OnDeltaAsync("hello", CancellationToken.None);
-        await sink.OnDeltaAsync("hello", CancellationToken.None);
-        await sink.OnDeltaAsync("hello", CancellationToken.None);
-
-        envelopes.Should().ContainSingle();
-    }
-
-    [Fact]
     public async Task OnDeltaAsync_ActorDispatchThrows_DropsChunkWithoutPropagating()
     {
         var dispatchPort = Substitute.For<IActorDispatchPort>();
         dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException(new InvalidOperationException("boom")));
-        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
+            .Returns(Task.FromException<DispatchAdmission>(new InvalidOperationException("boom")));
+        var sink = CreateSink(dispatchPort, out _);
 
         var act = async () => await sink.OnDeltaAsync("hello", CancellationToken.None);
 
@@ -216,39 +81,38 @@ public sealed class TurnStreamingReplySinkTests
     }
 
     [Fact]
-    public async Task Dispose_PreventsLaterTimerFlush()
+    public async Task Dispose_PreventsLaterDispatch()
     {
         var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
-
-        await sink.OnDeltaAsync("first", CancellationToken.None);
-        time.Advance(TimeSpan.FromMilliseconds(100));
-        await sink.OnDeltaAsync("first plus more", CancellationToken.None);
+        var sink = CreateSink(dispatchPort, out _);
 
         sink.Dispose();
-        time.Advance(TimeSpan.FromMilliseconds(2000));
+        await sink.OnDeltaAsync("first", CancellationToken.None);
 
-        // The deferred copy should be discarded by Dispose before the timer would have fired.
-        envelopes.Should().ContainSingle();
+        envelopes.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task Dispose_AfterFinalize_IsIdempotent()
+    public void Source_ShouldNotContainSinkOwnedTimerOrPendingDispatchState()
     {
-        var (dispatchPort, _) = BuildRecordingDispatchPort();
-        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
+        // Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
+        //   Old pattern: sink owned timer callbacks, pending business text, and in-flight dispatch loops.
+        //   New principle: actor/run state owns coalescing and calls the sink only with approved snapshots.
+        var source = File.ReadAllText(GetProductionSourcePath());
 
-        await sink.OnDeltaAsync("first", CancellationToken.None);
-        await sink.FinalizeAsync("first plus", CancellationToken.None);
-
-        sink.Dispose();
-        sink.Dispose();
+        source.Should().NotContain("_flushTimer");
+        source.Should().NotContain("CreateTimer");
+        source.Should().NotContain("_pendingText");
+        source.Should().NotContain("_dispatchInProgress");
+        source.Should().NotContain(string.Concat("Task", ".Run"));
+        source.Should().NotContain("_ = DispatchAsync");
+        source.Should().NotContain("_ = DispatchLoopAsync");
     }
 
     private static TurnStreamingReplySink CreateSink(
         IActorDispatchPort dispatchPort,
-        int throttleMs,
-        out FakeTimeProvider timeProvider)
+        out FakeTimeProvider timeProvider,
+        bool cardMode = false)
     {
         timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 4, 24, 9, 0, 0, TimeSpan.Zero));
         return new TurnStreamingReplySink(
@@ -274,9 +138,11 @@ public sealed class TurnStreamingReplySinkTests
                     CorrelationId = "corr-1",
                 },
             },
-            throttle: TimeSpan.FromMilliseconds(throttleMs),
+            replyToken: "runtime-reply-token",
+            replyTokenExpiresAtUnixMs: 1770000000000,
             timeProvider,
-            NullLogger<TurnStreamingReplySink>.Instance);
+            NullLogger<TurnStreamingReplySink>.Instance,
+            cardMode);
     }
 
     private static (IActorDispatchPort dispatchPort, List<EventEnvelope> envelopes) BuildRecordingDispatchPort()
@@ -284,9 +150,28 @@ public sealed class TurnStreamingReplySinkTests
         var envelopes = new List<EventEnvelope>();
         var dispatchPort = Substitute.For<IActorDispatchPort>();
         dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
         dispatchPort.When(x => x.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => envelopes.Add(call.Arg<EventEnvelope>()));
         return (dispatchPort, envelopes);
+    }
+
+    private static string GetProductionSourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "agents",
+                "Aevatar.GAgents.Channel.Runtime",
+                "TurnStreamingReplySink.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate TurnStreamingReplySink.cs from test output directory.");
     }
 }

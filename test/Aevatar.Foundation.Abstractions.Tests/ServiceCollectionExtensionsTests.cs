@@ -6,6 +6,7 @@ using Shouldly;
 
 namespace Aevatar.Foundation.Abstractions.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class ServiceCollectionExtensionsTests
 {
     [Fact]
@@ -77,17 +78,21 @@ public sealed class ServiceCollectionExtensionsTests
     {
         private readonly string _name;
         private readonly string? _previous;
+        private readonly string _value;
 
         public EnvironmentVariableScope(string name, string value)
         {
             _name = name;
             _previous = Environment.GetEnvironmentVariable(name);
+            _value = value;
             Environment.SetEnvironmentVariable(name, value);
         }
 
         public void Dispose()
         {
             Environment.SetEnvironmentVariable(_name, _previous);
+            if (Directory.Exists(_value))
+                Directory.Delete(_value, recursive: true);
         }
     }
 }

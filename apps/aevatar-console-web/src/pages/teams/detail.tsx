@@ -1,130 +1,72 @@
-import {
-  type AGUIEvent,
-  AGUIEventType,
-  CustomEventName,
-} from "@aevatar-react-sdk/types";
-import {
-  BranchesOutlined,
-  DeploymentUnitOutlined,
-} from "@ant-design/icons";
-import type { Edge, Node } from "@xyflow/react";
-import { Button, Space, Tooltip, Typography, theme } from "antd";
-import { useQuery } from "@tanstack/react-query";
+import { Input, Modal, Space, Typography, message, theme } from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIntl } from "@umijs/max";
 import React from "react";
-import { scopesApi } from "@/shared/api/scopesApi";
 import {
-  formatCompactDateTime,
-  formatTimeOnly,
-} from "@/shared/datetime/dateTime";
-import GraphCanvas from "@/shared/graphs/GraphCanvas";
-import { buildActorGraphElements } from "@/shared/graphs/buildGraphElements";
+  applyRuntimeEvent,
+  createRuntimeEventAccumulator,
+} from "@/shared/agui/runtimeEventSemantics";
+import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
+import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import {
   getLocationSnapshot,
   history,
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
-import {
-  buildPlatformDeploymentsHref,
-  buildPlatformGovernanceHref,
-  buildPlatformServicesHref,
-} from "@/shared/navigation/platformRoutes";
 import { buildScopeHref } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
+  buildTeamStudioHref,
   readTeamDetailRouteState,
   type TeamDetailTab,
 } from "@/shared/navigation/teamRoutes";
+import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
 import {
-  buildRuntimeExplorerHref,
-  buildRuntimeMissionControlHref,
-  buildRuntimeRunsHref,
-} from "@/shared/navigation/runtimeRoutes";
-import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
-import { studioApi } from "@/shared/studio/api";
-import {
-  buildStudioWorkflowMemberKey,
-  buildStudioScriptsWorkspaceRoute,
-  buildStudioWorkflowEditorRoute,
-  buildStudioWorkflowWorkspaceRoute,
-} from "@/shared/studio/navigation";
-import type { StudioWorkflowDocument } from "@/shared/studio/models";
-import {
-  AevatarInspectorEmpty,
-  AevatarPanel,
-} from "@/shared/ui/aevatarPageShells";
+  formatStudioMemberLifecycleStage,
+} from "@/shared/studio/models";
+import type { StudioTeamSummary } from "@/shared/studio/models";
 import { AevatarCompactText } from "@/shared/ui/compactText";
+import { describeError } from "@/shared/ui/errorText";
 import {
   TeamActionRail,
   TeamDetailEmptyState,
   TeamDetailShell,
   type TeamTabOption,
 } from "./components/TeamDetailChrome";
+import TeamTestPanel, {
+  type TeamTestLastResult,
+  type TeamTestStatus,
+} from "./components/TeamTestPanel";
+import { DetailPill } from "./components/TeamDetailPrimitives";
 import {
-  DetailPill,
-  FactLine,
-  factValueFontFamily,
-  SignalCard,
-} from "./components/TeamDetailPrimitives";
-import TeamAdvancedTab from "./tabs/TeamAdvancedTab";
-import TeamAssetsTab, { teamAssetIcons } from "./tabs/TeamAssetsTab";
-import TeamBindingsTab from "./tabs/TeamBindingsTab";
-import TeamEventsTab from "./tabs/TeamEventsTab";
+  describeTeamTestError,
+  isAbortLikeError,
+  type TeamTestErrorDescription,
+} from "./components/teamTestErrors";
 import TeamMembersTab from "./tabs/TeamMembersTab";
 import TeamOverviewTab from "./tabs/TeamOverviewTab";
-import TeamTopologyTab from "./tabs/TeamTopologyTab";
 import { resolveWorkflowOperationalUnit } from "./workflowOperationalUnits";
-import {
-  deriveTeamIntegrationsSummary,
-  deriveTeamWorkflowRoleBindings,
-} from "./runtime/teamIntegrations";
-import type {
-  TeamHealthStatus,
-  TeamHealthTone,
-  TeamPlaybackSummary,
-} from "./runtime/teamRuntimeLens";
 import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
+import { t } from "@/shared/i18n/messages";
 
-type ObservationStatus = "live" | "delayed" | "partial" | "unavailable";
+const teamProjectionRetryLimit = 5;
+const teamProjectionRetryBaseMs = 500;
+const teamProjectionRetryMaxMs = 3_000;
+const entryMemberClearingId = "__clear_entry_member__";
+const teamEntryVisibilityAttempts = 5;
+const teamEntryVisibilityRetryDelayMs = 100;
 
-type ObservationBadge = {
-  label: string;
-  status: ObservationStatus;
-};
+function isProjectionSyncing404(error: unknown): boolean {
+  return isStudioApiStatus(error, 404);
+}
 
-type TeamCompositionRow = {
-  key: string;
-  name: string;
-  summary: string;
-  kind: string;
-};
-
-type TopologyNodeKind = "actor" | "connector" | "service";
-
-type TopologyEntitySummary = {
-  badgeText: string;
-  badgeTone: PillTone;
-  id: string;
-  kind: TopologyNodeKind;
-  note: string;
-  summary: string;
-  title: string;
-};
-
-type TopologyDetailRow = {
-  badge: string;
-  label: string;
-  note: string;
-  noteMonospace?: boolean;
-  noteRows?: number;
-  value: string;
-  valueMonospace?: boolean;
-  valueRows?: number;
-};
-
-type MemberLike = {
-  actorId: string;
-  actorType: string;
-};
+function projectionRetryDelay(attemptIndex: number): number {
+  return Math.min(
+    teamProjectionRetryBaseMs * 2 ** attemptIndex,
+    teamProjectionRetryMaxMs,
+  );
+}
 
 function trimText(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -166,7 +108,7 @@ function resolveTeamHeading(input: {
 
   const genericLensTitle =
     normalizedScopeId ? `Team ${normalizedScopeId}` : "";
-  if (normalizedLensTitle === "当前团队") {
+  if (normalizedLensTitle === t("pages.teams.detail.copy", "Current team")) {
     return {
       metaScopeId: normalizedScopeId || undefined,
       title: normalizedLensTitle,
@@ -185,7 +127,7 @@ function resolveTeamHeading(input: {
 
   return {
     metaScopeId: normalizedScopeId || undefined,
-    title: "团队详情",
+    title: t("pages.teams.detail.copy.2", "Team detail"),
   };
 }
 
@@ -202,22 +144,24 @@ function compactId(value: string | null | undefined): string {
     : compacted;
 }
 
-function formatTeamTabLabel(tab: TeamDetailTab): string {
+function compactOptionalId(value: string | null | undefined): string {
+  const normalized = trimText(value);
+  if (!normalized || normalized === "--") {
+    return "--";
+  }
+
+  return compactId(normalized);
+}
+
+function formatTeamTabLabel(
+  tab: TeamDetailTab,
+  intl: ReturnType<typeof useIntl>,
+): string {
   switch (tab) {
-    case "topology":
-      return "事件拓扑";
-    case "events":
-      return "事件流";
     case "members":
-      return "团队成员";
-    case "bindings":
-      return "Bindings";
-    case "assets":
-      return "Assets";
-    case "advanced":
-      return "配置";
+      return intl.formatMessage({ id: "teams.detail.tabs.members" });
     default:
-      return "概览";
+      return intl.formatMessage({ id: "teams.detail.tabs.overview" });
   }
 }
 
@@ -225,7 +169,10 @@ function normalizeStatus(value: string | null | undefined): string {
   return trimText(value).toLowerCase();
 }
 
-function formatFriendlyStatus(value: string | null | undefined): string {
+function formatFriendlyStatus(
+  value: string | null | undefined,
+  intl: ReturnType<typeof useIntl>,
+): string {
   const normalized = normalizeStatus(value);
   if (!normalized) {
     return "--";
@@ -235,25 +182,25 @@ function formatFriendlyStatus(value: string | null | undefined): string {
     case "active":
     case "running":
     case "processing":
-      return "运行中";
+      return intl.formatMessage({ id: "teams.detail.runtimeStatus.running" });
     case "published":
-      return "已发布";
+      return intl.formatMessage({ id: "teams.detail.runtimeStatus.published" });
     case "default":
-      return "默认版本";
+      return intl.formatMessage({ id: "teams.detail.runtimeStatus.default" });
     case "completed":
     case "finished":
     case "succeeded":
     case "success":
-      return "已完成";
+      return intl.formatMessage({ id: "teams.detail.runtimeStatus.completed" });
     case "draft":
-      return "草稿";
+      return intl.formatMessage({ id: "teams.detail.runtimeStatus.draft" });
     case "retired":
-      return "已停用";
+      return intl.formatMessage({ id: "teams.detail.runtimeStatus.retired" });
     case "failed":
     case "error":
     case "cancelled":
     case "degraded":
-      return "运行异常";
+      return intl.formatMessage({ id: "teams.detail.runtimeStatus.failed" });
     case "waiting":
     case "waiting_signal":
     case "waiting_approval":
@@ -261,365 +208,46 @@ function formatFriendlyStatus(value: string | null | undefined): string {
     case "human_approval":
     case "suspended":
     case "blocked":
-      return "等待处理";
+      return intl.formatMessage({ id: "teams.detail.runtimeStatus.waiting" });
     default:
       return trimText(value) || "--";
   }
 }
 
-type MemberPresenceKind = "focus" | "run" | "visible";
-
-function formatMemberPresenceLabel(kind: MemberPresenceKind): string {
-  switch (kind) {
-    case "focus":
-      return "当前焦点";
-    case "run":
-      return "参与本次 Run";
+function formatTeamLifecycleLabel(value: string | null | undefined): string {
+  switch (normalizeStatus(value)) {
+    case "active":
+      return t("teams.detail.status.active", "Active");
+    case "archived":
+      return t("teams.detail.status.archived", "Archived");
+    case "unknown":
+      return t("teams.detail.status.unknown", "Unknown status");
     default:
-      return "可见 Actor";
+      return trimText(value) || t("teams.detail.status.unknown", "Unknown status");
   }
 }
 
-function resolveMemberPresenceTone(kind: MemberPresenceKind): PillTone {
-  switch (kind) {
-    case "focus":
-      return "info";
-    case "run":
-      return "success";
-    default:
-      return "neutral";
-  }
-}
-
-function formatCompositionKind(kind: string): string {
+function formatCompositionKind(kind: string | null | undefined): string {
   switch (normalizeStatus(kind)) {
+    case "":
+    case "unknown":
+      return t("pages.teams.detail.copy.7", "Unrecognized");
     case "workflow role":
-      return "角色";
+      return t("pages.teams.detail.copy.8", "Role");
     case "workflow":
-      return "流程";
+      return t("pages.teams.detail.copy.9", "Workflow");
     case "service":
-      return "服务";
+      return t("pages.teams.detail.copy.10", "Service");
     case "actor":
       return "Actor";
     case "runtime":
-      return "运行";
+      return t("pages.teams.detail.copy.11", "Run");
     case "script":
-      return "脚本";
+      return t("pages.teams.detail.copy.12", "Script");
     case "gagent":
       return "Agent";
     default:
       return kind || "--";
-  }
-}
-
-function formatConnectorTypeLabel(kind: string): string {
-  switch (normalizeStatus(kind)) {
-    case "http":
-      return "HTTP API";
-    case "cli":
-      return "CLI";
-    case "mcp":
-      return "MCP";
-    default:
-      return kind || "--";
-  }
-}
-
-function formatConnectorEnabledLabel(enabled: boolean): string {
-  return enabled ? "可用" : "停用";
-}
-
-function formatObservationLabel(status: ObservationStatus): string {
-  switch (status) {
-    case "live":
-      return "实时";
-    case "delayed":
-      return "稍有延迟";
-    case "partial":
-      return "部分可见";
-    default:
-      return "暂不可用";
-  }
-}
-
-function formatTopologyNodeKindLabel(kind: TopologyNodeKind): string {
-  switch (kind) {
-    case "service":
-      return "服务节点";
-    case "connector":
-      return "连接器";
-    default:
-      return "团队成员";
-  }
-}
-
-function formatTopologyDepthLabel(depth: number): string {
-  switch (depth) {
-    case 1:
-      return "近邻";
-    case 3:
-      return "全景";
-    default:
-      return "扩展";
-  }
-}
-
-function summarizeTopologyTitles(
-  titles: readonly string[],
-  emptyLabel: string,
-): string {
-  const visible = [...new Set(titles.map((title) => trimText(title)).filter(Boolean))];
-  if (visible.length === 0) {
-    return emptyLabel;
-  }
-  if (visible.length <= 3) {
-    return visible.join("、");
-  }
-  return `${visible.slice(0, 3).join("、")} 等 ${visible.length} 个`;
-}
-
-function formatTopologyFocusReason(reason: string): string {
-  const normalized = trimText(reason);
-  switch (normalized) {
-    case "Focused on the actor behind the most recent team activity.":
-      return "当前焦点跟随最近一次团队运行里的实际执行成员。";
-    case "Focused on the currently selected service revision actor because no active run was selected.":
-      return "当前还没有选中运行，所以先对齐到当前所选服务版本对应的成员。";
-    case "Focused on the currently selected service actor because no stronger runtime signal was available.":
-      return "当前还没有更强的运行信号，所以先对齐到当前所选服务对应的成员。";
-    case "Focused on the first known team member because no stronger runtime signal was available.":
-      return "当前运行信号不足，先落在当前可见的第一位团队成员。";
-    case "No actor focus is available yet.":
-      return "当前还没有可用的团队成员焦点。";
-    default:
-      return normalized;
-  }
-}
-
-function formatPlaybackSummary(summary: string): string {
-  const normalized = trimText(summary);
-  switch (normalized) {
-    case "No run audit is available for the current team activity.":
-      return "当前还没有可见的运行审计记录。";
-    case "No event timeline is available for the current team activity.":
-      return "当前还没有可见的事件时间线。";
-    case "Timeline reconstructed from the latest visible run steps.":
-      return "当前事件流是根据最近一次可见运行步骤整理的。";
-    default:
-      return normalized;
-  }
-}
-
-function buildDepthMap(
-  rootId: string,
-  edges: readonly { source: string; target: string }[],
-): Map<string, number> {
-  const normalizedRootId = trimText(rootId);
-  if (!normalizedRootId) {
-    return new Map();
-  }
-
-  const adjacency = new Map<string, string[]>();
-  edges.forEach((edge) => {
-    const source = trimText(edge.source);
-    const target = trimText(edge.target);
-    if (!source || !target) {
-      return;
-    }
-
-    const sourceNeighbors = adjacency.get(source) ?? [];
-    sourceNeighbors.push(target);
-    adjacency.set(source, sourceNeighbors);
-
-    const targetNeighbors = adjacency.get(target) ?? [];
-    targetNeighbors.push(source);
-    adjacency.set(target, targetNeighbors);
-  });
-
-  const depths = new Map<string, number>([[normalizedRootId, 0]]);
-  const queue = [normalizedRootId];
-
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    const nextDepth = (depths.get(current) ?? 0) + 1;
-    for (const next of adjacency.get(current) ?? []) {
-      if (depths.has(next)) {
-        continue;
-      }
-      depths.set(next, nextDepth);
-      queue.push(next);
-    }
-  }
-
-  return depths;
-}
-
-function formatStepTypeLabel(value: string | null | undefined): string {
-  const normalized = normalizeStatus(value);
-  switch (normalized) {
-    case "human_approval":
-      return "人工确认";
-    case "human_input":
-      return "人工输入";
-    case "llm_call":
-      return "LLM 调用";
-    case "tool_call":
-      return "工具调用";
-    case "branch":
-      return "条件分支";
-    default:
-      return trimText(value) || "--";
-  }
-}
-
-type PillTone = "danger" | "info" | "neutral" | "success" | "warning";
-
-function resolveTonePillStyle(
-  token: ReturnType<typeof theme.useToken>["token"],
-  tone: PillTone,
-): React.CSSProperties {
-  switch (tone) {
-    case "success":
-      return {
-        background: "rgba(82, 196, 26, 0.12)",
-        color: token.colorSuccess,
-      };
-    case "info":
-      return {
-        background: "rgba(24, 144, 255, 0.08)",
-        color: token.colorInfo,
-      };
-    case "warning":
-      return {
-        background: "rgba(250, 173, 20, 0.12)",
-        color: token.colorWarning,
-      };
-    case "danger":
-      return {
-        background: "rgba(255, 77, 79, 0.12)",
-        color: token.colorError,
-      };
-    default:
-      return {
-        background: token.colorFillQuaternary,
-        color: token.colorTextSecondary,
-      };
-  }
-}
-
-function formatTeamHealthStatusLabel(status: TeamHealthStatus): string {
-  switch (status) {
-    case "healthy":
-      return "可信运行";
-    case "attention":
-      return "需要核验";
-    case "degraded":
-      return "运行降级";
-    case "blocked":
-      return "等待人工";
-    case "human-overridden":
-      return "人工接管";
-    default:
-      return "状态未知";
-  }
-}
-
-function formatTeamHealthActionLabel(status: TeamHealthStatus): string {
-  switch (status) {
-    case "healthy":
-      return "可继续观察或小步调整";
-    case "attention":
-      return "变更前先核验信号";
-    case "degraded":
-      return "先修复运行异常";
-    case "blocked":
-      return "需要人工处理后继续";
-    case "human-overridden":
-      return "人工介入正在影响判断";
-    default:
-      return "等待更多运行事实";
-  }
-}
-
-function resolveTeamHealthToneStyle(
-  token: ReturnType<typeof theme.useToken>["token"],
-  tone: TeamHealthTone,
-): React.CSSProperties {
-  switch (tone) {
-    case "success":
-      return resolveTonePillStyle(token, "success");
-    case "warning":
-      return resolveTonePillStyle(token, "warning");
-    case "error":
-      return resolveTonePillStyle(token, "danger");
-    case "info":
-      return resolveTonePillStyle(token, "info");
-    default:
-      return resolveTonePillStyle(token, "neutral");
-  }
-}
-
-function formatTeamHealthDetail(detail: string): string {
-  const normalized = trimText(detail);
-  if (!normalized) {
-    return "--";
-  }
-
-  if (normalized === "A human-in-the-loop step is visible in the current run.") {
-    return "当前运行可见人工介入步骤。";
-  }
-
-  if (normalized.startsWith("Service deployment is ")) {
-    return `服务部署状态：${normalized.replace("Service deployment is ", "").replace(/\.$/, "")}。`;
-  }
-
-  if (normalized === "No recent team activity is available to verify the active deployment.") {
-    return "当前还没有近期团队运行来证明 active deployment 的健康状态。";
-  }
-
-  if (normalized.startsWith("Current run ")) {
-    return normalized
-      .replace(/^Current run /, "当前运行 ")
-      .replace(" is ", " 状态为 ");
-  }
-
-  if (normalized.startsWith("Latest error: ")) {
-    return normalized.replace("Latest error: ", "最近错误：");
-  }
-
-  if (normalized.startsWith("Current run status is ")) {
-    return normalized.replace("Current run status is ", "当前运行状态为 ");
-  }
-
-  return normalized;
-}
-
-function formatPartialSignal(signal: string): string {
-  switch (trimText(signal)) {
-    case "Actor graph unavailable":
-      return "事件拓扑暂不可用";
-    case "No successful baseline run":
-      return "暂无成功基线运行";
-    case "No recent runs":
-      return "暂无近期运行";
-    default:
-      return trimText(signal) || "--";
-  }
-}
-
-function resolveObservationPillStyle(
-  token: ReturnType<typeof theme.useToken>["token"],
-  status: ObservationStatus,
-): React.CSSProperties {
-  switch (status) {
-    case "live":
-      return resolveTonePillStyle(token, "success");
-    case "delayed":
-      return resolveTonePillStyle(token, "warning");
-    case "partial":
-      return resolveTonePillStyle(token, "info");
-    default:
-      return resolveTonePillStyle(token, "neutral");
   }
 }
 
@@ -629,16 +257,27 @@ function resolveCompositionKindPillStyle(
 ): React.CSSProperties {
   switch (normalizeStatus(kind)) {
     case "workflow role":
-      return resolveTonePillStyle(token, "info");
+      return {
+        background: "rgba(24, 144, 255, 0.08)",
+        color: token.colorInfo,
+      };
     case "workflow":
-      return resolveTonePillStyle(token, "success");
+      return {
+        background: "rgba(82, 196, 26, 0.12)",
+        color: token.colorSuccess,
+      };
     case "service":
-      return resolveTonePillStyle(token, "warning");
+      return {
+        background: "rgba(250, 173, 20, 0.12)",
+        color: token.colorWarning,
+      };
     case "actor":
     case "runtime":
-      return resolveTonePillStyle(token, "neutral");
     default:
-      return resolveTonePillStyle(token, "neutral");
+      return {
+        background: token.colorFillQuaternary,
+        color: token.colorTextSecondary,
+      };
   }
 }
 
@@ -647,6 +286,13 @@ function resolveStatusPillStyle(
   value: string | null | undefined,
 ): React.CSSProperties {
   const normalized = normalizeStatus(value);
+
+  if (normalized === "archived") {
+    return {
+      background: token.colorFillQuaternary,
+      color: token.colorTextSecondary,
+    };
+  }
 
   if (
     [
@@ -700,381 +346,34 @@ function resolveStatusPillStyle(
   };
 }
 
-function resolveActionButtonStyle(
-  token: ReturnType<typeof theme.useToken>["token"],
-  tone: "primary" | "secondary" = "secondary",
-): React.CSSProperties {
-  return {
-    background: tone === "secondary" ? token.colorBgContainer : undefined,
-    borderColor: tone === "secondary" ? token.colorBorderSecondary : undefined,
-    borderRadius: 16,
-    boxShadow: "none",
-    color: tone === "secondary" ? token.colorText : undefined,
-    fontWeight: 600,
-    height: 40,
-    paddingInline: 18,
-  };
-}
-
-function resolveSegmentedButtonStyle(
-  token: ReturnType<typeof theme.useToken>["token"],
-  active: boolean,
-): React.CSSProperties {
-  return {
-    background: active ? token.colorPrimary : "transparent",
-    border: "none",
-    borderRadius: 999,
-    color: active ? token.colorWhite : token.colorTextSecondary,
-    cursor: "pointer",
-    fontFamily: factValueFontFamily,
-    fontSize: 12,
-    fontWeight: 700,
-    padding: "8px 12px",
-    transition: "all 160ms ease",
-  };
-}
-
-function resolveSelectionCardButtonStyle(
-  token: ReturnType<typeof theme.useToken>["token"],
-  selected: boolean,
-): React.CSSProperties {
-  return {
-    background: selected ? token.colorPrimaryBg : token.colorBgContainer,
-    border: `1px solid ${selected ? token.colorPrimaryBorder : token.colorBorderSecondary}`,
-    borderRadius: 18,
-    boxShadow: selected ? token.boxShadowSecondary : "none",
-    cursor: "pointer",
-    transition: "all 160ms ease",
-  };
-}
-
-function formatEventStreamStageLabel(
-  stage: string | null | undefined,
-  stepType?: string | null,
-): string {
-  const normalizedStage = normalizeStatus(stage);
-  const normalizedStepType = normalizeStatus(stepType);
-
-  const asStageCode = (value: string): string =>
-    trimText(value)
-      .replace(/[^a-zA-Z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .toUpperCase();
-
-  if (
-    normalizedStage.includes("human") ||
-    normalizedStage.includes("wait") ||
-    normalizedStage.includes("suspend") ||
-    normalizedStepType === "human_approval" ||
-    normalizedStepType === "human_input"
-  ) {
-    return "HUMAN_GATE";
-  }
-
-  if (normalizedStepType === "llm_call") {
-    return "LLM_CALL";
-  }
-
-  if (normalizedStepType === "tool_call") {
-    return "TOOL_CALL";
-  }
-
-  if (normalizedStage.includes("route") || normalizedStage.includes("dispatch")) {
-    return "ROUTED";
-  }
-
-  if (normalizedStage.includes("reply")) {
-    return "REPLY";
-  }
-
-  if (normalizedStage.includes("schedule")) {
-    return "SCHEDULE";
-  }
-
-  if (
-    normalizedStage.includes("input") ||
-    normalizedStage.includes("ingress") ||
-    normalizedStage.includes("receive") ||
-    normalizedStage.includes("message")
-  ) {
-    return "MSG_IN";
-  }
-
-  if (normalizedStage === "step") {
-    return "STEP";
-  }
-
-  if (trimText(stage)) {
-    return asStageCode(trimText(stage));
-  }
-
-  return stepType ? asStageCode(stepType) : "RUNTIME";
-}
-
-function resolveEventStreamTone(
-  stage: string | null | undefined,
-  tone: string | null | undefined,
-  stepType?: string | null,
-): PillTone {
-  const normalizedTone = normalizeStatus(tone);
-  if (normalizedTone === "error") {
-    return "danger";
-  }
-  if (normalizedTone === "warning") {
-    return "warning";
-  }
-
-  const normalizedStage = normalizeStatus(stage);
-  const normalizedStepType = normalizeStatus(stepType);
-  if (
-    normalizedStage.includes("human") ||
-    normalizedStage.includes("wait") ||
-    normalizedStage.includes("suspend") ||
-    normalizedStepType === "human_approval" ||
-    normalizedStepType === "human_input"
-  ) {
-    return "warning";
-  }
-  if (normalizedStage.includes("reply")) {
-    return "success";
-  }
-  if (
-    normalizedStage.includes("route") ||
-    normalizedStage.includes("dispatch") ||
-    normalizedStepType === "llm_call" ||
-    normalizedStepType === "tool_call"
-  ) {
-    return "info";
-  }
-  return "neutral";
-}
-
 function formatCompactTimestamp(value: string | null | undefined): string {
-  return formatCompactDateTime(value, "暂无");
+  return formatCompactDateTime(value, t("pages.teams.detail.copy.13", "None"));
 }
 
-function formatClockTimestamp(value: string | null | undefined): string {
-  return formatTimeOnly(value, "--");
+function formatLocalTimeLabel(date: Date): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
 }
 
-function readWorkflowRoleName(role: Record<string, unknown>, index: number): string {
-  return (
-    trimText(typeof role.name === "string" ? role.name : "") ||
-    trimText(typeof role.id === "string" ? role.id : "") ||
-    `role-${index + 1}`
-  );
+function hasTeamEntryMember(
+  summary: StudioTeamSummary | null | undefined,
+  memberId: string,
+): boolean {
+  return trimText(summary?.entryMemberId) === trimText(memberId);
 }
 
-function readWorkflowRoleConnectors(role: Record<string, unknown>): string[] {
-  const connectors = Array.isArray(role.connectors) ? role.connectors : [];
-  return connectors
-    .map((entry) => {
-      if (typeof entry === "string") {
-        return trimText(entry);
-      }
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return "";
-      }
-      const record = entry as Record<string, unknown>;
-      return trimText(
-        typeof record.name === "string"
-          ? record.name
-          : typeof record.id === "string"
-            ? record.id
-            : "",
-      );
-    })
-    .filter(Boolean);
-}
-
-function deriveTeamCompositionRows(input: {
-  documents: readonly StudioWorkflowDocument[];
-  fallbackMembers: readonly MemberLike[];
-  implementationKind: string | null | undefined;
-}): TeamCompositionRow[] {
-  const rows: TeamCompositionRow[] = [];
-  const seen = new Set<string>();
-
-  input.documents.forEach((document) => {
-    const roles = Array.isArray(document.roles) ? document.roles : [];
-    roles.forEach((role, index) => {
-      if (!role || typeof role !== "object" || Array.isArray(role)) {
-        return;
-      }
-
-      const record = role as Record<string, unknown>;
-      const name = readWorkflowRoleName(record, index);
-      const dedupeKey = name.toLowerCase();
-      if (seen.has(dedupeKey)) {
-        return;
-      }
-      seen.add(dedupeKey);
-
-      const connectors = readWorkflowRoleConnectors(record);
-      const provider = trimText(
-        typeof record.provider === "string" ? record.provider : "",
-      );
-      const model = trimText(typeof record.model === "string" ? record.model : "");
-      const summaryParts: string[] = [];
-
-      if (connectors.length > 0) {
-        summaryParts.push(connectors.slice(0, 3).join("、"));
-      }
-      if (provider || model) {
-        summaryParts.push([provider, model].filter(Boolean).join(" / "));
-      }
-      if (summaryParts.length === 0) {
-        summaryParts.push("--");
-      }
-
-      rows.push({
-        key: `role:${name}`,
-        kind: "workflow role",
-        name,
-        summary: summaryParts.join("，"),
-      });
-    });
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, ms);
   });
-
-  if (rows.length > 0) {
-    return rows;
-  }
-
-  return input.fallbackMembers.map((member) => ({
-    key: `member:${member.actorId}`,
-    kind: trimText(input.implementationKind) || "runtime",
-    name: trimText(member.actorType) || compactId(member.actorId),
-    summary: trimText(member.actorId) || "--",
-  }));
 }
-
-function createObservedPlaybackEvents(
-  playback: Pick<TeamPlaybackSummary, "commandId" | "currentRunId" | "rootActorId">,
-): AGUIEvent[] {
-  const events: AGUIEvent[] = [];
-  const runId = playback.currentRunId?.trim() || "";
-  const actorId = playback.rootActorId?.trim() || "";
-  const commandId = playback.commandId?.trim() || "";
-
-  if (runId) {
-    events.push({
-      runId,
-      threadId: commandId || runId,
-      timestamp: Date.now(),
-      type: AGUIEventType.RUN_STARTED,
-    } as AGUIEvent);
-  }
-
-  if (actorId || commandId) {
-    events.push({
-      name: CustomEventName.RunContext,
-      timestamp: Date.now(),
-      type: AGUIEventType.CUSTOM,
-      value: {
-        actorId: actorId || undefined,
-        commandId: commandId || undefined,
-      },
-    } as AGUIEvent);
-  }
-
-  return events;
-}
-
-const TopologyNodeCard: React.FC<{
-  entity: TopologyEntitySummary;
-}> = ({ entity }) => {
-  const { token } = theme.useToken();
-  const kindStyle =
-    entity.kind === "service"
-      ? resolveTonePillStyle(token, "info")
-      : entity.kind === "connector"
-        ? resolveTonePillStyle(token, "warning")
-        : resolveTonePillStyle(token, "neutral");
-  const kindLabel =
-    entity.kind === "service"
-      ? "服务节点"
-      : entity.kind === "connector"
-        ? "连接器"
-        : "团队成员";
-
-  return (
-    <div
-      style={{
-        background: token.colorBgContainer,
-        borderRadius: 20,
-        display: "flex",
-        flexDirection: "column",
-        gap: 12,
-        minHeight: 132,
-        minWidth: 0,
-        padding: 18,
-      }}
-    >
-      <div
-        style={{
-          alignItems: "flex-start",
-          display: "flex",
-          gap: 10,
-          justifyContent: "space-between",
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
-          <div>
-            <DetailPill compact style={kindStyle} text={kindLabel} />
-          </div>
-          <Typography.Text
-            strong
-            style={{
-              color: token.colorText,
-              display: "block",
-              fontSize: 17,
-              lineHeight: 1.2,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {entity.title}
-          </Typography.Text>
-          <Typography.Text
-            style={{
-              color: token.colorTextTertiary,
-              display: "block",
-              fontSize: 12,
-              lineHeight: 1.45,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {entity.summary}
-          </Typography.Text>
-        </div>
-        <DetailPill
-          compact
-          style={resolveTonePillStyle(token, entity.badgeTone)}
-          text={entity.badgeText}
-        />
-      </div>
-      <Typography.Text
-        style={{
-          color: token.colorTextSecondary,
-          display: "block",
-          fontFamily: factValueFontFamily,
-          fontSize: 12,
-          lineHeight: 1.5,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {entity.note}
-      </Typography.Text>
-    </div>
-  );
-};
 
 const TeamDetailPage: React.FC = () => {
+  const intl = useIntl();
+  const queryClient = useQueryClient();
   const locationSnapshot = React.useSyncExternalStore(
     subscribeToLocationChanges,
     getLocationSnapshot,
@@ -1088,20 +387,48 @@ const TeamDetailPage: React.FC = () => {
     return readTeamDetailRouteState(window.location.search, window.location.pathname);
   }, [locationSnapshot]);
   const scopeId = routeState.scopeId.trim();
+  const selectedTeamId = trimText(routeState.teamId);
+  const hasTeamIdentity = scopeId.length > 0 && selectedTeamId.length > 0;
+  const teamSummaryQueryKey = React.useMemo(
+    () => ["teams", "team-summary", scopeId, selectedTeamId] as const,
+    [scopeId, selectedTeamId],
+  );
+  const teamMembersQueryKey = React.useMemo(
+    () => ["teams", "team-members", scopeId, selectedTeamId] as const,
+    [scopeId, selectedTeamId],
+  );
+  const cachedTeamSummary = queryClient.getQueryData<StudioTeamSummary>(
+    teamSummaryQueryKey,
+  );
+  const shouldRetryProjectionSync = Boolean(
+    hasTeamIdentity && cachedTeamSummary?.teamId === selectedTeamId,
+  );
   const teamsListHref = React.useMemo(
     () => buildScopeHref("/teams", { scopeId }),
     [scopeId],
   );
-  const [graphDepth, setGraphDepth] = React.useState(2);
   const [preferredMemberId, setPreferredMemberId] = React.useState(routeState.memberId);
   const [preferredServiceId, setPreferredServiceId] = React.useState(
     routeState.serviceId,
   );
   const [preferredRunId, setPreferredRunId] = React.useState(routeState.runId);
   const [activeTab, setActiveTab] = React.useState<TeamDetailTab>(routeState.tab);
-  const [selectedActorId, setSelectedActorId] = React.useState("");
-  const [selectedConnectorKey, setSelectedConnectorKey] = React.useState("");
-  const [selectedTopologyNodeId, setSelectedTopologyNodeId] = React.useState("");
+  const [teamEditorOpen, setTeamEditorOpen] = React.useState(false);
+  const [teamArchiveOpen, setTeamArchiveOpen] = React.useState(false);
+  const [teamEditorName, setTeamEditorName] = React.useState("");
+  const [teamEditorDescription, setTeamEditorDescription] = React.useState("");
+  const [teamEditorSaving, setTeamEditorSaving] = React.useState(false);
+  const [teamArchiving, setTeamArchiving] = React.useState(false);
+  const [teamTestPrompt, setTeamTestPrompt] = React.useState("");
+  const [teamTestResultText, setTeamTestResultText] = React.useState("");
+  const [teamTestStatus, setTeamTestStatus] = React.useState<TeamTestStatus>("idle");
+  const [teamTestError, setTeamTestError] =
+    React.useState<TeamTestErrorDescription | null>(null);
+  const [teamTestLastResult, setTeamTestLastResult] =
+    React.useState<TeamTestLastResult | null>(null);
+  const [teamTestModalOpen, setTeamTestModalOpen] = React.useState(false);
+  const [entryActionBusyMemberId, setEntryActionBusyMemberId] = React.useState("");
+  const teamTestAbortRef = React.useRef<AbortController | null>(null);
   const { token } = theme.useToken();
 
   React.useEffect(() => {
@@ -1121,41 +448,106 @@ const TeamDetailPage: React.FC = () => {
     setActiveTab((currentTab) =>
       currentTab === routeState.tab ? currentTab : routeState.tab,
     );
-  }, [routeState.memberId, routeState.runId, routeState.serviceId, routeState.tab]);
+    if (routeState.testTeam) {
+      setTeamTestModalOpen(true);
+    }
+  }, [
+    routeState.memberId,
+    routeState.runId,
+    routeState.serviceId,
+    routeState.tab,
+    routeState.testTeam,
+  ]);
 
+  React.useEffect(() => {
+    teamTestAbortRef.current?.abort();
+    teamTestAbortRef.current = null;
+    setTeamTestError(null);
+    setTeamTestLastResult(null);
+    setTeamTestResultText("");
+    setTeamTestStatus("idle");
+    setTeamTestModalOpen(routeState.testTeam);
+    setEntryActionBusyMemberId("");
+  }, [routeState.testTeam, scopeId, selectedTeamId]);
+
+  React.useEffect(
+    () => () => {
+      teamTestAbortRef.current?.abort();
+    },
+    [],
+  );
+
+  const teamMembersQuery = useQuery({
+    enabled: hasTeamIdentity,
+    queryFn: () => studioApi.listTeamMembers(scopeId, selectedTeamId),
+    queryKey: teamMembersQueryKey,
+    retry: (failureCount, error) =>
+      shouldRetryProjectionSync &&
+      isProjectionSyncing404(error) &&
+      failureCount < teamProjectionRetryLimit,
+    retryDelay: projectionRetryDelay,
+  });
+  const teamSummaryQuery = useQuery({
+    enabled: hasTeamIdentity,
+    queryFn: () => studioApi.getTeam(scopeId, selectedTeamId),
+    queryKey: teamSummaryQueryKey,
+    retry: (failureCount, error) =>
+      shouldRetryProjectionSync &&
+      isProjectionSyncing404(error) &&
+      failureCount < teamProjectionRetryLimit,
+    retryDelay: projectionRetryDelay,
+  });
+  const isTeamMembersProjectionSyncing =
+    shouldRetryProjectionSync &&
+    ((teamMembersQuery.failureCount > 0 &&
+      isProjectionSyncing404(teamMembersQuery.failureReason)) ||
+      (teamMembersQuery.isError && isProjectionSyncing404(teamMembersQuery.error)));
+  const teamMemberServiceIds = React.useMemo(
+    () =>
+      (teamMembersQuery.data?.members ?? [])
+        .map((member) => trimText(member.publishedServiceId))
+        .filter(Boolean),
+    [teamMembersQuery.data?.members],
+  );
+  const hasExplicitRuntimeFocus = Boolean(
+    trimText(preferredMemberId) || trimText(preferredServiceId) || trimText(preferredRunId),
+  );
   const {
-    actorGraphQuery,
-    actorsQuery,
-    baselineRunAuditQuery,
-    currentRunAuditQuery,
     lens,
     runsQuery,
     preferredMemberSummary,
     serviceRevisionsQuery,
-    scriptsQuery,
     servicesQuery,
     workflowsQuery,
   } = useTeamRuntimeLens(scopeId, {
-    graphDepth,
-    preferredActorId: selectedActorId || undefined,
+    allowScopeServiceFallback: false,
+    enabled: hasTeamIdentity,
     preferredMemberId,
     preferredRunId,
     preferredServiceId,
+    teamMemberServiceIds,
   });
 
-  const workspaceSettingsQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryFn: () => studioApi.getWorkspaceSettings(),
-    queryKey: ["teams", "workspace-settings"],
-    retry: false,
-  });
+  React.useEffect(() => {
+    if (!teamEditorOpen || !teamSummaryQuery.data) {
+      return;
+    }
 
-  const connectorCatalogQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryFn: () => studioApi.getConnectorCatalog(),
-    queryKey: ["teams", "connector-catalog"],
-    retry: false,
-  });
+    setTeamEditorName(teamSummaryQuery.data.displayName);
+    setTeamEditorDescription(teamSummaryQuery.data.description);
+  }, [teamEditorOpen, teamSummaryQuery.data]);
+
+  const refreshTeamAuthority = React.useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: teamSummaryQueryKey,
+      }),
+      queryClient.invalidateQueries({
+        queryKey: teamMembersQueryKey,
+      }),
+      queryClient.invalidateQueries({ queryKey: ["teams", "roster", scopeId] }),
+    ]);
+  }, [queryClient, scopeId, teamMembersQueryKey, teamSummaryQueryKey]);
 
   const fallbackWorkflowSummary = React.useMemo(() => {
     if (lens.activeRevision?.implementationKind !== "workflow") {
@@ -1163,15 +555,8 @@ const TeamDetailPage: React.FC = () => {
     }
 
     const workflows = workflowsQuery.data ?? [];
-    const workflowNameHints = [
-      trimText(lens.activeRevision.workflowName),
-      trimText(lens.currentRun?.workflowName),
-      trimText(lens.currentRunAudit?.audit.workflowName),
-      trimText(lens.currentRunAudit?.summary.workflowName),
-      trimText(lens.playback.workflowName),
-    ].filter(Boolean);
-
-    for (const workflowNameHint of workflowNameHints) {
+    const workflowNameHint = trimText(lens.activeRevision.workflowName);
+    if (workflowNameHint) {
       const matched =
         workflows.find(
           (workflow) =>
@@ -1184,13 +569,7 @@ const TeamDetailPage: React.FC = () => {
     }
 
     return workflows.length === 1 ? workflows[0] : null;
-  }, [
-    lens.activeRevision,
-    lens.currentRun,
-    lens.currentRunAudit,
-    lens.playback.workflowName,
-    workflowsQuery.data,
-  ]);
+  }, [lens.activeRevision, workflowsQuery.data]);
 
   const activeWorkflowSummary = React.useMemo(() => {
     if (trimText(routeState.workflowId)) {
@@ -1205,7 +584,7 @@ const TeamDetailPage: React.FC = () => {
   }, [fallbackWorkflowSummary, routeState.workflowId, workflowsQuery.data]);
 
   const focusedOperationalUnit = React.useMemo(() => {
-    if (!activeWorkflowSummary) {
+    if (!activeWorkflowSummary || !hasExplicitRuntimeFocus) {
       return null;
     }
 
@@ -1227,6 +606,7 @@ const TeamDetailPage: React.FC = () => {
     });
   }, [
     activeWorkflowSummary,
+    hasExplicitRuntimeFocus,
     lens.currentService?.serviceId,
     preferredServiceId,
     preferredRunId,
@@ -1250,118 +630,6 @@ const TeamDetailPage: React.FC = () => {
     routeState.workflowId,
   ]);
 
-  const teamWorkflowDetailQuery = useQuery({
-    enabled:
-      scopeId.length > 0 &&
-      lens.activeRevision?.implementationKind === "workflow" &&
-      trimText(activeWorkflowSummary?.workflowId).length > 0,
-    queryFn: () =>
-      scopesApi.getWorkflowDetail(scopeId, activeWorkflowSummary?.workflowId ?? ""),
-    queryKey: [
-      "teams",
-      "workflow-detail",
-      scopeId,
-      activeWorkflowSummary?.workflowId ?? "",
-      lens.activeRevision?.revisionId ?? "",
-    ],
-    retry: false,
-  });
-
-  const teamWorkflowDocumentsQuery = useQuery({
-    enabled:
-      lens.activeRevision?.implementationKind === "workflow" &&
-      Boolean(teamWorkflowDetailQuery.data?.available) &&
-      trimText(teamWorkflowDetailQuery.data?.source?.workflowYaml).length > 0,
-    queryFn: async (): Promise<StudioWorkflowDocument[]> => {
-      const source = teamWorkflowDetailQuery.data?.source;
-      if (!source) {
-        return [];
-      }
-
-      const workflowYamls = [
-        trimText(source.workflowYaml),
-        ...Object.values(source.inlineWorkflowYamls ?? {}).map((yaml) => trimText(yaml)),
-      ].filter(Boolean);
-      const parsedDocuments = await Promise.all(
-        [...new Set(workflowYamls)].map(async (yaml) => {
-          const parsed = await studioApi.parseYaml({ yaml });
-          return parsed.document ?? null;
-        }),
-      );
-
-      return parsedDocuments.filter(
-        (document): document is StudioWorkflowDocument => Boolean(document),
-      );
-    },
-    queryKey: [
-      "teams",
-      "workflow-documents",
-      scopeId,
-      activeWorkflowSummary?.workflowId ?? "",
-      lens.activeRevision?.revisionId ?? "",
-    ],
-    retry: false,
-  });
-
-  const teamScopedRoleLoading =
-    lens.activeRevision?.implementationKind === "workflow" &&
-    (workflowsQuery.isLoading ||
-      teamWorkflowDetailQuery.isLoading ||
-      teamWorkflowDocumentsQuery.isLoading);
-  const teamScopedRoleUnavailable =
-    lens.activeRevision?.implementationKind === "workflow" &&
-    !teamScopedRoleLoading &&
-    (!activeWorkflowSummary ||
-      teamWorkflowDetailQuery.isError ||
-      teamWorkflowDocumentsQuery.isError ||
-      !teamWorkflowDetailQuery.data?.available ||
-      !teamWorkflowDetailQuery.data?.source);
-
-  const integrations = React.useMemo(
-    () =>
-      deriveTeamIntegrationsSummary({
-        bindingKind: lens.activeRevision?.implementationKind ?? "unknown",
-        connectorCatalog: connectorCatalogQuery.data ?? null,
-        teamWorkflowRoles:
-          lens.activeRevision?.implementationKind !== "workflow"
-            ? []
-            : teamScopedRoleLoading
-              ? undefined
-              : teamScopedRoleUnavailable
-                ? null
-                : deriveTeamWorkflowRoleBindings(teamWorkflowDocumentsQuery.data ?? []),
-        workflowDocumentCount: teamWorkflowDocumentsQuery.data?.length ?? 0,
-        workspaceSettings: workspaceSettingsQuery.data ?? null,
-      }),
-    [
-      connectorCatalogQuery.data,
-      lens.activeRevision?.implementationKind,
-      teamScopedRoleLoading,
-      teamScopedRoleUnavailable,
-      teamWorkflowDocumentsQuery.data,
-      workspaceSettingsQuery.data,
-    ],
-  );
-
-  const defaultSelectedConnectorKey =
-    integrations.items.find((item) => item.usedByRoles.length > 0)?.key ||
-    integrations.items[0]?.key ||
-    "";
-
-  React.useEffect(() => {
-    if (integrations.items.length === 0) {
-      setSelectedConnectorKey("");
-      return;
-    }
-
-    if (
-      !selectedConnectorKey ||
-      !integrations.items.some((item) => item.key === selectedConnectorKey)
-    ) {
-      setSelectedConnectorKey(defaultSelectedConnectorKey);
-    }
-  }, [defaultSelectedConnectorKey, integrations.items, selectedConnectorKey]);
-
   const runtimeServiceId =
     focusedOperationalUnit?.matchedService?.serviceId ||
     lens.currentService?.serviceId ||
@@ -1370,9 +638,15 @@ const TeamDetailPage: React.FC = () => {
   const currentMemberId =
     trimText(preferredMemberSummary?.memberId) ||
     trimText(preferredMemberId);
+  const selectedRosterMemberId = currentMemberId;
   React.useEffect(() => {
     const canonicalMemberId = trimText(currentMemberId);
-    if (!scopeId || !canonicalMemberId || trimText(routeState.memberId)) {
+    if (
+      !hasTeamIdentity ||
+      !canonicalMemberId ||
+      !trimText(routeState.serviceId) ||
+      trimText(routeState.memberId)
+    ) {
       return;
     }
 
@@ -1380,6 +654,7 @@ const TeamDetailPage: React.FC = () => {
       buildTeamDetailHref({
         memberId: canonicalMemberId,
         scopeId,
+        teamId: selectedTeamId || undefined,
         workflowId: trimText(routeState.workflowId) || undefined,
         serviceId: trimText(routeState.serviceId) || undefined,
         runId: trimText(routeState.runId) || undefined,
@@ -1393,256 +668,165 @@ const TeamDetailPage: React.FC = () => {
     routeState.serviceId,
     routeState.tab,
     routeState.workflowId,
+    selectedTeamId,
+    hasTeamIdentity,
     scopeId,
   ]);
-  const currentPlatformService =
-    focusedOperationalUnit?.matchedService || lens.currentService || servicesQuery.data?.[0] || null;
-  const platformRouteIdentity = React.useMemo(
-    () => ({
-      tenantId: trimText(currentPlatformService?.tenantId) || scopeId,
-      appId: trimText(currentPlatformService?.appId) || "default",
-      namespace: trimText(currentPlatformService?.namespace) || "default",
-      serviceId: runtimeServiceId,
-    }),
-    [currentPlatformService?.appId, currentPlatformService?.namespace, currentPlatformService?.tenantId, runtimeServiceId, scopeId],
-  );
-  const selectedStudioMemberId =
-    currentMemberId ||
-    trimText(runtimeServiceId) ||
-    trimText(serviceRevisionsQuery.data?.serviceId) ||
-    trimText(preferredServiceId) ||
-    trimText(servicesQuery.data?.[0]?.serviceId) ||
-    trimText(activeWorkflowSummary?.serviceKey).split(":").pop()?.trim() ||
-    "";
-  const selectedStudioMemberKey =
-    trimText(activeWorkflowSummary?.workflowId).length > 0
-      ? buildStudioWorkflowMemberKey({
-          workflowId: activeWorkflowSummary?.workflowId,
-          workflowName:
-            trimText(activeWorkflowSummary?.displayName) ||
-            trimText(activeWorkflowSummary?.workflowName),
-        })
-      : selectedStudioMemberId
-        ? `member:${selectedStudioMemberId}`
-        : undefined;
-
-  const teamBuilderRoute =
-    trimText(activeWorkflowSummary?.workflowId).length > 0
-      ? buildStudioWorkflowEditorRoute({
-          scopeId,
-          memberKey: selectedStudioMemberKey,
-          workflowId: activeWorkflowSummary?.workflowId,
-        })
-      : buildStudioWorkflowWorkspaceRoute({
-          scopeId,
-          memberKey: selectedStudioMemberKey,
-        });
-
-  const availableActorIds = React.useMemo(
-    () =>
-      Array.from(
-        new Set([
-          ...lens.members.map((member) => member.actorId),
-          ...lens.graph.nodes.map((node) => node.actorId),
-        ]),
-      ).filter(Boolean),
-    [lens.graph.nodes, lens.members],
-  );
-
-  const defaultSelectedActorId =
-    lens.graph.focusActorId || lens.members[0]?.actorId || "";
-
-  React.useEffect(() => {
-    if (availableActorIds.length === 0) {
-      setSelectedActorId("");
-      return;
-    }
-    if (!selectedActorId || !availableActorIds.includes(selectedActorId)) {
-      setSelectedActorId(defaultSelectedActorId || availableActorIds[0]);
-    }
-  }, [availableActorIds, defaultSelectedActorId, selectedActorId]);
-
-  const effectiveActorId = selectedActorId || defaultSelectedActorId;
-  const localizedFocusReason = formatTopologyFocusReason(lens.graph.focusReason);
-  const selectedFocusReason =
-    effectiveActorId && effectiveActorId !== lens.graph.focusActorId
-      ? `当前视角已锁定在 ${compactId(effectiveActorId)}。${localizedFocusReason}`
-      : localizedFocusReason;
-
-  const graphProvenance: ObservationBadge = actorGraphQuery.isError
-    ? { label: formatObservationLabel("unavailable"), status: "unavailable" }
-    : lens.graph.available
-      ? { label: formatObservationLabel("live"), status: "live" }
-      : { label: formatObservationLabel("partial"), status: "partial" };
-  const playbackProvenance: ObservationBadge = currentRunAuditQuery.isError
-    ? { label: formatObservationLabel("unavailable"), status: "unavailable" }
-    : lens.playback.available
-      ? { label: formatObservationLabel("delayed"), status: "delayed" }
-      : { label: formatObservationLabel("partial"), status: "partial" };
-  const integrationsProvenance: ObservationBadge =
-    workspaceSettingsQuery.isError && connectorCatalogQuery.isError
-      ? { label: formatObservationLabel("unavailable"), status: "unavailable" }
-      : integrations.available
-        ? { label: formatObservationLabel("delayed"), status: "delayed" }
-        : { label: formatObservationLabel("partial"), status: "partial" };
-
-  const handleOpenPlaybackRun = React.useCallback(
-    (preferredActorId?: string | null) => {
-      const runId = lens.playback.currentRunId?.trim() || "";
-      if (!scopeId || !runId) {
-        return;
-      }
-
-      const actorId =
-        preferredActorId?.trim() ||
-        lens.playback.rootActorId?.trim() ||
-        lens.currentRun?.actorId?.trim() ||
-        "";
-      const observedDraftKey = saveObservedRunSessionPayload({
-        actorId: actorId || undefined,
-        commandId: lens.playback.commandId || undefined,
-        endpointId: "chat",
-        endpointKind: "chat",
-        events: createObservedPlaybackEvents(lens.playback),
-        prompt:
-          lens.playback.launchPrompt ||
-          lens.playback.prompt ||
-          lens.playback.summary,
-        routeName: lens.playback.workflowName || undefined,
-        runId,
-        scopeId,
-        serviceOverrideId: runtimeServiceId,
-      });
-
-      history.push(
-        buildRuntimeRunsHref({
-          actorId: actorId || undefined,
-          draftKey: observedDraftKey || undefined,
-          endpointId: "chat",
-          endpointKind: "chat",
-          prompt: lens.playback.launchPrompt || undefined,
-          route: lens.playback.workflowName || undefined,
-          scopeId,
-          serviceId: runtimeServiceId,
-        }),
-      );
-    },
-    [lens.currentRun?.actorId, lens.playback, runtimeServiceId, scopeId],
-  );
-
-  const handleOpenPlaybackActor = React.useCallback(
-    (actorId?: string | null, runId?: string | null) => {
-      const resolvedActorId =
-        actorId?.trim() || lens.playback.rootActorId?.trim() || "";
-      if (!scopeId || !resolvedActorId) {
-        return;
-      }
-
-      history.push(
-        buildRuntimeExplorerHref({
-          actorId: resolvedActorId,
-          runId: runId?.trim() || lens.playback.currentRunId || undefined,
-          scopeId,
-          serviceId: runtimeServiceId,
-        }),
-      );
-    },
-    [lens.playback.currentRunId, lens.playback.rootActorId, runtimeServiceId, scopeId],
-  );
-
-  const missionControlPrompt =
-    trimText(lens.currentRunAudit?.audit.input) ||
-    trimText(lens.playback.launchPrompt) ||
-    trimText(lens.playback.prompt);
-
-  const handleOpenMissionControl = React.useCallback(() => {
-    const runId =
-      trimText(lens.currentRun?.runId) || trimText(lens.playback.currentRunId);
-    if (!scopeId || !runId) {
-      return;
-    }
-
-    const actorId =
-      trimText(lens.currentRun?.actorId) ||
-      trimText(lens.playback.rootActorId) ||
-      trimText(lens.graph.focusActorId) ||
-      undefined;
-
-    history.push(
-      buildRuntimeMissionControlHref({
-        actorId,
-        autoStream: Boolean(missionControlPrompt),
-        endpointId: "chat",
-        prompt: missionControlPrompt || undefined,
-        runId,
-        scopeId,
-        serviceId: runtimeServiceId,
-      }),
-    );
-  }, [
-    lens.currentRun?.actorId,
-    lens.currentRun?.runId,
-    lens.graph.focusActorId,
-    lens.playback.currentRunId,
-    lens.playback.rootActorId,
-    missionControlPrompt,
-    runtimeServiceId,
-    scopeId,
-  ]);
-
   const teamHeading = resolveTeamHeading({
     scopeId,
     workflowId: activeWorkflowSummary?.workflowId,
     workflowName: activeWorkflowSummary?.workflowName,
     displayName:
+      trimText(teamSummaryQuery.data?.displayName) ||
       trimText(preferredMemberSummary?.displayName) ||
       activeWorkflowSummary?.displayName,
     lensTitle: lens.title,
   });
   const teamTitle = teamHeading.title;
-  const teamTitleMeta = teamHeading.metaScopeId ? (
-    <Space size={6} wrap>
-      <span style={{ textTransform: "none" }}>scopeId</span>
-      <AevatarCompactText
-        color="inherit"
-        head={8}
-        maxWidth={320}
-        monospace
-        tail={6}
-        value={teamHeading.metaScopeId}
-      />
-    </Space>
-  ) : null;
+  const teamLifecycleStatus = trimText(teamSummaryQuery.data?.lifecycleStage);
+  const teamLifecycleLabel = teamSummaryQuery.data
+    ? formatTeamLifecycleLabel(teamSummaryQuery.data.lifecycleStage)
+    : "";
+  const teamSummaryDescription = trimText(teamSummaryQuery.data?.description);
+  const teamMetaScopeId = teamHeading.metaScopeId || (selectedTeamId ? scopeId : "");
+  const teamTitleMeta =
+    selectedTeamId || teamMetaScopeId || teamSummaryQuery.data ? (
+      <Space size={[10, 6]} wrap>
+        {selectedTeamId ? (
+          <Space size={6} wrap>
+            <span style={{ textTransform: "none" }}>
+              {intl.formatMessage({ id: "teams.detail.meta.teamId" })}
+            </span>
+            <AevatarCompactText
+              color="inherit"
+              head={8}
+              maxWidth={320}
+              monospace
+              tail={6}
+              value={selectedTeamId}
+            />
+          </Space>
+        ) : null}
+        {teamMetaScopeId ? (
+          <Space size={6} wrap>
+            <span style={{ textTransform: "none" }}>
+              {intl.formatMessage({ id: "teams.detail.meta.scopeId" })}
+            </span>
+            <AevatarCompactText
+              color="inherit"
+              head={8}
+              maxWidth={320}
+              monospace
+              tail={6}
+              value={teamMetaScopeId}
+            />
+          </Space>
+        ) : null}
+        {teamSummaryQuery.data ? (
+          <span>
+            {intl.formatMessage(
+              { id: "teams.detail.meta.memberCount" },
+              { count: teamSummaryQuery.data.memberCount },
+            )}
+          </span>
+        ) : null}
+        {teamSummaryDescription ? <span>{teamSummaryDescription}</span> : null}
+      </Space>
+    ) : null;
   const activeWorkflowId =
     trimText(activeWorkflowSummary?.workflowId) || trimText(routeState.workflowId);
-  const teamCompositionRows = React.useMemo(
-    () =>
-      deriveTeamCompositionRows({
-        documents: teamWorkflowDocumentsQuery.data ?? [],
-        fallbackMembers: lens.members,
-        implementationKind: lens.activeRevision?.implementationKind,
+  const buildTeamReturnHref = React.useCallback(
+    (memberId?: string) =>
+      buildTeamDetailHref({
+        memberId: trimText(memberId) || undefined,
+        scopeId,
+        tab: "members",
+        teamId: selectedTeamId,
       }),
-    [lens.activeRevision?.implementationKind, lens.members, teamWorkflowDocumentsQuery.data],
+    [scopeId, selectedTeamId],
+  );
+  const entryMemberId = trimText(teamSummaryQuery.data?.entryMemberId);
+  const entryMemberSummary = React.useMemo(
+    () =>
+      entryMemberId
+        ? (teamMembersQuery.data?.members ?? []).find(
+            (member) => trimText(member.memberId) === entryMemberId,
+          ) ?? null
+        : null,
+    [entryMemberId, teamMembersQuery.data?.members],
+  );
+  const entryMemberLabel =
+    trimText(entryMemberSummary?.displayName) || entryMemberId;
+  const teamRosterRows = React.useMemo(
+    () =>
+      (teamMembersQuery.data?.members ?? []).map((member) => ({
+        buildStudioHref: buildTeamStudioHref({
+          memberId: member.memberId,
+          mode: "build-member",
+          returnTo: buildTeamReturnHref(member.memberId),
+          scopeId,
+          teamId: selectedTeamId,
+        }),
+        description: trimText(member.description),
+        canInvokeAsEntry:
+          normalizeStatus(member.lifecycleStage) === "bind_ready" &&
+          trimText(member.publishedServiceId).length > 0,
+        editStudioHref: buildTeamStudioHref({
+          memberId: member.memberId,
+          mode: "edit-member",
+          returnTo: buildTeamReturnHref(member.memberId),
+          scopeId,
+          teamId: selectedTeamId,
+        }),
+        implementationKind: formatCompositionKind(member.implementationKind),
+        key: member.memberId,
+        lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
+        lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
+        isEntryMember: trimText(member.memberId) === entryMemberId,
+        isSelectedMember: trimText(member.memberId) === selectedRosterMemberId,
+        memberId: member.memberId,
+        name: trimText(member.displayName) || member.memberId,
+        serviceId: trimText(member.publishedServiceId) || "--",
+      })),
+    [
+      buildTeamReturnHref,
+      entryMemberId,
+      selectedRosterMemberId,
+      scopeId,
+      selectedTeamId,
+      teamMembersQuery.data?.members,
+      token,
+    ],
+  );
+  const createMemberHref = React.useMemo(
+    () =>
+      buildTeamStudioHref({
+        mode: "create-member",
+        returnTo: buildTeamReturnHref(),
+        scopeId,
+        teamId: selectedTeamId,
+      }),
+    [buildTeamReturnHref, scopeId, selectedTeamId],
   );
   const latestVisibleUpdate =
+    teamSummaryQuery.data?.updatedAt ||
     lens.currentRun?.lastUpdatedAt ||
-    lens.currentRunAudit?.summary.lastUpdatedAt ||
     activeWorkflowSummary?.updatedAt ||
     "";
-  const latestVisibleUpdateNote = lens.currentRun?.lastUpdatedAt
-    ? trimText(lens.currentRun?.runId)
-      ? `来自 run ${compactId(lens.currentRun?.runId)}`
-      : "来自最近可见运行"
-    : lens.currentRunAudit?.summary.lastUpdatedAt
-      ? "来自最近审计摘要"
+  const latestVisibleUpdateNote = teamSummaryQuery.data?.updatedAt
+    ? t("pages.teams.detail.team", "From Team update time")
+    : lens.currentRun?.lastUpdatedAt
+      ? trimText(lens.currentRun?.runId)
+      ? t("pages.teams.detail.run", "From run {value1}", { value1: compactId(lens.currentRun?.runId) })
+      : t("pages.teams.detail.copy.15", "From latest visible run")
       : activeWorkflowSummary?.updatedAt
-        ? "来自 workflow 更新时间"
-        : "当前还没有可见更新时间";
+        ? t("pages.teams.detail.workflow", "From workflow update time")
+        : t("pages.teams.detail.copy.16", "No visible update time yet");
   const activeRunId =
     lens.currentRun?.runId ||
-    lens.playback.currentRunId ||
     focusedOperationalUnit?.latestRun?.runId ||
     "";
+  const hasVisibleRun = Boolean(activeRunId);
   const currentRevisionId = trimText(lens.activeRevision?.revisionId) || "--";
   const currentRevisionStatus =
     trimText(lens.activeRevision?.servingState) ||
@@ -1652,15 +836,14 @@ const TeamDetailPage: React.FC = () => {
     trimText(lens.currentService?.deploymentStatus) ||
     trimText(lens.activeRevision?.status) ||
     "--";
-  const currentHeaderStatus =
-    trimText(lens.currentRun?.completionStatus) || currentDeploymentStatus;
-  const currentHeaderStatusFriendly = formatFriendlyStatus(currentHeaderStatus);
-  const currentRevisionFriendly = formatFriendlyStatus(currentRevisionStatus);
-  const currentDeploymentFriendly = formatFriendlyStatus(currentDeploymentStatus);
-  const currentDeploymentId =
-    trimText(lens.activeRevision?.deploymentId) ||
-    trimText(lens.currentService?.deploymentId) ||
-    "--";
+  // Refactor (iterv1/issue1444-first):
+  //   Old pattern: Team workbench rendered completed as stable and mixed run/deployment status.
+  //   New principle: expose run completion, deployment serving, and readmodel freshness as separate facts.
+  const currentReadModelFreshnessLabel = teamSummaryQuery.data
+    ? `ReadModel · ${formatCompactTimestamp(latestVisibleUpdate)}`
+    : t("pages.teams.detail.readmodel", "ReadModel is not visible yet");
+  const currentRevisionFriendly = formatFriendlyStatus(currentRevisionStatus, intl);
+  const currentDeploymentFriendly = formatFriendlyStatus(currentDeploymentStatus, intl);
   const currentServiceKey =
     trimText(lens.currentService?.serviceKey) ||
     trimText(activeWorkflowSummary?.serviceKey) ||
@@ -1668,1197 +851,163 @@ const TeamDetailPage: React.FC = () => {
   const currentServiceDisplayName =
     trimText(lens.currentService?.displayName) || "--";
   const currentRunStatus = trimText(lens.currentRun?.completionStatus) || "--";
-  const currentRunFriendly = activeRunId
-    ? formatFriendlyStatus(currentRunStatus)
-    : "暂无运行";
+  const currentRunFriendly = hasVisibleRun
+    ? formatFriendlyStatus(currentRunStatus, intl)
+    : t("pages.teams.detail.copy.17", "Waiting for first test");
+  const currentMemberLabel =
+    trimText(preferredMemberSummary?.displayName) ||
+    teamRosterRows.find((row) => row.memberId === currentMemberId)?.name ||
+    currentMemberId ||
+    "--";
+  const currentMemberCardCaption = currentMemberId
+    ? `memberId · ${compactOptionalId(currentMemberId)}`
+    : t("pages.teams.detail.copy.18", "No member selected yet");
+  const currentMemberCardTooltip = currentMemberId
+    ? `memberId · ${currentMemberId}`
+    : t("pages.teams.detail.copy.19", "No member selected yet");
   const currentServiceFriendly =
     currentServiceDisplayName !== "--"
       ? currentServiceDisplayName
       : runtimeServiceId || "--";
+  const hasRunnableTeamEntry =
+    Boolean(entryMemberId) ||
+    Boolean(currentMemberId) ||
+    currentServiceFriendly !== "--" ||
+    currentServiceKey !== "--" ||
+    Boolean(runtimeServiceId);
+  const currentHeaderStatus = hasVisibleRun
+    ? currentRunStatus
+    : hasRunnableTeamEntry
+      ? "waiting"
+      : currentDeploymentStatus;
+  const currentHeaderStatusFriendly = hasVisibleRun
+    ? formatFriendlyStatus(currentRunStatus, intl)
+    : hasRunnableTeamEntry
+      ? t("pages.teams.detail.copy.20", "Waiting for first test")
+      : formatFriendlyStatus(currentDeploymentStatus, intl);
   const currentVersionFriendly =
     currentRevisionFriendly !== "--"
       ? currentRevisionFriendly
       : currentDeploymentFriendly;
   const currentServicePillText =
     currentServiceFriendly !== "--"
-      ? `服务 · ${currentServiceFriendly}`
-      : "服务待配置";
+      ? t("pages.teams.detail.copy.21", "Services ·{value1}", { value1: currentServiceFriendly })
+      : t("pages.teams.detail.copy.22", "Service to be configured");
   const currentDeploymentPillText =
     currentVersionFriendly !== "--"
-      ? `版本 · ${currentVersionFriendly}`
-      : "版本待确认";
-  const currentRunPillText = activeRunId
-    ? `运行 · ${currentRunFriendly}`
-    : "暂无近期运行";
-  const currentServiceReference =
-    trimText(runtimeServiceId) ||
-    (currentServiceKey !== "--" ? currentServiceKey : "");
+      ? t("pages.teams.detail.copy.23", "Version ·{value1}", { value1: currentVersionFriendly })
+      : t("pages.teams.detail.copy.24", "Version to be confirmed");
+  const currentRunPillText = hasVisibleRun
+    ? t("pages.teams.detail.copy.25", "Run ·{value1}", { value1: currentRunFriendly })
+    : t("pages.teams.detail.copy.26", "Next steps · Test team");
   const currentServiceCardCaption = runtimeServiceId
-    ? `serviceId · ${runtimeServiceId}`
+    ? `serviceId · ${compactOptionalId(runtimeServiceId)}`
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
       ? `serviceKey · ${compactId(currentServiceKey)}`
-      : "当前还没有更多服务标识";
+      : t("pages.teams.detail.copy.27", "There are currently no more service IDs");
   const currentServiceCardTooltip = runtimeServiceId
     ? `serviceId · ${runtimeServiceId}`
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
       ? `serviceKey · ${currentServiceKey}`
-      : "当前还没有更多服务标识";
-  const currentRunCardCaption = activeRunId
+      : t("pages.teams.detail.copy.28", "There are currently no more service IDs");
+  const currentRunCardCaption = hasVisibleRun
     ? `runId · ${compactId(activeRunId)}`
-    : "当前还没有可见 run";
-  const currentRunCardTooltip = activeRunId
+    : t("pages.teams.detail.copy.29", "The latest runs will be displayed here after the testing team.");
+  const currentRunCardTooltip = hasVisibleRun
     ? `runId · ${activeRunId}`
-    : "当前还没有可见 run";
+    : t("pages.teams.detail.copy.30", "The latest runs will be displayed here after the testing team.");
+  const teamStartupGuidance = hasVisibleRun
+    ? t("pages.teams.detail.copy.31", "The recent runs are visible and you can continue to test the team or adjust the member configuration.")
+    : hasRunnableTeamEntry
+      ? t("pages.teams.detail.copy.32", "The team portal is ready, but not yet visibly running. Click \"Test Team\" to generate the first run.")
+      : t("pages.teams.detail.copy.33", "No entrance available yet. Configure entry members and services first, and then test the team.");
   const workflowNameValue =
     trimText(activeWorkflowSummary?.workflowName) ||
     trimText(lens.activeRevision?.workflowName) ||
     "--";
-  const currentActorId =
-    trimText(lens.currentRun?.actorId) ||
-    trimText(lens.activeRevision?.primaryActorId) ||
-    "--";
-  const currentStateVersion =
-    lens.currentRun?.stateVersion != null ? String(lens.currentRun.stateVersion) : "--";
-  const currentLastEventId = trimText(lens.currentRun?.lastEventId) || "--";
-  const currentEndpointCount = lens.currentService?.endpoints.length ?? 0;
-  const currentPolicyCount = lens.currentService?.policyIds.length ?? 0;
-  const enabledConnectorCount = integrations.items.filter((item) => item.enabled).length;
-  const connectorHighlights = React.useMemo(
-    () =>
-      integrations.items
-        .filter((item) => item.usedByRoles.length > 0)
-        .slice(0, 3)
-        .map((item) => item.name),
-    [integrations.items],
-  );
-  const selectedConnector =
-    integrations.items.find((item) => item.key === selectedConnectorKey) ??
-    integrations.items[0] ??
-    null;
-  const selectedConnectorRows = React.useMemo(() => {
-    if (!selectedConnector) {
-      return [];
-    }
-
-    return [
-      {
-        badgeText: formatConnectorTypeLabel(selectedConnector.type),
-        badgeTone: "info" as const,
-        label: "连接器类型",
-        note: selectedConnector.summary,
-        value: selectedConnector.name,
-      },
-      {
-        badgeText: formatConnectorEnabledLabel(selectedConnector.enabled),
-        badgeTone: selectedConnector.enabled ? ("success" as const) : ("neutral" as const),
-        label: "团队使用",
-        note:
-          selectedConnector.usedByRoles.length > 0
-            ? `${selectedConnector.usedByRoles.length} 个角色正在引用`
-            : "当前团队还没有显式引用它",
-        value:
-          selectedConnector.usedByRoles.length > 0
-            ? selectedConnector.usedByRoles.join("、")
-            : "尚未显式引用",
-      },
-      {
-        badgeText: integrations.runtimeHostLabel || "--",
-        badgeTone: integrations.runtimeBaseUrl ? ("info" as const) : ("neutral" as const),
-        label: "工作区环境",
-        note: integrations.workspaceSummary,
-        value:
-          integrations.connectorCount > 0
-            ? `已加载 ${integrations.connectorCount} 个连接器定义`
-            : "当前还没有加载连接器定义",
-      },
-      {
-        badgeText: currentServiceFriendly !== "--" ? "服务入口" : "待配置",
-        badgeTone: currentServiceFriendly !== "--" ? ("success" as const) : ("neutral" as const),
-        label: "默认绑定",
-        note: runtimeServiceId || currentServiceKey || "--",
-        value: currentServiceFriendly !== "--" ? currentServiceFriendly : "当前还没有主服务入口",
-      },
-      {
-        badgeText: `${currentEndpointCount} 个入口`,
-        badgeTone: currentEndpointCount > 0 ? ("info" as const) : ("neutral" as const),
-        label: "Endpoint 暴露",
-        note: `${currentPolicyCount} 条策略`,
-        value:
-          currentEndpointCount > 0
-            ? `${currentEndpointCount} 个 endpoint 已暴露`
-            : "当前还没有可见 endpoint 暴露",
-      },
-    ];
-  }, [
-    currentEndpointCount,
-    currentPolicyCount,
-    currentServiceFriendly,
-    currentServiceKey,
-    integrations.connectorCount,
-    integrations.runtimeBaseUrl,
-    integrations.runtimeHostLabel,
-    integrations.workspaceSummary,
-    runtimeServiceId,
-    selectedConnector,
-  ]);
-  const connectorSummaryCards = React.useMemo(
-    () => [
-      {
-        caption: runtimeServiceId || currentServiceKey || "--",
-        icon: <DeploymentUnitOutlined />,
-        label: "默认绑定",
-        value: currentServiceFriendly,
-      },
-      {
-        caption: `已绑定 ${integrations.linkedConnectorCount} 个 · 工作区可见 ${integrations.items.length} 个`,
-        icon: <BranchesOutlined />,
-        label: "连接能力",
-        value: enabledConnectorCount,
-      },
-      {
-        caption:
-          connectorHighlights.length > 0
-            ? connectorHighlights.join("、")
-            : "当前 workflow 还没有显式引用连接器",
-        label: "团队会用到",
-        value:
-          integrations.linkedConnectorCount > 0
-            ? `${integrations.linkedConnectorCount} 个连接器`
-            : "尚未显式引用",
-      },
-      {
-        caption: currentServiceFriendly !== "--" ? currentServiceFriendly : "等待服务入口",
-        icon: <DeploymentUnitOutlined />,
-        label: "治理摘要",
-        value: `${currentEndpointCount} / ${currentPolicyCount}`,
-      },
-    ],
-    [
-      connectorHighlights,
-      currentEndpointCount,
-      currentPolicyCount,
-      currentServiceFriendly,
-      currentServiceKey,
-      enabledConnectorCount,
-      integrations.items.length,
-      integrations.linkedConnectorCount,
-      runtimeServiceId,
-    ],
-  );
-  const connectorCatalogCards = React.useMemo(
-    () =>
-      integrations.items.map((connector) => ({
-        availabilityLabel: formatConnectorEnabledLabel(connector.enabled),
-        availabilityStyle: resolveTonePillStyle(
-          token,
-          connector.enabled ? "success" : "neutral",
-        ),
-        buttonStyle: resolveSelectionCardButtonStyle(
-          token,
-          connector.key === selectedConnector?.key,
-        ),
-        key: connector.key,
-        name: connector.name,
-        summary: connector.summary,
-        typeLabel: formatConnectorTypeLabel(connector.type),
-        typeStyle: resolveTonePillStyle(token, "info"),
-        usageLabel:
-          connector.usedByRoles.length > 0
-            ? `${connector.usedByRoles.length} 个角色在用`
-            : "团队未显式引用",
-        usageStyle: resolveTonePillStyle(
-          token,
-          connector.usedByRoles.length > 0 ? "info" : "neutral",
-        ),
-        usageSummary:
-          connector.usedByRoles.length > 0
-            ? `当前团队会用到：${connector.usedByRoles.join("、")}`
-            : "当前团队还没有显式引用这个连接器。",
-      })),
-    [integrations.items, selectedConnector?.key, token],
-  );
-  const connectorDetailRows = React.useMemo(
-    () =>
-      selectedConnectorRows.map((row) => ({
-        badgeStyle: resolveTonePillStyle(token, row.badgeTone),
-        badgeText: row.badgeText,
-        label: row.label,
-        note: row.note,
-        value: row.value,
-      })),
-    [selectedConnectorRows, token],
-  );
-  const connectorsEmptyDescription =
-    "一旦当前成员服务、连接器目录或治理策略可见，这里会自动展开成 Bindings 视图。";
   const configurationDetailRows = React.useMemo(
     () => [
       {
-        label: "团队流程",
+        label: t("pages.teams.detail.copy.34", "team process"),
         note: `workflowId: ${activeWorkflowId || "--"}`,
         value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
       },
       {
-        label: "绑定方式",
+        label: t("pages.teams.detail.copy.35", "Binding method"),
         note:
           currentServiceFriendly !== "--"
-            ? `当前会落到 ${currentServiceFriendly}`
-            : "当前还没有匹配到主服务入口",
-        value: formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
+            ? t("pages.teams.detail.copy.36", "Currently routes to {value1}", { value1: currentServiceFriendly })
+            : t("pages.teams.detail.copy.37", "Currently, the main service entrance has not been matched."),
+        value: formatCompositionKind(lens.activeRevision?.implementationKind),
       },
       {
-        label: "主服务入口",
-        note: `serviceId: ${runtimeServiceId || "--"} · serviceKey: ${currentServiceKey}`,
+        label: t("pages.teams.detail.copy.38", "Main service entrance"),
+        note: `serviceId: ${compactOptionalId(runtimeServiceId)} · serviceKey: ${compactOptionalId(currentServiceKey)}`,
+        noteTooltip: `serviceId: ${runtimeServiceId || "--"} · serviceKey: ${currentServiceKey}`,
         value: currentServiceFriendly,
       },
       {
-        label: "部署记录",
-        note: `deploymentId: ${currentDeploymentId}`,
-        value: currentDeploymentFriendly,
-      },
-      {
-        label: "版本标识",
-        note: `revisionId: ${currentRevisionId}`,
+        label: t("pages.teams.detail.copy.39", "Version ID"),
+        note: `revisionId: ${compactOptionalId(currentRevisionId)}`,
+        noteTooltip: `revisionId: ${currentRevisionId}`,
         value: currentVersionFriendly,
-      },
-      {
-        label: "连接器引用",
-        note:
-          connectorHighlights.length > 0
-            ? connectorHighlights.join("、")
-            : integrations.items.length > 0
-              ? `工作区可见 ${integrations.items.length} 个连接器定义`
-              : "当前工作区还没有可见连接器定义",
-        value:
-          integrations.linkedConnectorCount > 0
-            ? `${integrations.linkedConnectorCount} 个已引用`
-            : "未显式引用",
-      },
-      {
-        label: "服务能力",
-        note: `${currentPolicyCount} 条策略`,
-        value: `${currentEndpointCount} 个入口`,
       },
     ],
     [
       activeWorkflowId,
-      currentDeploymentFriendly,
-      currentDeploymentId,
-      currentEndpointCount,
-      currentPolicyCount,
       currentRevisionId,
       currentServiceFriendly,
       currentServiceKey,
       currentVersionFriendly,
-      connectorHighlights,
-      integrations.items.length,
-      integrations.linkedConnectorCount,
       lens.activeRevision?.implementationKind,
       runtimeServiceId,
       teamTitle,
       workflowNameValue,
     ],
-  );
-  const configurationAdjustmentRows = React.useMemo(
-    () => [
-      {
-        badge: formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
-        label: "流程定义",
-        note: activeWorkflowId ? `workflowId: ${activeWorkflowId}` : "当前还没有 workflowId",
-        value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
-      },
-      {
-        badge: currentDeploymentFriendly,
-        label: "服务映射",
-        note:
-          currentVersionFriendly !== "--"
-            ? `${currentVersionFriendly} · ${currentServiceFriendly}`
-            : currentServiceFriendly,
-        value: currentServiceFriendly,
-      },
-      {
-        badge:
-          integrations.linkedConnectorCount > 0
-            ? `${integrations.linkedConnectorCount} 个已引用`
-            : "未显式引用",
-        label: "连接器引用",
-        note:
-          connectorHighlights.length > 0
-            ? connectorHighlights.join("、")
-            : "当前 workflow 还没有显式引用连接器",
-        value:
-          integrations.linkedConnectorCount > 0
-            ? `${integrations.linkedConnectorCount} 个连接器`
-            : "当前没有显式连接器引用",
-      },
-    ],
-    [
-      activeWorkflowId,
-      connectorHighlights,
-      currentDeploymentFriendly,
-      currentServiceFriendly,
-      currentVersionFriendly,
-      integrations.linkedConnectorCount,
-      lens.activeRevision?.implementationKind,
-      teamTitle,
-      workflowNameValue,
-    ],
-  );
-  const advancedSummaryCards = React.useMemo(
-    () => [
-      {
-        caption: activeWorkflowId || "--",
-        captionMonospace: true,
-        label: "团队流程",
-        value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
-      },
-      {
-        caption:
-          currentServiceFriendly !== "--"
-            ? `当前会落到 ${currentServiceFriendly}`
-            : "当前还没有匹配到主服务入口",
-        label: "绑定方式",
-        value: formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
-      },
-      {
-        caption: currentDeploymentId,
-        captionMonospace: true,
-        label: "部署记录",
-        value: currentDeploymentFriendly,
-      },
-      {
-        caption:
-          connectorHighlights.length > 0
-            ? connectorHighlights.join("、")
-            : "当前 workflow 还没有显式引用连接器",
-        label: "连接器引用",
-        value:
-          integrations.linkedConnectorCount > 0
-            ? `${integrations.linkedConnectorCount} 个已引用`
-            : "未显式引用",
-      },
-    ],
-    [
-      activeWorkflowId,
-      connectorHighlights,
-      currentDeploymentFriendly,
-      currentDeploymentId,
-      currentServiceFriendly,
-      integrations.linkedConnectorCount,
-      lens.activeRevision?.implementationKind,
-      teamTitle,
-      workflowNameValue,
-    ],
-  );
-  const advancedTeamImpactSummary =
-    integrations.linkedConnectorCount > 0
-      ? ` ${integrations.linkedConnectorCount} 个已绑定连接器`
-      : " 当前还没有显式绑定的连接器";
-  const workflowAssetRows = React.useMemo(
-    () =>
-      (workflowsQuery.data ?? []).map((workflow) => {
-        const isCurrent =
-          trimText(workflow.workflowId) === trimText(activeWorkflowId) ||
-          trimText(workflow.workflowId) === trimText(activeWorkflowSummary?.workflowId);
-        const statusLabel = formatFriendlyStatus(workflow.deploymentStatus || "draft");
-        return {
-          actionLabel: "进入 Workflow Studio",
-          badgeLabel: isCurrent ? "当前团队流程" : statusLabel,
-          badgeStyle: resolveTonePillStyle(token, isCurrent ? "success" : "neutral"),
-          buttonStyle: resolveSelectionCardButtonStyle(token, isCurrent),
-          key: workflow.workflowId,
-          primaryMetaLabel: "Revision",
-          primaryMetaValue: workflow.activeRevisionId || "n/a",
-          secondaryMetaLabel: "Entrypoint",
-          secondaryMetaValue: workflow.serviceKey || "未绑定",
-          summary: workflow.displayName
-            ? `${workflow.displayName} 已绑定到 ${workflow.serviceKey || "待发布入口"}`
-            : "当前 workflow 已准备好进入 Studio。",
-          subtitle: workflow.workflowName || "Workflow capability",
-          title: workflow.displayName || workflow.workflowId,
-        };
-      }),
-    [activeWorkflowId, activeWorkflowSummary?.workflowId, token, workflowsQuery.data],
-  );
-  const scriptAssetRows = React.useMemo(
-    () =>
-      (scriptsQuery.data ?? []).map((script) => {
-        const isCurrent =
-          trimText(script.scriptId) === trimText(lens.activeRevision?.scriptId);
-        return {
-          actionLabel: "进入 Script Studio",
-          badgeLabel: isCurrent ? "当前绑定脚本" : script.activeRevision ? "已激活" : "草稿",
-          badgeStyle: resolveTonePillStyle(token, isCurrent ? "success" : "neutral"),
-          buttonStyle: resolveSelectionCardButtonStyle(token, isCurrent),
-          key: script.scriptId,
-          primaryMetaLabel: "Revision",
-          primaryMetaValue: trimText(script.activeRevision) || "n/a",
-          secondaryMetaLabel: "Catalog actor",
-          secondaryMetaValue: trimText(script.catalogActorId) || "n/a",
-          summary:
-            trimText(script.activeSourceHash).length > 0
-              ? `当前脚本 revision 已落在 ${trimText(script.activeSourceHash)}`
-              : "当前脚本已经进入 Team 资产目录。",
-          subtitle: "Script capability",
-          title: script.scriptId || "未命名 Script",
-        };
-      }),
-    [lens.activeRevision?.scriptId, scriptsQuery.data, token],
-  );
-  const assetSummaryCards = React.useMemo(
-    () => [
-      {
-        caption: activeWorkflowId || "--",
-        icon: teamAssetIcons.workflows,
-        label: "Workflow 资产",
-        value: workflowsQuery.data?.length ?? 0,
-      },
-      {
-        caption: trimText(lens.activeRevision?.scriptId) || "--",
-        icon: teamAssetIcons.scripts,
-        label: "Script 资产",
-        value: scriptsQuery.data?.length ?? 0,
-      },
-      {
-        caption: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
-        icon: teamAssetIcons.deployment,
-        label: "当前主流程",
-        value: activeWorkflowSummary?.displayName || workflowNameValue,
-      },
-      {
-        caption: currentServiceFriendly !== "--" ? currentServiceFriendly : "待绑定",
-        icon: <DeploymentUnitOutlined />,
-        label: "服务入口",
-        value: runtimeServiceId || "--",
-      },
-    ],
-    [
-      activeWorkflowId,
-      activeWorkflowSummary?.displayName,
-      currentServiceFriendly,
-      lens.activeRevision?.scriptId,
-      runtimeServiceId,
-      scriptsQuery.data?.length,
-      teamTitle,
-      workflowNameValue,
-      workflowsQuery.data?.length,
-    ],
-  );
-  const topologyConnectors = React.useMemo(
-    () =>
-      integrations.items
-        .filter((item) => item.usedByRoles.length > 0)
-        .slice(0, 2),
-    [integrations.items],
-  );
-  const actorLabelMap = React.useMemo(() => {
-    const entries = new Map<string, string>();
-
-    lens.members.forEach((member) => {
-      if (!trimText(member.actorId)) {
-        return;
-      }
-      entries.set(
-        member.actorId,
-        trimText(member.actorType) || compactId(member.actorId),
-      );
-    });
-
-    (actorGraphQuery.data?.subgraph.nodes ?? []).forEach((node) => {
-      const label =
-        trimText(node.properties.label) ||
-        trimText(node.properties.role) ||
-        entries.get(node.nodeId) ||
-        compactId(node.nodeId);
-      entries.set(node.nodeId, label);
-    });
-
-    return entries;
-  }, [actorGraphQuery.data?.subgraph.nodes, lens.members]);
-  const topologyGraph = React.useMemo(() => {
-    const subgraph = actorGraphQuery.data?.subgraph;
-    const rootActorId =
-      trimText(subgraph?.rootNodeId) || effectiveActorId || defaultSelectedActorId;
-    const actorNodes = subgraph?.nodes ?? [];
-    const actorEdges = subgraph?.edges ?? [];
-    const actorNodeMap = new Map(actorNodes.map((node) => [node.nodeId, node]));
-    const playbackStepsByActor = new Map<string, TeamPlaybackSummary["steps"]>();
-    lens.playback.steps.forEach((step) => {
-      const actorId = trimText(step.actorId);
-      if (!actorId) {
-        return;
-      }
-      const currentSteps = playbackStepsByActor.get(actorId) ?? [];
-      currentSteps.push(step);
-      playbackStepsByActor.set(actorId, currentSteps);
-    });
-    const playbackEventsByActor = new Map<string, TeamPlaybackSummary["events"]>();
-    lens.playback.events.forEach((event) => {
-      const actorId = trimText(event.actorId);
-      if (!actorId) {
-        return;
-      }
-      const currentEvents = playbackEventsByActor.get(actorId) ?? [];
-      currentEvents.push(event);
-      playbackEventsByActor.set(actorId, currentEvents);
-    });
-
-    const baseElements =
-      actorNodes.length > 0
-        ? buildActorGraphElements(actorNodes, actorEdges, rootActorId)
-        : { edges: [] as Edge[], nodes: [] as Node[] };
-
-    const actorDisplayNodes = baseElements.nodes.map((node) => {
-      const rawNode = actorNodeMap.get(node.id);
-      const latestStep = (playbackStepsByActor.get(node.id) ?? [])[0];
-      const label =
-        trimText(rawNode?.properties.label) ||
-        trimText(rawNode?.properties.role) ||
-        actorLabelMap.get(node.id) ||
-        compactId(node.id);
-      const summary =
-        trimText(rawNode?.properties.role) ||
-        (trimText(rawNode?.nodeType) ? `团队成员 · ${trimText(rawNode?.nodeType)}` : "") ||
-        actorLabelMap.get(node.id) ||
-        "团队成员";
-      const badgeText = latestStep
-        ? formatFriendlyStatus(latestStep.status)
-        : node.id === rootActorId
-          ? "焦点成员"
-          : "团队成员";
-      const badgeTone: PillTone = latestStep
-        ? latestStep.status === "failed"
-          ? "danger"
-          : latestStep.status === "waiting"
-            ? "warning"
-            : latestStep.status === "completed"
-              ? "success"
-              : "info"
-        : node.id === rootActorId
-          ? "info"
-          : "neutral";
-      const entity: TopologyEntitySummary = {
-        badgeText,
-        badgeTone,
-        id: node.id,
-        kind: "actor",
-        note: trimText(node.id) || "--",
-        summary,
-        title: label,
-      };
-
-      return {
-        ...node,
-        data: {
-          label: React.createElement(TopologyNodeCard, { entity }),
-        },
-        style: {
-          background: "transparent",
-          border: `1px solid ${
-            node.id === rootActorId ? token.colorPrimaryBorder : token.colorBorderSecondary
-          }`,
-          borderRadius: 22,
-          boxShadow:
-            node.id === rootActorId
-              ? `0 0 0 2px ${token.colorPrimaryBorder}55, ${token.boxShadowSecondary}`
-              : token.boxShadowSecondary,
-          padding: 0,
-          width: 244,
-        },
-      } satisfies Node;
-    });
-
-    const actorDisplayEdges = baseElements.edges.map((edge, index) => ({
-      ...edge,
-      animated: false,
-      label: "",
-      style: {
-        stroke:
-          index % 3 === 0
-            ? token.colorPrimary
-            : index % 3 === 1
-              ? token.colorSuccess
-              : token.colorWarning,
-        strokeWidth: 2.5,
-      },
-    }));
-
-    const positionedActorNodes = actorDisplayNodes;
-    const maxActorX =
-      positionedActorNodes.length > 0
-        ? Math.max(...positionedActorNodes.map((node) => node.position.x))
-        : 0;
-    const focusActorNode =
-      positionedActorNodes.find((node) => node.id === rootActorId) ||
-      positionedActorNodes[0];
-    const focusPosition = focusActorNode?.position ?? { x: 0, y: 0 };
-    const serviceNodeId = trimText(runtimeServiceId)
-      ? `topology-service:${runtimeServiceId}`
-      : "";
-    const hasServiceNode =
-      serviceNodeId.length > 0 && currentServiceFriendly !== "--";
-    const serviceNodeX = maxActorX + 280;
-    const serviceNodeY = focusPosition.y + 70;
-
-    const serviceNode = hasServiceNode
-      ? ({
-          data: {
-            label: React.createElement(TopologyNodeCard, {
-              entity: {
-                badgeText: currentDeploymentFriendly,
-                badgeTone:
-                  currentDeploymentStatus !== "--" ? "success" : "neutral",
-                id: serviceNodeId,
-                kind: "service",
-                note: currentServiceKey,
-                summary: "对外服务入口",
-                title: currentServiceFriendly,
-              },
-            }),
-          },
-          id: serviceNodeId,
-          position: {
-            x: serviceNodeX,
-            y: serviceNodeY,
-          },
-          style: {
-            background: "transparent",
-            border: `1px solid ${token.colorInfoBorder}`,
-            borderRadius: 22,
-            boxShadow: token.boxShadowSecondary,
-            padding: 0,
-            width: 244,
-          },
-          type: "default",
-        } satisfies Node)
-      : null;
-
-    const connectorNodes = topologyConnectors.map((connector, index) => {
-      const connectorNodeId = `topology-connector:${connector.key}`;
-      return {
-        data: {
-          label: React.createElement(TopologyNodeCard, {
-            entity: {
-              badgeText: formatConnectorEnabledLabel(connector.enabled),
-              badgeTone: connector.enabled ? "warning" : "neutral",
-              id: connectorNodeId,
-              kind: "connector",
-              note: connector.usedByRoles.join("、") || connector.summary,
-              summary: `${formatConnectorTypeLabel(connector.type)} 连接器`,
-              title: connector.name,
-            },
-          }),
-        },
-        id: connectorNodeId,
-        position: {
-          x: serviceNodeX + 280,
-          y: serviceNodeY - 90 + index * 180,
-        },
-        style: {
-          background: "transparent",
-          border: `1px solid ${token.colorWarningBorder}`,
-          borderRadius: 22,
-          boxShadow: token.boxShadowSecondary,
-          padding: 0,
-          width: 244,
-        },
-        type: "default",
-      } satisfies Node;
-    });
-
-    const derivedEdges: Edge[] = [];
-    if (hasServiceNode && rootActorId) {
-      derivedEdges.push({
-        id: `derived-actor-service:${rootActorId}`,
-        source: rootActorId,
-        target: serviceNodeId,
-        label: "",
-        style: {
-          stroke: token.colorInfo,
-          strokeDasharray: "6 6",
-          strokeWidth: 2,
-        },
-      });
-    }
-    connectorNodes.forEach((connectorNode) => {
-      if (!hasServiceNode) {
-        return;
-      }
-      derivedEdges.push({
-        id: `derived-service-connector:${connectorNode.id}`,
-        source: serviceNodeId,
-        target: connectorNode.id,
-        label: "",
-        style: {
-          stroke: token.colorWarning,
-          strokeDasharray: "6 6",
-          strokeWidth: 2,
-        },
-      });
-    });
-
-    const nodes = [...positionedActorNodes, ...(serviceNode ? [serviceNode] : []), ...connectorNodes];
-    const edges = [...actorDisplayEdges, ...derivedEdges];
-    const depthMap = buildDepthMap(
-      rootActorId,
-      edges.map((edge) => ({
-        source: String(edge.source),
-        target: String(edge.target),
-      })),
-    );
-
-    const entityMap = new Map<string, TopologyEntitySummary>();
-    positionedActorNodes.forEach((node) => {
-      const rawNode = actorNodeMap.get(node.id);
-      const latestEvent = (playbackEventsByActor.get(node.id) ?? [])[0];
-      const latestStep = (playbackStepsByActor.get(node.id) ?? [])[0];
-      entityMap.set(node.id, {
-        badgeText: latestStep
-          ? formatFriendlyStatus(latestStep.status)
-          : node.id === rootActorId
-            ? "焦点成员"
-            : "团队成员",
-        badgeTone: latestStep
-          ? latestStep.status === "failed"
-            ? "danger"
-            : latestStep.status === "waiting"
-              ? "warning"
-              : latestStep.status === "completed"
-                ? "success"
-                : "info"
-          : node.id === rootActorId
-            ? "info"
-            : "neutral",
-        id: node.id,
-        kind: "actor",
-        note: latestEvent?.message || trimText(node.id) || "--",
-        summary:
-          trimText(rawNode?.properties.role) ||
-          (trimText(rawNode?.nodeType) ? `团队成员 · ${trimText(rawNode?.nodeType)}` : "") ||
-          actorLabelMap.get(node.id) ||
-          "团队成员",
-        title:
-          trimText(rawNode?.properties.label) ||
-          trimText(rawNode?.properties.role) ||
-          actorLabelMap.get(node.id) ||
-          compactId(node.id),
-      });
-    });
-    if (serviceNode) {
-      entityMap.set(serviceNode.id, {
-        badgeText: currentDeploymentFriendly,
-        badgeTone: currentDeploymentStatus !== "--" ? "success" : "neutral",
-        id: serviceNode.id,
-        kind: "service",
-        note: currentServiceKey,
-        summary: "对外服务入口",
-        title: currentServiceFriendly,
-      });
-    }
-    topologyConnectors.forEach((connector) => {
-      entityMap.set(`topology-connector:${connector.key}`, {
-        badgeText: formatConnectorEnabledLabel(connector.enabled),
-        badgeTone: connector.enabled ? "warning" : "neutral",
-        id: `topology-connector:${connector.key}`,
-        kind: "connector",
-        note: connector.usedByRoles.join("、") || connector.summary,
-        summary: `${formatConnectorTypeLabel(connector.type)} 连接器`,
-        title: connector.name,
-      });
-    });
-
-    return {
-      depthMap,
-      entityMap,
-      eventMap: playbackEventsByActor,
-      nodes,
-      rootActorId,
-      stepMap: playbackStepsByActor,
-      edges,
-    };
-  }, [
-    actorGraphQuery.data?.subgraph,
-    actorLabelMap,
-    currentDeploymentFriendly,
-    currentDeploymentStatus,
-    currentServiceFriendly,
-    currentServiceKey,
-    defaultSelectedActorId,
-    effectiveActorId,
-    integrations.items,
-    lens.members,
-    lens.playback.events,
-    lens.playback.steps,
-    runtimeServiceId,
-    token.boxShadowSecondary,
-    token.colorBorderSecondary,
-    token.colorInfo,
-    token.colorInfoBorder,
-    token.colorPrimary,
-    token.colorPrimaryBorder,
-    token.colorSuccess,
-    token.colorWarning,
-    token.colorWarningBorder,
-    topologyConnectors,
-  ]);
-  const topologyNodeIds = React.useMemo(
-    () => topologyGraph.nodes.map((node) => node.id),
-    [topologyGraph.nodes],
-  );
-  React.useEffect(() => {
-    if (topologyNodeIds.length === 0) {
-      setSelectedTopologyNodeId("");
-      return;
-    }
-    if (!selectedTopologyNodeId || !topologyNodeIds.includes(selectedTopologyNodeId)) {
-      setSelectedTopologyNodeId(
-        topologyNodeIds.includes(effectiveActorId)
-          ? effectiveActorId
-          : topologyNodeIds[0],
-      );
-    }
-  }, [effectiveActorId, selectedTopologyNodeId, topologyNodeIds]);
-  const selectedTopologyEntity =
-    topologyGraph.entityMap.get(selectedTopologyNodeId) ??
-    topologyGraph.entityMap.get(effectiveActorId) ??
-    null;
-  const selectedTopologyEvent =
-    (selectedTopologyEntity?.kind === "actor"
-      ? topologyGraph.eventMap.get(selectedTopologyEntity.id)?.[0]
-      : null) ?? null;
-  const selectedTopologyStep =
-    (selectedTopologyEntity?.kind === "actor"
-      ? topologyGraph.stepMap.get(selectedTopologyEntity.id)?.[0]
-      : null) ?? null;
-  const selectedTopologyInboundCount = topologyGraph.edges.filter(
-    (edge) => edge.target === selectedTopologyEntity?.id,
-  ).length;
-  const selectedTopologyOutboundCount = topologyGraph.edges.filter(
-    (edge) => edge.source === selectedTopologyEntity?.id,
-  ).length;
-  const selectedTopologyDepth =
-    topologyGraph.depthMap.get(selectedTopologyEntity?.id || "") ?? 0;
-  const selectedTopologyInboundTitles = React.useMemo(
-    () =>
-      selectedTopologyEntity
-        ? topologyGraph.edges
-            .filter((edge) => edge.target === selectedTopologyEntity.id)
-            .map(
-              (edge) =>
-                topologyGraph.entityMap.get(String(edge.source))?.title ||
-                compactId(String(edge.source)),
-            )
-        : [],
-    [selectedTopologyEntity, topologyGraph.edges, topologyGraph.entityMap],
-  );
-  const selectedTopologyOutboundTitles = React.useMemo(
-    () =>
-      selectedTopologyEntity
-        ? topologyGraph.edges
-            .filter((edge) => edge.source === selectedTopologyEntity.id)
-            .map(
-              (edge) =>
-                topologyGraph.entityMap.get(String(edge.target))?.title ||
-                compactId(String(edge.target)),
-            )
-        : [],
-    [selectedTopologyEntity, topologyGraph.edges, topologyGraph.entityMap],
-  );
-  const selectedTopologyInboundSummary = summarizeTopologyTitles(
-    selectedTopologyInboundTitles,
-    "当前没有上游节点",
-  );
-  const selectedTopologyOutboundSummary = summarizeTopologyTitles(
-    selectedTopologyOutboundTitles,
-    "当前没有下游节点",
-  );
-  const selectedTopologyLatestStepLabel = selectedTopologyStep
-    ? `${selectedTopologyStep.stepId} · ${formatStepTypeLabel(selectedTopologyStep.stepType)}`
-    : "当前还没有可见步骤";
-  const selectedTopologyLatestStepNote = selectedTopologyStep
-    ? [
-        selectedTopologyStep.detail,
-        selectedTopologyStep.timestamp
-          ? `发生于 ${formatCompactTimestamp(selectedTopologyStep.timestamp)}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : selectedTopologyEvent?.message || "当前还没有更多节点运行细节。";
-  const selectedTopologyRows = React.useMemo<TopologyDetailRow[]>(() => {
-    if (!selectedTopologyEntity) {
-      return [];
-    }
-
-    if (selectedTopologyEntity.kind === "service") {
-      return [
-        {
-          badge: "服务",
-          label: "主服务",
-          note: runtimeServiceId || currentServiceKey || "--",
-          noteMonospace: true,
-          noteRows: 1,
-          value: currentServiceFriendly,
-          valueMonospace: false,
-        },
-        {
-          badge: "部署",
-          label: "部署状态",
-          note: currentDeploymentId,
-          noteMonospace: true,
-          noteRows: 1,
-          value: currentDeploymentFriendly,
-          valueMonospace: false,
-        },
-        {
-          badge: `${currentEndpointCount} 个入口`,
-          label: "服务能力",
-          note: `${currentPolicyCount} 条策略`,
-          value: `${currentEndpointCount} 个入口`,
-          valueMonospace: false,
-        },
-        {
-          badge: `${selectedTopologyInboundCount} 条入边`,
-          label: "上游来自",
-          note: `当前深度 ${selectedTopologyDepth} · 出边 ${selectedTopologyOutboundCount}`,
-          value: selectedTopologyInboundSummary,
-          valueMonospace: false,
-        },
-        {
-          badge: `${selectedTopologyOutboundCount} 条出边`,
-          label: "下游连接",
-          note: "当前团队通过这个入口继续流向工具或下游能力",
-          value: selectedTopologyOutboundSummary,
-          valueMonospace: false,
-        },
-      ];
-    }
-
-    if (selectedTopologyEntity.kind === "connector") {
-      const connector = topologyConnectors.find(
-        (item) => `topology-connector:${item.key}` === selectedTopologyEntity.id,
-      );
-      return [
-        {
-          badge: formatConnectorTypeLabel(connector?.type || "--"),
-          label: "连接器",
-          note: connector?.summary || "--",
-          value: connector?.name || selectedTopologyEntity.title,
-          valueMonospace: false,
-        },
-        {
-          badge: formatConnectorEnabledLabel(Boolean(connector?.enabled)),
-          label: "团队使用",
-          note: connector?.usedByRoles.join("、") || "当前团队还没有引用它",
-          value:
-            connector?.usedByRoles.length
-              ? `${connector.usedByRoles.length} 个角色`
-              : "0 个角色",
-          valueMonospace: false,
-        },
-        {
-          badge: `${selectedTopologyInboundCount} 条入边`,
-          label: "上游来自",
-          note: `当前深度 ${selectedTopologyDepth} · 出边 ${selectedTopologyOutboundCount}`,
-          value: selectedTopologyInboundSummary,
-          valueMonospace: false,
-        },
-        {
-          badge: `${selectedTopologyOutboundCount} 条出边`,
-          label: "下游连接",
-          note: "当前节点来自团队配置推导，不直接代表一次实时运行",
-          value: selectedTopologyOutboundSummary,
-          valueMonospace: false,
-        },
-      ];
-    }
-
-    return [
-      {
-        badge: formatTopologyNodeKindLabel(selectedTopologyEntity.kind),
-        label: "角色定位",
-        note: selectedTopologyEntity.id,
-        noteMonospace: true,
-        noteRows: 1,
-        value: selectedTopologyEntity.title,
-        valueMonospace: false,
-      },
-      {
-        badge: selectedTopologyStep
-          ? formatStepTypeLabel(selectedTopologyStep.stepType)
-          : "最近事件",
-        label: "最近一步",
-        note: selectedTopologyLatestStepNote,
-        value: selectedTopologyLatestStepLabel,
-        valueMonospace: false,
-      },
-      {
-        badge: selectedTopologyStep
-          ? formatFriendlyStatus(selectedTopologyStep.status)
-          : selectedTopologyEntity.badgeText,
-        label: "当前状态",
-        note:
-          selectedTopologyEvent?.message ||
-          selectedTopologyEntity.note ||
-          "当前还没有更多节点运行细节。",
-        value: selectedTopologyEntity.summary,
-        valueMonospace: false,
-      },
-      {
-        badge: `${selectedTopologyInboundCount} 条入边`,
-        label: "上游来自",
-        note: `当前深度 ${selectedTopologyDepth} · 出边 ${selectedTopologyOutboundCount}`,
-        value: selectedTopologyInboundSummary,
-        valueMonospace: false,
-      },
-      {
-        badge: `${selectedTopologyOutboundCount} 条出边`,
-        label: "下游流向",
-        note:
-          selectedTopologyEntity.id === topologyGraph.rootActorId
-            ? "这是当前焦点路径的起点"
-            : "这是围绕当前焦点展开的协作节点",
-        value: selectedTopologyOutboundSummary,
-        valueMonospace: false,
-      },
-    ];
-  }, [
-    currentDeploymentFriendly,
-    currentDeploymentId,
-    currentEndpointCount,
-    currentPolicyCount,
-    currentServiceFriendly,
-    currentServiceKey,
-    runtimeServiceId,
-    selectedTopologyDepth,
-    selectedTopologyEntity,
-    selectedTopologyEvent,
-    selectedTopologyInboundCount,
-    selectedTopologyInboundSummary,
-    selectedTopologyOutboundCount,
-    selectedTopologyOutboundSummary,
-    selectedTopologyLatestStepLabel,
-    selectedTopologyLatestStepNote,
-    selectedTopologyStep,
-    topologyConnectors,
-    topologyGraph.rootActorId,
-  ]);
-  const topologyDetailRows = React.useMemo(
-    () =>
-      selectedTopologyRows.map((row) => ({
-        ...row,
-        badgeStyle: resolveTonePillStyle(token, "neutral"),
-      })),
-    [selectedTopologyRows, token],
   );
   const compositionDisplayRows = React.useMemo(() => {
-    if (teamCompositionRows.length > 0) {
-      return teamCompositionRows;
+    if (teamRosterRows.length > 0) {
+      return teamRosterRows.map((row) => ({
+        key: row.key,
+        kind: row.implementationKind,
+        name: row.name,
+        summary: row.description || t("pages.teams.detail.copy.40", "Service entry {value1}", { value1: compactOptionalId(row.serviceId) }),
+      }));
+    }
+
+    if (!hasExplicitRuntimeFocus) {
+      return [];
     }
 
     return [
       {
         key: "fallback-workflow",
         kind: "workflow",
-        name: "团队流程",
+        name: t("pages.teams.detail.copy.41", "team process"),
         summary: workflowNameValue !== "--" ? workflowNameValue : activeWorkflowId || "--",
       },
       {
         key: "fallback-actor",
         kind: "actor",
-        name: "当前执行",
-        summary: activeRunId ? `${currentRunFriendly} · ${compactId(currentActorId)}` : "暂无最近运行",
+        name: t("pages.teams.detail.copy.42", "current execution"),
+        summary: hasVisibleRun ? currentRunFriendly : t("pages.teams.detail.copy.43", "After the test team, the most recent runs will be displayed."),
       },
       {
         key: "fallback-service",
         kind: "service",
-        name: "主服务",
+        name: t("pages.teams.detail.copy.44", "main service"),
         summary: currentServiceFriendly,
       },
     ];
   }, [
     activeWorkflowId,
-    activeRunId,
-    currentActorId,
     currentRunFriendly,
-    currentServiceKey,
     currentServiceFriendly,
-    runtimeServiceId,
-    teamCompositionRows,
+    hasExplicitRuntimeFocus,
+    hasVisibleRun,
+    teamRosterRows,
     workflowNameValue,
   ]);
-  const runtimeSummaryRows = [
-    {
-      badge: currentRevisionFriendly,
-      badgeColor: currentRevisionStatus === "Active" ? "success" : undefined,
-      key: "revisionId",
-      label: "当前版本",
-      note:
-        currentRevisionId !== "--"
-          ? `revisionId · ${compactId(currentRevisionId)}`
-          : "当前还没有可见版本标识",
-      noteMonospace: false,
-      noteTooltip:
-        currentRevisionId !== "--"
-          ? `revisionId · ${currentRevisionId}`
-          : "当前还没有可见版本标识",
-      value: currentRevisionFriendly,
-    },
-    {
-      badge: currentServiceFriendly,
-      badgeColor: runtimeServiceId ? "success" : undefined,
-      key: "serviceKey",
-      label: "主服务",
-      note: currentServiceReference
-        ? `serviceId · ${compactId(currentServiceReference)}`
-        : "当前还没有主服务标识",
-      noteMonospace: false,
-      noteTooltip: currentServiceReference
-        ? `serviceId · ${currentServiceReference}`
-        : "当前还没有主服务标识",
-      value: currentServiceFriendly,
-    },
-    {
-      badge: currentRunFriendly,
-      badgeColor: currentRunStatus !== "--" ? "success" : undefined,
-      key: "runId",
-      label: "最近状态",
-      note: activeRunId
-        ? `runId · ${compactId(activeRunId)}`
-        : currentActorId !== "--"
-          ? `actorId · ${compactId(currentActorId)}`
-          : "当前还没有可见运行身份",
-      noteMonospace: false,
-      noteTooltip: activeRunId
-        ? `runId · ${activeRunId}`
-        : currentActorId !== "--"
-          ? `actorId · ${currentActorId}`
-          : "当前还没有可见运行身份",
-      value: currentRunFriendly,
-    },
-    {
-      badge: currentStateVersion !== "--" ? `v${currentStateVersion}` : "--",
-      key: "lastUpdatedAt",
-      label: "最近更新时间",
-      note: latestVisibleUpdateNote,
-      noteMonospace: false,
-      value: latestVisibleUpdate ? formatCompactTimestamp(latestVisibleUpdate) : "--",
-    },
-    {
-      badge: `${integrations.linkedConnectorCount}`,
-      badgeColor: integrations.linkedConnectorCount > 0 ? "success" : undefined,
-      key: "bindings",
-      label: "Bindings",
-      note:
-        connectorHighlights.length > 0
-          ? connectorHighlights.join("、")
-          : `catalog: ${integrations.items.length}`,
-      noteMonospace: false,
-      value:
-        integrations.linkedConnectorCount > 0
-          ? `${integrations.linkedConnectorCount} 个已绑定`
-          : "未配置",
-    },
-  ];
   const overviewCompositionRows = React.useMemo(
     () =>
       compositionDisplayRows.map((row) => ({
@@ -2870,340 +1019,15 @@ const TeamDetailPage: React.FC = () => {
       })),
     [compositionDisplayRows, token],
   );
-  const overviewRuntimeSummaryRows = runtimeSummaryRows.map((row) => ({
-    ...row,
-    badgeStyle:
-      row.badgeColor === "success"
-        ? resolveTonePillStyle(token, "success")
-        : resolveStatusPillStyle(token, row.badge),
-  }));
-  const overviewGovernanceRows = [
-    {
-      badge: currentRevisionId !== "--" ? "serving" : "unknown",
-      badgeStyle:
-        currentRevisionId !== "--"
-          ? resolveTonePillStyle(token, "info")
-          : resolveTonePillStyle(token, "neutral"),
-      key: "servingRevision",
-      label: "Serving",
-      note:
-        lens.governance.servingRevision !== "Unknown"
-          ? `serving revision · ${compactId(lens.governance.servingRevision)}`
-          : "当前还没有可见 serving revision。",
-      value:
-        lens.governance.servingRevision !== "Unknown"
-          ? compactId(lens.governance.servingRevision)
-          : "Unknown",
-    },
-    {
-      badge: lens.currentRun ? "可追踪" : "暂无运行",
-      badgeStyle: lens.currentRun
-        ? resolveTonePillStyle(token, "success")
-        : resolveTonePillStyle(token, "neutral"),
-      key: "traceability",
-      label: "审计链路",
-      note: lens.governance.traceability,
-      value: lens.currentRun ? `run ${compactId(lens.currentRun.runId)}` : "暂无近期运行",
-    },
-    {
-      badge: lens.humanInterventionDetected ? "人工介入" : "未介入",
-      badgeStyle: lens.humanInterventionDetected
-        ? resolveTonePillStyle(token, "warning")
-        : resolveTonePillStyle(token, "success"),
-      key: "humanIntervention",
-      label: "人工介入",
-      note: lens.governance.humanIntervention,
-      value: lens.humanInterventionDetected ? "Manual gate active" : "No active override",
-    },
-    {
-      badge: lens.baselineRun ? "有基线" : "无基线",
-      badgeStyle: lens.baselineRun
-        ? resolveTonePillStyle(token, "success")
-        : resolveTonePillStyle(token, "warning"),
-      key: "fallback",
-      label: "回退基线",
-      note: lens.governance.fallback,
-      value: lens.baselineRun ? `run ${compactId(lens.baselineRun.runId)}` : "Fallback unavailable",
-    },
-    {
-      badge: currentDeploymentFriendly,
-      badgeStyle: resolveStatusPillStyle(token, currentDeploymentStatus),
-      key: "rollout",
-      label: "Rollout",
-      note: lens.governance.rollout,
-      value: currentDeploymentFriendly,
-    },
-  ];
-  const overviewCompareStatusLabel = lens.compare.available
-    ? "基线可用"
-    : lens.currentRun
-      ? "等待基线"
-      : "等待运行";
-  const overviewCompareStatusStyle = lens.compare.available
-    ? resolveTonePillStyle(token, "success")
-    : lens.currentRun
-      ? resolveTonePillStyle(token, "warning")
-      : resolveTonePillStyle(token, "info");
-  const overviewHealthDetails = lens.healthDetails.map(formatTeamHealthDetail);
-  const overviewPartialSignals = lens.partialSignals.map(formatPartialSignal);
-  const displayedRunId = lens.currentRun?.runId || preferredRunId || "";
-  const runSwitchOptions = React.useMemo(
-    () =>
-      (runsQuery.data?.runs ?? []).slice(0, 4).map((run) => ({
-        label: `${formatCompactTimestamp(run.lastUpdatedAt)} · ${formatFriendlyStatus(run.completionStatus)}`,
-        runId: run.runId,
-      })),
-    [runsQuery.data?.runs],
-  );
-  const runSwitchDisplayOptions = React.useMemo(
-    () =>
-      runSwitchOptions.map((option) => ({
-        ...option,
-        buttonStyle: resolveSegmentedButtonStyle(
-          token,
-          option.runId === displayedRunId,
-        ),
-      })),
-    [displayedRunId, runSwitchOptions, token],
-  );
-  const playbackStepMap = React.useMemo(
-    () => new Map(lens.playback.steps.map((step) => [step.stepId, step])),
-    [lens.playback.steps],
-  );
-  const eventStreamRows = React.useMemo(
-    () =>
-      lens.playback.events.map((event) => {
-        const relatedStep = event.stepId ? playbackStepMap.get(event.stepId) ?? null : null;
-        const sourceLabel =
-          trimText(event.actorId ? actorLabelMap.get(event.actorId) : "") ||
-          compactId(event.actorId) ||
-          "当前团队";
-        const targetLabel =
-          trimText(relatedStep?.owner) ||
-          trimText(relatedStep?.actorId ? actorLabelMap.get(relatedStep.actorId) : "") ||
-          "";
-        const flowLabel =
-          targetLabel && normalizeStatus(targetLabel) !== normalizeStatus(sourceLabel)
-            ? `${sourceLabel} -> ${targetLabel}`
-            : sourceLabel;
-        const detailNote = [event.detail, relatedStep?.summary || ""]
-          .map((part) => trimText(part))
-          .filter(Boolean)
-          .filter((part, index, items) => items.indexOf(part) === index)
-          .join(" · ");
-
-        return {
-          detail: event.message,
-          detailNote,
-          flowLabel,
-          key: event.key,
-          stageLabel: formatEventStreamStageLabel(event.stage, relatedStep?.stepType),
-          stageTone: resolveEventStreamTone(event.stage, event.tone, relatedStep?.stepType),
-          timeLabel: formatClockTimestamp(event.timestamp),
-        };
-      }),
-    [actorLabelMap, lens.playback.events, playbackStepMap],
-  );
-  const eventStreamDisplayRows = React.useMemo(
-    () =>
-      eventStreamRows.map((row) => ({
-        ...row,
-        stageStyle: resolveTonePillStyle(token, row.stageTone),
-      })),
-    [eventStreamRows, token],
-  );
-  const memberMappingRows = React.useMemo(() => {
-    const memberByActorId = new Map(lens.members.map((member) => [member.actorId, member]));
-    const rows = new Map<
-      string,
-      {
-        implementation: string;
-        key: string;
-        member: string;
-        responsibility: string;
-        serviceLabel: string;
-        serviceNote: string;
-        statusLabel: string;
-        statusNote?: string;
-        statusTone: PillTone;
-      }
-    >();
-
-    lens.playback.steps.forEach((step) => {
-      const actorId = trimText(step.actorId);
-      const member = actorId ? memberByActorId.get(actorId) ?? null : null;
-      const actorLabel =
-        trimText(actorId ? actorLabelMap.get(actorId) : "") ||
-        trimText(step.owner) ||
-        trimText(member?.actorType) ||
-        compactId(actorId) ||
-        "当前成员";
-      const matchingRole =
-        teamCompositionRows.find(
-          (row) =>
-            normalizeStatus(row.name) === normalizeStatus(step.owner) ||
-            normalizeStatus(row.name) === normalizeStatus(actorLabel),
-        ) || null;
-      const rowKey =
-        actorId || `owner:${normalizeStatus(step.owner) || normalizeStatus(actorLabel)}`;
-
-      if (rows.has(rowKey)) {
-        return;
-      }
-
-      rows.set(rowKey, {
-        implementation:
-          trimText(member?.actorType) ||
-          formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
-        key: rowKey,
-        member: actorLabel,
-        responsibility: matchingRole?.summary || step.summary || step.detail || "--",
-        serviceLabel: currentServiceFriendly,
-        serviceNote: runtimeServiceId || currentServiceKey || "--",
-        statusLabel: formatMemberPresenceLabel(member?.isFocused ? "focus" : "run"),
-        statusNote: formatFriendlyStatus(step.status),
-        statusTone: resolveMemberPresenceTone(member?.isFocused ? "focus" : "run"),
-      });
-    });
-
-    if (rows.size > 0) {
-      return [...rows.values()];
-    }
-
-    lens.playback.events.forEach((event) => {
-      const actorId = trimText(event.actorId);
-      const member = actorId ? memberByActorId.get(actorId) ?? null : null;
-      const actorLabel =
-        trimText(actorId ? actorLabelMap.get(actorId) : "") ||
-        trimText(member?.actorType) ||
-        compactId(actorId) ||
-        "当前成员";
-      const rowKey = actorId || `event:${event.key}`;
-      if (rows.has(rowKey)) {
-        return;
-      }
-
-      rows.set(rowKey, {
-        implementation:
-          trimText(member?.actorType) ||
-          formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
-        key: rowKey,
-        member: actorLabel,
-        responsibility: event.message || event.detail || "--",
-        serviceLabel: currentServiceFriendly,
-        serviceNote: runtimeServiceId || currentServiceKey || "--",
-        statusLabel: formatMemberPresenceLabel(member?.isFocused ? "focus" : "run"),
-        statusNote: formatEventStreamStageLabel(event.stage),
-        statusTone: resolveMemberPresenceTone(member?.isFocused ? "focus" : "run"),
-      });
-    });
-
-    return [...rows.values()];
-  }, [
-    actorLabelMap,
-    currentServiceFriendly,
-    currentServiceKey,
-    lens.activeRevision?.implementationKind,
-    lens.members,
-    lens.playback.events,
-    lens.playback.steps,
-    runtimeServiceId,
-    teamCompositionRows,
-  ]);
-  const memberMappingDisplayRows = React.useMemo(
-    () =>
-      memberMappingRows.map((row) => ({
-        ...row,
-        statusStyle: resolveTonePillStyle(token, row.statusTone),
-      })),
-    [memberMappingRows, token],
-  );
-  const runtimeIdentityRows = React.useMemo(
-    () =>
-      lens.members.map((member) => {
-        const graphNode =
-          lens.graph.nodes.find((node) => node.actorId === member.actorId) ?? null;
-        const implementationKind = formatCompositionKind(
-          lens.activeRevision?.implementationKind || "runtime",
-        );
-        return {
-          actorId: member.actorId,
-          implementationKind: trimText(member.actorType)
-            ? `${implementationKind} · ${trimText(member.actorType)}`
-            : implementationKind,
-          key: member.actorId,
-          member:
-            trimText(actorLabelMap.get(member.actorId)) ||
-            trimText(member.actorType) ||
-            compactId(member.actorId),
-          note:
-            graphNode?.caption ||
-            "当前还没有更多可见的运行时协作关系。",
-          relationLabel:
-            graphNode != null
-              ? `${graphNode.relationCount} 条可见关系`
-              : "暂无可见关系",
-          serviceId: runtimeServiceId || currentServiceKey || "--",
-          statusLabel: formatMemberPresenceLabel(member.isFocused ? "focus" : "visible"),
-          statusTone: resolveMemberPresenceTone(member.isFocused ? "focus" : "visible"),
-        };
-      }),
-    [
-      actorLabelMap,
-      currentServiceKey,
-      lens.activeRevision?.implementationKind,
-      lens.graph.nodes,
-      lens.members,
-      runtimeServiceId,
-    ],
-  );
-  const memberCompositionRows = React.useMemo(
-    () =>
-      teamCompositionRows.map((row) => ({
-        key: row.key,
-        kindLabel: formatCompositionKind(row.kind),
-        kindStyle: resolveCompositionKindPillStyle(token, row.kind),
-        name: row.name,
-        summary: row.summary,
-      })),
-    [teamCompositionRows, token],
-  );
-  const memberIdentityRows = React.useMemo(
-    () =>
-      runtimeIdentityRows.map((row) => ({
-        actorId: row.actorId,
-        cardStyle: resolveSelectionCardButtonStyle(
-          token,
-          row.actorId === effectiveActorId,
-        ),
-        implementationKind: row.implementationKind,
-        key: row.key,
-        member: row.member,
-        note: row.note,
-        relationLabel: row.relationLabel,
-        serviceId: row.serviceId,
-        statusLabel: row.statusLabel,
-        statusStyle: resolveTonePillStyle(token, row.statusTone),
-      })),
-    [effectiveActorId, runtimeIdentityRows, token],
-  );
-
   const tabOptions: TeamTabOption[] = [
-    { label: "概览", value: "overview" },
-    { label: "事件拓扑", value: "topology" },
-    { label: "事件流", value: "events" },
-    { label: "团队成员", value: "members" },
-    { label: "Bindings", value: "bindings" },
-    { label: "Assets", value: "assets" },
-    { label: "配置", value: "advanced" },
+    { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
+    { label: t("pages.teams.detail.copy.46", "team member"), value: "members" },
   ];
 
   const initialLoading =
     serviceRevisionsQuery.isLoading ||
     servicesQuery.isLoading ||
-    actorsQuery.isLoading ||
-    workflowsQuery.isLoading ||
-    scriptsQuery.isLoading;
+    workflowsQuery.isLoading;
 
   const pushTeamTab = React.useCallback(
     (tab: TeamDetailTab) => {
@@ -3212,12 +1036,12 @@ const TeamDetailPage: React.FC = () => {
         buildTeamDetailHref({
           memberId: currentMemberId || undefined,
           scopeId,
+          teamId: selectedTeamId || undefined,
           workflowId: activeWorkflowId || undefined,
           serviceId: runtimeServiceId,
           runId:
             preferredRunId ||
             lens.currentRun?.runId ||
-            lens.playback.currentRunId ||
             undefined,
           tab,
         }),
@@ -3227,154 +1051,439 @@ const TeamDetailPage: React.FC = () => {
       activeWorkflowId,
       currentMemberId,
       lens.currentRun?.runId,
-      lens.playback.currentRunId,
       preferredRunId,
       runtimeServiceId,
+      selectedTeamId,
       scopeId,
     ],
   );
 
-  const handleSelectRun = React.useCallback(
-    (runId: string) => {
-      const normalizedRunId = trimText(runId);
-      setPreferredRunId(normalizedRunId);
-      setSelectedActorId("");
-      setSelectedTopologyNodeId("");
-      history.push(
-        buildTeamDetailHref({
-          memberId: currentMemberId || undefined,
-          scopeId,
-          workflowId: activeWorkflowId || undefined,
-          serviceId: runtimeServiceId,
-          runId: normalizedRunId || undefined,
-          tab: activeTab,
-        }),
-      );
-    },
-    [activeTab, activeWorkflowId, currentMemberId, runtimeServiceId, scopeId],
-  );
-
-  const handleOpenConversation = React.useCallback(() => {
-    if (lens.playback.currentRunId) {
-      handleOpenPlaybackRun();
+  const editTeamActionLabel = intl.formatMessage({ id: "teams.detail.actions.edit" });
+  const canEditSelectedTeam = Boolean(teamSummaryQuery.data && selectedTeamId);
+  const editTeamHint = selectedTeamId
+    ? intl.formatMessage({ id: "teams.detail.edit.hint.ready" })
+    : intl.formatMessage({ id: "teams.detail.edit.hint.noTeam" });
+  const openTeamEditor = React.useCallback(() => {
+    if (!teamSummaryQuery.data) {
       return;
     }
-    history.push(
-      buildRuntimeRunsHref({
+
+    setTeamEditorName(teamSummaryQuery.data.displayName);
+    setTeamEditorDescription(teamSummaryQuery.data.description);
+    setTeamEditorOpen(true);
+  }, [teamSummaryQuery.data]);
+  const closeTeamEditor = React.useCallback(() => {
+    if (teamEditorSaving) {
+      return;
+    }
+
+    setTeamEditorOpen(false);
+  }, [teamEditorSaving]);
+  const saveTeamEditor = React.useCallback(async () => {
+    if (!teamSummaryQuery.data || teamEditorSaving) {
+      return;
+    }
+
+    const displayName = teamEditorName.trim();
+    if (!displayName) {
+      void message.error(intl.formatMessage({ id: "teams.detail.messages.nameRequired" }));
+      return;
+    }
+
+    setTeamEditorSaving(true);
+    try {
+      await studioApi.updateTeam({
         scopeId,
-        serviceId: runtimeServiceId,
-        actorId: lens.currentRun?.actorId || undefined,
-      }),
-    );
+        teamId: selectedTeamId,
+        displayName,
+        description: teamEditorDescription.trim() || null,
+      });
+      void message.success(intl.formatMessage({ id: "teams.detail.messages.updateSuccess" }));
+      setTeamEditorOpen(false);
+      await refreshTeamAuthority();
+    } catch (error) {
+      void message.error(
+        describeError(error, intl.formatMessage({ id: "teams.detail.messages.updateFailed" })),
+      );
+    } finally {
+      setTeamEditorSaving(false);
+    }
   }, [
-    handleOpenPlaybackRun,
-    lens.currentRun?.actorId,
-    lens.playback.currentRunId,
-    runtimeServiceId,
+    refreshTeamAuthority,
     scopeId,
+    selectedTeamId,
+    teamEditorDescription,
+    teamEditorName,
+    teamEditorSaving,
+    teamSummaryQuery.data,
+    intl,
   ]);
-  const conversationActionLabel = lens.playback.currentRunId ? "本次对话" : "运行记录";
-  const serviceMappingActionLabel = "服务映射";
-  const teamBuilderActionLabel = "高级编辑";
-  const topologyFocusActorId =
-    trimText(effectiveActorId) ||
-    trimText(lens.graph.focusActorId) ||
-    trimText(lens.playback.rootActorId) ||
-    trimText(lens.currentRun?.actorId) ||
-    "";
-  const canAdjustTopologyDepth = topologyFocusActorId.length > 0;
-  const canOpenPlatformTopology = topologyFocusActorId.length > 0;
-  const topologyDepthLabel = formatTopologyDepthLabel(graphDepth);
-  const topologyControlsHint = canAdjustTopologyDepth
-    ? ""
-    : "当前还没有可用的团队成员焦点，待成员或运行信号可见后再切换视角。";
-  const platformTopologyHint = canOpenPlatformTopology
-    ? ""
-    : "当前还没有可打开的平台拓扑焦点。";
-  const topologyEmptyDescription = canAdjustTopologyDepth
-    ? `当前在${topologyDepthLabel}视角下还没有更多可见的事件拓扑关系。`
-    : "当前还没有可用的团队成员焦点，所以暂时没有可展开的事件拓扑关系。";
+  const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
+  const archiveTeamActionLabel =
+    teamSummaryQuery.data && !isTeamArchived
+      ? intl.formatMessage({ id: "teams.detail.actions.archive" })
+      : "";
+  const archiveTeamHint = selectedTeamId
+    ? intl.formatMessage({ id: "teams.detail.archive.hint.ready" })
+    : intl.formatMessage({ id: "teams.detail.archive.hint.noTeam" });
+  const openTeamArchive = React.useCallback(() => {
+    if (!teamSummaryQuery.data || isTeamArchived) {
+      return;
+    }
+
+    setTeamArchiveOpen(true);
+  }, [isTeamArchived, teamSummaryQuery.data]);
+  const closeTeamArchive = React.useCallback(() => {
+    if (teamArchiving) {
+      return;
+    }
+
+    setTeamArchiveOpen(false);
+  }, [teamArchiving]);
+  const confirmTeamArchive = React.useCallback(async () => {
+    if (!teamSummaryQuery.data || isTeamArchived || teamArchiving) {
+      return;
+    }
+
+    setTeamArchiving(true);
+    try {
+      await studioApi.archiveTeam(scopeId, selectedTeamId);
+      void message.success(intl.formatMessage({ id: "teams.detail.messages.archiveSuccess" }));
+      setTeamArchiveOpen(false);
+      await refreshTeamAuthority();
+    } catch (error) {
+      void message.error(
+        describeError(error, intl.formatMessage({ id: "teams.detail.messages.archiveFailed" })),
+      );
+    } finally {
+      setTeamArchiving(false);
+    }
+  }, [
+    isTeamArchived,
+    refreshTeamAuthority,
+    scopeId,
+    selectedTeamId,
+    teamArchiving,
+    teamSummaryQuery.data,
+    intl,
+  ]);
   const handleOpenTeamsList = React.useCallback(() => {
     history.push(teamsListHref);
   }, [teamsListHref]);
+  const openTeamTestModal = React.useCallback(() => {
+    setTeamTestModalOpen(true);
+  }, []);
+  const closeTeamTestModal = React.useCallback(() => {
+    setTeamTestModalOpen(false);
+  }, []);
+  const streamTeamTest = React.useCallback(async (promptOverride?: string) => {
+    const prompt = trimText(promptOverride) || teamTestPrompt.trim();
+    if (!prompt || !scopeId || !selectedTeamId || isTeamArchived) {
+      return;
+    }
 
-  const handleOpenServiceMapping = React.useCallback(() => {
-    handleOpenPlaybackActor(
-      topologyFocusActorId,
-      lens.currentRun?.runId || lens.playback.currentRunId,
-    );
-  }, [
-    handleOpenPlaybackActor,
-    lens.currentRun?.actorId,
-    lens.currentRun?.runId,
-    lens.playback.currentRunId,
-    topologyFocusActorId,
-  ]);
-  const handleOpenServices = React.useCallback(() => {
-    history.push(buildPlatformServicesHref(platformRouteIdentity));
-  }, [platformRouteIdentity]);
-  const handleOpenGovernance = React.useCallback(() => {
-    history.push(
-      buildPlatformGovernanceHref({
-        ...platformRouteIdentity,
-        revisionId: currentRevisionId !== "--" ? currentRevisionId : undefined,
-        view: "bindings",
-      }),
-    );
-  }, [currentRevisionId, platformRouteIdentity]);
-  const handleOpenDeployments = React.useCallback(() => {
-    history.push(
-      buildPlatformDeploymentsHref({
-        ...platformRouteIdentity,
-        deploymentId: currentDeploymentId !== "--" ? currentDeploymentId : undefined,
-      }),
-    );
-  }, [currentDeploymentId, platformRouteIdentity]);
-  const handleOpenWorkflowAsset = React.useCallback(
-    (workflowId: string) => {
-      history.push(
-        buildStudioWorkflowEditorRoute({
-          scopeId,
-          memberKey:
-            trimText(workflowId).length > 0 ? `workflow:${trimText(workflowId)}` : undefined,
-          workflowId,
-        }),
+    teamTestAbortRef.current?.abort();
+    const controller = new AbortController();
+    teamTestAbortRef.current = controller;
+    const accumulator = createRuntimeEventAccumulator();
+    setTeamTestStatus("running");
+    setTeamTestError(null);
+    setTeamTestResultText("");
+
+    try {
+      const response = await runtimeRunsApi.streamTeamChat(
+        scopeId,
+        selectedTeamId,
+        {
+          prompt,
+          metadata: {
+            source: "team-detail",
+            teamId: selectedTeamId,
+          },
+        },
+        controller.signal,
       );
+
+      for await (const event of parseBackendSSEStream(response, {
+        signal: controller.signal,
+      })) {
+        applyRuntimeEvent(accumulator, event);
+        setTeamTestResultText(
+          accumulator.errorText ||
+            accumulator.finalOutput ||
+            accumulator.assistantText ||
+            accumulator.thinking,
+        );
+      }
+
+      if (controller.signal.aborted) {
+        const stoppedSummary =
+          accumulator.assistantText ||
+          accumulator.finalOutput ||
+          accumulator.errorText ||
+          intl.formatMessage({ id: "teams.detail.messages.teamTestStopped" });
+        setTeamTestStatus("stopped");
+        setTeamTestLastResult({
+          finishedAtLabel: formatLocalTimeLabel(new Date()),
+          runId: accumulator.runId || undefined,
+          status: "stopped",
+          summary: stoppedSummary,
+        });
+        return;
+      }
+
+      const summary =
+        accumulator.errorText ||
+        accumulator.finalOutput ||
+        accumulator.assistantText ||
+        intl.formatMessage({ id: "teams.detail.messages.teamTestEmpty" });
+      const nextStatus = accumulator.errorText ? "error" : "success";
+      setTeamTestResultText(summary);
+      setTeamTestStatus(nextStatus);
+      if (accumulator.errorText) {
+        setTeamTestError(
+          describeTeamTestError(
+            accumulator.errorText,
+            intl.formatMessage({ id: "teams.detail.test.errors.failed" }),
+            (id, values) => intl.formatMessage({ id }, values),
+          ),
+        );
+      }
+      setTeamTestLastResult({
+        finishedAtLabel: formatLocalTimeLabel(new Date()),
+        runId: accumulator.runId || undefined,
+        status: nextStatus,
+        summary,
+      });
+    } catch (error) {
+      if (controller.signal.aborted || isAbortLikeError(error)) {
+        setTeamTestStatus("stopped");
+        setTeamTestError(
+          describeTeamTestError(
+            error,
+            intl.formatMessage({ id: "teams.detail.test.errors.failed" }),
+            (id, values) => intl.formatMessage({ id }, values),
+          ),
+        );
+        setTeamTestLastResult({
+          finishedAtLabel: formatLocalTimeLabel(new Date()),
+          status: "stopped",
+          summary: intl.formatMessage({ id: "teams.detail.messages.teamTestStopped" }),
+        });
+        return;
+      }
+
+      const errorDescription = describeTeamTestError(
+        error,
+        intl.formatMessage({ id: "teams.detail.test.errors.failed" }),
+        (id, values) => intl.formatMessage({ id }, values),
+      );
+      setTeamTestStatus("error");
+      setTeamTestError(errorDescription);
+      setTeamTestResultText(errorDescription.description);
+      setTeamTestLastResult({
+        finishedAtLabel: formatLocalTimeLabel(new Date()),
+        status: "error",
+        summary: errorDescription.description,
+      });
+    } finally {
+      if (teamTestAbortRef.current === controller) {
+        teamTestAbortRef.current = null;
+      }
+    }
+  }, [intl, isTeamArchived, scopeId, selectedTeamId, teamTestPrompt]);
+  const handleStopTeamTest = React.useCallback(() => {
+    teamTestAbortRef.current?.abort();
+  }, []);
+  const waitForTeamEntryVisibility = React.useCallback(
+    async (memberId: string) => {
+      const normalizedMemberId = trimText(memberId);
+      if (!scopeId || !selectedTeamId || !normalizedMemberId) {
+        return false;
+      }
+
+      for (let attempt = 0; attempt < teamEntryVisibilityAttempts; attempt += 1) {
+        const summary = await queryClient.fetchQuery({
+          queryFn: () => studioApi.getTeam(scopeId, selectedTeamId),
+          queryKey: teamSummaryQueryKey,
+          staleTime: 0,
+        });
+        if (hasTeamEntryMember(summary, normalizedMemberId)) {
+          return true;
+        }
+        if (attempt < teamEntryVisibilityAttempts - 1) {
+          await delay(teamEntryVisibilityRetryDelayMs);
+        }
+      }
+
+      return false;
     },
-    [scopeId],
+    [queryClient, scopeId, selectedTeamId, teamSummaryQueryKey],
   );
-  const handleOpenScriptAsset = React.useCallback(
-    (scriptId: string) => {
-      history.push(
-        buildStudioScriptsWorkspaceRoute({
+  const handleSetEntry = React.useCallback(
+    async (memberId: string, options?: { test?: boolean }) => {
+      const normalizedMemberId = trimText(memberId);
+      const promptSnapshot = teamTestPrompt.trim();
+      if (!scopeId || !selectedTeamId || !normalizedMemberId) {
+        return;
+      }
+
+      setEntryActionBusyMemberId(normalizedMemberId);
+      setTeamTestStatus("setting-entry");
+      setTeamTestError(null);
+      try {
+        const updatedTeam = await studioApi.setTeamEntryMember(
           scopeId,
-          memberKey:
-            trimText(scriptId).length > 0 ? `script:${trimText(scriptId)}` : undefined,
-          scriptId,
-        }),
-      );
+          selectedTeamId,
+          normalizedMemberId,
+        );
+        if (updatedTeam) {
+          queryClient.setQueryData<StudioTeamSummary | undefined>(
+            teamSummaryQueryKey,
+            updatedTeam,
+          );
+        }
+        void message.info(
+          intl.formatMessage({ id: "teams.detail.messages.entrySetSubmitted" }),
+        );
+        await refreshTeamAuthority();
+        if (options?.test) {
+          const entryVisible = await waitForTeamEntryVisibility(normalizedMemberId);
+          if (!entryVisible) {
+            const errorDescription: TeamTestErrorDescription = {
+              actionLabel: intl.formatMessage({ id: "teams.detail.test.entrySyncing.action" }),
+              description:
+                intl.formatMessage({ id: "teams.detail.test.entrySyncing.description" }),
+              kind: "entry_syncing",
+              title: intl.formatMessage({ id: "teams.detail.test.entrySyncing.title" }),
+            };
+            setTeamTestStatus("error");
+            setTeamTestError(errorDescription);
+            setTeamTestResultText(errorDescription.description);
+            setTeamTestLastResult({
+              finishedAtLabel: formatLocalTimeLabel(new Date()),
+              status: "error",
+              summary: errorDescription.description,
+            });
+            return;
+          }
+          await streamTeamTest(promptSnapshot);
+        } else {
+          setTeamTestStatus("idle");
+        }
+      } catch (error) {
+        const errorDescription = describeTeamTestError(
+          error,
+          intl.formatMessage({ id: "teams.detail.messages.entrySetFailed" }),
+          (id, values) => intl.formatMessage({ id }, values),
+        );
+        setTeamTestStatus("error");
+        setTeamTestError(errorDescription);
+        void message.error(errorDescription.title);
+      } finally {
+        setEntryActionBusyMemberId("");
+      }
     },
-    [scopeId],
+    [
+      queryClient,
+      intl,
+      refreshTeamAuthority,
+      scopeId,
+      selectedTeamId,
+      streamTeamTest,
+      teamTestPrompt,
+      teamSummaryQueryKey,
+      waitForTeamEntryVisibility,
+    ],
+  );
+  const handleClearEntry = React.useCallback(async () => {
+    if (!scopeId || !selectedTeamId) {
+      return;
+    }
+
+    setEntryActionBusyMemberId(entryMemberClearingId);
+    setTeamTestError(null);
+    try {
+      const updatedTeam = await studioApi.clearTeamEntryMember(scopeId, selectedTeamId);
+      if (updatedTeam) {
+        queryClient.setQueryData<StudioTeamSummary | undefined>(
+          teamSummaryQueryKey,
+          updatedTeam,
+        );
+      }
+      void message.info(
+        intl.formatMessage({ id: "teams.detail.messages.entryClearSubmitted" }),
+      );
+      await refreshTeamAuthority();
+      setTeamTestStatus("idle");
+    } catch (error) {
+      const errorDescription = describeTeamTestError(
+        error,
+        intl.formatMessage({ id: "teams.detail.messages.entryClearFailed" }),
+        (id, values) => intl.formatMessage({ id }, values),
+      );
+      setTeamTestStatus("error");
+      setTeamTestError(errorDescription);
+      void message.error(errorDescription.title);
+    } finally {
+      setEntryActionBusyMemberId("");
+    }
+  }, [
+    queryClient,
+    entryMemberId,
+    intl,
+    isTeamArchived,
+    refreshTeamAuthority,
+    scopeId,
+    selectedTeamId,
+    teamSummaryQueryKey,
+  ]);
+  const teamTestPanel = (
+    <TeamTestPanel
+      createMemberHref={createMemberHref}
+      currentMemberId={currentMemberId || null}
+      currentMemberLabel={currentMemberLabel}
+      disabled={isTeamArchived}
+      entryActionBusyMemberId={entryActionBusyMemberId}
+      entryMemberId={teamSummaryQuery.data?.entryMemberId}
+      error={teamTestError}
+      lastResult={teamTestLastResult}
+      onClearEntry={handleClearEntry}
+      onNavigate={(href) => history.push(href)}
+      onPromptChange={setTeamTestPrompt}
+      onSetEntryAndTest={(memberId) => void handleSetEntry(memberId, { test: true })}
+      onStop={handleStopTeamTest}
+      onTest={() => void streamTeamTest()}
+      prompt={teamTestPrompt}
+      resultText={teamTestResultText}
+      rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
+      rosterLoading={teamMembersQuery.isLoading}
+      rosterRows={teamRosterRows}
+      rosterSyncing={isTeamMembersProjectionSyncing}
+      status={teamTestStatus}
+      teamId={selectedTeamId}
+    />
   );
 
   const renderOverviewTab = () => {
     return (
       <TeamOverviewTab
-        compareAvailable={lens.compare.available}
-        compareSections={lens.compare.sections}
-        compareStatusLabel={overviewCompareStatusLabel}
-        compareStatusStyle={overviewCompareStatusStyle}
-        compareSummary={lens.compare.summary}
-        compareTitle={lens.compare.title}
+        configurationDetailRows={configurationDetailRows}
         compositionRows={overviewCompositionRows}
         currentDeploymentPillStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
         currentDeploymentPillText={currentDeploymentPillText}
-        currentHeaderStatusFriendly={currentHeaderStatusFriendly}
-        currentHeaderStatusStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
+        currentHeaderStatusFriendly={currentReadModelFreshnessLabel}
+        currentHeaderStatusStyle={{
+          background: token.colorFillQuaternary,
+          color: token.colorTextSecondary,
+        }}
+        currentMemberCardCaption={currentMemberCardCaption}
+        currentMemberCardTooltip={currentMemberCardTooltip}
+        currentMemberLabel={currentMemberLabel}
         currentRunCardCaption={currentRunCardCaption}
         currentRunCardTooltip={currentRunCardTooltip}
         currentRunFriendly={currentRunFriendly}
-        currentRunPillStyle={resolveStatusPillStyle(token, currentRunStatus)}
+        currentRunPillStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
         currentRunPillText={currentRunPillText}
         currentServiceCardCaption={currentServiceCardCaption}
         currentServiceCardTooltip={currentServiceCardTooltip}
@@ -3385,117 +1494,17 @@ const TeamDetailPage: React.FC = () => {
           color: token.colorInfo,
         }}
         currentServicePillText={currentServicePillText}
-        governanceRows={overviewGovernanceRows}
-        healthActionLabel={formatTeamHealthActionLabel(lens.healthStatus)}
-        healthDetails={overviewHealthDetails}
-        healthStatusLabel={formatTeamHealthStatusLabel(lens.healthStatus)}
-        healthStatusStyle={resolveTeamHealthToneStyle(token, lens.healthTone)}
-        healthSummary={lens.healthSummary}
+        entryMemberId={entryMemberId || null}
+        entryMemberLabel={entryMemberLabel}
+        entryMemberUpdating={entryActionBusyMemberId === entryMemberClearingId}
         latestVisibleUpdateLabel={formatCompactTimestamp(latestVisibleUpdate)}
         latestVisibleUpdateNote={latestVisibleUpdateNote}
-        partialSignals={overviewPartialSignals}
-        runtimeSummaryRows={overviewRuntimeSummaryRows}
-      />
-    );
-  };
-
-  const renderTopologyTab = () => {
-    return (
-      <TeamTopologyTab
-        depthControlDisabled={!canAdjustTopologyDepth}
-        depthControlHint={topologyControlsHint || undefined}
-        graphDepth={graphDepth}
-        graphEdgeCount={topologyGraph.edges.length}
-        graphFocusLabel={`${topologyDepthLabel}视角 · 焦点 ${topologyFocusActorId ? compactId(topologyFocusActorId) : "未选中"}`}
-        graphNodeCount={topologyGraph.nodes.length}
-        isError={actorGraphQuery.isError}
-        isLoading={actorGraphQuery.isLoading}
-        onCanvasSelect={() =>
-          setSelectedTopologyNodeId(
-            topologyGraph.entityMap.has(topologyFocusActorId)
-              ? topologyFocusActorId
-              : topologyGraph.nodes[0]?.id || "",
-          )
-        }
-        onNodeSelect={(nodeId) => {
-          setSelectedTopologyNodeId(nodeId);
-          if (topologyGraph.entityMap.get(nodeId)?.kind === "actor") {
-            setSelectedActorId(nodeId);
-          }
-        }}
-        onOpenPlatformTopology={handleOpenServiceMapping}
-        onSetGraphDepth={setGraphDepth}
-        platformTopologyDisabled={!canOpenPlatformTopology}
-        platformTopologyHint={platformTopologyHint || undefined}
-        openPlatformTopologyButtonStyle={{
-          borderRadius: 16,
-          height: 40,
-          paddingInline: 18,
-        }}
-        provenanceLabel={graphProvenance.label}
-        provenanceStyle={resolveObservationPillStyle(token, graphProvenance.status)}
-        selectedEntityBadgeLabel={selectedTopologyEntity?.badgeText}
-        selectedEntityBadgeStyle={
-          selectedTopologyEntity
-            ? resolveTonePillStyle(token, selectedTopologyEntity.badgeTone)
+        onClearEntryMember={
+          teamSummaryQuery.data && !isTeamArchived && entryMemberId
+            ? () => void handleClearEntry()
             : undefined
         }
-        selectedEntityDetailRows={topologyDetailRows}
-        selectedEntityEmpty={!selectedTopologyEntity}
-        selectedEntityKindLabel={
-          selectedTopologyEntity
-            ? formatTopologyNodeKindLabel(selectedTopologyEntity.kind)
-            : undefined
-        }
-        selectedEntityKindStyle={
-          selectedTopologyEntity
-            ? resolveTonePillStyle(token, "neutral")
-            : undefined
-        }
-        selectedEntitySummary={selectedTopologyEntity?.summary}
-        selectedEntityTitle={selectedTopologyEntity?.title}
-        selectedFocusReason={
-          selectedFocusReason || "围绕当前焦点成员展开团队消息路径。点击左侧节点即可切换视角。"
-        }
-        selectedNodeId={selectedTopologyNodeId || topologyFocusActorId}
-        topologyEmptyDescription={topologyEmptyDescription}
-        topologyEdges={topologyGraph.edges}
-        topologyNodes={topologyGraph.nodes}
-      />
-    );
-  };
-
-  const renderEventsTab = () => {
-    return (
-      <TeamEventsTab
-        activeRunLabel={lens.currentRun?.runId || "当前还没有可见运行"}
-        activeRunMetaLabel={activeRunId ? `run · ${activeRunId}` : "暂无当前 run"}
-        currentRunStatusLabel={
-          lens.currentRun?.completionStatus
-            ? formatFriendlyStatus(lens.currentRun.completionStatus)
-            : undefined
-        }
-        currentRunStatusStyle={
-          lens.currentRun?.completionStatus
-            ? resolveStatusPillStyle(token, lens.currentRun.completionStatus)
-            : undefined
-        }
-        eventRows={eventStreamDisplayRows}
-        isRunsError={runsQuery.isError}
-        isRunsLoading={runsQuery.isLoading}
-        memberMappingRows={memberMappingDisplayRows}
-        onOpenAudit={() =>
-          handleOpenPlaybackActor(lens.currentRun?.actorId, activeRunId)
-        }
-        onOpenMissionControl={handleOpenMissionControl}
-        onSelectRun={handleSelectRun}
-        openAuditButtonStyle={resolveActionButtonStyle(token)}
-        playbackSummary={formatPlaybackSummary(lens.playback.summary)}
-        provenanceLabel={playbackProvenance.label}
-        provenanceStyle={resolveObservationPillStyle(token, playbackProvenance.status)}
-        runSwitchOptions={runSwitchDisplayOptions}
-        showOpenAudit={Boolean(activeRunId)}
-        showOpenMissionControl={Boolean(activeRunId && missionControlPrompt)}
+        startupGuidance={teamStartupGuidance}
       />
     );
   };
@@ -3503,126 +1512,39 @@ const TeamDetailPage: React.FC = () => {
   const renderMembersTab = () => {
     return (
       <TeamMembersTab
-        compositionRows={memberCompositionRows}
-        identityRows={memberIdentityRows}
-        openRuntimeExplorerDisabled={!canOpenPlatformTopology}
-        openRuntimeExplorerHint={platformTopologyHint || undefined}
-        onOpenRuntimeExplorer={handleOpenServiceMapping}
-        onOpenServices={handleOpenServices}
-        onSelectActor={setSelectedActorId}
-      />
-    );
-  };
-
-  const renderBindingsTab = () => {
-    return (
-      <TeamBindingsTab
-        catalogCards={connectorCatalogCards}
-        emptyDescription={connectorsEmptyDescription}
-        onOpenDeployments={handleOpenDeployments}
-        onOpenGovernance={handleOpenGovernance}
-        onOpenServices={handleOpenServices}
-        onSelectBinding={setSelectedConnectorKey}
-        provenanceLabel={integrationsProvenance.label}
-        provenanceStyle={resolveObservationPillStyle(token, integrationsProvenance.status)}
-        selectedBindingDetailRows={connectorDetailRows}
-        selectedBindingEmpty={!selectedConnector}
-        selectedBindingStatusLabel={
-          selectedConnector
-            ? formatConnectorEnabledLabel(selectedConnector.enabled)
-            : ""
+        createMemberHref={createMemberHref}
+        entryActionBusyMemberId={entryActionBusyMemberId}
+        onClearEntry={
+          teamSummaryQuery.data && !isTeamArchived && entryMemberId
+            ? () => void handleClearEntry()
+            : undefined
         }
-        selectedBindingStatusStyle={resolveTonePillStyle(
-          token,
-          selectedConnector?.enabled ? "success" : "neutral",
-        )}
-        selectedBindingName={selectedConnector?.name || ""}
-        selectedBindingSummary={selectedConnector?.summary || ""}
-        summaryCards={connectorSummaryCards}
-      />
-    );
-  };
-
-  const renderAssetsTab = () => {
-    return (
-      <TeamAssetsTab
-        onOpenScriptAsset={handleOpenScriptAsset}
-        onOpenScriptsWorkspace={() =>
-          history.push(
-            buildStudioScriptsWorkspaceRoute({
-              scopeId,
-              memberKey: selectedStudioMemberKey,
-            }),
-          )
+        onNavigate={(href) => history.push(href)}
+        onSetEntry={
+          teamSummaryQuery.data && !isTeamArchived
+            ? (memberId) => void handleSetEntry(memberId)
+            : undefined
         }
-        onOpenWorkflowAsset={handleOpenWorkflowAsset}
-        onOpenWorkflowWorkspace={() =>
-          history.push(
-            buildStudioWorkflowWorkspaceRoute({
-              scopeId,
-              memberKey: selectedStudioMemberKey,
-            }),
-          )
-        }
-        scriptRows={scriptAssetRows}
-        summaryCards={assetSummaryCards}
-        workflowRows={workflowAssetRows}
+        rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
+        rosterLoading={teamMembersQuery.isLoading}
+        rosterSyncing={isTeamMembersProjectionSyncing}
+        rosterRows={teamRosterRows}
+        rosterTeamId={selectedTeamId}
       />
     );
   };
 
-  const renderAdvancedTab = () => {
-    return (
-      <TeamAdvancedTab
-        adjustmentBadgeStyle={resolveTonePillStyle(token, "neutral")}
-        configurationAdjustmentRows={configurationAdjustmentRows}
-        configurationDetailRows={configurationDetailRows}
-        conversationActionLabel={conversationActionLabel}
-        currentDeploymentBadgeStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
-        currentDeploymentFriendly={currentDeploymentFriendly}
-        currentServiceFriendly={currentServiceFriendly}
-        currentVersionFriendly={currentVersionFriendly}
-        onOpenConversation={handleOpenConversation}
-        onOpenServiceMapping={handleOpenServiceMapping}
-        onOpenTeamBuilder={() => history.push(teamBuilderRoute)}
-        serviceMappingDisabled={!canOpenPlatformTopology}
-        serviceMappingHint={platformTopologyHint || undefined}
-        primaryActionButtonStyle={resolveActionButtonStyle(token, "primary")}
-        secondaryActionButtonStyle={resolveActionButtonStyle(token)}
-        serviceMappingActionLabel={serviceMappingActionLabel}
-        summaryCards={advancedSummaryCards}
-        teamBuilderActionLabel={teamBuilderActionLabel}
-        teamImpactSummary={advancedTeamImpactSummary}
-      />
-    );
-  };
-
-  let tabContent: React.ReactNode = renderOverviewTab();
+  let tabContent: React.ReactNode;
   switch (activeTab) {
-    case "topology":
-      tabContent = renderTopologyTab();
-      break;
-    case "events":
-      tabContent = renderEventsTab();
-      break;
     case "members":
       tabContent = renderMembersTab();
-      break;
-    case "bindings":
-      tabContent = renderBindingsTab();
-      break;
-    case "assets":
-      tabContent = renderAssetsTab();
-      break;
-    case "advanced":
-      tabContent = renderAdvancedTab();
       break;
     default:
       tabContent = renderOverviewTab();
       break;
   }
 
-  if (!scopeId) {
+  if (!hasTeamIdentity) {
     return <TeamDetailEmptyState />;
   }
 
@@ -3630,26 +1552,35 @@ const TeamDetailPage: React.FC = () => {
     <TeamDetailShell
       actionRail={
         <TeamActionRail
-          conversationActionLabel={conversationActionLabel}
-          onOpenConversation={handleOpenConversation}
-          onOpenServiceMapping={handleOpenServiceMapping}
-          onOpenTeamBuilder={() => history.push(teamBuilderRoute)}
-          serviceMappingDisabled={!canOpenPlatformTopology}
-          serviceMappingHint={platformTopologyHint || undefined}
-          serviceMappingActionLabel={serviceMappingActionLabel}
-          teamBuilderActionLabel={teamBuilderActionLabel}
-        />
+          archiveTeamActionLabel={archiveTeamActionLabel || undefined}
+          archiveTeamDisabled={!teamSummaryQuery.data || teamArchiving}
+          archiveTeamHint={archiveTeamHint}
+          editTeamDisabled={!canEditSelectedTeam}
+          editTeamHint={editTeamHint}
+          editTeamLabel={editTeamActionLabel}
+          onArchiveTeam={openTeamArchive}
+        onOpenTeamEditor={openTeamEditor}
+        onOpenTeamTest={openTeamTestModal}
+        testTeamDisabled={isTeamArchived}
+        testTeamHint={intl.formatMessage({ id: "teams.detail.test.archivedHint" })}
+        testTeamLabel={intl.formatMessage({ id: "teams.detail.actions.test" })}
+      />
       }
       activeTab={activeTab}
-      activeTabLabel={formatTeamTabLabel(activeTab)}
+      activeTabLabel={formatTeamTabLabel(activeTab, intl)}
       initialLoading={initialLoading}
       onOpenTeamsList={handleOpenTeamsList}
       onSelectTab={pushTeamTab}
       statusBadge={
-        currentHeaderStatusFriendly !== "--" ? (
+        teamSummaryQuery.data ? (
           <DetailPill
-            style={resolveStatusPillStyle(token, currentHeaderStatus)}
-            text={currentHeaderStatusFriendly}
+            style={resolveStatusPillStyle(token, teamLifecycleStatus)}
+            text={teamLifecycleLabel}
+          />
+        ) : lens.currentRun?.completionStatus ? (
+          <DetailPill
+            style={resolveStatusPillStyle(token, lens.currentRun.completionStatus)}
+            text={formatFriendlyStatus(lens.currentRun.completionStatus, intl)}
           />
         ) : null
       }
@@ -3659,6 +1590,73 @@ const TeamDetailPage: React.FC = () => {
       teamsListHref={teamsListHref}
     >
       {tabContent}
+      <Modal
+        footer={null}
+        onCancel={closeTeamTestModal}
+        open={teamTestModalOpen}
+        title={intl.formatMessage({ id: "teams.detail.test.modal.title" })}
+        width={960}
+        styles={{
+          body: {
+            maxHeight: "calc(100vh - 180px)",
+            overflowY: "auto",
+            padding: 0,
+          },
+        }}
+      >
+        <div data-testid="team-test-modal-body">{teamTestPanel}</div>
+      </Modal>
+      <Modal
+        confirmLoading={teamEditorSaving}
+        okButtonProps={{ disabled: !teamEditorName.trim() }}
+        okText={intl.formatMessage({ id: "teams.detail.edit.modal.save" })}
+        onCancel={closeTeamEditor}
+        onOk={() => void saveTeamEditor()}
+        open={teamEditorOpen}
+        title={intl.formatMessage({ id: "teams.detail.edit.modal.title" })}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <Typography.Text strong>
+              {intl.formatMessage({ id: "teams.detail.edit.modal.name" })}
+            </Typography.Text>
+            <Input
+              aria-label={intl.formatMessage({ id: "teams.detail.edit.modal.nameAria" })}
+              disabled={teamEditorSaving}
+              onChange={(event) => setTeamEditorName(event.target.value)}
+              value={teamEditorName}
+            />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <Typography.Text strong>
+              {intl.formatMessage({ id: "teams.detail.edit.modal.description" })}
+            </Typography.Text>
+            <Input.TextArea
+              aria-label={intl.formatMessage({ id: "teams.detail.edit.modal.descriptionAria" })}
+              autoSize={{ minRows: 3, maxRows: 5 }}
+              disabled={teamEditorSaving}
+              onChange={(event) => setTeamEditorDescription(event.target.value)}
+              value={teamEditorDescription}
+            />
+          </div>
+          <Typography.Text type="secondary">
+            {intl.formatMessage({ id: "teams.detail.edit.modal.help" })}
+          </Typography.Text>
+        </div>
+      </Modal>
+      <Modal
+        confirmLoading={teamArchiving}
+        okText={intl.formatMessage({ id: "teams.detail.actions.archive" })}
+        okButtonProps={{ danger: true }}
+        onCancel={closeTeamArchive}
+        onOk={() => void confirmTeamArchive()}
+        open={teamArchiveOpen}
+        title={intl.formatMessage({ id: "teams.detail.archive.modal.title" })}
+      >
+        <Typography.Text>
+          {intl.formatMessage({ id: "teams.detail.archive.modal.content" })}
+        </Typography.Text>
+      </Modal>
     </TeamDetailShell>
   );
 };

@@ -15,6 +15,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Bootstrap.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public class BootstrapServiceCollectionExtensionsTests
 {
     [Fact]

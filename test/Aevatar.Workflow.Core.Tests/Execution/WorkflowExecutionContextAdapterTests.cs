@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
 using FluentAssertions;
 using Google.Protobuf;
@@ -24,6 +25,18 @@ public sealed class WorkflowExecutionContextAdapterTests
         FluentActions.Invoking(() => WorkflowExecutionContextAdapter.Create(inner, null!))
             .Should()
             .Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void RuntimeContext_ShouldExposeStateHostRuntimeContext()
+    {
+        var host = new RecordingStateHost();
+        host.RuntimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
+
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
+
+        adapter.RuntimeContext.Should().BeSameAs(host.RuntimeContext);
+        adapter.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
     }
 
     [Fact]
@@ -113,6 +126,8 @@ public sealed class WorkflowExecutionContextAdapterTests
         adapter.InboundEnvelope.Should().BeSameAs(inner.InboundEnvelope);
         adapter.Services.Should().BeSameAs(inner.Services);
         adapter.Logger.Should().BeSameAs(inner.Logger);
+        adapter.UtcNow.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5));
+        adapter.GetElapsedTime(adapter.GetTimestamp()).Should().BeGreaterThanOrEqualTo(TimeSpan.Zero);
 
         await adapter.PublishAsync(new StringValue { Value = "published" }, TopologyAudience.Self, CancellationToken.None);
         await adapter.SendToAsync("child-1", new Int32Value { Value = 3 }, CancellationToken.None);
@@ -157,8 +172,26 @@ public sealed class WorkflowExecutionContextAdapterTests
         inner.Canceled.Should().ContainSingle(x => x.CallbackId == "cancel-me");
     }
 
+    [Fact]
+    public void ClockApis_ShouldUseInjectedTimeProvider()
+    {
+        var timeProvider = new ManualTimeProvider(DateTimeOffset.Parse("2026-05-20T10:00:00Z"));
+        var services = new SingleServiceProvider(typeof(TimeProvider), timeProvider);
+        var adapter = WorkflowExecutionContextAdapter.Create(
+            new RecordingEventHandlerContext { ServicesOverride = services },
+            new RecordingStateHost());
+
+        var startedAt = adapter.GetTimestamp();
+        timeProvider.Advance(TimeSpan.FromMilliseconds(42));
+
+        adapter.UtcNow.Should().Be(DateTimeOffset.Parse("2026-05-20T10:00:00.042Z"));
+        adapter.GetElapsedTime(startedAt).Should().Be(TimeSpan.FromMilliseconds(42));
+    }
+
     private sealed class RecordingEventHandlerContext : IEventHandlerContext
     {
+        private readonly IServiceProvider _defaultServices = new NullServiceProvider();
+
         public EventEnvelope InboundEnvelope { get; } = new()
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -169,7 +202,9 @@ public sealed class WorkflowExecutionContextAdapterTests
 
         public IAgent Agent { get; } = new StubAgent("agent-1");
 
-        public IServiceProvider Services { get; } = new NullServiceProvider();
+        public IServiceProvider Services => ServicesOverride ?? _defaultServices;
+
+        public IServiceProvider? ServicesOverride { get; init; }
 
         public ILogger Logger { get; } = NullLogger.Instance;
 
@@ -244,6 +279,25 @@ public sealed class WorkflowExecutionContextAdapterTests
     {
         public string RunId { get; set; } = "run-1";
 
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+        public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+        {
+            ApplyDelta(ExecutionContextState, delta);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ExecutionContextState.Llm = null;
+            ExecutionContextState.Connector = null;
+            return Task.CompletedTask;
+        }
+
         public Dictionary<string, Any> States { get; } = new(StringComparer.Ordinal);
 
         public Any? GetExecutionState(string scopeKey) =>
@@ -286,6 +340,58 @@ public sealed class WorkflowExecutionContextAdapterTests
     private sealed class NullServiceProvider : IServiceProvider
     {
         public object? GetService(global::System.Type serviceType) => null;
+    }
+
+    private static void ApplyDelta(
+        WorkflowRunExecutionContextState state,
+        WorkflowRunExecutionContextDelta delta)
+    {
+        if (delta.ClearLlm)
+            state.Llm = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
+        if (delta.Llm != null)
+        {
+            state.Llm = new WorkflowLlmExecutionContextState
+            {
+                ModelOverride = delta.Llm.ModelOverride,
+                UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
+            };
+            if (delta.Llm.HasMaxToolRoundsOverride)
+                state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
+        }
+
+        if (delta.Connector != null)
+        {
+            state.Connector = new WorkflowConnectorExecutionContextState
+            {
+                HttpAuthorization = delta.Connector.HttpAuthorization,
+            };
+        }
+    }
+
+    private sealed class SingleServiceProvider(global::System.Type serviceType, object service) : IServiceProvider
+    {
+        public object? GetService(global::System.Type requestedServiceType) =>
+            requestedServiceType == serviceType ? service : null;
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+        private long _timestamp;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public override long GetTimestamp() => _timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public void Advance(TimeSpan elapsed)
+        {
+            _utcNow = _utcNow.Add(elapsed);
+            _timestamp += elapsed.Ticks;
+        }
     }
 
     private sealed record RecordedCallback(

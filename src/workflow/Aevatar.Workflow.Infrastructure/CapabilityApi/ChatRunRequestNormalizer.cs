@@ -1,4 +1,3 @@
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 
@@ -19,95 +18,162 @@ internal readonly record struct ChatRunRequestNormalizationResult(
 
 internal static class ChatRunRequestNormalizer
 {
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+
+    // Refactor (iter112/cluster-3): Old pattern: Host adapters populated Application mirror fields beside typed source. New principle: Host keeps wire aliases but normalizes them once into typed WorkflowChatSource.
+    // Refactor (iter15/cluster-029):
+    //   Old pattern: normalized context carried metadata-derived scope conflict state.
+    //   New principle: scope is owned by the typed field; metadata only carries open extension entries.
     private readonly record struct NormalizedChatContext(
         IReadOnlyDictionary<string, string> Metadata,
-        string? ScopeId,
-        WorkflowChatRunStartError Error)
-    {
-        public bool Succeeded => Error == WorkflowChatRunStartError.None;
-    }
+        IReadOnlyDictionary<string, string>? Headers,
+        string? ScopeId);
 
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
-        WorkflowCapabilitiesDocument? capabilities = null,
-        IReadOnlyDictionary<string, string>? defaultMetadata = null)
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        string? trustedConnectorHttpAuthorization = null)
     {
+        // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
+        // Refactor (iter349/cluster-349):
+        //   Old pattern: WorkflowAuthoringSkillPromptAugmentor rewrote chat prompt via hidden workflow.authoring.enabled metadata + AEVATAR_WORKFLOW_AUTHORING_AUTO_INJECT env
+        //   New principle: chat sources execute unchanged; hidden prompt mutation removed; explicit authoring surface (if needed) deferred to later-slice design
         ArgumentNullException.ThrowIfNull(input);
 
-        var normalizedAgentId = NormalizeAgentId(input.AgentId);
         var normalizedInputParts = NormalizeInputParts(input.InputParts);
         if (HasOnlyUnsupportedInputParts(input, normalizedInputParts))
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
-        var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, defaultMetadata);
-        if (!normalizedContext.Succeeded)
-            return ChatRunRequestNormalizationResult.Failed(normalizedContext.Error);
-
+        var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, input.Headers, defaultMetadata);
         var normalizedMetadata = normalizedContext.Metadata;
+        var sourceResult = NormalizeSource(input);
+        if (!sourceResult.Succeeded)
+            return ChatRunRequestNormalizationResult.Failed(sourceResult.Error);
+
+        var rawPrompt = ResolvePrompt(input.Prompt, normalizedInputParts);
+        if (rawPrompt.Length == 0)
+            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
+
+        return ChatRunRequestNormalizationResult.Success(
+            new WorkflowChatRunRequest(
+                Prompt: rawPrompt,
+                Source: sourceResult.Source!,
+                SessionId: NormalizeSessionId(input.SessionId),
+                InputParts: normalizedInputParts,
+                Metadata: normalizedMetadata,
+                ScopeId: normalizedContext.ScopeId,
+                LlmControl: NormalizeLlmControl(input.LlmControl),
+                ConnectorHttpAuthorization: NormalizeOptional(trustedConnectorHttpAuthorization),
+                Headers: normalizedContext.Headers));
+    }
+
+    private static WorkflowLlmControl? NormalizeLlmControl(ChatLlmControlInput? source)
+    {
+        if (source == null)
+            return null;
+
+        return new WorkflowLlmControl(
+            NormalizeOptional(source.ModelOverride),
+            source.MaxToolRoundsOverride is > 0 ? source.MaxToolRoundsOverride : null,
+            NormalizeOptional(source.UserMemoryPrompt));
+    }
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private readonly record struct SourceNormalizationResult(
+        WorkflowChatSource? Source,
+        WorkflowChatRunStartError Error)
+    {
+        public bool Succeeded => Error == WorkflowChatRunStartError.None && Source != null;
+        public static SourceNormalizationResult Success(WorkflowChatSource source) =>
+            new(source, WorkflowChatRunStartError.None);
+        public static SourceNormalizationResult Failed(WorkflowChatRunStartError error) =>
+            new(null, error);
+    }
+
+    private static SourceNormalizationResult NormalizeSource(ChatInput input)
+    {
+        // Refactor (phase9/cluster-349):
+        //   Old pattern: legacy workflow inputs could smuggle actor authority through top-level agentId.
+        //   New principle: legacy name/YAML aliases resolve only workflow content; actor authority must be in typed source variants.
+        if (input.Source != null)
+            return NormalizeTypedSource(input.Source);
+
         var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
         var legacyWorkflowYaml = input.WorkflowYaml;
         var hasLegacyWorkflowYaml = legacyWorkflowYaml != null;
 
         if (hasLegacyWorkflowYaml && string.IsNullOrWhiteSpace(legacyWorkflowYaml))
-            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml);
+            return SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml);
 
         if (hasLegacyWorkflowYaml && inlineWorkflowYamls.Count > 0)
-            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml);
+            return SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml);
 
         if (hasLegacyWorkflowYaml)
             inlineWorkflowYamls = [legacyWorkflowYaml!];
 
-        var rawPrompt = ResolvePrompt(input.Prompt, normalizedInputParts);
-        if (rawPrompt.Length == 0)
-            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
-
-        var normalizedPrompt = WorkflowAuthoringSkillPromptAugmentor.AugmentPrompt(
-            rawPrompt,
-            requestedWorkflowName,
-            inlineWorkflowYamls.Count > 0,
-            normalizedMetadata,
-            capabilities);
-
         if (inlineWorkflowYamls.Count > 0)
-        {
-            return ChatRunRequestNormalizationResult.Success(
-                new WorkflowChatRunRequest(
-                    Prompt: normalizedPrompt,
-                    WorkflowName: string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName,
-                    ActorId: normalizedAgentId,
-                    SessionId: NormalizeSessionId(input.SessionId),
-                    InputParts: normalizedInputParts,
-                    WorkflowYamls: inlineWorkflowYamls,
-                    Metadata: normalizedMetadata,
-                    ScopeId: normalizedContext.ScopeId));
-        }
+            return SourceNormalizationResult.Success(ToInlineYamlBundleSource(
+                string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName,
+                inlineWorkflowYamls,
+                actorId: null));
 
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
-        {
-            return ChatRunRequestNormalizationResult.Success(
-                new WorkflowChatRunRequest(
-                    Prompt: normalizedPrompt,
-                    WorkflowName: requestedWorkflowName,
-                    ActorId: normalizedAgentId,
-                    SessionId: NormalizeSessionId(input.SessionId),
-                    InputParts: normalizedInputParts,
-                    WorkflowYamls: null,
-                    Metadata: normalizedMetadata,
-                    ScopeId: normalizedContext.ScopeId));
-        }
+            return SourceNormalizationResult.Success(WorkflowChatSource.CatalogWorkflow(requestedWorkflowName));
 
-        return ChatRunRequestNormalizationResult.Success(
-            new WorkflowChatRunRequest(
-                Prompt: normalizedPrompt,
-                WorkflowName: null,
-                ActorId: normalizedAgentId,
-                SessionId: NormalizeSessionId(input.SessionId),
-                InputParts: normalizedInputParts,
-                WorkflowYamls: null,
-                Metadata: normalizedMetadata,
-                ScopeId: normalizedContext.ScopeId));
+        return SourceNormalizationResult.Success(WorkflowChatSource.Direct());
     }
+
+    private static SourceNormalizationResult NormalizeTypedSource(WorkflowChatSourceInput source)
+    {
+        // Refactor (phase9/cluster-349):
+        //   Old pattern: typed direct source accepted actor id aliases and built Direct(actorId).
+        //   New principle: direct source is address-free; actor ids belong to DefinitionActor.
+        var kind = NormalizeSourceKind(source.Kind);
+        var workflowName = ResolveTypedWorkflowName(source, kind);
+        var actorId = ResolveTypedActorId(source, kind);
+        var inlineYamlDocuments = ResolveTypedInlineYamlDocuments(source, kind);
+
+        return kind switch
+        {
+            WorkflowChatSourceKind.CatalogWorkflow when string.IsNullOrWhiteSpace(workflowName) =>
+                SourceNormalizationResult.Failed(WorkflowChatRunStartError.WorkflowNotFound),
+            WorkflowChatSourceKind.CatalogWorkflow =>
+                SourceNormalizationResult.Success(WorkflowChatSource.CatalogWorkflow(workflowName)),
+            WorkflowChatSourceKind.DefinitionActor when string.IsNullOrWhiteSpace(actorId) =>
+                SourceNormalizationResult.Failed(WorkflowChatRunStartError.AgentNotFound),
+            WorkflowChatSourceKind.DefinitionActor =>
+                SourceNormalizationResult.Success(WorkflowChatSource.DefinitionActor(actorId, string.IsNullOrWhiteSpace(workflowName) ? null : workflowName)),
+            WorkflowChatSourceKind.InlineYamlBundle when inlineYamlDocuments.Count == 0 ||
+                                                          inlineYamlDocuments.Any(static document => string.IsNullOrWhiteSpace(document.Yaml)) =>
+                SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml),
+            WorkflowChatSourceKind.InlineYamlBundle =>
+                SourceNormalizationResult.Success(WorkflowChatSource.InlineYamlBundle(
+                    string.IsNullOrWhiteSpace(workflowName) ? null : workflowName,
+                    inlineYamlDocuments,
+                    string.IsNullOrWhiteSpace(actorId) ? null : actorId)),
+            WorkflowChatSourceKind.Direct when !string.IsNullOrWhiteSpace(actorId) =>
+                SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml),
+            WorkflowChatSourceKind.Direct =>
+                SourceNormalizationResult.Success(WorkflowChatSource.Direct()),
+            _ => SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml),
+        };
+    }
+
+    private static WorkflowChatSourceKind NormalizeSourceKind(string? kind) =>
+        kind?.Trim().ToLowerInvariant() switch
+        {
+            "catalog_workflow" or "catalog-workflow" or "catalog" or "workflow" =>
+                WorkflowChatSourceKind.CatalogWorkflow,
+            "definition_actor" or "definition-actor" or "actor" =>
+                WorkflowChatSourceKind.DefinitionActor,
+            "inline_yaml_bundle" or "inline-yaml-bundle" or "inline_yaml" or "inline-yaml" =>
+                WorkflowChatSourceKind.InlineYamlBundle,
+            "direct" => WorkflowChatSourceKind.Direct,
+            _ => WorkflowChatSourceKind.Unspecified,
+        };
 
     private static IReadOnlyList<string> NormalizeInlineWorkflowYamls(IReadOnlyList<string>? workflowYamls)
     {
@@ -119,6 +185,60 @@ internal static class ChatRunRequestNormalizer
             normalized.Add(yaml ?? string.Empty);
         return normalized;
     }
+
+    private static string ResolveTypedWorkflowName(WorkflowChatSourceInput source, WorkflowChatSourceKind kind)
+    {
+        var value = kind switch
+        {
+            WorkflowChatSourceKind.CatalogWorkflow => source.CatalogName?.WorkflowName ?? source.WorkflowName,
+            WorkflowChatSourceKind.DefinitionActor => source.DefinitionActor?.WorkflowName ?? source.WorkflowName,
+            WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.EntryName ?? source.WorkflowName,
+            _ => source.WorkflowName,
+        };
+        return NormalizeWorkflowName(value);
+    }
+
+    private static string ResolveTypedActorId(WorkflowChatSourceInput source, WorkflowChatSourceKind kind)
+    {
+        // Refactor (phase9/cluster-349):
+        //   Old pattern: source.actorId was a catch-all fallback for definition actor, inline bundle, and direct source.
+        //   New principle: each source kind reads only its typed actor-id slot; direct/catalog sources stay address-free.
+        var value = kind switch
+        {
+            WorkflowChatSourceKind.DefinitionActor => source.DefinitionActor?.ActorId,
+            WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.ActorId,
+            _ => null,
+        };
+        return NormalizeActorId(value);
+    }
+
+    private static IReadOnlyList<WorkflowChatInlineYamlDocument> ResolveTypedInlineYamlDocuments(
+        WorkflowChatSourceInput source,
+        WorkflowChatSourceKind kind)
+    {
+        if (kind != WorkflowChatSourceKind.InlineYamlBundle)
+            return ToUnnamedInlineYamlDocuments(NormalizeInlineWorkflowYamls(source.WorkflowYamls));
+
+        if (source.InlineBundle?.YamlDocuments is not { Count: > 0 } documents)
+            return ToUnnamedInlineYamlDocuments(NormalizeInlineWorkflowYamls(source.WorkflowYamls));
+
+        return documents.Select(static document => new WorkflowChatInlineYamlDocument(
+            string.IsNullOrWhiteSpace(document?.Name) ? string.Empty : document.Name.Trim(),
+            document?.Yaml ?? string.Empty)).ToArray();
+    }
+
+    private static WorkflowChatSource ToInlineYamlBundleSource(
+        string? entryName,
+        IReadOnlyList<string> workflowYamls,
+        string? actorId)
+    {
+        var documents = ToUnnamedInlineYamlDocuments(workflowYamls);
+        return WorkflowChatSource.InlineYamlBundle(entryName, documents, actorId);
+    }
+
+    private static IReadOnlyList<WorkflowChatInlineYamlDocument> ToUnnamedInlineYamlDocuments(
+        IReadOnlyList<string> workflowYamls) =>
+        workflowYamls.Select(static yaml => new WorkflowChatInlineYamlDocument(string.Empty, yaml)).ToArray();
 
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
@@ -158,78 +278,75 @@ internal static class ChatRunRequestNormalizer
         input.InputParts is { Count: > 0 } &&
         normalizedInputParts == null;
 
+    // Refactor (iter15/cluster-029):
+    //   Old pattern: scope id / channel facts fell back to metadata bag string keys.
+    //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     private static NormalizedChatContext NormalizeContext(
         string? explicitScopeId,
         IDictionary<string, string>? metadata,
+        IDictionary<string, string>? headers,
         IReadOnlyDictionary<string, string>? defaultMetadata)
     {
         var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        var normalizedHeaders = new Dictionary<string, string>(StringComparer.Ordinal);
         var normalizedScopeId = NormalizeScopeId(explicitScopeId);
         if (defaultMetadata is { Count: > 0 })
         {
             foreach (var (key, value) in defaultMetadata)
-            {
-                if (!AddNormalizedMetadataEntry(normalized, ref normalizedScopeId, key, value))
-                    return new NormalizedChatContext(normalized, null, WorkflowChatRunStartError.ConflictingScopeId);
-            }
+                AddNormalizedMetadataEntry(normalized, key, value);
         }
 
         if (metadata is { Count: > 0 })
         {
             foreach (var (key, value) in metadata)
-            {
-                if (!AddNormalizedMetadataEntry(normalized, ref normalizedScopeId, key, value))
-                    return new NormalizedChatContext(normalized, null, WorkflowChatRunStartError.ConflictingScopeId);
-            }
+                AddNormalizedMetadataEntry(normalized, key, value);
         }
 
-        return new NormalizedChatContext(normalized, normalizedScopeId, WorkflowChatRunStartError.None);
+        if (headers is { Count: > 0 })
+        {
+            foreach (var (key, value) in headers)
+                AddNormalizedMetadataEntry(normalizedHeaders, key, value);
+        }
+
+        return new NormalizedChatContext(
+            normalized,
+            normalizedHeaders.Count == 0 ? null : normalizedHeaders,
+            normalizedScopeId);
     }
 
-    private static bool AddNormalizedMetadataEntry(
+    // Refactor (iter15/cluster-029):
+    //   Old pattern: scope metadata keys promoted into control-flow ScopeId or conflict errors.
+    //   New principle: scope metadata keys are not control input and are not forwarded as extension metadata.
+    private static void AddNormalizedMetadataEntry(
         IDictionary<string, string> metadata,
-        ref string? scopeId,
         string key,
         string value)
     {
         var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
         var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
         if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
-            return true;
+            return;
 
-        if (IsScopeMetadataKey(normalizedKey))
-        {
-            return TryAssignScopeId(ref scopeId, normalizedValue);
-        }
+        if (IsReservedMetadataKey(normalizedKey))
+            return;
 
         metadata[normalizedKey] = normalizedValue;
-        return true;
     }
+
+    // Refactor (iter169/cluster-issue1551): Old pattern: public metadata could carry connector authorization. New principle: only trusted adapter code can set the typed ConnectorHttpAuthorization command field.
+    private static bool IsReservedMetadataKey(string key) =>
+        IsScopeMetadataKey(key) ||
+        string.Equals(key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal);
 
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.OrdinalIgnoreCase);
 
-    private static bool TryAssignScopeId(ref string? currentScopeId, string? candidateScopeId)
-    {
-        var normalizedCandidate = NormalizeScopeId(candidateScopeId);
-        if (normalizedCandidate == null)
-            return true;
-
-        if (string.IsNullOrWhiteSpace(currentScopeId))
-        {
-            currentScopeId = normalizedCandidate;
-            return true;
-        }
-
-        return string.Equals(currentScopeId, normalizedCandidate, StringComparison.Ordinal);
-    }
-
     private static string? NormalizeScopeId(string? scopeId) =>
         string.IsNullOrWhiteSpace(scopeId) ? null : scopeId.Trim();
 
-    private static string? NormalizeAgentId(string? agentId) =>
-        string.IsNullOrWhiteSpace(agentId) ? null : agentId.Trim();
+    private static string NormalizeActorId(string? actorId) =>
+        string.IsNullOrWhiteSpace(actorId) ? string.Empty : actorId.Trim();
 
     private static string? NormalizeSessionId(string? sessionId) =>
         string.IsNullOrWhiteSpace(sessionId) ? null : sessionId.Trim();

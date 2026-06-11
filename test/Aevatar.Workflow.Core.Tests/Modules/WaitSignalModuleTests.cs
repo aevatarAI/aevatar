@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -83,7 +82,10 @@ public sealed class WaitSignalModuleTests
         var context = new RecordingEventHandlerContext(
             new EmptyServiceProvider(),
             new StubAgent("workflow-early"),
-            NullLogger.Instance);
+            NullLogger.Instance)
+        {
+            UtcNow = DateTimeOffset.Parse("2026-05-20T10:00:00Z"),
+        };
 
         await module.HandleAsync(
             Envelope(new SignalReceivedEvent
@@ -96,7 +98,8 @@ public sealed class WaitSignalModuleTests
             context,
             CancellationToken.None);
 
-        context.Published.Select(item => item.Event).OfType<WorkflowSignalBufferedEvent>().Should().ContainSingle();
+        var bufferedEvent = context.Published.Select(item => item.Event).OfType<WorkflowSignalBufferedEvent>().Should().ContainSingle().Subject;
+        bufferedEvent.ReceivedAtUnixTimeMs.Should().Be(context.UtcNow.ToUnixTimeMilliseconds());
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -171,6 +174,15 @@ public sealed class WaitSignalModuleTests
         public IServiceProvider Services { get; }
         public ILogger Logger { get; }
         public string RunId => AgentId;
+        public DateTimeOffset UtcNow { get; set; } = DateTimeOffset.UtcNow;
+
+        public long GetTimestamp() => 1;
+
+        public TimeSpan GetElapsedTime(long startingTimestamp)
+        {
+            _ = startingTimestamp;
+            return TimeSpan.Zero;
+        }
 
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new()

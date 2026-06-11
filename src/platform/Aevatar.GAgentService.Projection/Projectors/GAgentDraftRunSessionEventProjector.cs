@@ -1,9 +1,12 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Projection.Orchestration;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
+using Google.Protobuf.WellKnownTypes;
+using RoleChatSessionCompletedEvent = Aevatar.AI.Abstractions.RoleChatSessionCompletedEvent;
 
 namespace Aevatar.GAgentService.Projection.Projectors;
 
@@ -29,9 +32,39 @@ public sealed class GAgentDraftRunSessionEventProjector
         if (!string.Equals(envelope.Propagation?.CorrelationId, context.SessionId, StringComparison.Ordinal))
             return EmptyEntries;
 
-        var mapped = ScopeGAgentAguiEventMapper.TryMap(envelope);
+        var committedEntries = TryResolveCommittedCompletionEntries(context, envelope);
+        if (committedEntries.Count > 0)
+            return committedEntries;
+
+        // Refactor (iter164/cluster-003-draft-run):
+        //   Old pattern: raw TextMessage*/Tool* envelopes were projected as draft-run AGUI session events.
+        //   New principle: draft-run session observation only accepts committed completions above or explicit AGUI observation frames here.
+        var mapped = ScopeGAgentAguiEventMapper.TryMapExplicitSessionObservation(envelope);
         if (mapped == null)
             return EmptyEntries;
+
+        CompleteRunFinishedFrame(context, mapped);
+        if (mapped.EventCase == AGUIEvent.EventOneofCase.TextMessageEnd)
+        {
+            return
+            [
+                new ProjectionSessionEventEntry<AGUIEvent>(
+                    context.RootActorId,
+                    context.SessionId,
+                    mapped),
+                new ProjectionSessionEventEntry<AGUIEvent>(
+                    context.RootActorId,
+                    context.SessionId,
+                    new AGUIEvent
+                    {
+                        RunFinished = new RunFinishedEvent
+                        {
+                            ThreadId = context.RootActorId,
+                            RunId = context.SessionId,
+                        },
+                    }),
+            ];
+        }
 
         return
         [
@@ -41,4 +74,151 @@ public sealed class GAgentDraftRunSessionEventProjector
                 mapped),
         ];
     }
+
+    private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> TryResolveCommittedCompletionEntries(
+        GAgentDraftRunProjectionContext context,
+        EventEnvelope envelope)
+    {
+        if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
+            payload?.Is(RoleChatSessionCompletedEvent.Descriptor) != true)
+        {
+            return EmptyEntries;
+        }
+
+        var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
+        if (TryBuildFailureFrame(completed.Content, out var failureFrame))
+        {
+            return
+            [
+                new ProjectionSessionEventEntry<AGUIEvent>(
+                    context.RootActorId,
+                    context.SessionId,
+                    failureFrame),
+            ];
+        }
+
+        var messageId = string.IsNullOrWhiteSpace(completed.SessionId)
+            ? context.SessionId
+            : completed.SessionId;
+        var content = completed.Content ?? string.Empty;
+        return BuildTerminalEntries(context, messageId, content, completed.ContentEmitted);
+    }
+
+    private static void CompleteRunFinishedFrame(
+        GAgentDraftRunProjectionContext context,
+        AGUIEvent aguiEvent)
+    {
+        if (aguiEvent.EventCase != AGUIEvent.EventOneofCase.RunFinished)
+            return;
+
+        aguiEvent.RunFinished.ThreadId = string.IsNullOrWhiteSpace(aguiEvent.RunFinished.ThreadId)
+            ? context.RootActorId
+            : aguiEvent.RunFinished.ThreadId;
+        aguiEvent.RunFinished.RunId = string.IsNullOrWhiteSpace(aguiEvent.RunFinished.RunId)
+            ? context.SessionId
+            : aguiEvent.RunFinished.RunId;
+    }
+
+    private static bool TryBuildFailureFrame(string? content, out AGUIEvent failureFrame)
+    {
+        failureFrame = null!;
+        if (string.IsNullOrEmpty(content))
+            return false;
+
+        const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
+        const string llmFailedPrefix = "LLM request failed";
+        if (content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
+        {
+            failureFrame = new AGUIEvent
+            {
+                RunError = new RunErrorEvent
+                {
+                    Message = content[llmErrorPrefix.Length..].Trim(),
+                },
+            };
+            return true;
+        }
+
+        if (content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
+        {
+            failureFrame = new AGUIEvent
+            {
+                RunError = new RunErrorEvent
+                {
+                    Message = ScopeGAgentAguiEventMapper.NormalizeLlmFailureMessage(content),
+                },
+            };
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> BuildTerminalEntries(
+        GAgentDraftRunProjectionContext context,
+        string messageId,
+        string output,
+        bool contentEmitted)
+    {
+        var entries = new List<ProjectionSessionEventEntry<AGUIEvent>>();
+        if (!contentEmitted && !string.IsNullOrEmpty(output))
+        {
+            entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
+                context.RootActorId,
+                context.SessionId,
+                new AGUIEvent
+                {
+                    TextMessageStart = new TextMessageStartEvent
+                    {
+                        MessageId = messageId,
+                        Role = "assistant",
+                    },
+                }));
+            entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
+                context.RootActorId,
+                context.SessionId,
+                new AGUIEvent
+                {
+                    TextMessageContent = new TextMessageContentEvent
+                    {
+                        MessageId = messageId,
+                        Delta = output,
+                    },
+                }));
+        }
+
+        entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
+            context.RootActorId,
+            context.SessionId,
+            BuildTextMessageEnd(messageId)));
+        entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
+            context.RootActorId,
+            context.SessionId,
+            BuildRunFinished(context, output)));
+        return entries;
+    }
+
+    private static AGUIEvent BuildTextMessageEnd(string messageId) =>
+        new()
+        {
+            TextMessageEnd = new TextMessageEndEvent
+            {
+                MessageId = messageId,
+            },
+        };
+
+    private static AGUIEvent BuildRunFinished(GAgentDraftRunProjectionContext context, string output) =>
+        new()
+        {
+            RunFinished = new RunFinishedEvent
+            {
+                ThreadId = context.RootActorId,
+                RunId = context.SessionId,
+                // Refactor (iter98/cluster-790): Old: committed completion fallback synthesized TextMessageContent when live deltas were missed. New: RunFinished.result carries typed GAgentDraftRunResultPayload and consumers read result.output without extra stream frames.
+                Result = Any.Pack(new GAgentDraftRunResultPayload
+                {
+                    Output = output ?? string.Empty,
+                }),
+            },
+        };
 }

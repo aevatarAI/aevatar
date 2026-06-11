@@ -6,7 +6,8 @@ public readonly record struct RuntimeCallbackEnvelopeState(
     string CallbackId,
     long Generation,
     long FireIndex,
-    long FiredAtUnixTimeMs);
+    long FiredAtUnixTimeMs,
+    int SlotEpoch);
 
 public static class RuntimeCallbackEnvelopeStateReader
 {
@@ -28,7 +29,8 @@ public static class RuntimeCallbackEnvelopeStateReader
             callback.CallbackId,
             callback.Generation,
             callback.FireIndex,
-            callback.FiredAtUnixTimeMs);
+            callback.FiredAtUnixTimeMs,
+            callback.SlotEpoch);
         return true;
     }
 
@@ -41,7 +43,8 @@ public static class RuntimeCallbackEnvelopeStateReader
 
         return TryRead(envelope, out var state) &&
                string.Equals(state.CallbackId, lease.CallbackId, StringComparison.Ordinal) &&
-               state.Generation == lease.Generation;
+               state.Generation == lease.Generation &&
+               state.SlotEpoch == lease.SlotEpoch;
     }
 }
 

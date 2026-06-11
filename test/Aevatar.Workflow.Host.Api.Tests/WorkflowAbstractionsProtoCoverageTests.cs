@@ -68,12 +68,37 @@ public class WorkflowAbstractionsProtoCoverageTests
         var parsedRequest = StepRequestEvent.Parser.ParseFrom(request.ToByteArray());
         parsedRequest.StepType.Should().Be("llm_call");
         parsedRequest.Parameters["temperature"].Should().Be("0.1");
+        parsedRequest.StepParameters.Parameters["temperature"].Should().Be("0.1");
 
         var parsedCompleted = StepCompletedEvent.Parser.ParseFrom(completed.ToByteArray());
         parsedCompleted.WorkerId.Should().Be("worker-1");
         parsedCompleted.Annotations["latency_ms"].Should().Be("12");
 
         parsedCompleted.Clone().Should().BeEquivalentTo(parsedCompleted);
+    }
+
+    [Fact]
+    public void StepRequestEvent_ShouldExposeTypedStepParametersOnFieldEight()
+    {
+        StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 8 && field.Name == "step_parameters");
+        StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
+            .Should().NotContain(field => field.FieldNumber == 5);
+
+        var request = new StepRequestEvent
+        {
+            StepId = "s-typed",
+            StepType = "transform",
+            StepParameters = new WorkflowStepParameters(),
+        };
+        request.StepParameters.Parameters["op"] = "trim";
+        request.Parameters["target"] = "result";
+
+        var parsed = StepRequestEvent.Parser.ParseFrom(request.ToByteArray());
+        parsed.StepParameters.Parameters.Should().Contain(new KeyValuePair<string, string>("op", "trim"));
+        parsed.Parameters.Should().Contain(new KeyValuePair<string, string>("target", "result"));
+        parsed.ToString().Should().Contain("stepParameters");
+        ((IMessage)parsed.StepParameters).Descriptor.Name.Should().Be(nameof(WorkflowStepParameters));
     }
 
     [Fact]
@@ -119,6 +144,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         var mergedRequest = new StepRequestEvent();
         mergedRequest.MergeFrom(request);
         mergedRequest.Should().BeEquivalentTo(request);
+        mergedRequest.StepParameters.Parameters["op"].Should().Be("uppercase");
         mergedRequest.GetHashCode().Should().Be(request.GetHashCode());
         mergedRequest.ToString().Should().Contain("stepId");
         ((IMessage)mergedRequest).Descriptor.Name.Should().Be(nameof(StepRequestEvent));
@@ -203,7 +229,26 @@ public class WorkflowAbstractionsProtoCoverageTests
             ChildActorId = "actor-child",
             ChildRunId = "run-child",
             Lifecycle = "singleton",
+            DefinitionActorId = "definition-child",
+            DefinitionVersion = 3,
+            Input = "payload",
+            HandoffPhase = 4,
+            DefinitionYaml = "name: sub_flow",
+            ScopeId = "scope-a",
         };
+        registered.InlineWorkflowYamls["sub_flow"] = "name: sub_flow";
+        var parsedRegistered = SubWorkflowInvocationRegisteredEvent.Parser.ParseFrom(registered.ToByteArray());
+        parsedRegistered.Should().BeEquivalentTo(registered);
+
+        var advanced = new SubWorkflowInvocationHandoffAdvancedEvent
+        {
+            InvocationId = "invoke-1",
+            ChildRunId = "run-child",
+            HandoffPhase = 4,
+        };
+        var parsedAdvanced = SubWorkflowInvocationHandoffAdvancedEvent.Parser.ParseFrom(advanced.ToByteArray());
+        parsedAdvanced.Should().BeEquivalentTo(advanced);
+
         var completed = new SubWorkflowInvocationCompletedEvent
         {
             InvocationId = "invoke-1",
@@ -220,6 +265,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         };
 
         ((IMessage)registered).Descriptor.Name.Should().Be(nameof(SubWorkflowInvocationRegisteredEvent));
+        ((IMessage)advanced).Descriptor.Name.Should().Be(nameof(SubWorkflowInvocationHandoffAdvancedEvent));
         ((IMessage)completed).Descriptor.Name.Should().Be(nameof(SubWorkflowInvocationCompletedEvent));
         ((IMessage)binding).Descriptor.Name.Should().Be(nameof(SubWorkflowBindingUpsertedEvent));
     }
@@ -235,6 +281,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvokeRequestedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowBindingUpsertedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationRegisteredEvent));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationHandoffAdvancedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SecureValueCapturedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationCompletedEvent));
     }

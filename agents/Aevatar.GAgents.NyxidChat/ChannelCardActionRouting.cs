@@ -1,5 +1,6 @@
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.GAgents.Channel.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -11,15 +12,36 @@ public static class ChannelCardActionRouting
         InboundMessage inbound,
         out WorkflowResumeCommand? command)
     {
+        // Refactor (iter93/cluster-093):
+        // Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+        // New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+        // extension data plus legacy callback JSON inbound compatibility.
         command = null;
         ArgumentNullException.ThrowIfNull(inbound);
 
         if (!string.Equals(inbound.ChatType, CardActionChatType, StringComparison.Ordinal))
             return false;
 
-        if (!TryGetRequiredValue(inbound.Extra, "actor_id", out var actorId) ||
-            !TryGetRequiredValue(inbound.Extra, "run_id", out var runId) ||
-            !TryGetRequiredValue(inbound.Extra, "step_id", out var stepId))
+        var payload = inbound.CardAction?.WorkflowResume;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (payload is not null && HasWorkflowResumeIdentity(payload))
+        {
+            CopyWorkflowResumePayload(payload, values);
+            foreach (var pair in inbound.CardAction!.FormFields)
+                values[pair.Key] = pair.Value;
+        }
+        else if (TryBuildDeprecatedWorkflowResumeValues(inbound.Extra, values))
+        {
+            // Deprecated inbound compatibility only. New producers must use WorkflowResumeActionPayload.
+        }
+        else
+        {
+            return false;
+        }
+
+        if (!TryGetRequiredValue(values, "actor_id", out var actorId) ||
+            !TryGetRequiredValue(values, "run_id", out var runId) ||
+            !TryGetRequiredValue(values, "step_id", out var stepId))
         {
             return false;
         }
@@ -32,19 +54,57 @@ public static class ChannelCardActionRouting
         if (!string.IsNullOrWhiteSpace(inbound.MessageId))
             metadata["channel.message_id"] = inbound.MessageId;
 
-        var approved = ResolveApproved(inbound.Extra);
-        var editedContent = ResolveEditedContent(inbound.Extra);
-        var feedback = ResolveFeedback(inbound.Extra, approved);
+        var approved = ResolveApproved(values);
+        var editedContent = ResolveEditedContent(values);
+        var feedback = ResolveFeedback(values, approved);
         command = new WorkflowResumeCommand(
             actorId,
             runId,
             stepId,
             NormalizeOptional(inbound.MessageId),
             approved,
-            ResolveUserInput(inbound.Extra, approved),
+            ResolveUserInput(values, approved),
             metadata,
             editedContent,
             feedback);
+        return true;
+    }
+
+    private static bool HasWorkflowResumeIdentity(WorkflowResumeActionPayload payload) =>
+        !string.IsNullOrWhiteSpace(payload.ActorId) &&
+        !string.IsNullOrWhiteSpace(payload.RunId) &&
+        !string.IsNullOrWhiteSpace(payload.StepId);
+
+    private static void CopyWorkflowResumePayload(
+        WorkflowResumeActionPayload payload,
+        IDictionary<string, string> values)
+    {
+        values["actor_id"] = payload.ActorId;
+        values["run_id"] = payload.RunId;
+        values["step_id"] = payload.StepId;
+        if (payload.HasApproved)
+            values["approved"] = payload.Approved ? "true" : "false";
+        if (!string.IsNullOrWhiteSpace(payload.UserInput))
+            values["user_input"] = payload.UserInput;
+        if (!string.IsNullOrWhiteSpace(payload.EditedContent))
+            values["edited_content"] = payload.EditedContent;
+        if (!string.IsNullOrWhiteSpace(payload.Feedback))
+            values["feedback"] = payload.Feedback;
+    }
+
+    private static bool TryBuildDeprecatedWorkflowResumeValues(
+        IReadOnlyDictionary<string, string> extra,
+        IDictionary<string, string> values)
+    {
+        if (!TryGetRequiredValue(extra, "actor_id", out _) ||
+            !TryGetRequiredValue(extra, "run_id", out _) ||
+            !TryGetRequiredValue(extra, "step_id", out _))
+        {
+            return false;
+        }
+
+        foreach (var pair in extra)
+            values[pair.Key] = pair.Value;
         return true;
     }
 

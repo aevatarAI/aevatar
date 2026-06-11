@@ -1,8 +1,6 @@
 using System.Globalization;
-using System.Text.Json.Nodes;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Models;
-using Aevatar.Studio.Domain.Studio.Utilities;
 
 namespace Aevatar.Studio.Domain.Studio.Services;
 
@@ -50,7 +48,7 @@ public sealed class WorkflowDocumentNormalizer
     private StepModel NormalizeStep(StepModel step)
     {
         var canonicalType = _profile.ToCanonicalType(step.Type);
-        var normalizedParameters = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
+        var normalizedParameters = new StudioStepParameters();
 
         foreach (var (key, value) in step.Parameters)
         {
@@ -71,7 +69,7 @@ public sealed class WorkflowDocumentNormalizer
             !normalizedParameters.ContainsKey("timeout_ms"))
         {
             normalizedParameters["timeout_ms"] =
-                JsonValue.Create(step.TimeoutMs.Value.ToString(CultureInfo.InvariantCulture));
+                StudioStepParameterValue.FromScalar(step.TimeoutMs.Value.ToString(CultureInfo.InvariantCulture));
         }
 
         return step with
@@ -90,7 +88,7 @@ public sealed class WorkflowDocumentNormalizer
         };
     }
 
-    private JsonNode? NormalizeParameterValue(string key, JsonNode? value)
+    private StudioStepParameterValue? NormalizeParameterValue(string key, StudioStepParameterValue? value)
     {
         if (value is null)
         {
@@ -99,7 +97,7 @@ public sealed class WorkflowDocumentNormalizer
 
         if (value.IsComplexValue())
         {
-            return value.DeepCloneNode();
+            return value.DeepCloneValue();
         }
 
         var scalar = value.ToWorkflowScalarString() ?? string.Empty;
@@ -108,10 +106,10 @@ public sealed class WorkflowDocumentNormalizer
             scalar = _profile.ToCanonicalType(scalar);
         }
 
-        return JsonValue.Create(scalar);
+        return StudioStepParameterValue.FromScalar(scalar);
     }
 
-    private static void ApplyErgonomicDefaults(string rawType, IDictionary<string, JsonNode?> parameters)
+    private static void ApplyErgonomicDefaults(string rawType, IDictionary<string, StudioStepParameterValue?> parameters)
     {
         var normalized = string.IsNullOrWhiteSpace(rawType)
             ? string.Empty
@@ -135,7 +133,7 @@ public sealed class WorkflowDocumentNormalizer
                 if (!parameters.ContainsKey("operation") &&
                     parameters.TryGetValue("tool", out var toolNode))
                 {
-                    AddStringIfMissing(parameters, "operation", toolNode.ToWorkflowScalarString());
+                    AddStringIfMissing(parameters, "operation", toolNode?.ToWorkflowScalarString());
                 }
                 break;
             case "foreach_llm":
@@ -148,14 +146,14 @@ public sealed class WorkflowDocumentNormalizer
         }
     }
 
-    private static void AddStringIfMissing(IDictionary<string, JsonNode?> parameters, string key, string? value)
+    private static void AddStringIfMissing(IDictionary<string, StudioStepParameterValue?> parameters, string key, string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || parameters.ContainsKey(key))
         {
             return;
         }
 
-        parameters[key] = JsonValue.Create(value);
+        parameters[key] = StudioStepParameterValue.FromScalar(value);
     }
 
     private static string? NormalizeText(string? value) =>

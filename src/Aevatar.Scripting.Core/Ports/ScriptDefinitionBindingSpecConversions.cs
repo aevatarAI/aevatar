@@ -4,6 +4,9 @@ namespace Aevatar.Scripting.Core.Ports;
 
 public static class ScriptDefinitionBindingSpecConversions
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     public static ScriptDefinitionBindingSpec ToBindingSpec(this ScriptDefinitionSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -12,7 +15,6 @@ public static class ScriptDefinitionBindingSpecConversions
         {
             ScriptId = snapshot.ScriptId,
             Revision = snapshot.Revision,
-            SourceText = snapshot.SourceText,
             SourceHash = snapshot.SourceHash,
             ScriptPackage = snapshot.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
             StateTypeUrl = snapshot.StateTypeUrl,
@@ -34,7 +36,6 @@ public static class ScriptDefinitionBindingSpecConversions
         return new ScriptDefinitionSnapshot(
             spec.ScriptId ?? string.Empty,
             spec.Revision ?? string.Empty,
-            spec.SourceText ?? string.Empty,
             spec.SourceHash ?? string.Empty,
             spec.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
             spec.StateTypeUrl ?? string.Empty,

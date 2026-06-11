@@ -19,6 +19,13 @@ public class NyxIdServiceApiHintsTests
         hint.Should().Contain(expectedContains);
     }
 
+    [Fact]
+    public void Telegram_hint_must_not_recommend_getUpdates()
+    {
+        var hint = NyxIdServiceApiHints.GetHint("bot-telegram");
+        hint.Should().NotContain("/getUpdates", "deleted per iter113/cluster-1 — inbound 走 NyxID relay");
+    }
+
     [Theory]
     [InlineData("unknown-service")]
     [InlineData("my-custom-api")]
@@ -96,7 +103,7 @@ public class NyxIdServiceApiHintsTests
 
         hint.Should().Contain("20 endpoints");
         hint.Should().Contain("... and 15 more");
-        hint.Should().Contain("nyxid_search_capabilities");
+        hint.Should().Contain("nyxid_proxy");
     }
 
     [Fact]

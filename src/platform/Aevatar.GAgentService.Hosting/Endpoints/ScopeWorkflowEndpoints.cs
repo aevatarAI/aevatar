@@ -3,8 +3,12 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Hosting;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
+using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -13,16 +17,19 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 public static class ScopeWorkflowEndpoints
 {
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+
     public static IEndpointRouteBuilder MapScopeWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = ScopeEndpointRouteGroups.MapScopeGroup(app).WithTags("ScopeWorkflows");
         group.MapPut("/{scopeId}/workflows/{workflowId}", HandleUpsertWorkflowAsync)
-            .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status200OK)
+            .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
@@ -49,9 +56,10 @@ public static class ScopeWorkflowEndpoints
         bool includeSource,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
         [FromServices] IWorkflowActorBindingReader workflowActorBindingReader,
-        [FromServices] IServiceRevisionArtifactStore? artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
-        => await HandleListWorkflowsAsyncCore(http, scopeId, includeSource, workflowQueryPort, workflowActorBindingReader, artifactStore, ct);
+        => await HandleListWorkflowsAsyncCore(http, scopeId, includeSource, workflowQueryPort, workflowActorBindingReader, revisionCatalogReader, options, ct);
 
     internal static async Task<IResult> HandleGetWorkflowDetailAsync(
         HttpContext http,
@@ -59,9 +67,10 @@ public static class ScopeWorkflowEndpoints
         string workflowId,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
         [FromServices] IWorkflowActorBindingReader workflowActorBindingReader,
-        [FromServices] IServiceRevisionArtifactStore? artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
-        => await HandleGetWorkflowDetailAsyncCore(http, scopeId, workflowId, workflowQueryPort, workflowActorBindingReader, artifactStore, ct);
+        => await HandleGetWorkflowDetailAsyncCore(http, scopeId, workflowId, workflowQueryPort, workflowActorBindingReader, revisionCatalogReader, options, ct);
 
     internal static async Task HandleRunWorkflowByIdStreamAsync(
         HttpContext http,
@@ -69,7 +78,7 @@ public static class ScopeWorkflowEndpoints
         string workflowId,
         RunScopeWorkflowByIdStreamHttpRequest request,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
         => await HandleRunWorkflowByIdStreamAsyncCore(http, scopeId, workflowId, request, workflowQueryPort, chatRunService, ct);
 
@@ -78,7 +87,7 @@ public static class ScopeWorkflowEndpoints
         string scopeId,
         RunScopeWorkflowStreamHttpRequest request,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
         => await HandleRunWorkflowStreamAsyncCore(http, scopeId, request, workflowQueryPort, chatRunService, ct);
 
@@ -103,7 +112,7 @@ public static class ScopeWorkflowEndpoints
                 request.DisplayName,
                 request.InlineWorkflowYamls,
                 request.RevisionId), ct);
-            return Results.Ok(result);
+            return Results.Accepted(result.ReadModelUrl, result);
         }
         catch (InvalidOperationException ex)
         {
@@ -121,7 +130,8 @@ public static class ScopeWorkflowEndpoints
         bool includeSource,
         IScopeWorkflowQueryPort workflowQueryPort,
         IWorkflowActorBindingReader workflowActorBindingReader,
-        IServiceRevisionArtifactStore? artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
         try
@@ -135,7 +145,7 @@ public static class ScopeWorkflowEndpoints
 
             var details = new List<ScopeWorkflowDetail>(workflows.Count);
             foreach (var workflow in workflows)
-                details.Add(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, artifactStore, ct));
+                details.Add(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
 
             return Results.Ok(details);
         }
@@ -155,7 +165,8 @@ public static class ScopeWorkflowEndpoints
         string workflowId,
         IScopeWorkflowQueryPort workflowQueryPort,
         IWorkflowActorBindingReader workflowActorBindingReader,
-        IServiceRevisionArtifactStore? artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
         try
@@ -173,7 +184,7 @@ public static class ScopeWorkflowEndpoints
                 });
             }
 
-            return Results.Json(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, artifactStore, ct));
+            return Results.Json(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
         }
         catch (InvalidOperationException ex)
         {
@@ -191,7 +202,7 @@ public static class ScopeWorkflowEndpoints
         string workflowId,
         RunScopeWorkflowByIdStreamHttpRequest request,
         IScopeWorkflowQueryPort workflowQueryPort,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         try
@@ -238,7 +249,7 @@ public static class ScopeWorkflowEndpoints
         string scopeId,
         RunScopeWorkflowStreamHttpRequest request,
         IScopeWorkflowQueryPort workflowQueryPort,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         try
@@ -288,7 +299,7 @@ public static class ScopeWorkflowEndpoints
         string? sessionId,
         Dictionary<string, string>? headers,
         string? eventFormat,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         if (!TryParseEventFormat(eventFormat, out var resolvedEventFormat))
@@ -304,28 +315,39 @@ public static class ScopeWorkflowEndpoints
 
         if (resolvedEventFormat == ScopeWorkflowStreamEventFormat.Workflow)
         {
+            var scopedHeaders = BuildScopedHeaders(headers);
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
                 new ChatInput
                 {
                     Prompt = prompt,
-                    AgentId = workflow.ActorId,
+                    Source = new WorkflowChatSourceInput
+                    {
+                        Kind = "definition_actor",
+                        DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                        {
+                            ActorId = workflow.ActorId,
+                        },
+                    },
                     SessionId = sessionId,
                     ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
-                    Metadata = await BuildScopedHeadersAsync(scopeId, headers, http, ct),
+                    Headers = scopedHeaders,
+                    LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                 },
                 chatRunService,
                 ct);
             return;
         }
 
+        var aguiHeaders = BuildScopedHeaders(headers);
         await HandleAguiStreamAsync(
             http,
             scopeId,
             workflow,
             prompt,
             sessionId,
-            await BuildScopedHeadersAsync(scopeId, headers, http, ct),
+            aguiHeaders,
+            await BuildScopedLlmControlAsync(http, ct),
             chatRunService,
             ct);
     }
@@ -333,7 +355,7 @@ public static class ScopeWorkflowEndpoints
     internal static async Task HandleAguiStreamAsync(
         HttpContext http,
         WorkflowChatRunRequest request,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
@@ -412,7 +434,8 @@ public static class ScopeWorkflowEndpoints
         string prompt,
         string? sessionId,
         IReadOnlyDictionary<string, string>? headers,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        LLMControlContext? llmControl,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
@@ -420,12 +443,13 @@ public static class ScopeWorkflowEndpoints
             http,
             new WorkflowChatRunRequest(
                 prompt,
-                workflow.WorkflowName,
-                workflow.ActorId,
+                WorkflowChatSource.DefinitionActor(workflow.ActorId, workflow.WorkflowName),
                 sessionId,
-                WorkflowYamls: null,
-                Metadata: await BuildScopedHeadersAsync(scopeId, headers, http, ct),
-                ScopeId: NormalizeRequired(scopeId, nameof(scopeId))),
+                Metadata: headers,
+                ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
+                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
+                LlmControl: ToWorkflowLlmControl(llmControl),
+                Headers: headers),
             chatRunService,
             ct);
     }
@@ -433,7 +457,8 @@ public static class ScopeWorkflowEndpoints
     private static async Task<ScopeWorkflowDetail> BuildWorkflowDetailAsync(
         ScopeWorkflowSummary workflow,
         IWorkflowActorBindingReader workflowActorBindingReader,
-        IServiceRevisionArtifactStore? artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        ScopeWorkflowCapabilityOptions options,
         CancellationToken ct)
     {
         PreparedServiceRevisionArtifact? artifact = null;
@@ -441,15 +466,29 @@ public static class ScopeWorkflowEndpoints
         if (!string.IsNullOrWhiteSpace(workflow.ActorId))
             binding = await workflowActorBindingReader.GetAsync(workflow.ActorId, ct);
 
-        if (artifactStore != null &&
-            !string.IsNullOrWhiteSpace(workflow.ServiceKey) &&
+        if (!string.IsNullOrWhiteSpace(workflow.ServiceKey) &&
             !string.IsNullOrWhiteSpace(workflow.ActiveRevisionId))
         {
-            artifact = await artifactStore.GetAsync(workflow.ServiceKey, workflow.ActiveRevisionId, ct);
+            var revisionCatalog = await revisionCatalogReader.GetAsync(BuildWorkflowServiceIdentity(workflow, options), ct);
+            artifact = revisionCatalog?.Revisions
+                .FirstOrDefault(x => string.Equals(x.RevisionId, workflow.ActiveRevisionId, StringComparison.Ordinal))
+                ?.PreparedArtifact
+                ?.Clone();
         }
 
         return BuildWorkflowDetailPayload(workflow, binding, artifact);
     }
+
+    private static ServiceIdentity BuildWorkflowServiceIdentity(
+        ScopeWorkflowSummary workflow,
+        ScopeWorkflowCapabilityOptions options) =>
+        new()
+        {
+            TenantId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.ScopeId, nameof(workflow.ScopeId)),
+            AppId = options.ServiceAppId,
+            Namespace = options.ServiceNamespace,
+            ServiceId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.WorkflowId, nameof(workflow.WorkflowId)),
+        };
 
     private static ScopeWorkflowDetail BuildWorkflowDetailPayload(
         ScopeWorkflowSummary workflow,
@@ -510,46 +549,117 @@ public static class ScopeWorkflowEndpoints
         return false;
     }
 
-    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
-        string scopeId,
-        IReadOnlyDictionary<string, string>? headers,
-        HttpContext? http = null,
-        CancellationToken cancellationToken = default)
+    private static Dictionary<string, string> BuildScopedHeaders(
+        IReadOnlyDictionary<string, string>? headers)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
-        if (http != null)
-        {
-            var auth = http.Request.Headers.Authorization.FirstOrDefault();
-            if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            {
-                var bearerToken = auth["Bearer ".Length..].Trim();
-                scopedHeaders["nyxid.access_token"] = bearerToken;
-                scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
-            }
+        scopedHeaders.Remove(LegacyConnectorHttpAuthorizationBlockedKey);
+        // Refactor (iter169/cluster-issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses WorkflowChatRunRequest.ConnectorHttpAuthorization.
 
-            var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
-            if (userConfigStore != null)
+        return scopedHeaders;
+    }
+
+    internal static async Task<ChatLlmControlInput?> BuildScopedLlmControlInputAsync(
+        HttpContext? http,
+        CancellationToken cancellationToken = default)
+    {
+        var control = await BuildScopedLlmControlAsync(http, cancellationToken);
+        if (control == null)
+            return null;
+
+        return new ChatLlmControlInput
+        {
+            NyxIdAccessToken = control.NyxIdAccessToken,
+            NyxIdOrgToken = control.NyxIdOrgToken,
+            ModelOverride = control.ModelOverride,
+            NyxIdRoutePreference = control.NyxIdRoutePreference,
+            MaxToolRoundsOverride = control.MaxToolRoundsOverride,
+            UserMemoryPrompt = control.UserMemoryPrompt,
+        };
+    }
+
+    private static WorkflowLlmControl? ToWorkflowLlmControl(LLMControlContext? control)
+    {
+        if (control == null)
+            return null;
+
+        var model = NormalizeOptional(control.ModelOverride);
+        var userMemoryPrompt = NormalizeOptional(control.UserMemoryPrompt);
+        var maxToolRounds = control.MaxToolRoundsOverride is > 0
+            ? control.MaxToolRoundsOverride
+            : null;
+        if (model == null && userMemoryPrompt == null && maxToolRounds == null)
+            return null;
+
+        return new WorkflowLlmControl(
+            model,
+            maxToolRounds,
+            userMemoryPrompt);
+    }
+
+    internal static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
+        HttpContext? http,
+        CancellationToken cancellationToken = default)
+    {
+        if (http == null)
+            return null;
+
+        var bearerToken = ExtractBearerToken(http);
+        var control = new LLMControlContext(
+            NyxIdAccessToken: bearerToken,
+            NyxIdOrgToken: bearerToken,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: null,
+            NyxIdRoutePreference: null,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
+
+        var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
+        if (userConfigStore != null)
+        {
+            try
             {
-                try
+                var userConfig = await userConfigStore.GetAsync(cancellationToken);
+                var model = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
+                    ? control.ModelOverride
+                    : userConfig.DefaultModel.Trim();
+                var route = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
+                    ? control.NyxIdRoutePreference
+                    : userConfig.PreferredLlmRoute.Trim();
+                (model, route) = await UserLlmRouteModelResolver
+                    .ResolveAsync(http, model, route, cancellationToken)
+                    .ConfigureAwait(false);
+
+                control = control with
                 {
-                    var userConfig = await userConfigStore.GetAsync(cancellationToken);
-                    if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                        scopedHeaders[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-                    if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
-                        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
-                }
-                catch
-                {
-                    // Best-effort; fall back to provider default if config unavailable.
-                }
+                    ModelOverride = model,
+                    NyxIdRoutePreference = route,
+                };
+            }
+            catch
+            {
+                // Best-effort; fall back to provider defaults if config unavailable.
             }
         }
 
-        return scopedHeaders;
+        return control == LLMControlContext.Empty ? null : control;
+    }
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var auth = http.Request.Headers.Authorization.FirstOrDefault();
+        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var bearerToken = auth["Bearer ".Length..].Trim();
+        return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
     }
 
     internal static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)
@@ -560,12 +670,12 @@ public static class ScopeWorkflowEndpoints
             WorkflowChatRunStartError.WorkflowNotFound => (StatusCodes.Status404NotFound, "WORKFLOW_NOT_FOUND", "Workflow not found."),
             WorkflowChatRunStartError.AgentTypeNotSupported => (StatusCodes.Status400BadRequest, "AGENT_TYPE_NOT_SUPPORTED", "Actor is not workflow-capable."),
             WorkflowChatRunStartError.ProjectionDisabled => (StatusCodes.Status503ServiceUnavailable, "PROJECTION_DISABLED", "Projection pipeline is disabled."),
+            WorkflowChatRunStartError.ProjectionUnavailable => (StatusCodes.Status503ServiceUnavailable, "WORKFLOW_PROJECTION_UNAVAILABLE", "Workflow projection is unavailable."),
             WorkflowChatRunStartError.WorkflowBindingMismatch => (StatusCodes.Status409Conflict, "WORKFLOW_BINDING_MISMATCH", "Actor is bound to a different workflow."),
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => (StatusCodes.Status409Conflict, "AGENT_WORKFLOW_NOT_CONFIGURED", "Actor has no bound workflow."),
             WorkflowChatRunStartError.InvalidWorkflowYaml => (StatusCodes.Status400BadRequest, "INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
             WorkflowChatRunStartError.WorkflowNameMismatch => (StatusCodes.Status400BadRequest, "WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             WorkflowChatRunStartError.PromptRequired => (StatusCodes.Status400BadRequest, "PROMPT_REQUIRED", "Prompt is required."),
-            WorkflowChatRunStartError.ConflictingScopeId => (StatusCodes.Status400BadRequest, "CONFLICTING_SCOPE_ID", "Conflicting scope_id values were provided."),
             _ => (StatusCodes.Status400BadRequest, "RUN_START_FAILED", "Failed to resolve actor."),
         };
     }

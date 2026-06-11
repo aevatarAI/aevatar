@@ -15,6 +15,8 @@ FILES=(
   "src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs"
   "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs"
 )
+MAPPED_CURRENT_STATE_HELPER="src/Aevatar.CQRS.Projection.Core/Orchestration/MappedCurrentStateProjectionMaterializer.cs"
+WORKFLOW_BINDING_PROJECTOR="src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorBindingProjector.cs"
 
 legacy_reader_hits="$(
   rg -n "IProjectionDocumentReader<|_documentReader|IProjectionEventReducer<|_reducersByType|EventEnvelopeTimestampResolver\\.Resolve\\(" \
@@ -28,11 +30,30 @@ if [[ -n "${legacy_reader_hits}" ]]; then
   exit 1
 fi
 
+binding_reader_hits="$(
+  rg -n "IProjectionDocumentReader<|_documentReader|GetOrCreateAsync|\\.GetAsync\\(" \
+    "${WORKFLOW_BINDING_PROJECTOR}" \
+    || true
+)"
+
+if [[ -n "${binding_reader_hits}" ]]; then
+  echo "${binding_reader_hits}"
+  echo "Workflow actor binding projector must construct full documents from committed event payloads without reading prior readmodels."
+  exit 1
+fi
+
 missing_committed_hits="$(
   for file in "${FILES[@]}"; do
-    if ! rg -q "CommittedStateEventEnvelope\\.(TryUnpackState<|TryGetObservedPayload\\()" "${file}"; then
-      echo "${file}"
+    if rg -q "CommittedStateEventEnvelope\\.(TryUnpackState<|TryGetObservedPayload\\()" "${file}"; then
+      continue
     fi
+
+    if rg -q "MappedCurrentStateProjectionMaterializer<" "${file}" &&
+       rg -q "CommittedStateEventEnvelope\\.TryUnpackState<" "${MAPPED_CURRENT_STATE_HELPER}"; then
+      continue
+    fi
+
+    echo "${file}"
   done
 )"
 

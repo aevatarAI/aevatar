@@ -16,14 +16,14 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
-using Aevatar.AI.Core.Agents;
-using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
+using Aevatar.Workflow.Integration.AI;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,12 +42,15 @@ public class WorkflowIntegrationTests
         roles:
           - id: researcher
             name: Researcher
+            agent_kind: workflow.assistant-role
             system_prompt: "你是一个 researcher，负责调研主题并输出调研结果"
           - id: reviewer
             name: Reviewer
+            agent_kind: workflow.assistant-role
             system_prompt: "你是一个 reviewer，负责审查研究结果并给出改进建议"
           - id: writer
             name: Writer
+            agent_kind: workflow.assistant-role
             system_prompt: "你是一个 writer，负责将研究结果和审查意见整合为最终报告"
         steps:
           - id: research
@@ -77,12 +80,20 @@ public class WorkflowIntegrationTests
 
         // 注册 Workflow 核心模块 pack 与统一模块工厂
         services.AddAevatarWorkflow();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.AddAevatarAgentKindRegistry(RegisterAssistantRoleKind);
 
         var sp = services.BuildServiceProvider();
         var runtime = sp.GetRequiredService<IActorRuntime>();
         return (sp, runtime, mockLlm);
     }
+
+    private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
+        builder.Register(new AgentRegistration(
+            "workflow.assistant-role",
+            typeof(WorkflowRoleGAgent),
+            typeof(RoleGAgentState),
+            [],
+            []));
 
     // ═══════════════════════════════════════════════════════════
     //  Scenario 1: YAML 解析 + 验证
@@ -132,6 +143,7 @@ public class WorkflowIntegrationTests
             roles:
               - id: r1
                 name: Role1
+                agent_kind: workflow.assistant-role
             steps:
               - id: step1
                 type: llm_call
@@ -154,6 +166,7 @@ public class WorkflowIntegrationTests
             roles:
               - id: r1
                 name: Role1
+                agent_kind: workflow.assistant-role
             steps:
               - id: root
                 type: parallel
@@ -200,11 +213,17 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
+        var actorSuffix = Guid.NewGuid().ToString("N")[..8];
+        var definitionActorId = $"wf-{actorSuffix}";
+        var runActorId = $"wf-{actorSuffix}-run";
+        var researcherActorId = $"{runActorId}:researcher";
+        var reviewerActorId = $"{runActorId}:reviewer";
+        var writerActorId = $"{runActorId}:writer";
 
         // 创建 WorkflowGAgent 并通过配置事件注入 YAML
-        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
-        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-1-run");
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>(definitionActorId);
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>(runActorId);
         await definitionActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -230,7 +249,7 @@ public class WorkflowIntegrationTests
                 DefinitionActorId = definitionActor.Id,
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
-                RunId = "wf-1-run",
+                RunId = runActorId,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -244,7 +263,7 @@ public class WorkflowIntegrationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new ChatRequestEvent
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new WorkflowChatRequestEvent
             {
                 Prompt = "分析量子纠缠的最新进展",
                 SessionId = "test-session",
@@ -257,24 +276,30 @@ public class WorkflowIntegrationTests
         });
 
         // Then
-        (await runtime.ExistsAsync("wf-1")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run:researcher")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run:reviewer")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run:writer")).Should().BeTrue();
+        (await runtime.ExistsAsync(definitionActorId)).Should().BeTrue();
+        (await runtime.ExistsAsync(runActorId)).Should().BeTrue();
+        (await runtime.ExistsAsync(researcherActorId)).Should().BeTrue();
+        (await runtime.ExistsAsync(reviewerActorId)).Should().BeTrue();
+        (await runtime.ExistsAsync(writerActorId)).Should().BeTrue();
 
         // 验证层级
         var children = await runActor.GetChildrenIdsAsync();
         children.Should().HaveCount(3);
-        children.Should().Contain("wf-1-run:researcher");
-        children.Should().Contain("wf-1-run:reviewer");
-        children.Should().Contain("wf-1-run:writer");
+        children.Should().Contain(researcherActorId);
+        children.Should().Contain(reviewerActorId);
+        children.Should().Contain(writerActorId);
 
         // 验证每个 RoleGAgent 的配置
-        var researcherActor = await runtime.GetAsync("wf-1-run:researcher");
-        researcherActor.Should().NotBeNull();
-        var researcher = (RoleGAgent)researcherActor!.Agent;
-        researcher.RoleName.Should().Be("Researcher");
+        var researcher = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            async _ =>
+            {
+                var researcherActor = await runtime.GetAsync(researcherActorId);
+                return researcherActor?.Agent as RoleGAgent;
+            },
+            agent => agent?.RoleName == "Researcher",
+            $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
+            CancellationToken.None);
+        researcher!.RoleName.Should().Be("Researcher");
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -287,7 +312,7 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
 
         var actor = await runtime.CreateAsync<RoleGAgent>("role-test-1");
         var agent = (RoleGAgent)actor.Agent;
@@ -320,7 +345,7 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, mockLlm) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
 
         var actor = await runtime.CreateAsync<RoleGAgent>("llm-test-1");
         var agent = (RoleGAgent)actor.Agent;
@@ -376,7 +401,7 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
 
         // 创建层级
         var root = await runtime.CreateAsync<WorkflowGAgent>("root");
@@ -423,15 +448,19 @@ public class WorkflowIntegrationTests
             roles:
               - id: planner
                 name: Planner
+                agent_kind: workflow.assistant-role
                 system_prompt: "你是规划者"
               - id: analyst_a
                 name: AnalystA
+                agent_kind: workflow.assistant-role
                 system_prompt: "你是分析师A"
               - id: analyst_b
                 name: AnalystB
+                agent_kind: workflow.assistant-role
                 system_prompt: "你是分析师B"
               - id: synthesizer
                 name: Synthesizer
+                agent_kind: workflow.assistant-role
                 system_prompt: "你是综合者"
             steps:
               - id: plan
@@ -477,12 +506,12 @@ public class WorkflowIntegrationTests
 
     [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有核心原语模块")]
     [Trait("Feature", "ModuleFactory")]
-    public void Scenario7_AllCoreModules()
+    public async Task Scenario7_AllCoreModules()
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddAevatarWorkflow();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
 
         // ─── 流程控制 ───

@@ -196,7 +196,7 @@ public sealed class LarkConversationTargetsTests
     public void BuildFromInbound_ShouldReturnEmptyTypedPairWithFellBack_WhenP2pAndSenderIsMissing()
     {
         // Defensive: a confused inbound (chat_type=p2p but no sender open_id) cannot be pinned
-        // to a typed receive target without re-creating the original /daily outage shape (open_id
+        // to a typed receive target without re-creating the original /summary outage shape (open_id
         // typed as chat_id). Return an empty typed pair with FellBack=true so the outbound
         // resolver runs the legacy prefix path and call sites emit the Debug breadcrumb.
         var target = LarkConversationTargets.BuildFromInbound(

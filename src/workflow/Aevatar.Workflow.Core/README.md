@@ -19,7 +19,7 @@
   - 安装 workflow modules
   - 创建 run-scoped `RoleGAgent` 子 actor
   - 处理 `ChatRequestEvent`、`ReplaceWorkflowDefinitionAndExecuteEvent`、`WorkflowCompletedEvent`
-  - 通过 event sourcing 持久化 run lifecycle 与 `ExecutionStates`
+  - 通过 event sourcing 持久化 run lifecycle、`ExecutionStates` 与 typed execution context
 - `SubWorkflowOrchestrator`
   - 管理 `workflow_call` 的子 run 创建、绑定、完成与对账
 
@@ -31,6 +31,7 @@
 - `WorkflowYaml / WorkflowName / InlineWorkflowYamls`
 - `RunId / Status / Input / FinalOutput / FinalError`
 - `ExecutionStates`
+- `ExecutionContext`（LLM control、connector authorization 等 typed request control facts）
 - 子工作流 binding / invocation 关系
 
 模块运行态通过 `IWorkflowExecutionContext.LoadState/SaveState/ClearState` 读写 `WorkflowRunState.ExecutionStates`。这意味着：
@@ -38,6 +39,18 @@
 - 模块状态跟随 run actor replay
 - callback fired 事件能在 actor 内完成对账
 - 不再依赖模块私有 `Dictionary/HashSet`
+
+request metadata 与 tool context 中的 control/security 字段不直接改写 `WorkflowRunState.ExecutionContext`。
+`WorkflowRunExecutionStartedEvent` 携带启动时的 `execution_context_delta`；后续更新走
+`WorkflowRunExecutionContextUpdatedEvent`，显式清理走 `WorkflowRunExecutionContextClearedEvent`。
+`IWorkflowExecutionStateHost.ExecutionContextSnapshot` 只暴露只读快照，写路径必须经 `PersistDomainEventAsync`
+进入 `TransitionState` reducer。committed observation 发布前会清空 token / authorization 等 raw secret 字段。
+
+// Refactor (iter89/cluster-089-workflow-module-clock-state):
+//   Old: modules read process wall clock for cache TTL, signal buffer eviction,
+//        timeout stamps, and connector elapsed metadata.
+//   New: modules use `IWorkflowExecutionContext.UtcNow` for workflow business
+//        time and `GetTimestamp/GetElapsedTime` for monotonic duration metrics.
 
 ## 关键模块语义
 

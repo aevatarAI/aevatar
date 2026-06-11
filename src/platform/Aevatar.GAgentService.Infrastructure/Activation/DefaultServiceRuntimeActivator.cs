@@ -13,18 +13,18 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
     private readonly IActorRuntime _runtime;
     private readonly IScriptDefinitionSnapshotPort _scriptDefinitionSnapshotPort;
     private readonly IScriptRuntimeProvisioningPort _scriptRuntimeProvisioningPort;
-    private readonly IWorkflowRunActorPort _workflowRunActorPort;
+    private readonly IWorkflowDefinitionProvisioningPort _workflowDefinitionProvisioningPort;
 
     public DefaultServiceRuntimeActivator(
         IActorRuntime runtime,
         IScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
         IScriptRuntimeProvisioningPort scriptRuntimeProvisioningPort,
-        IWorkflowRunActorPort workflowRunActorPort)
+        IWorkflowDefinitionProvisioningPort workflowDefinitionProvisioningPort)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort ?? throw new ArgumentNullException(nameof(scriptDefinitionSnapshotPort));
         _scriptRuntimeProvisioningPort = scriptRuntimeProvisioningPort ?? throw new ArgumentNullException(nameof(scriptRuntimeProvisioningPort));
-        _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
+        _workflowDefinitionProvisioningPort = workflowDefinitionProvisioningPort ?? throw new ArgumentNullException(nameof(workflowDefinitionProvisioningPort));
     }
 
     public async Task<ServiceRuntimeActivationResult> ActivateAsync(
@@ -68,13 +68,20 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
         string deploymentId,
         CancellationToken ct)
     {
-        var actorType = ResolveActorType(plan.ActorTypeName)
-            ?? throw new InvalidOperationException($"Static actor type '{plan.ActorTypeName}' was not found.");
+        var agentKind = plan.AgentKind?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(agentKind))
+            throw new InvalidOperationException("Static agent_kind is required.");
+
         var actorId = string.IsNullOrWhiteSpace(plan.PreferredActorId)
             ? $"gagent-service:static-runtime:{deploymentId}"
             : $"{plan.PreferredActorId}:{deploymentId}";
         if (!await _runtime.ExistsAsync(actorId))
-            _ = await _runtime.CreateAsync(actorType, actorId, ct);
+        {
+            // Refactor (issue1044/static-service-agent-kind):
+            //   Old pattern: static service activation reconstructed CLR Type from actor_type_name.
+            //   New principle: runtime owns kind-based creation through IAgentKindRegistry + CreateByKindAsync.
+            _ = await _runtime.CreateByKindAsync(agentKind, actorId, ct);
+        }
 
         return new ServiceRuntimeActivationResult(deploymentId, actorId, "active");
     }
@@ -108,50 +115,15 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
         var preferredActorId = string.IsNullOrWhiteSpace(plan.DefinitionActorId)
             ? $"gagent-service:workflow-definition:{deploymentId}"
             : $"{plan.DefinitionActorId}:{deploymentId}";
-        IActor actor;
-        if (await _runtime.ExistsAsync(preferredActorId))
-        {
-            actor = await _runtime.GetAsync(preferredActorId)
-                ?? throw new InvalidOperationException($"Workflow definition actor '{preferredActorId}' was not found.");
-        }
-        else
-        {
-            actor = await _workflowRunActorPort.CreateDefinitionAsync(preferredActorId, ct);
-        }
+        var receipt = await _workflowDefinitionProvisioningPort.EnsureDefinitionAsync(
+            new WorkflowDefinitionBinding(
+                preferredActorId,
+                plan.WorkflowName,
+                plan.WorkflowYaml,
+                plan.InlineWorkflowYamls),
+            preferredActorId,
+            ct);
 
-        await _workflowRunActorPort.BindWorkflowDefinitionAsync(
-            actor,
-            plan.WorkflowYaml,
-            plan.WorkflowName,
-            plan.InlineWorkflowYamls,
-            ct: ct);
-
-        return new ServiceRuntimeActivationResult(deploymentId, actor.Id, "active");
-    }
-
-    private static Type? ResolveActorType(string typeName)
-    {
-        // Try direct resolution first (works for assembly-qualified names).
-        var type = Type.GetType(typeName, throwOnError: false);
-        if (type is not null)
-            return type;
-
-        // Fallback: scan all loaded assemblies by full type name.
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (assembly.IsDynamic) continue;
-            try
-            {
-                type = assembly.GetType(typeName);
-                if (type is not null)
-                    return type;
-            }
-            catch
-            {
-                // ignored
-            }
-        }
-
-        return null;
+        return new ServiceRuntimeActivationResult(deploymentId, receipt.ActorId, "active");
     }
 }

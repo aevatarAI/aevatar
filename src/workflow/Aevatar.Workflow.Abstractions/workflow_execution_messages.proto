@@ -4,6 +4,42 @@ option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 import "google/protobuf/any.proto";
 
+enum WorkflowChatInputPartKind {
+  WORKFLOW_CHAT_INPUT_PART_KIND_UNSPECIFIED = 0;
+  WORKFLOW_CHAT_INPUT_PART_KIND_TEXT = 1;
+  WORKFLOW_CHAT_INPUT_PART_KIND_IMAGE = 2;
+  WORKFLOW_CHAT_INPUT_PART_KIND_AUDIO = 3;
+  WORKFLOW_CHAT_INPUT_PART_KIND_VIDEO = 4;
+}
+
+message WorkflowChatInputPartPayload {
+  WorkflowChatInputPartKind kind = 1;
+  string text = 2;
+  string data_base64 = 3;
+  string media_type = 4;
+  string uri = 5;
+  string name = 6;
+}
+
+message WorkflowLlmControlContext {
+  string model_override = 1;
+  optional int32 max_tool_rounds_override = 2;
+  string user_memory_prompt = 3;
+  string sender_nyx_id_access_token = 4;
+}
+
+message WorkflowChatRequestEvent {
+  string prompt = 1;
+  string session_id = 2;
+  map<string, string> headers = 3;
+  int32 timeout_ms = 4;
+  string scope_id = 5;
+  repeated WorkflowChatInputPartPayload input_parts = 6;
+  map<string, string> metadata = 7;
+  WorkflowLlmControlContext llm_control = 8;
+  string connector_http_authorization = 9;
+}
+
 message StartWorkflowEvent    { string workflow_name = 1; string input = 2; map<string, string> parameters = 3; string run_id = 4; }
 message BindWorkflowRunDefinitionEvent
 {
@@ -20,6 +56,7 @@ message BindWorkflowDefinitionEvent
   string workflow_yaml = 2;
   map<string, string> inline_workflow_yamls = 3;
   string scope_id = 4;
+  string source_kind = 5;
 }
 message WorkflowRunExecutionStartedEvent
 {
@@ -28,7 +65,33 @@ message WorkflowRunExecutionStartedEvent
   string input = 3;
   string definition_actor_id = 4;
   string scope_id = 5;
+  WorkflowRunExecutionContextDelta execution_context_delta = 6;
 }
+message WorkflowRunExecutionContextDelta
+{
+  WorkflowRunLlmExecutionContextDelta llm = 1;
+  WorkflowRunConnectorExecutionContextDelta connector = 2;
+  bool clear_llm = 3;
+  bool clear_connector = 4;
+}
+message WorkflowRunLlmExecutionContextDelta
+{
+  reserved 1, 3;
+  reserved "nyxid_access_token", "nyxid_route_preference";
+  string model_override = 2;
+  optional int32 max_tool_rounds_override = 4;
+  string user_memory_prompt = 5;
+}
+message WorkflowRunConnectorExecutionContextDelta
+{
+  string http_authorization = 1;
+}
+message WorkflowRunExecutionContextUpdatedEvent
+{
+  string run_id = 1;
+  WorkflowRunExecutionContextDelta execution_context_delta = 2;
+}
+message WorkflowRunExecutionContextClearedEvent { string run_id = 1; }
 message WorkflowCommandObservedEvent { string command_id = 1; }
 message WorkflowExecutionStateUpsertedEvent
 {
@@ -38,7 +101,21 @@ message WorkflowExecutionStateUpsertedEvent
 message WorkflowExecutionStateClearedEvent  { string scope_key = 1; }
 message WorkflowStoppedEvent { string workflow_name = 1; string run_id = 2; string reason = 3; }
 message WorkflowCompletedEvent { string workflow_name = 1; bool success = 2; string output = 3; string error = 4; string run_id = 5; }
-message StepRequestEvent      { string step_id = 1; string step_type = 2; string input = 3; string target_role = 4; map<string, string> parameters = 5; string run_id = 6; string execution_id = 7; }
+message WorkflowStepParameters
+{
+  map<string, string> parameters = 1;
+}
+message StepRequestEvent
+{
+  reserved 5;
+  string step_id = 1;
+  string step_type = 2;
+  string input = 3;
+  string target_role = 4;
+  string run_id = 6;
+  string execution_id = 7;
+  WorkflowStepParameters step_parameters = 8;
+}
 message StepCompletedEvent {
   string step_id = 1;
   bool success = 2;
@@ -117,6 +194,7 @@ message SubWorkflowDefinitionResolutionRegisteredEvent
   string timeout_callback_actor_id = 10;
   int32 timeout_callback_backend = 11;
   int32 timeout_ms = 12;
+  int32 timeout_callback_slot_epoch = 13;
 }
 message SubWorkflowDefinitionResolutionClearedEvent
 {
@@ -141,6 +219,17 @@ message SubWorkflowInvocationRegisteredEvent
   string lifecycle = 7;
   string definition_actor_id = 8;
   int32 definition_version = 9;
+  string input = 10;
+  int32 handoff_phase = 11;
+  string definition_yaml = 12;
+  string scope_id = 13;
+  map<string, string> inline_workflow_yamls = 14;
+}
+message SubWorkflowInvocationHandoffAdvancedEvent
+{
+  string invocation_id = 1;
+  string child_run_id = 2;
+  int32 handoff_phase = 3;
 }
 message SubWorkflowInvocationCompletedEvent
 {
@@ -161,6 +250,17 @@ message WorkflowSuspendedEvent
   map<string, string> metadata = 7;
   string content = 8;
   string delivery_target_id = 9;
+  bool secure = 10;
+  string redacted_output = 11;
+  WorkflowToolApprovalSuspension tool_approval = 12;
+}
+message WorkflowToolApprovalSuspension
+{
+  string execution_id = 1;
+  string tool_name = 2;
+  string tool_call_id = 3;
+  string approval_request_id = 4;
+  string arguments_json = 5;
 }
 message WorkflowResumedEvent
 {
@@ -191,6 +291,20 @@ message WorkflowRoleActorLinkedEvent
   string role_id = 2;
   string child_actor_id = 3;
 }
+message WorkflowRoleInitializeEvent
+{
+  string role_id = 1;
+  string role_name = 2;
+  string provider_name = 3;
+  string model = 4;
+  string system_prompt = 5;
+  int32 max_tokens = 6;
+  int32 max_tool_rounds = 7;
+  int32 max_history_messages = 8;
+  string event_modules = 9;
+  string event_routes = 10;
+  optional double temperature = 11;
+}
 message WorkflowRoleReplyToolCall
 {
   string tool_name = 1;
@@ -209,6 +323,70 @@ message WorkflowRoleReplyRecordedEvent
   repeated WorkflowRoleReplyToolCall tool_calls = 9;
 }
 
+message WorkflowLlmExecutionIntent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string prompt = 4;
+  string model = 5;
+  optional int32 max_tool_rounds = 6;
+  string user_memory_prompt = 7;
+  int32 timeout_ms = 8;
+  map<string, string> headers = 9;
+  map<string, string> annotations = 10;
+  string sender_nyx_id_access_token = 11;
+}
+
+message WorkflowLlmInvocationStartedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string role_actor_id = 4;
+}
+
+message WorkflowLlmStreamChunkEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string role_actor_id = 4;
+  string delta_content = 5;
+  string delta_reasoning_content = 6;
+}
+
+message WorkflowLlmInvocationCompletedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string role_actor_id = 4;
+  bool success = 5;
+  string content = 6;
+  string reasoning_content = 7;
+  string error = 8;
+}
+
+message WorkflowToolCallStartedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string tool_name = 3;
+  string call_id = 4;
+  string arguments_json = 5;
+}
+
+message WorkflowToolCallCompletedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string call_id = 3;
+  bool success = 4;
+  string result_json = 5;
+  string error = 6;
+}
+
 // Replaces an existing workflow actor's definition using runtime-provided YAML and starts execution immediately.
 message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; string input = 2; }
 
@@ -219,6 +397,18 @@ message WorkflowStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; i
 message WorkflowStepRetryBackoffFiredEvent { string run_id = 1; string step_id = 2; int32 delay_ms = 3; int32 next_attempt = 4; }
 message DelayStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 duration_ms = 3; }
 message LlmCallWatchdogTimeoutFiredEvent { string run_id = 1; string step_id = 2; string session_id = 3; int32 timeout_ms = 4; }
+message WorkflowConnectorTimeoutFiredEvent { string run_id = 1; string step_id = 2; string operation_id = 3; int32 timeout_ms = 4; int32 attempt = 5; }
+message WorkflowConnectorAttemptCompletedEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string operation_id = 3;
+  int32 attempt = 4;
+  bool success = 5;
+  string output = 6;
+  string error = 7;
+  map<string, string> annotations = 8;
+  string execution_id = 9;
+}
 message WorkflowSignalBufferedEvent
 {
   string run_id = 1;

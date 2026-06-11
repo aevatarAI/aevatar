@@ -18,6 +18,7 @@ public class RoleGAgentAppStateAndConfigContractTests
 
         await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
+            RoleId = "worker-role",
             RoleName = "worker",
             ProviderName = "mock",
             Model = "model-a",
@@ -26,9 +27,10 @@ public class RoleGAgentAppStateAndConfigContractTests
             MaxTokens = 256,
             MaxToolRounds = 3,
             MaxHistoryMessages = 9,
-            StreamBufferCapacity = 33,
         });
 
+        agent.RoleId.Should().Be("worker-role");
+        agent.State.RoleId.Should().Be("worker-role");
         agent.RoleName.Should().Be("worker");
         agent.State.ConfigOverrides.Should().NotBeNull();
         agent.State.ConfigOverrides.ProviderName.Should().Be("mock");
@@ -38,8 +40,6 @@ public class RoleGAgentAppStateAndConfigContractTests
         agent.State.ConfigOverrides.MaxTokens.Should().Be(256);
         agent.State.ConfigOverrides.MaxToolRounds.Should().Be(3);
         agent.State.ConfigOverrides.MaxHistoryMessages.Should().Be(9);
-        agent.State.ConfigOverrides.StreamBufferCapacity.Should().Be(33);
-
         agent.EffectiveConfig.ProviderName.Should().Be("mock");
         agent.EffectiveConfig.Model.Should().Be("model-a");
         agent.EffectiveConfig.SystemPrompt.Should().Be("be helpful");
@@ -47,7 +47,6 @@ public class RoleGAgentAppStateAndConfigContractTests
         agent.EffectiveConfig.MaxTokens.Should().Be(256);
         agent.EffectiveConfig.MaxToolRounds.Should().Be(3);
         agent.EffectiveConfig.MaxHistoryMessages.Should().Be(9);
-        agent.EffectiveConfig.StreamBufferCapacity.Should().Be(33);
     }
 
     [Fact]

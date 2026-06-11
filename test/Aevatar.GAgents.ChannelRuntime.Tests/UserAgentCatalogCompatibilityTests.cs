@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -28,7 +28,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                 {
                     AgentId = "agent-compat-1",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "summary",
                 },
             },
         };
@@ -71,8 +71,8 @@ public sealed class UserAgentCatalogCompatibilityTests
                 Entry = new UserAgentCatalogEntry
                 {
                     AgentId = "agent-compat-2",
-                    AgentType = WorkflowAgentDefaults.AgentType,
-                    TemplateName = WorkflowAgentDefaults.TemplateName,
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "legacy-template",
                 },
             });
 
@@ -89,7 +89,7 @@ public sealed class UserAgentCatalogCompatibilityTests
 
         next.Entries.Should().ContainSingle(x =>
             x.AgentId == "agent-compat-2" &&
-            x.TemplateName == WorkflowAgentDefaults.TemplateName);
+            x.TemplateName == "legacy-template");
     }
 
     [Fact]
@@ -107,8 +107,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                     {
                         AgentId = "agent-compat-3",
                         AgentType = SkillRunnerDefaults.AgentType,
-                        TemplateName = "daily_report",
-                        Status = "running",
+                        TemplateName = "summary",
                     },
                 }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("publisher-compat", TopologyAudience.Children),
@@ -119,10 +118,9 @@ public sealed class UserAgentCatalogCompatibilityTests
         agent.HandleCount.Should().Be(1);
         agent.LastHandled.Should().NotBeNull();
         agent.LastHandled!.Entry.AgentId.Should().Be("agent-compat-3");
-        agent.LastHandled.Entry.Status.Should().Be("running");
         agent.State.Entries.Should().ContainSingle(x =>
             x.AgentId == "agent-compat-3" &&
-            x.TemplateName == "daily_report");
+            x.TemplateName == "summary");
     }
 
     private static Any CreateLegacyAny(string typeUrl, Google.Protobuf.IMessage message) =>

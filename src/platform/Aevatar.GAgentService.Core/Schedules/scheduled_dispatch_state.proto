@@ -1,0 +1,242 @@
+syntax = "proto3";
+package aevatar.gagentservice.schedules;
+option csharp_namespace = "Aevatar.GAgentService.Core.Schedules";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/any.proto";
+import "agent_messages.proto";
+import "service_endpoint.proto";
+
+message ScheduledDispatchState
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  string target_actor_id = 3;
+  aevatar.EventEnvelope trigger_envelope = 4;
+  string cron_expression = 5;
+  string timezone = 6;
+  bool enabled = 7;
+  google.protobuf.Timestamp created_at_utc_value = 8;
+  google.protobuf.Timestamp updated_at_utc_value = 9;
+  google.protobuf.Timestamp next_fire_at_utc_value = 10;
+  google.protobuf.Timestamp last_fire_at_utc_value = 11;
+  string last_target_actor_id = 12;
+  string last_command_id = 13;
+  string last_correlation_id = 14;
+  string last_error = 15;
+  int32 fire_count = 16;
+  int32 failure_count = 17;
+  map<string, string> headers = 18;
+  string payload_type_url = 19;
+  reserved 20;
+  ScheduledDispatchRuntimeCallbackLeaseState next_fire_lease = 21;
+  map<string, ScheduledDispatchFireRecordState> fire_records = 22;
+  ScheduledDispatchTargetState target = 23;
+  google.protobuf.Timestamp pending_next_fire_at = 24;
+  google.protobuf.Timestamp pending_next_fire_requested_at = 25;
+  ScheduledDispatchScheduleKindState schedule_kind = 26;
+}
+
+enum ScheduledDispatchScheduleKindState
+{
+  SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_GENERIC = 0;
+  SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_WORKFLOW = 1;
+}
+
+enum ScheduledDispatchRuntimeCallbackBackendState
+{
+  SCHEDULED_DISPATCH_RUNTIME_CALLBACK_BACKEND_STATE_UNSPECIFIED = 0;
+  SCHEDULED_DISPATCH_RUNTIME_CALLBACK_BACKEND_STATE_IN_MEMORY = 1;
+  SCHEDULED_DISPATCH_RUNTIME_CALLBACK_BACKEND_STATE_DEDICATED = 2;
+}
+
+message ScheduledDispatchRuntimeCallbackLeaseState
+{
+  string actor_id = 1;
+  string callback_id = 2;
+  int64 generation = 3;
+  ScheduledDispatchRuntimeCallbackBackendState backend = 4;
+  int32 slot_epoch = 5;
+}
+
+message ScheduledDispatchTargetState
+{
+  ScheduledDispatchTargetKindState kind = 1;
+  string actor_id = 2;
+  aevatar.EventEnvelope envelope = 3;
+  ScheduledServiceInvocationTargetState service_invocation = 4;
+  reserved 5;
+}
+
+enum ScheduledDispatchTargetKindState
+{
+  SCHEDULED_DISPATCH_TARGET_KIND_STATE_UNSPECIFIED = 0;
+  SCHEDULED_DISPATCH_TARGET_KIND_STATE_ENVELOPE = 1;
+  SCHEDULED_DISPATCH_TARGET_KIND_STATE_SERVICE_INVOCATION = 2;
+  reserved 3;
+}
+
+message ScheduledServiceInvocationTargetState
+{
+  aevatar.gagentservice.ServiceIdentity identity = 1;
+  string endpoint_id = 2;
+  google.protobuf.Any payload = 3;
+  string revision_id = 4;
+  aevatar.gagentservice.ServiceInvocationCaller caller = 5;
+  ScheduledServiceInvocationAuthState auth = 6;
+}
+
+message ScheduledServiceInvocationAuthState
+{
+  ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1;
+}
+
+message ScheduledServiceInvocationNyxIdCredentialSourceState
+{
+  ScheduledServiceInvocationNyxIdSubjectRefState subject = 1;
+  string scope = 2;
+}
+
+message ScheduledServiceInvocationNyxIdSubjectRefState
+{
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
+}
+
+message ScheduledDispatchCreateCommand
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  string target_actor_id = 3;
+  aevatar.EventEnvelope trigger_envelope = 4;
+  string cron_expression = 5;
+  string timezone = 6;
+  bool enabled = 7;
+  map<string, string> headers = 8;
+  string payload_type_url = 9;
+  ScheduledDispatchTargetState target = 10;
+  ScheduledDispatchScheduleKindState schedule_kind = 11;
+}
+
+message ScheduledDispatchUpdateCommand
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  string target_actor_id = 3;
+  aevatar.EventEnvelope trigger_envelope = 4;
+  string cron_expression = 5;
+  string timezone = 6;
+  bool enabled = 7;
+  map<string, string> headers = 8;
+  string payload_type_url = 9;
+  ScheduledDispatchTargetState target = 10;
+  ScheduledDispatchScheduleKindState schedule_kind = 11;
+}
+
+message ScheduledDispatchConfiguredEvent
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  string target_actor_id = 3;
+  aevatar.EventEnvelope trigger_envelope = 4;
+  string cron_expression = 5;
+  string timezone = 6;
+  bool enabled = 7;
+  google.protobuf.Timestamp configured_at = 8;
+  map<string, string> headers = 9;
+  string payload_type_url = 10;
+  ScheduledDispatchTargetState target = 11;
+  reserved 12;
+  ScheduledDispatchScheduleKindState schedule_kind = 13;
+}
+
+message ScheduledDispatchEnableCommand
+{
+  string reason = 1;
+}
+
+message ScheduledDispatchDisableCommand
+{
+  string reason = 1;
+}
+
+message ScheduledDispatchEnabledEvent
+{
+  string reason = 1;
+  google.protobuf.Timestamp enabled_at = 2;
+}
+
+message ScheduledDispatchDisabledEvent
+{
+  string reason = 1;
+  google.protobuf.Timestamp disabled_at = 2;
+}
+
+message ScheduledDispatchNextFireIntentRecordedEvent
+{
+  google.protobuf.Timestamp next_fire_at = 1;
+  google.protobuf.Timestamp requested_at = 2;
+}
+
+message ScheduledDispatchNextFireScheduledEvent
+{
+  google.protobuf.Timestamp next_fire_at = 1;
+  ScheduledDispatchRuntimeCallbackLeaseState lease = 2;
+  google.protobuf.Timestamp scheduled_at = 3;
+}
+
+message ScheduledDispatchFireCommand
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  bool manual = 2;
+}
+
+message ScheduledDispatchFireStartedEvent
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  google.protobuf.Timestamp started_at = 2;
+  string idempotency_key = 3;
+  bool manual = 4;
+}
+
+message ScheduledDispatchFireDispatchedEvent
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  google.protobuf.Timestamp dispatched_at = 2;
+  string idempotency_key = 3;
+  string target_actor_id = 4;
+  string command_id = 5;
+  string correlation_id = 6;
+  bool manual = 7;
+}
+
+message ScheduledDispatchFireFailedEvent
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string idempotency_key = 3;
+  string error = 4;
+  bool manual = 5;
+}
+
+message ScheduledDispatchFireRecordState
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  google.protobuf.Timestamp completed_at = 2;
+  string idempotency_key = 3;
+  string target_actor_id = 4;
+  string command_id = 5;
+  string correlation_id = 6;
+  string error = 7;
+  bool manual = 8;
+  ScheduledDispatchFireStatusState status = 9;
+}
+
+enum ScheduledDispatchFireStatusState
+{
+  SCHEDULED_DISPATCH_FIRE_STATUS_STATE_UNSPECIFIED = 0;
+  SCHEDULED_DISPATCH_FIRE_STATUS_STATE_STARTED = 1;
+  SCHEDULED_DISPATCH_FIRE_STATUS_STATE_DISPATCHED = 2;
+  SCHEDULED_DISPATCH_FIRE_STATUS_STATE_FAILED = 3;
+}

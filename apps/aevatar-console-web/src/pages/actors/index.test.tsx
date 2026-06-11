@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { setLocale } from "@umijs/max";
 import React from "react";
 import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
@@ -127,6 +128,7 @@ describe("ActorsPage", () => {
     screen.getAllByRole("row").find((row) => row.textContent?.includes(needle)) ?? null;
 
   beforeEach(() => {
+    setLocale("zh-CN", false);
     window.localStorage.clear();
     window.history.replaceState({}, "", "/runtime/explorer");
     (runtimeQueryApi.listAgents as jest.Mock).mockReset();
@@ -146,6 +148,10 @@ describe("ActorsPage", () => {
     );
   });
 
+  afterEach(() => {
+    setLocale("en-US", false);
+  });
+
   it("renders the live runtime explorer shell and actor list", async () => {
     const { container } = renderWithQueryClient(React.createElement(ActorsPage));
 
@@ -160,6 +166,8 @@ describe("ActorsPage", () => {
     expect(screen.getByRole("button", { name: "刷新列表" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "打开追查详情" })).toBeTruthy();
     expect(screen.queryByText("示例数据")).toBeNull();
+    expect(container.textContent).toContain("数据源");
+    expect(container.textContent).toContain("Actor 查询");
     expect(container.textContent).toContain("SupportRoot");
     expect(screen.getAllByRole("button", { name: "查看概览" }).length).toBeGreaterThan(0);
   });
@@ -305,8 +313,8 @@ describe("ActorsPage", () => {
       within(plannerRow as HTMLElement).getByRole("button", { name: "查看概览" }),
     );
 
-    expect(await screen.findByText("这个 actor 当前不可预览")).toBeTruthy();
-    expect(screen.getByText("当前后端还能引用这个 actor，但已经查不到它的 snapshot。常见原因是后端重启、运行态已清理，或这是历史绑定残留。")).toBeTruthy();
+    expect(await screen.findByText("这个 Actor 当前不可预览")).toBeTruthy();
+    expect(screen.getByText("当前后端还能引用这个 Actor，但已经查不到它的 Snapshot。常见原因是后端重启、运行态已清理，或这是历史绑定残留。")).toBeTruthy();
   });
 
   it("keeps the list page route without a detail actor selection", async () => {

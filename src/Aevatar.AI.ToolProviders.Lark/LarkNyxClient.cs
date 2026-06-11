@@ -283,6 +283,7 @@ public sealed class LarkNyxClient : ILarkNyxClient
         {
             ["instance_code"] = request.InstanceCode,
             ["task_id"] = request.TaskId,
+            ["user_id"] = request.UserId,
         };
 
         if (!string.IsNullOrWhiteSpace(request.Comment))

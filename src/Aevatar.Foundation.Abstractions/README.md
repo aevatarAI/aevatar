@@ -66,6 +66,7 @@ Aevatar.Foundation.Abstractions/
 - `EventEnvelope` 是 runtime message envelope，是 Actor 之间通过 stream 传递的统一包络。
 - `StateEvent` 是 Event Sourcing 的持久化事实记录。
 - `CommittedStateEventPublished` 是 commit 成功后由 framework 内部发出的 observer publication payload。
+- `EventSourcing/` only carries committed-state publication contracts; behavior, factories, snapshots, stores, and runtime options remain outside this project.
 - 两者都叫 “event”，但不在同一层：前者服务 transport/runtime，后者服务事实持久化与 replay。
 
 ## 依赖

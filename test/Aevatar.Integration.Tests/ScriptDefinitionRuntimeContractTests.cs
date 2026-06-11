@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
@@ -35,12 +36,17 @@ public sealed class ScriptDefinitionRuntimeContractTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "contract-script",
             scriptRevision: revision,
-            sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
-            sourceHash: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorHash,
+            scriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource),
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
 
         await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, definition.Snapshot, CancellationToken.None);
+        await ScriptEvolutionIntegrationTestKit.WaitForScriptBindingAsync(
+            provider,
+            runtimeActorId,
+            definitionActorId,
+            revision,
+            CancellationToken.None);
         await commandPort.RunRuntimeAsync(
             runtimeActorId,
             "run-1",
@@ -53,6 +59,11 @@ public sealed class ScriptDefinitionRuntimeContractTests
             definitionActorId,
             "integration.requested",
             CancellationToken.None);
+        var firstState = await ScriptEvolutionIntegrationTestKit.WaitForStateAsync<TextNormalizationReadModel>(
+            provider,
+            runtimeActorId,
+            state => string.Equals(state.NormalizedText, "HELLO", StringComparison.Ordinal),
+            CancellationToken.None);
 
         var firstActor = await runtime.GetAsync(runtimeActorId);
         firstActor.Should().NotBeNull();
@@ -60,7 +71,7 @@ public sealed class ScriptDefinitionRuntimeContractTests
         firstAgent.State.DefinitionActorId.Should().Be(definitionActorId);
         firstAgent.State.Revision.Should().Be(revision);
         firstAgent.State.StateRoot.Should().NotBeNull();
-        firstAgent.State.StateRoot.Unpack<TextNormalizationReadModel>().NormalizedText.Should().Be("HELLO");
+        firstState.NormalizedText.Should().Be("HELLO");
 
         var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
         persisted.Should().Contain(x => x.EventData.Is(ScriptBehaviorBoundEvent.Descriptor));
@@ -68,6 +79,12 @@ public sealed class ScriptDefinitionRuntimeContractTests
 
         await runtime.DestroyAsync(runtimeActorId, CancellationToken.None);
         await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, definition.Snapshot, CancellationToken.None);
+        await ScriptEvolutionIntegrationTestKit.WaitForScriptBindingAsync(
+            provider,
+            runtimeActorId,
+            definitionActorId,
+            revision,
+            CancellationToken.None);
 
         var replayedActor = await runtime.GetAsync(runtimeActorId);
         replayedActor.Should().NotBeNull();

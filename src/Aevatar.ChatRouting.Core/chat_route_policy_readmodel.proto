@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package aevatar.chat_routing.v1;
+
+option csharp_namespace = "Aevatar.ChatRouting.Core";
+
+import "google/protobuf/timestamp.proto";
+import "chat_route_policy.proto";
+import "agent_messages.proto";
+
+// ─── ChatRoutePolicy current-state readmodel ───
+//
+// Query-side replica of ChatRoutePolicyState, materialized from the
+// ChatRoutePolicyGAgent's committed ChatRoutePolicyUpdated events by
+// ChatRoutePolicyCurrentStateProjector (CLAUDE.md 一权威状态 → 多 readmodel).
+//
+// Business fields mirror ChatRoutePolicyState field-for-field with the
+// strongly-typed sub-messages from chat_route_policy.proto — no
+// google.protobuf.Any state_root bag — so query ports read typed fields
+// directly without unpacking the authority's internal layout.
+//
+// The two version/timestamp pairs are deliberately distinct:
+//   - state_version / updated_at  → projection-envelope facts (the committed
+//     StateEvent.Version the document was materialized from, and when the
+//     projector wrote it).
+//   - policy_version / policy_updated_at → the authority's own monotonic
+//     ChatRoutePolicyState.version and updated_at, mirrored verbatim.
+message ChatRoutePolicyCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  // Business fields (projected 1:1 from ChatRoutePolicyState).
+  string policy_id = 10;
+  aevatar.OwnerScope owner_scope = 11;
+  ChatRouteAction default_target = 12;
+  repeated ChatRouteRule rules = 13;
+  int64 policy_version = 14;
+  google.protobuf.Timestamp policy_updated_at = 15;
+}

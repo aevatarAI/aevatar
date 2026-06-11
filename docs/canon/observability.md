@@ -1,0 +1,385 @@
+---
+title: "Aevatar Observability — OTel Semantic Conventions"
+status: active
+owner: eanzhao
+---
+
+# Aevatar Observability — OTel Semantic Conventions
+
+## 1. 目的
+
+定义 aevatar 仓库内 OpenTelemetry `ActivitySource` 发出的 activity 名称、tag
+键、稳定性等级，以及 Host → browser demo 边界的 JSON wire 形式例外。
+这是 aevatar 可观测面的唯一权威清单 —— 加新 activity / tag、改名、提升稳定
+性，都要先动这份文档再动代码。
+
+## 2. ActivitySources
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Aevatar process                                                │
+│                                                                │
+│   ┌─────────────────────┐    ┌──────────────────────────┐      │
+│   │ Aevatar.Agents      │    │ Aevatar.GenAI            │      │
+│   │ (AevatarActivity-   │    │ (GenAIActivitySource)    │      │
+│   │  Source)            │    │ — OTel GenAI SemConv     │      │
+│   │                     │    │   compliant, unchanged   │      │
+│   │ agent lifecycle,    │    │   by ADR 0021            │      │
+│   │ event handling,     │    │                          │      │
+│   │ projection, readmodel, │ │   gen_ai.* family        │      │
+│   │ workflow run        │    │                          │      │
+│   └──────────┬──────────┘    └─────────────┬────────────┘      │
+│              │                              │                   │
+│              └──────────┬───────────────────┘                   │
+│                         ▼                                       │
+│           OTel pipeline (exporters / samplers)                  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+- `Aevatar.Agents` —— 仓库自身的 activity 总集。详见 §3 / §4。
+- `Aevatar.GenAI` —— LLM 与 Tool 的 trace，符合 OpenTelemetry GenAI
+  Semantic Conventions。本文档不重复其规范；引用见 [OTel GenAI SemConv](https://opentelemetry.io/docs/specs/semconv/gen-ai/)。
+
+ActivityListener 消费方过滤：`source.Name == "Aevatar.Agents"`（单源
+模式，对应 ADR [0022](../adr/0022-otel-aevatar-semantic-conventions.md)
+的决定）。
+
+## 3. Activity 清单 (`Aevatar.Agents`)
+
+每条 activity 都标 **stability**（`[experimental]` / `[stable]`），实验
+级允许在任一版本里改名 / 改语义 / 删除；稳定级走废弃周期。当前**全部
+为 experimental**。
+
+### 3.1 Event handling
+
+#### `HandleEvent:{eventTypeName}` `[stable]`
+
+事件处理器执行。事件 typeName 拼在 activity name 里以方便 Jaeger /
+Tempo 中按事件类型 facet。
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.agent.id` | string | yes | actor id |
+| `aevatar.agent.type` | string | yes | `IAgent` 类型名，ADR 0021 新增 `[experimental]` |
+| `aevatar.event.id` | string | yes | event id |
+| `aevatar.event.type` | string | yes | event type url |
+| `aevatar.event.direction` | string | yes | `in` / `out` |
+| `aevatar.event.publisher` | string | yes | 发布者 id（如有） |
+
+### 3.2 Actor lifecycle `[experimental]`
+
+#### `aevatar.agent.spawn` `[experimental]`
+
+actor 首次被激活（**不**在 idempotent return 路径上触发）。`LocalActorRuntime`
+在 `CreateAsync` 实际新建 actor 之后 emit；命中已存在 actor 直接 return
+时不 emit。Orleans 当前实现在 V2 才覆盖（届时在 `OnActivateAsync` emit，
+时机与 Local 不同）。
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.agent.id` | string | yes | actor id |
+| `aevatar.agent.type` | string | yes | `IAgent` 类型名 |
+
+#### `aevatar.agent.deactivate` `[experimental]`
+
+actor 销毁（`DestroyAsync`）或通过 `IActorDeactivationHook` 失活。
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.agent.id` | string | yes | actor id |
+| `aevatar.agent.type` | string | no | 类型名（如能拿到） |
+
+#### `aevatar.agent.link` `[experimental]`
+
+`IActorRuntime.LinkAsync(parentId, childId)` 完成时 emit。**parent-child
+关系是动态的**：spawn 时**不**附 parent tag；link/unlink 才是权威的拓扑变化点。
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.agent.parent` | string | yes | parentId |
+| `aevatar.agent.id` | string | yes | childId |
+
+#### `aevatar.agent.unlink` `[experimental]`
+
+`IActorRuntime.UnlinkAsync(childId)` 完成时 emit。
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.agent.parent` | string | yes | parentId |
+| `aevatar.agent.id` | string | yes | childId |
+
+### 3.3 Projection materialize `[experimental]`
+
+#### `aevatar.projection.materialize` `[experimental]`
+
+`IProjectionMaterializer<TContext>.ProjectAsync` 的 wrapper。中心装配
+点 `src/Aevatar.CQRS.Projection.Core/DependencyInjection/ProjectionMaterializerRegistration.cs`
+将所有 projector 自动包入 `ObservedProjectionMaterializer<TContext>` —— 即
+新增 projector 默认获得这一 activity，无需业务侧改动。
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.projection.name` | string | yes | `typeof(TContext).Name` |
+| `aevatar.projection.last_event_id` | string | yes | `EventEnvelope.EventId`，进入时设 |
+| `aevatar.projection.state.version` | int64 | no | 成功完成后设；失败路径不设 |
+| `aevatar.workflow.run_id` | string | no | 若 `context is IWorkflowProjectionContext`，附 |
+| `aevatar.workflow.step` | string | no | 同上 |
+
+### 3.4 Readmodel writes `[experimental]`
+
+decorator 装配点：`src/Aevatar.CQRS.Projection.Runtime/DependencyInjection/ServiceCollectionExtensions.cs:11`
+（`IProjectionWriteDispatcher<>` open-generic 单点注册），改为先注册
+`ObservedProjectionWriteDispatcher<>` wrap `ProjectionStoreDispatcher<>`。
+
+#### `aevatar.readmodel.upsert` `[experimental]`
+
+`IProjectionWriteDispatcher<TReadModel>.UpsertAsync` 包装。
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.readmodel.name` | string | yes | `typeof(TReadModel).Name` |
+| `aevatar.readmodel.state.version` | int64 | yes | 被写入的 state 版本 |
+
+#### `aevatar.readmodel.delete` `[experimental]`
+
+`IProjectionWriteDispatcher<TReadModel>.DeleteAsync` 包装。
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.readmodel.name` | string | yes | `typeof(TReadModel).Name` |
+| `aevatar.readmodel.id` | string | yes | 被删除的 readmodel id |
+
+### 3.5 Workflow run `[experimental]`
+
+#### `aevatar.workflow.run` `[experimental]`
+
+`WorkflowExecutionRunEventProjector`（`src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs`）
+入口装饰。**不**改动 workflow runtime 的 emit 路径；现有 `WorkflowEvent`
+SSE 流维持原状。
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.workflow.run_id` | string | yes | run id |
+| `aevatar.workflow.name` | string | yes | workflow name |
+| `aevatar.workflow.step` | string | no | 当前 step（如适用） |
+
+### 3.6 Channel runtime `[experimental]`
+
+Channel runtime spans emit through the canonical `Aevatar.Agents` source via
+`ChannelDiagnostics`. They keep the channel RFC span names while using the
+documented `aevatar.channel.*` tag family so Host OTel collection and
+repository dashboards can join them with the rest of the Aevatar trace surface.
+iter85/cluster-085 keeps channel diagnostics on the single canonical source.
+
+#### `channel.pipeline.invoke` `[experimental]`
+
+`TracingMiddleware` wraps one channel pipeline invocation. Downstream channel
+middleware and bot-turn spans run inside this span.
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.channel.activity_id` | string | yes | normalized inbound activity id |
+| `aevatar.channel.provider_event_id` | string | no | adapter-provided raw payload identifier |
+| `aevatar.channel.canonical_key` | string | yes | `ConversationReference.CanonicalKey` |
+| `aevatar.channel.bot_instance_id` | string | yes | bot instance routing dimension |
+| `aevatar.channel.id` | string | yes | channel id |
+| `aevatar.channel.retry_count` | int64 | yes | retry attempt count |
+| `aevatar.channel.raw_payload_blob_ref` | string | no | redacted raw payload blob reference |
+| `aevatar.channel.auth_principal` | string | yes | auth principal summary |
+
+The same tag family is used by the other channel RFC spans when those spans are
+implemented: `channel.ingress.verify`, `channel.ingress.commit`,
+`channel.pipeline.dedup`, `channel.pipeline.resolve`, `channel.bot.turn`,
+`channel.egress.send`, `channel.egress.update`, `channel.egress.delete`, and
+`channel.egress.commit`. Outbound success spans may also set
+`aevatar.channel.sent_activity_id`.
+
+### 3.7 LLM / Tool（由 `Aevatar.GenAI` 拥有，未变）
+
+`invoke_agent` / `chat` / `execute_tool` 等 activity 在 `Aevatar.GenAI`
+源，按 [OTel GenAI SemConv](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+约定。本 ADR / 文档**不**修改。
+
+## 4. Tag 完整索引
+
+| Tag key | Source | Stability | Found on |
+|---------|--------|-----------|----------|
+| `aevatar.agent.id` | `Aevatar.Agents` | stable | HandleEvent, agent.* |
+| `aevatar.agent.type` | `Aevatar.Agents` | experimental | HandleEvent, agent.spawn, agent.deactivate |
+| `aevatar.agent.parent` | `Aevatar.Agents` | experimental | agent.link, agent.unlink |
+| `aevatar.event.id` | `Aevatar.Agents` | stable | HandleEvent |
+| `aevatar.event.type` | `Aevatar.Agents` | stable | HandleEvent |
+| `aevatar.event.direction` | `Aevatar.Agents` | stable | HandleEvent |
+| `aevatar.event.publisher` | `Aevatar.Agents` | stable | HandleEvent |
+| `aevatar.projection.name` | `Aevatar.Agents` | experimental | projection.materialize |
+| `aevatar.projection.last_event_id` | `Aevatar.Agents` | experimental | projection.materialize |
+| `aevatar.projection.state.version` | `Aevatar.Agents` | experimental | projection.materialize (success) |
+| `aevatar.readmodel.name` | `Aevatar.Agents` | experimental | readmodel.upsert, readmodel.delete |
+| `aevatar.readmodel.state.version` | `Aevatar.Agents` | experimental | readmodel.upsert |
+| `aevatar.readmodel.id` | `Aevatar.Agents` | experimental | readmodel.delete |
+| `aevatar.workflow.run_id` | `Aevatar.Agents` | experimental | workflow.run, projection.materialize (workflow context) |
+| `aevatar.workflow.name` | `Aevatar.Agents` | experimental | workflow.run |
+| `aevatar.workflow.step` | `Aevatar.Agents` | experimental | workflow.run, projection.materialize (workflow context) |
+| `aevatar.channel.activity_id` | `Aevatar.Agents` | experimental | channel.* |
+| `aevatar.channel.provider_event_id` | `Aevatar.Agents` | experimental | channel.ingress.*, channel.pipeline.invoke |
+| `aevatar.channel.canonical_key` | `Aevatar.Agents` | experimental | channel.* |
+| `aevatar.channel.bot_instance_id` | `Aevatar.Agents` | experimental | channel.* |
+| `aevatar.channel.id` | `Aevatar.Agents` | experimental | channel.* |
+| `aevatar.channel.sent_activity_id` | `Aevatar.Agents` | experimental | channel.egress.* |
+| `aevatar.channel.retry_count` | `Aevatar.Agents` | experimental | channel.ingress.*, channel.egress.*, channel.pipeline.invoke |
+| `aevatar.channel.raw_payload_blob_ref` | `Aevatar.Agents` | experimental | channel.ingress.*, channel.pipeline.invoke |
+| `aevatar.channel.auth_principal` | `Aevatar.Agents` | experimental | channel.egress.*, channel.pipeline.invoke |
+
+## 5. 稳定性策略
+
+```
+[experimental]  ←—  introduction default
+     │
+     │   (a) 经过两个 release 周期无破坏性改动
+     │   (b) 至少一个外部 consumer 已验证（dashboard / alert）
+     │   (c) 命名经过 ADR 评审
+     ▼
+[stable]        ←—  ADR 升级。废弃需经 deprecation 周期：
+     │             1) ADR 标 `deprecated`
+     │             2) 一个 release 内并发 emit 新旧 key
+     │             3) 下一个 major 移除旧 key
+     ▼
+[deprecated] → [removed]
+```
+
+- 实验级 key 可在任一 release 改名 / 删除；外部 consumer 自担风险。
+- 稳定级 key 走废弃周期；orphaned dashboard 有时间迁移。
+
+## 6. Sampling 与 emission 行为
+
+- 生产部署的 sampler 由部署侧决定；本文档不强制。建议生产用
+  `ParentBased(TraceIdRatioBased)`，开发用 `AlwaysOn`。
+- 本地 Inspector-style consumer（详见 ADR
+  [0023](../adr/0023-two-tier-inspector-architecture.md)）可在注册时显式覆盖为
+  `AlwaysOn`，仅本地生效。
+- Activity emit **必须 infallible**：tag set 失败 / listener 抛错 **不**
+  传播到业务路径。`AevatarActivitySource` 的 helper 方法内置 try/catch
+  swallow。
+
+## 7. Helper API
+
+仓库内禁止散落的 `activity?.SetTag(...)` 链。所有新 activity 通过
+`AevatarActivitySource` 的 typed factory 创建：
+
+```csharp
+public static class AevatarActivitySource
+{
+    // (existing)
+    public static Activity? StartHandleEvent(string agentId, string agentType, string eventId, ...);
+
+    // (new — ADR 0021)
+    public static Activity? StartAgentSpawn(string agentId, string agentType);
+    public static Activity? StartAgentDeactivate(string agentId, string? agentType = null);
+    public static Activity? StartAgentLink(string parentId, string childId);
+    public static Activity? StartAgentUnlink(string parentId, string childId);
+    public static Activity? StartProjectionMaterialize(string projectionName, string lastEventId);
+    public static Activity? StartReadmodelUpsert(string readmodelName, long stateVersion);
+    public static Activity? StartReadmodelDelete(string readmodelName, string id);
+    public static Activity? StartWorkflowRun(string runId, string workflowName, string? step = null);
+}
+```
+
+每个 callsite 一行。decorator 内的 post-call tag（如
+`aevatar.projection.state.version`）通过 `activity?.SetTag(...)`
+显式设，包 try/catch swallow（参见 ADR 0021 §"Consequences"）。
+Channel runtime may use its domain-local `ChannelDiagnostics` facade, but that
+facade must alias `AevatarActivitySource.Source` and only expose tag keys from
+the `aevatar.channel.*` family listed above.
+
+## 8. 消费者：ActivityListener pattern
+
+Inspector-style 本地 consumer 的最小消费实现：
+
+```csharp
+var listener = new ActivityListener
+{
+    ShouldListenTo = src => src.Name == "Aevatar.Agents",
+    Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+        ActivitySamplingResult.AllDataAndRecorded,  // local override, AlwaysOn
+    ActivityStarted = activity =>
+    {
+        // 转换为 TelemetryFrame，写入 BoundedChannel
+        var frame = TelemetryFrame.FromActivity(activity);
+        _channel.Writer.TryWrite(frame);  // drop-oldest when full
+    },
+};
+ActivitySource.AddActivityListener(listener);
+```
+
+Channel policy（ADR [0023](../adr/0023-two-tier-inspector-architecture.md)
+强制）：
+
+```csharp
+Channel.CreateBounded<TelemetryFrame>(new BoundedChannelOptions(1000)
+{
+    FullMode = BoundedChannelFullMode.DropOldest,
+    SingleReader = false,
+    SingleWriter = false,
+});
+```
+
+drop-oldest 保证：listener 永不反压回业务路径；channel 满时丢最旧帧。
+
+## 9. Host → browser JSON wire-format 例外
+
+CLAUDE.md "Protobuf 优先" 适用于：
+- actor ↔ actor 内部传输
+- 跨节点 RPC 内部传输
+- actor 持久态、event store、readmodel doc 等仓库内部存储
+
+**例外**：Host → browser demo 边界（例如 Inspector REST / SSE endpoint
+对前端 React 的传输）允许 JSON。具体规则：
+
+- Tier 1 REST：readmodel `state_root`（Protobuf `Any`）在 host 端用
+  `Google.Protobuf.JsonFormatter` 反包成 typed JSON（或复用 Studio.Projection
+  内现有 helper —— Phase A.3 调研确认）。
+- Tier 2 SSE：`TelemetryFrame` 序列化为 JSON event payload。
+- 此例外仅适用 demo 边界；任何其他出现 JSON 的内部跨 actor / 跨节点路径
+  仍属违规，应转 Protobuf。
+
+## 10. 与 Workflow Studio 的关系
+
+Workflow Studio（`demos/Aevatar.Demos.Workflow.Web`）走原 `WorkflowEvent`
+SSE 通道，由 `WorkflowExecutionRunEventProjector` 派发。本文档新增的
+`aevatar.workflow.run` activity **不替代**这条流；它是 OTel 侧的 trace
+装饰，给 Inspector / Jaeger / Tempo 用，**emit 路径不分叉**。
+
+| 消费者 | 通道 | 数据形式 |
+|--------|------|----------|
+| Workflow Studio (yaml editor + run viewer) | 原 `WorkflowEvent` SSE | `WorkflowRunEventEnvelope` proto（JSON 仅在 wire boundary） |
+| Inspector-style live actor system viz | OTel `Aevatar.Agents` activities | OTel activity + tags（observation） |
+| 外部 trace stack (Jaeger / Tempo) | OTel exporter | OTel spans |
+
+三个消费者读同一份 committed 事实源（workflow committed events），
+**emit 路径不 fanout**。Workflow Studio 不需要改动。
+
+## 11. CI 守护
+
+- `tools/ci/inspector_tier_boundary_guard.sh`（ADR
+  [0023](../adr/0023-two-tier-inspector-architecture.md) 引入）：扫描
+  `demos/Aevatar.Demos.Inspector*`，禁止任何 `/api/inspector/*`
+  endpoint 读 `Channel<TelemetryFrame>` 或返回历史 telemetry 列表。
+- `tools/ci/projection_state_version_guard.sh`：现有 guard，wrap
+  decorator 落地后不应触发新违规（decorator 只加 observation，不改
+  projection 语义）。
+- `tools/ci/architecture_guards.sh`：主入口，运行上述两条 + 其他。
+
+## 12. 参考
+
+- ADR [0022](../adr/0022-otel-aevatar-semantic-conventions.md) —
+  semantic conventions 的决议。
+- ADR [0023](../adr/0023-two-tier-inspector-architecture.md) —
+  Inspector two-tier 架构。
+- ADR [0019](../adr/0019-stable-agent-kind-identity.md) +
+  [0020](../adr/0020-actor-state-version-placement.md) —
+  actor identity / state version 的上下文（被 spawn / link tag 引用）。
+- [OpenTelemetry .NET API — ActivitySource](https://opentelemetry.io/docs/languages/net/instrumentation/)
+- [OpenTelemetry GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+- [docs/canon/architecture.md](architecture.md) — 仓库分层与 source 的归属。
+- [docs/canon/cqrs-projection.md](cqrs-projection.md) — projection
+  pipeline 的现状，被本文档的 materialize / readmodel 段引用。

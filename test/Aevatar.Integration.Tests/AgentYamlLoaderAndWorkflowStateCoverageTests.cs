@@ -6,6 +6,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Integration.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public class AgentYamlLoaderAndWorkflowStateCoverageTests
 {
     [Fact]

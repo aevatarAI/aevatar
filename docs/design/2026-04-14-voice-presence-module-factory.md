@@ -49,7 +49,7 @@ The original phase plan delivered provider, transport, and host endpoint pieces,
 
 ## Non-goals
 
-- No host/runtime-neutral `actorId -> VoicePresenceSession` resolver yet.
+- No host-level `actorId -> session object` resolver; voice endpoints use actor-owned realtime lease resolution.
 - No automatic inference of provider-side tool names from agent tool sources yet.
 - No change to the existing WebSocket/WHIP endpoint contract.
 

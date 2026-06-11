@@ -43,7 +43,7 @@ Concretely:
 - relay traffic now shares dedup, workflow resume, slash routing, agent-builder routing, and conversation completion events with the rest of ChannelRuntime
 - `TransportExtras` and `OutboundDeliveryContext` carry relay reply facts as typed contracts instead of opaque bags or raw-payload side channels
 - `ChannelBotRegistration` gains Nyx identity lookup fields so relay-originated activities resolve registration state without depending on `activity.Bot`
-- `NyxRelayAgentBuilderFlow` short-circuits unknown slash commands so `/unknown_command` no longer falls through to LLM hallucination
+- `AgentBuilderCardFlow` handles the known agent-builder slash commands and leaves unknown slash commands to the Ornn/LLM shortcut path
 - direct `NyxIdChatGAgent` creation from relay/webhook code is forbidden by CI guard; relay-to-chat orchestration must flow through `ConversationGAgent`
 - solution filters are split into `aevatar.channels.slnf` and `aevatar.platforms.slnf` so transport and rendering code are no longer hidden inside the Foundation slice
 
@@ -99,3 +99,19 @@ already excluded from the supported production contract.
   `/api/webhooks/nyxid-relay` ingress.
 
 The lessons that shaped this PR are captured in `docs/operations/2026-04-27-telegram-nyx-cutover-runbook.md`.
+
+## Lark CardKit streaming amendment (2026-05-25)
+
+Production Lark streaming uses CardKit 2.0 streaming cards as the primary path.
+The legacy message-edit path is fallback only for pre-send/card-create failure,
+deployments without CardKit scopes, or non-Lark/non-CardKit environments. It is
+not a rollback strategy for a broken production Lark stream: message edit still
+hits Lark's per-message edit cap (`230072`) and can truncate long replies.
+
+CardKit create/stream/finalize work is executed outside the actor turn, then
+reported back as typed continuation events. Those continuation envelopes are
+self-published by `ConversationGAgent` (`PublisherActorId == target actor id`),
+so the CardKit completion/timeout handlers must opt in to self handling. If they
+fall back to a bare `[EventHandler]`, `StaticHandlerAdapter` filters the signal
+after Lark has already accepted the card API call, leaving the card visible but
+the conversation lifecycle stuck.

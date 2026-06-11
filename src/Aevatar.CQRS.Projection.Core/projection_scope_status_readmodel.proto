@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+option csharp_namespace = "Aevatar.CQRS.Projection.Core.Orchestration";
+
+import "projection_scope_messages.proto";
+import "google/protobuf/timestamp.proto";
+
+message ProjectionScopeStatusDocument {
+  string id = 1;
+  string scope_actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string root_actor_id = 6;
+  string projection_kind = 7;
+  string session_id = 8;
+  ProjectionScopeMode mode = 9;
+  bool active = 10;
+  bool observation_attached = 11;
+  bool released = 12;
+  int64 last_observed_version = 13;
+  int64 last_successful_version = 14;
+  int32 failure_count = 15;
+}

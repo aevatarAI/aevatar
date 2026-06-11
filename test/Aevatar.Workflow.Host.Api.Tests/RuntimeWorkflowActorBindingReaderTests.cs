@@ -19,27 +19,13 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
     }
 
     [Fact]
-    public async Task GetAsync_ShouldReturnNull_WhenActorMissing()
-    {
-        var reader = CreateReader(existsAsync: _ => Task.FromResult(false));
-
-        var result = await reader.GetAsync("missing", CancellationToken.None);
-
-        result.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetAsync_ShouldReturnUnsupportedBinding_WhenActorIsNotWorkflowCapable()
+    public async Task GetAsync_ShouldReturnNull_WhenReadModelDocumentMissing()
     {
         var reader = CreateReader();
 
         var result = await reader.GetAsync("actor-1", CancellationToken.None);
 
-        result.Should().NotBeNull();
-        result!.ActorKind.Should().Be(WorkflowActorKind.Unsupported);
-        result.ActorId.Should().Be("actor-1");
-        result.WorkflowName.Should().BeEmpty();
-        result.WorkflowYaml.Should().BeEmpty();
+        result.Should().BeNull();
     }
 
     [Fact]
@@ -58,9 +44,7 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 {
                     ["child"] = "yaml-child",
                 },
-            }),
-            isExpectedAsync: static (actorId, expectedType, _) => Task.FromResult(
-                actorId == "actor-1" && expectedType == typeof(Aevatar.Workflow.Core.WorkflowRunGAgent)));
+            }));
 
         var result = await reader.GetAsync("actor-1", CancellationToken.None);
 
@@ -75,7 +59,7 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
     }
 
     [Fact]
-    public async Task GetAsync_ShouldUseVerifierKind_WhenProjectedDocumentDoesNotDeclareKind()
+    public async Task GetAsync_ShouldUseProjectedDocumentKind_WhenRuntimeWouldInferDifferentKind()
     {
         var reader = CreateReader(
             getDocumentAsync: (_, _) => Task.FromResult<WorkflowActorBindingDocument?>(new WorkflowActorBindingDocument
@@ -83,32 +67,104 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 Id = "actor-2",
                 ActorId = "binding-actor-2",
                 ActorKind = WorkflowActorKind.Unsupported,
-            }),
-            isExpectedAsync: static (actorId, expectedType, _) => Task.FromResult(
-                actorId == "actor-2" && expectedType == typeof(Aevatar.Workflow.Core.WorkflowGAgent)));
+            }));
 
         var result = await reader.GetAsync("actor-2", CancellationToken.None);
 
         result.Should().NotBeNull();
-        result!.ActorKind.Should().Be(WorkflowActorKind.Definition);
+        result!.ActorKind.Should().Be(WorkflowActorKind.Unsupported);
         result.ActorId.Should().Be("binding-actor-2");
     }
 
     [Fact]
-    public async Task GetAsync_ShouldReturnUnboundDefinitionBinding_WhenProjectionHasNoDocument()
+    public async Task ListByRunIdAsync_ShouldReturnProjectedRunRows_WithoutRuntimeFiltering()
     {
         var reader = CreateReader(
-            getDocumentAsync: (_, _) => Task.FromResult<WorkflowActorBindingDocument?>(null),
-            isExpectedAsync: static (actorId, expectedType, _) => Task.FromResult(
-                actorId == "actor-3" && expectedType == typeof(Aevatar.Workflow.Core.WorkflowGAgent)));
+            queryDocumentsAsync: (query, _) =>
+            {
+                query.Filters.Should().Contain(filter =>
+                    filter.FieldPath == nameof(WorkflowActorBindingDocument.RunId) &&
+                    filter.Operator == ProjectionDocumentFilterOperator.Eq);
+                query.Filters.Should().Contain(filter =>
+                    filter.FieldPath == nameof(WorkflowActorBindingDocument.ActorKindValue) &&
+                    filter.Operator == ProjectionDocumentFilterOperator.Eq);
 
-        var result = await reader.GetAsync("actor-3", CancellationToken.None);
+                return Task.FromResult(new ProjectionDocumentQueryResult<WorkflowActorBindingDocument>
+                {
+                    Items =
+                    [
+                        new WorkflowActorBindingDocument
+                        {
+                            ActorId = "run-actor-1",
+                            ActorKind = WorkflowActorKind.Run,
+                            DefinitionActorId = "definition-1",
+                            RunId = "run-1",
+                            WorkflowName = "projected",
+                        },
+                        new WorkflowActorBindingDocument
+                        {
+                            ActorId = " ",
+                            ActorKind = WorkflowActorKind.Run,
+                            DefinitionActorId = "definition-2",
+                            RunId = "run-1",
+                        },
+                    ],
+                });
+            });
 
-        result.Should().NotBeNull();
-        result!.ActorKind.Should().Be(WorkflowActorKind.Definition);
-        result.ActorId.Should().Be("actor-3");
-        result.DefinitionActorId.Should().Be("actor-3");
-        result.WorkflowYaml.Should().BeEmpty();
+        var result = await reader.ListByRunIdAsync(" run-1 ", take: 500, CancellationToken.None);
+
+        result.Should().ContainSingle();
+        result[0].ActorId.Should().Be("run-actor-1");
+        result[0].ActorKind.Should().Be(WorkflowActorKind.Run);
+        result[0].DefinitionActorId.Should().Be("definition-1");
+        result[0].RunId.Should().Be("run-1");
+        result[0].WorkflowName.Should().Be("projected");
+    }
+
+    [Fact]
+    public async Task QueryAsync_ShouldReturnProjectedRunRows_WithoutRuntimeFiltering()
+    {
+        var reader = CreateReader(
+            queryDocumentsAsync: (query, _) =>
+            {
+                query.Take.Should().Be(200);
+                query.Filters.Should().Contain(filter =>
+                    filter.FieldPath == nameof(WorkflowActorBindingDocument.ScopeId) &&
+                    filter.Operator == ProjectionDocumentFilterOperator.Eq);
+                query.Filters.Should().Contain(filter =>
+                    filter.FieldPath == nameof(WorkflowActorBindingDocument.DefinitionActorId) &&
+                    filter.Operator == ProjectionDocumentFilterOperator.In);
+
+                return Task.FromResult(new ProjectionDocumentQueryResult<WorkflowActorBindingDocument>
+                {
+                    Items =
+                    [
+                        new WorkflowActorBindingDocument
+                        {
+                            ActorId = "run-actor-2",
+                            ActorKind = WorkflowActorKind.Run,
+                            DefinitionActorId = "definition-2",
+                            RunId = "run-2",
+                            ScopeId = "scope-1",
+                        },
+                    ],
+                });
+            });
+
+        var result = await reader.QueryAsync(
+            new WorkflowRunBindingQuery(
+                " scope-1 ",
+                ["definition-1", "definition-2", "definition-1", " "],
+                Take: 500),
+            CancellationToken.None);
+
+        result.Should().ContainSingle();
+        result[0].ActorId.Should().Be("run-actor-2");
+        result[0].ActorKind.Should().Be(WorkflowActorKind.Run);
+        result[0].DefinitionActorId.Should().Be("definition-2");
+        result[0].RunId.Should().Be("run-2");
+        result[0].ScopeId.Should().Be("scope-1");
     }
 
     [Fact]
@@ -125,9 +181,7 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
 
     private static ProjectionWorkflowActorBindingReader CreateReader(
         Func<string, CancellationToken, Task<WorkflowActorBindingDocument?>>? getDocumentAsync = null,
-        Func<ProjectionDocumentQuery, CancellationToken, Task<ProjectionDocumentQueryResult<WorkflowActorBindingDocument>>>? queryDocumentsAsync = null,
-        Func<string, Task<bool>>? existsAsync = null,
-        Func<string, Type, CancellationToken, Task<bool>>? isExpectedAsync = null)
+        Func<ProjectionDocumentQuery, CancellationToken, Task<ProjectionDocumentQueryResult<WorkflowActorBindingDocument>>>? queryDocumentsAsync = null)
     {
         var queryAsync = queryDocumentsAsync;
         if (queryAsync == null)
@@ -141,8 +195,6 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
 
         return new ProjectionWorkflowActorBindingReader(
             getDocumentAsync ?? ((_, _) => Task.FromResult<WorkflowActorBindingDocument?>(null)),
-            queryAsync,
-            existsAsync ?? (_ => Task.FromResult(true)),
-            isExpectedAsync ?? ((_, _, _) => Task.FromResult(false)));
+            queryAsync);
     }
 }

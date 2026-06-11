@@ -45,6 +45,8 @@ export interface ScopeServiceRevisionActionResult {
 export interface ScopeServiceEndpointContract {
   readonly scopeId: string;
   readonly serviceId: string;
+  readonly memberId?: string;
+  readonly publishedServiceId?: string;
   readonly endpointId: string;
   readonly invokePath: string;
   readonly method: string;

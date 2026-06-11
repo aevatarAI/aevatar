@@ -31,24 +31,4 @@ public sealed class SchedulableStateTests
         schedule.ErrorCount.Should().Be(2);
     }
 
-    [Fact]
-    public void WorkflowAgentState_ExposesScheduleStateThroughISchedulable()
-    {
-        var state = new WorkflowAgentState
-        {
-            Enabled = false,
-            ScheduleCron = "0 * * * *",
-            ScheduleTimezone = "UTC",
-            ErrorCount = 0,
-        };
-
-        var schedule = ((ISchedulable)state).Schedule;
-
-        schedule.Enabled.Should().BeFalse();
-        schedule.Cron.Should().Be("0 * * * *");
-        schedule.Timezone.Should().Be("UTC");
-        schedule.NextRunAt.Should().BeNull();
-        schedule.LastRunAt.Should().BeNull();
-        schedule.ErrorCount.Should().Be(0);
-    }
 }

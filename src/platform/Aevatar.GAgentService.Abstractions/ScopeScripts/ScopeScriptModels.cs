@@ -1,3 +1,5 @@
+using Aevatar.Scripting.Abstractions;
+
 namespace Aevatar.GAgentService.Abstractions;
 
 public sealed record ScopeScriptCommandAcceptedHandle(
@@ -8,7 +10,7 @@ public sealed record ScopeScriptCommandAcceptedHandle(
 public sealed record ScopeScriptUpsertRequest(
     string ScopeId,
     string ScriptId,
-    string SourceText,
+    ScriptPackageSpec ScriptPackage,
     string? RevisionId = null,
     string? ExpectedBaseRevision = null);
 

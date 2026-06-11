@@ -14,9 +14,7 @@ public sealed class WorkflowRunControlCommandTests
     {
         var runtime = new FakeActorRuntime();
         runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var resolver = new WorkflowResumeCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(
+        var resolver = new WorkflowResumeCommandTargetResolver(new FakeWorkflowActorBindingReader(
                 new WorkflowActorBinding(
                     WorkflowActorKind.Run,
                     "actor-1",
@@ -41,9 +39,7 @@ public sealed class WorkflowRunControlCommandTests
     {
         var runtime = new FakeActorRuntime();
         runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var resolver = new WorkflowSignalCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(
+        var resolver = new WorkflowSignalCommandTargetResolver(new FakeWorkflowActorBindingReader(
                 new WorkflowActorBinding(
                     WorkflowActorKind.Run,
                     "actor-1",
@@ -65,9 +61,7 @@ public sealed class WorkflowRunControlCommandTests
     public async Task ResumeResolver_ShouldRejectBlankStepId_BeforeRuntimeLookup()
     {
         var runtime = new FakeActorRuntime();
-        var resolver = new WorkflowResumeCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(null));
+        var resolver = new WorkflowResumeCommandTargetResolver(new FakeWorkflowActorBindingReader(null));
 
         var result = await resolver.ResolveAsync(
             new WorkflowResumeCommand("actor-1", "run-1", " ", "cmd-1", true, "approved"),
@@ -81,9 +75,7 @@ public sealed class WorkflowRunControlCommandTests
     public async Task SignalResolver_ShouldRejectBlankSignalName_BeforeRuntimeLookup()
     {
         var runtime = new FakeActorRuntime();
-        var resolver = new WorkflowSignalCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(null));
+        var resolver = new WorkflowSignalCommandTargetResolver(new FakeWorkflowActorBindingReader(null));
 
         var result = await resolver.ResolveAsync(
             new WorkflowSignalCommand("actor-1", "run-1", " ", "cmd-1", "yes"),
@@ -98,9 +90,7 @@ public sealed class WorkflowRunControlCommandTests
     {
         var runtime = new FakeActorRuntime();
         runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var resolver = new WorkflowStopCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(
+        var resolver = new WorkflowStopCommandTargetResolver(new FakeWorkflowActorBindingReader(
                 new WorkflowActorBinding(
                     WorkflowActorKind.Run,
                     "actor-1",
@@ -138,13 +128,14 @@ public sealed class WorkflowRunControlCommandTests
                 },
                 "edited draft",
                 "minor note"),
-            new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
+            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
         var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Route!.PublisherActorId.Should().Be("api.workflow.resume");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
-        envelope.Propagation!.CorrelationId.Should().Be("cmd-1");
+        envelope.Propagation!.CorrelationId.Should().Be("corr-1");
         resumed.RunId.Should().Be("run-1");
         resumed.StepId.Should().Be("step-1");
         resumed.Approved.Should().BeTrue();
@@ -172,13 +163,14 @@ public sealed class WorkflowRunControlCommandTests
         var factory = new WorkflowSignalCommandEnvelopeFactory();
         var envelope = factory.CreateEnvelope(
             new WorkflowSignalCommand("actor-1", "run-1", "approve", "cmd-1", "yes"),
-            new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
+            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
         var signal = envelope.Payload.Unpack<SignalReceivedEvent>();
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Route!.PublisherActorId.Should().Be("api.workflow.signal");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
-        envelope.Propagation!.CorrelationId.Should().Be("cmd-1");
+        envelope.Propagation!.CorrelationId.Should().Be("corr-1");
         signal.RunId.Should().Be("run-1");
         signal.SignalName.Should().Be("approve");
         signal.Payload.Should().Be("yes");
@@ -202,13 +194,14 @@ public sealed class WorkflowRunControlCommandTests
         var factory = new WorkflowStopCommandEnvelopeFactory();
         var envelope = factory.CreateEnvelope(
             new WorkflowStopCommand("actor-1", "run-1", "cmd-1", "user requested stop"),
-            new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
+            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
         var stopped = envelope.Payload.Unpack<WorkflowStoppedEvent>();
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Route!.PublisherActorId.Should().Be("api.workflow.stop");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
-        envelope.Propagation!.CorrelationId.Should().Be("cmd-1");
+        envelope.Propagation!.CorrelationId.Should().Be("corr-1");
         stopped.RunId.Should().Be("run-1");
         stopped.Reason.Should().Be("user requested stop");
     }
@@ -218,7 +211,7 @@ public sealed class WorkflowRunControlCommandTests
     {
         var factory = new WorkflowRunControlAcceptedReceiptFactory();
         var receipt = factory.Create(
-            new WorkflowRunControlCommandTarget(new FakeActor("actor-1"), "run-1"),
+            new WorkflowRunControlCommandTarget("actor-1", "run-1"),
             new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
         receipt.ActorId.Should().Be("actor-1");

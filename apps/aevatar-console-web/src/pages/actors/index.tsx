@@ -3,6 +3,7 @@ import {
   RadarChartOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
+import { useIntl } from "@umijs/max";
 import type { Edge, Node } from "@xyflow/react";
 import { Position } from "@xyflow/react";
 import {
@@ -55,6 +56,7 @@ import {
   formatAevatarStatusLabel,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
+import { t } from "@/shared/i18n/messages";
 
 type ExplorerRouteSelection = {
   actorId: string;
@@ -150,7 +152,7 @@ function buildContextLabel(scopeId?: string, serviceId?: string, runId?: string)
     serviceId || "",
     runId ? truncateMiddle(runId, 8, 6) : "",
   ].filter(Boolean);
-  return segments.length > 0 ? segments.join(" / ") : "未带入入口上下文";
+  return segments.length > 0 ? segments.join(" / ") : t("pages.actors.index.entry.context.not.brought", "Entry context not brought in");
 }
 
 function filterSubgraph(
@@ -349,6 +351,7 @@ const TopologyMetricCard: React.FC<{
       flexDirection: "column",
       gap: compact ? 4 : 6,
       minHeight: compact ? 78 : 94,
+      minWidth: 0,
       padding: compact ? 14 : 16,
     }}
   >
@@ -585,6 +588,7 @@ function buildGraphCanvasEdges(subgraph: WorkflowActorGraphSubgraph): Edge[] {
 export const TopologyExplorerPage: React.FC<{
   detailOnly?: boolean;
 }> = ({ detailOnly = false }) => {
+  const intl = useIntl();
   const { token } = theme.useToken();
   const surfaceToken = token as AevatarThemeSurfaceToken;
   const initialRouteRef = useRef<ExplorerRouteSelection>(readExplorerSelection());
@@ -803,21 +807,21 @@ export const TopologyExplorerPage: React.FC<{
       {
         dataIndex: "timestamp",
         key: "timestamp",
-        title: "时间",
+        title: t("pages.actors.index.time", "time"),
         width: 170,
         render: (value: string) => formatDateTime(value),
       },
       {
         dataIndex: "stage",
         key: "stage",
-        title: "阶段",
+        title: t("pages.actors.index.stage", "stage"),
         width: 132,
         render: (value: string) => <AevatarStatusTag domain="run" status={value || "observed"} />,
       },
       {
         dataIndex: "message",
         key: "message",
-        title: "事件",
+        title: t("pages.actors.index.event", "event"),
         render: (value: string, record) => (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Typography.Text strong>{value}</Typography.Text>
@@ -843,7 +847,10 @@ export const TopologyExplorerPage: React.FC<{
       {
         dataIndex: "edgeType",
         key: "edgeType",
-        title: "关系",
+        title: intl.formatMessage({
+          id: "pages.actors.index.relation",
+          defaultMessage: "relation",
+        }),
         width: 140,
         render: (value: string) => <Tag>{edgeTypeLabel(value)}</Tag>,
       },
@@ -862,12 +869,15 @@ export const TopologyExplorerPage: React.FC<{
       {
         dataIndex: "updatedAt",
         key: "updatedAt",
-        title: "最近更新",
+        title: intl.formatMessage({
+          id: "pages.actors.index.latest.updates",
+          defaultMessage: "Latest updates",
+        }),
         width: 170,
         render: (value: string) => formatDateTime(value),
       },
     ],
-    [],
+    [intl],
   );
 
   const commitWorkbenchActor = useCallback((actorId: string) => {
@@ -990,7 +1000,7 @@ export const TopologyExplorerPage: React.FC<{
     () => [
       {
         key: "workflow",
-        title: "工作流 / 对象",
+        title: t("pages.actors.index.workflow.object", "workflow/Object"),
         width: 280,
         render: (_value, record) => (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
@@ -1010,7 +1020,7 @@ export const TopologyExplorerPage: React.FC<{
       {
         dataIndex: "id",
         key: "id",
-        title: "Actor ID",
+        title: t("pages.actors.index.actor.id", "Actor ID"),
         width: 180,
         render: (value: string) => (
           <TopologyInlineToken head={4} maxWidth={156} monospace strong tail={4} value={value} />
@@ -1019,7 +1029,7 @@ export const TopologyExplorerPage: React.FC<{
       {
         dataIndex: "type",
         key: "type",
-        title: "Actor 类型",
+        title: t("pages.actors.index.actor.type", "actor type"),
         width: 196,
         render: (value?: string) => (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
@@ -1027,14 +1037,17 @@ export const TopologyExplorerPage: React.FC<{
             <TopologyCompactLabelText
               color={token.colorTextSecondary}
               maxWidth={180}
-              value="当前列表按 actor 维度暴露后端真实对象。"
+              value={t(
+                "pages.actors.index.list.exposes.backend.objects",
+                "The current list exposes real backend objects by actor.",
+              )}
             />
           </div>
         ),
       },
       {
         key: "context",
-        title: "入口上下文",
+        title: t("pages.actors.index.entry.context", "Entry context"),
         width: 220,
         render: () => (
           <TopologyCompactLabelText
@@ -1046,7 +1059,7 @@ export const TopologyExplorerPage: React.FC<{
       },
       {
         key: "actions",
-        title: "操作",
+        title: t("pages.actors.index.operate", "operate"),
         width: 108,
         render: (_value, record) => (
           <Button
@@ -1056,8 +1069,7 @@ export const TopologyExplorerPage: React.FC<{
             }}
             type="link"
           >
-            查看概览
-          </Button>
+            {t("pages.actors.index.view.overview", "View overview")}</Button>
         ),
       },
     ],
@@ -1079,31 +1091,31 @@ export const TopologyExplorerPage: React.FC<{
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <Typography.Text style={graphControlLabelStyle}>图方向</Typography.Text>
+        <Typography.Text style={graphControlLabelStyle}>{t("pages.actors.index.figure.direction", "Figure direction")}</Typography.Text>
         <Select
           options={[
-            { label: "双向", value: "Both" },
-            { label: "只看出边", value: "Outbound" },
-            { label: "只看入边", value: "Inbound" },
+            { label: t("pages.actors.index.two.way", "Two-way"), value: "Both" },
+            { label: t("pages.actors.index.only.the.edges.can", "Only the edges can be seen"), value: "Outbound" },
+            { label: t("pages.actors.index.only.look.inward", "Only look inward"), value: "Inbound" },
           ]}
           value={direction}
           onChange={(value) => setDirection(value as ActorGraphDirection)}
         />
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <Typography.Text style={graphControlLabelStyle}>拓扑深度</Typography.Text>
+        <Typography.Text style={graphControlLabelStyle}>{t("pages.actors.index.topological.depth", "topological depth")}</Typography.Text>
         <Select
           options={[
-            { label: "1 跳", value: 1 },
-            { label: "2 跳", value: 2 },
-            { label: "3 跳", value: 3 },
+            { label: t("pages.actors.index.jump", "1 jump"), value: 1 },
+            { label: t("pages.actors.index.jumps", "2 jumps"), value: 2 },
+            { label: t("pages.actors.index.jumps.2", "3 jumps"), value: 3 },
           ]}
           value={depth}
           onChange={(value) => setDepth(Number(value))}
         />
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <Typography.Text style={graphControlLabelStyle}>关系类型</Typography.Text>
+        <Typography.Text style={graphControlLabelStyle}>{t("pages.actors.index.relationship.type", "Relationship type")}</Typography.Text>
         <Select
           allowClear
           mode="multiple"
@@ -1111,7 +1123,7 @@ export const TopologyExplorerPage: React.FC<{
             label: edgeTypeLabel(edgeType),
             value: edgeType,
           }))}
-          placeholder={availableEdgeTypes.length > 0 ? "全部关系" : "暂无关系类型"}
+          placeholder={availableEdgeTypes.length > 0 ? t("pages.actors.index.all.relations", "All relations") : t("pages.actors.index.no.relationship.type.yet", "No relationship type yet")}
           value={edgeTypes}
           onChange={(values) => setEdgeTypes(values)}
         />
@@ -1126,18 +1138,18 @@ export const TopologyExplorerPage: React.FC<{
     <AevatarPanel
       layoutMode="document"
       padding={16}
-      title={selectedEdge ? "当前选中关系" : "当前选中节点"}
+      title={selectedEdge ? t("pages.actors.index.currently.selected.relationship", "Currently selected relationship") : t("pages.actors.index.currently.selected.node", "Currently selected node")}
     >
       {selectedEdge ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Space size={[8, 8]} wrap>
             <Tag color="processing">{edgeTypeLabel(selectedEdge.edgeType)}</Tag>
             <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12 }}>
-              最近更新 {formatDateTime(selectedEdge.updatedAt)}
+              {t("pages.actors.index.latest.updates.2", "Latest updates")}{formatDateTime(selectedEdge.updatedAt)}
             </Typography.Text>
           </Space>
           <div style={topologySelectionPanelStyle}>
-            <Typography.Text strong>From</Typography.Text>
+            <Typography.Text strong>{t("pages.actors.index.from", "From")}</Typography.Text>
             <TopologyInlineToken maxWidth="100%" monospace value={selectedEdge.fromNodeId} />
           </div>
           <div style={topologySelectionPanelStyle}>
@@ -1150,15 +1162,15 @@ export const TopologyExplorerPage: React.FC<{
           <Space size={[8, 8]} wrap>
             <Tag color="blue">{selectedNode.nodeType}</Tag>
             <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12 }}>
-              最近更新 {formatDateTime(selectedNode.updatedAt)}
+              {t("pages.actors.index.latest.updates.3", "Latest updates")}{formatDateTime(selectedNode.updatedAt)}
             </Typography.Text>
           </Space>
           <div style={topologySelectionPanelStyle}>
-            <Typography.Text strong>节点标识</Typography.Text>
+            <Typography.Text strong>{t("pages.actors.index.node.id", "Node ID")}</Typography.Text>
             <TopologyInlineToken maxWidth="100%" monospace value={selectedNode.nodeId} />
           </div>
           <div style={topologySelectionPanelStyle}>
-            <Typography.Text strong>关键属性</Typography.Text>
+            <Typography.Text strong>{t("pages.actors.index.key.attributes", "Key attributes")}</Typography.Text>
             {selectionProperties.length > 0 ? (
               selectionProperties.slice(0, 6).map(([key, value]) => (
                 <div
@@ -1187,12 +1199,12 @@ export const TopologyExplorerPage: React.FC<{
                 </div>
               ))
             ) : (
-              <Typography.Text type="secondary">当前没有额外属性。</Typography.Text>
+              <Typography.Text type="secondary">{t("pages.actors.index.there.are.currently.no", "There are currently no additional properties.")}</Typography.Text>
             )}
           </div>
         </div>
       ) : (
-        <AevatarInspectorEmpty description="先在图里点一个节点或关系。" />
+        <AevatarInspectorEmpty description={t("pages.actors.index.first.click.on.node", "First click on a node or relationship in the graph.")} />
       )}
     </AevatarPanel>
   );
@@ -1211,8 +1223,7 @@ export const TopologyExplorerPage: React.FC<{
       description={
         <div style={{ display: "flex", flexDirection: "column", gap: options?.compact ? 8 : 10 }}>
           <Typography.Text style={{ color: token.colorTextSecondary }}>
-            当前后端还能引用这个 actor，但已经查不到它的 snapshot。常见原因是后端重启、运行态已清理，或这是历史绑定残留。
-          </Typography.Text>
+            {t("pages.actors.index.currently.the.backend.can", "Currently, the backend can still reference this actor, but its snapshot can no longer be found. Common reasons are that the backend is restarted, the running state has been cleaned, or this is the remnant of historical binding.")}</Typography.Text>
           <div
             style={{
               display: "grid",
@@ -1221,16 +1232,14 @@ export const TopologyExplorerPage: React.FC<{
             }}
           >
             <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}>
-              Actor ID
-            </Typography.Text>
+              {t("pages.actors.index.actor.id.2", "Actor ID")}</Typography.Text>
             <TopologyInlineToken head={4} maxWidth="100%" monospace tail={4} value={actorId} />
             {options?.contextLabel ? (
               <>
                 <Typography.Text
                   style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}
                 >
-                  入口上下文
-                </Typography.Text>
+                  {t("pages.actors.index.entry.context.2", "Entry context")}</Typography.Text>
                 <TopologyInlineToken
                   head={4}
                   maxWidth="100%"
@@ -1243,7 +1252,7 @@ export const TopologyExplorerPage: React.FC<{
           </div>
         </div>
       }
-      message={options?.title || "当前 actor 不可查询"}
+      message={options?.title || t("pages.actors.index.the.current.actor.cannot", "The current actor cannot be queried")}
       showIcon
       type="warning"
     />
@@ -1253,7 +1262,7 @@ export const TopologyExplorerPage: React.FC<{
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
       extra={
-        <Tag color="blue">真实数据</Tag>
+        <Tag color="blue">{t("pages.actors.index.real.data", "real data")}</Tag>
       }
       title="Topology"
     >
@@ -1270,12 +1279,21 @@ export const TopologyExplorerPage: React.FC<{
           <div
             style={{
               alignItems: "flex-start",
-              display: "grid",
+              display: "flex",
+              flexWrap: "wrap",
               gap: 14,
-              gridTemplateColumns: "minmax(0, 1fr) auto",
+              justifyContent: "space-between",
             }}
           >
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div
+              style={{
+                display: "flex",
+                flex: "1 1 180px",
+                flexDirection: "column",
+                gap: 6,
+                minWidth: 180,
+              }}
+            >
               <Typography.Text
                 style={{
                   color: token.colorPrimary,
@@ -1285,18 +1303,20 @@ export const TopologyExplorerPage: React.FC<{
                   textTransform: "uppercase",
                 }}
               >
-                {detailOnly ? "追查详情" : "追查入口"}
+                {detailOnly ? t("pages.actors.index.track.down.details", "Track down details") : t("pages.actors.index.trace.the.entrance", "Trace the entrance")}
               </Typography.Text>
               <Typography.Text strong style={{ fontSize: 22 }}>
-                {detailOnly ? "追查对象" : "选择追查对象"}
+                {detailOnly ? t("pages.actors.index.tracing.object", "Tracing object") : t("pages.actors.index.select.tracing.object", "Select tracing object")}
               </Typography.Text>
             </div>
             <div
               style={{
                 alignItems: "flex-end",
                 display: "flex",
+                flex: "0 1 auto",
                 flexDirection: "column",
                 gap: 8,
+                maxWidth: "100%",
               }}
             >
               <div
@@ -1309,12 +1329,13 @@ export const TopologyExplorerPage: React.FC<{
                   display: "inline-flex",
                   fontSize: 12,
                   fontWeight: 600,
-                  minHeight: 32,
                   maxWidth: "100%",
+                  minHeight: 32,
+                  overflowWrap: "anywhere",
                   padding: "0 14px",
                 }}
               >
-                入口上下文 {currentContextLabel}
+                {t("pages.actors.index.entry.context.3", "Entry context")}{currentContextLabel}
               </div>
               {detailOnly && selectedActorId ? (
                 <TopologyInlineToken
@@ -1339,11 +1360,10 @@ export const TopologyExplorerPage: React.FC<{
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}>
-                Actor ID
-              </Typography.Text>
+                {t("pages.actors.index.actor.id.3", "Actor ID")}</Typography.Text>
               <Input
                 onChange={(event) => setActorInput(event.target.value)}
-                placeholder="输入 Actor ID"
+                placeholder={t("pages.actors.index.enter.actor.id", "Enter actor ID")}
                 style={{
                   fontFamily: '"IBM Plex Mono", "SF Mono", monospace',
                   fontSize: 12,
@@ -1354,11 +1374,10 @@ export const TopologyExplorerPage: React.FC<{
             {!detailOnly ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}>
-                  筛选 Actor
-                </Typography.Text>
+                  {t("pages.actors.index.filter.actors", "Filter Actors")}</Typography.Text>
                 <Input
                   onChange={(event) => setActorKeyword(event.target.value)}
-                  placeholder="筛选 Actor"
+                  placeholder={t("pages.actors.index.filter.actors.2", "Filter Actors")}
                   value={actorKeyword}
                 />
               </div>
@@ -1374,12 +1393,12 @@ export const TopologyExplorerPage: React.FC<{
           >
             <Space size={8}>
               <Button onClick={handleLoadFocus} type="primary">
-                {detailOnly ? "刷新追查对象" : "打开追查详情"}
+                {detailOnly ? t("pages.actors.index.refresh.tracking.objects", "Refresh tracking objects") : t("pages.actors.index.open.tracing.details", "Open tracing details")}
               </Button>
               {detailOnly ? (
-                <Button onClick={handleBackToExplorerList}>返回对象列表</Button>
+                <Button onClick={handleBackToExplorerList}>{t("pages.actors.index.return.object.list", "Return object list")}</Button>
               ) : (
-                <Button onClick={() => actorsQuery.refetch()}>刷新列表</Button>
+                <Button onClick={() => actorsQuery.refetch()}>{t("pages.actors.index.refresh.list", "Refresh list")}</Button>
               )}
             </Space>
           </div>
@@ -1390,7 +1409,7 @@ export const TopologyExplorerPage: React.FC<{
             message={
               liveError instanceof Error
                 ? liveError.message
-                : "Topology 读取失败。"
+                : t("pages.actors.index.topology.read.failed", "Topology read failed.")
             }
             showIcon
             type="error"
@@ -1401,7 +1420,7 @@ export const TopologyExplorerPage: React.FC<{
           style={{
             display: "grid",
             gap: 12,
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(128px, 1fr))",
           }}
         >
           {detailOnly ? (
@@ -1413,7 +1432,7 @@ export const TopologyExplorerPage: React.FC<{
               />
               <TopologyMetricCard
                 compact
-                label="Actor ID"
+                label={t("pages.actors.index.actor.id.4", "Actor ID")}
                 value={
                   selectedActorId ? (
                     <TopologyInlineToken
@@ -1430,24 +1449,24 @@ export const TopologyExplorerPage: React.FC<{
               />
               <TopologyMetricCard
                 compact
-                label="入口上下文"
+                label={t("pages.actors.index.entry.context.4", "Entry context")}
                 value={<TopologyInlineToken head={4} maxWidth="100%" monospace tail={4} value={currentContextLabel} />}
               />
               <TopologyMetricCard
                 compact
-                label="最近更新时间"
+                label={t("pages.actors.index.last.updated.time", "last updated time")}
                 value={selectedSnapshot ? formatDateTime(selectedSnapshot.lastUpdatedAt) : "n/a"}
               />
             </>
           ) : (
             <>
-              <TopologyMetricCard compact label="可追查对象" value={displayActors.length} />
-              <TopologyMetricCard compact label="数据源" value="Actor Query" />
-              <TopologyMetricCard compact label="入口上下文" value={currentContextLabel} />
+              <TopologyMetricCard compact label={t("pages.actors.index.traceable.objects", "Traceable objects")} value={displayActors.length} />
+              <TopologyMetricCard compact label={t("pages.actors.index.data.source", "data source")} value={t("pages.actors.index.actor.query", "Actor Query")} />
+              <TopologyMetricCard compact label={t("pages.actors.index.entry.context.5", "Entry context")} value={currentContextLabel} />
               <TopologyMetricCard
                 compact
-                label="列表状态"
-                value={actorsQuery.isLoading ? "读取中" : "已加载"}
+                label={t("pages.actors.index.list.status", "list status")}
+                value={actorsQuery.isLoading ? t("pages.actors.index.reading", "Reading") : t("pages.actors.index.loaded", "Loaded")}
               />
             </>
           )}
@@ -1457,8 +1476,8 @@ export const TopologyExplorerPage: React.FC<{
           <AevatarPanel
             layoutMode="document"
             padding={18}
-            title="可追查对象"
-            extra={<Tag color="default">实时</Tag>}
+            title={t("pages.actors.index.traceable.objects.2", "Traceable objects")}
+            extra={<Tag color="default">{t("pages.actors.index.real.time", "real time")}</Tag>}
           >
             {displayActors.length > 0 ? (
               <div className="topology-actor-table-shell" style={actorTableShellStyle}>
@@ -1466,7 +1485,7 @@ export const TopologyExplorerPage: React.FC<{
                   className="topology-actor-table"
                   columns={actorListColumns}
                   dataSource={displayActors}
-                  locale={{ emptyText: "当前没有可追查对象。" }}
+                  locale={{ emptyText: t("pages.actors.index.there.are.currently.no.2", "There are currently no targets to trace.") }}
                   pagination={false}
                   rowKey={(record) => record.id}
                   scroll={{ x: actorTableMinWidth, y: actorTableBodyMaxHeight }}
@@ -1477,8 +1496,8 @@ export const TopologyExplorerPage: React.FC<{
               </div>
             ) : (
               <AevatarInspectorEmpty
-                description="当前租户下没有可见 actor，或者 actor query endpoints 未启用。"
-                title="暂无可追查对象"
+                description={t("pages.actors.index.there.are.no.actors", "There are no actors visible under the current tenant, or the actor query endpoints are not enabled.")}
+                title={t("pages.actors.index.there.is.currently.no", "There is currently no traceable target")}
               />
             )}
           </AevatarPanel>
@@ -1490,38 +1509,38 @@ export const TopologyExplorerPage: React.FC<{
             onClose={() => setPreviewOpen(false)}
             open={previewOpen}
             size="large"
-            title="对象快速概览"
+            title={t("pages.actors.index.quick.overview.of.objects", "Quick overview of objects")}
           >
           {!previewActorId ? (
-            <AevatarInspectorEmpty description="先从列表里选择一个 actor。" />
+            <AevatarInspectorEmpty description={t("pages.actors.index.first.select.an.actor", "First select an actor from the list.")} />
           ) : loadingPreviewTopology ? (
-            <AevatarInspectorEmpty description="正在读取 snapshot、timeline 和 graph subgraph。" />
+            <AevatarInspectorEmpty description={t("pages.actors.index.reading.snapshot.timeline.and", "Reading snapshot, timeline and graph subgraph.")} />
           ) : previewActorUnavailable ? (
             actorUnavailableNotice(previewActorId, {
               compact: true,
               contextLabel: previewContextLabel,
-              title: "这个 actor 当前不可预览",
+              title: t("pages.actors.index.this.actor.is.currently", "This actor is currently not available for preview"),
             })
           ) : previewError ? (
             <Alert
               message={
                 previewError instanceof Error
                   ? previewError.message
-                  : "预览对象读取失败。"
+                  : t("pages.actors.index.failed.to.read.preview", "Failed to read preview object.")
               }
               showIcon
               type="error"
             />
           ) : !previewSnapshot ? (
             <AevatarInspectorEmpty
-              description="当前 actor 还没有可读的 snapshot。"
-              title="暂无运行态数据"
+              description={t("pages.actors.index.there.is.currently.no.2", "There is currently no readable snapshot of the actor.")}
+              title={t("pages.actors.index.no.running.data.yet", "No running data yet")}
             />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <Space size={[8, 8]} wrap>
-                  <Tag color="blue">实时对象</Tag>
+                  <Tag color="blue">{t("pages.actors.index.real.time.object", "real time object")}</Tag>
                   <TopologyStatusPill status={previewStatus} />
                 </Space>
                 <TopologyCompactLabelText
@@ -1545,7 +1564,7 @@ export const TopologyExplorerPage: React.FC<{
                 <TopologyCompactLabelText
                   color={token.colorTextSecondary}
                   maxWidth="100%"
-                  value={previewDisplayActor?.description || "当前没有额外描述。"}
+                  value={previewDisplayActor?.description || t("pages.actors.index.there.are.currently.no.3", "There are currently no additional descriptions.")}
                 />
               </div>
 
@@ -1556,14 +1575,14 @@ export const TopologyExplorerPage: React.FC<{
                   gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
                 }}
               >
-                <TopologyMetricCard compact label="状态版本" value={previewSnapshot.stateVersion} />
+                <TopologyMetricCard compact label={t("pages.actors.index.status.version", "status version")} value={previewSnapshot.stateVersion} />
                 <TopologyMetricCard
                   compact
-                  label="最近同步"
+                  label={t("pages.actors.index.recently.synced", "Recently synced")}
                   value={previewUpdatedAt ? formatDateTime(previewUpdatedAt) : "n/a"}
                 />
-                <TopologyMetricCard compact label="已完成步骤" value={previewSnapshot.completedSteps} />
-                <TopologyMetricCard compact label="关系边" value={previewSubgraph.edges.length} />
+                <TopologyMetricCard compact label={t("pages.actors.index.completed.steps", "Completed steps")} value={previewSnapshot.completedSteps} />
+                <TopologyMetricCard compact label={t("pages.actors.index.relationship.edge", "relationship edge")} value={previewSubgraph.edges.length} />
               </div>
 
               <div
@@ -1577,10 +1596,10 @@ export const TopologyExplorerPage: React.FC<{
                   padding: 14,
                 }}
               >
-                <Typography.Text strong>入口上下文</Typography.Text>
+                <Typography.Text strong>{t("pages.actors.index.entry.context.6", "Entry context")}</Typography.Text>
                 <TopologyInlineToken head={4} maxWidth="100%" monospace tail={4} value={previewContextLabel} />
                 <Typography.Paragraph style={{ marginBottom: 0, minHeight: 0 }}>
-                  {previewSnapshot.lastOutput || "当前没有最近输出。"}
+                  {previewSnapshot.lastOutput || t("pages.actors.index.there.are.currently.no.4", "There are currently no recent outputs.")}
                 </Typography.Paragraph>
               </div>
 
@@ -1595,7 +1614,7 @@ export const TopologyExplorerPage: React.FC<{
                   padding: 16,
                 }}
               >
-                <Typography.Text strong>最近事件</Typography.Text>
+                <Typography.Text strong>{t("pages.actors.index.recent.events", "recent events")}</Typography.Text>
                 {previewTimeline.length > 0 ? (
                   previewTimeline.map((event) => (
                     <div
@@ -1623,14 +1642,13 @@ export const TopologyExplorerPage: React.FC<{
                     </div>
                   ))
                 ) : (
-                  <Typography.Text type="secondary">当前没有最近事件。</Typography.Text>
+                  <Typography.Text type="secondary">{t("pages.actors.index.there.are.currently.no.5", "There are currently no recent events.")}</Typography.Text>
                 )}
               </div>
 
               <Space size={8} wrap>
                 <Button onClick={() => handleEnterWorkbench()} type="primary">
-                  进入追查工作台
-                </Button>
+                  {t("pages.actors.index.enter.the.tracing.workbench", "Enter the tracing workbench")}</Button>
                 <Button
                   icon={<RadarChartOutlined />}
                   onClick={() =>
@@ -1641,8 +1659,7 @@ export const TopologyExplorerPage: React.FC<{
                     )
                   }
                 >
-                  查看运行
-                </Button>
+                  {t("pages.actors.index.view.run", "View run")}</Button>
               </Space>
             </div>
           )}
@@ -1654,11 +1671,11 @@ export const TopologyExplorerPage: React.FC<{
           <AevatarPanel
             layoutMode="document"
             padding={18}
-            title="追查工作区"
+            title={t("pages.actors.index.trace.work.area", "Trace work area")}
             extra={
               selectedActorId ? (
                 <Space size={8} wrap>
-                  <Tag color="blue">当前焦点</Tag>
+                  <Tag color="blue">{t("pages.actors.index.current.focus", "current focus")}</Tag>
                   <Button
                     icon={<RadarChartOutlined />}
                     onClick={() =>
@@ -1669,28 +1686,27 @@ export const TopologyExplorerPage: React.FC<{
                       )
                     }
                   >
-                    查看运行
-                  </Button>
+                    {t("pages.actors.index.view.run.2", "View run")}</Button>
                 </Space>
               ) : undefined
             }
           >
             {!selectedActorId ? (
               <AevatarInspectorEmpty
-                description="输入 actorId，或者先从上方对象列表选择一个 workflow run actor。"
-                title="先锁定焦点 actor"
+                description={t("pages.actors.index.enter.an.actorid.or", "Enter an actorId, or first select a workflow run actor from the object list above.")}
+                title={t("pages.actors.index.lock.the.focus.actor", "Lock the focus actor first")}
               />
             ) : loadingLiveTopology ? (
-              <AevatarInspectorEmpty description="正在读取 snapshot、timeline 和 graph subgraph。" />
+              <AevatarInspectorEmpty description={t("pages.actors.index.reading.snapshot.timeline.and.2", "Reading snapshot, timeline and graph subgraph.")} />
             ) : selectedActorUnavailable ? (
               actorUnavailableNotice(selectedActorId, {
-                action: <Button onClick={handleBackToExplorerList}>返回对象列表</Button>,
+                action: <Button onClick={handleBackToExplorerList}>{t("pages.actors.index.return.object.list.2", "Return object list")}</Button>,
                 contextLabel: currentContextLabel,
               })
             ) : !selectedSnapshot ? (
               <AevatarInspectorEmpty
-                description="当前 actor 还没有可读的 snapshot。"
-                title="暂无运行态数据"
+                description={t("pages.actors.index.there.is.currently.no.3", "There is currently no readable snapshot of the actor.")}
+                title={t("pages.actors.index.no.running.data.yet.2", "No running data yet")}
               />
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -1701,10 +1717,10 @@ export const TopologyExplorerPage: React.FC<{
                     gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
                   }}
                 >
-                  <TopologyMetricCard label="状态版本" value={selectedSnapshot.stateVersion} />
-                  <TopologyMetricCard label="完成状态" value={focusStatusLabel} />
-                  <TopologyMetricCard label="已完成步骤" value={selectedSnapshot.completedSteps} />
-                  <TopologyMetricCard label="角色回复" value={selectedSnapshot.roleReplyCount} />
+                  <TopologyMetricCard label={t("pages.actors.index.status.version.2", "status version")} value={selectedSnapshot.stateVersion} />
+                  <TopologyMetricCard label={t("pages.actors.index.completion.status", "completion status")} value={focusStatusLabel} />
+                  <TopologyMetricCard label={t("pages.actors.index.completed.steps.2", "Completed steps")} value={selectedSnapshot.completedSteps} />
+                  <TopologyMetricCard label={t("pages.actors.index.character.reply", "character reply")} value={selectedSnapshot.roleReplyCount} />
                 </div>
 
                 <Tabs
@@ -1712,7 +1728,7 @@ export const TopologyExplorerPage: React.FC<{
                   items={[
                     {
                       key: "graph",
-                      label: "关系图",
+                      label: t("pages.actors.index.relationship.diagram", "relationship diagram"),
                       children: (
                         <div
                           style={{
@@ -1724,17 +1740,16 @@ export const TopologyExplorerPage: React.FC<{
                           <AevatarPanel
                             layoutMode="document"
                             padding={16}
-                            title="Actor 关系图"
+                            title={t("pages.actors.index.actor.relationship.diagram", "actor relationship diagram")}
                             extra={
                               <Space size={8} wrap>
-                                <Tag color="default">节点 {selectedSubgraph.nodes.length}</Tag>
-                                <Tag color="default">边 {selectedSubgraph.edges.length}</Tag>
+                                <Tag color="default">{t("pages.actors.index.node", "node")}{selectedSubgraph.nodes.length}</Tag>
+                                <Tag color="default">{t("pages.actors.index.side", "side")}{selectedSubgraph.edges.length}</Tag>
                                 <Button
                                   icon={<FullscreenOutlined />}
                                   onClick={() => setGraphFullscreenOpen(true)}
                                 >
-                                  全屏查看关系图
-                                </Button>
+                                  {t("pages.actors.index.view.relationship.diagram.full", "View relationship diagram full screen")}</Button>
                               </Space>
                             }
                           >
@@ -1742,8 +1757,7 @@ export const TopologyExplorerPage: React.FC<{
                               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                                 {graphControls}
                                 <Typography.Text style={{ color: token.colorTextSecondary }}>
-                                  焦点 actor 会固定为根节点，图里同时展示 workflow run、step 和 child actor 的当前关系。
-                                </Typography.Text>
+                                  {t("pages.actors.index.the.focus.actor.will", "The focus actor will be fixed as the root node, and the current relationship between workflow run, step and child actor is also shown in the figure.")}</Typography.Text>
                                 <div
                                   style={{
                                     background: "linear-gradient(180deg, rgba(248, 250, 252, 0.94) 0%, rgba(255, 255, 255, 0.98) 100%)",
@@ -1771,7 +1785,7 @@ export const TopologyExplorerPage: React.FC<{
                               </div>
                             ) : (
                               <Empty
-                                description="当前 actor 没有可见关系。"
+                                description={t("pages.actors.index.the.current.actor.has", "The current actor has no visible relationships.")}
                                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                               />
                             )}
@@ -1783,13 +1797,13 @@ export const TopologyExplorerPage: React.FC<{
                     },
                     {
                       key: "timeline",
-                      label: "最近事件",
+                      label: t("pages.actors.index.recent.events.2", "recent events"),
                       children: (
-                        <AevatarPanel layoutMode="document" padding={16} title="Timeline evidence">
+                        <AevatarPanel layoutMode="document" padding={16} title={t("pages.actors.index.timeline.evidence", "Timeline evidence")}>
                           <Table<WorkflowActorTimelineItem>
                             columns={actorTableColumns}
                             dataSource={selectedTimeline}
-                            locale={{ emptyText: "当前没有 timeline 事件。" }}
+                            locale={{ emptyText: t("pages.actors.index.there.are.currently.no.6", "There are currently no timeline events.") }}
                             pagination={false}
                             rowKey={(record) =>
                               `${record.timestamp}-${record.stage}-${record.stepId}-${record.eventType}`
@@ -1801,13 +1815,13 @@ export const TopologyExplorerPage: React.FC<{
                     },
                     {
                       key: "edges",
-                      label: "边关系",
+                      label: t("pages.actors.index.side.relationship", "side relationship"),
                       children: (
-                        <AevatarPanel layoutMode="document" padding={16} title="Edge table">
+                        <AevatarPanel layoutMode="document" padding={16} title={t("pages.actors.index.edge.table", "Edge table")}>
                           <Table<WorkflowActorGraphEdge>
                             columns={edgeTableColumns}
                             dataSource={selectedSubgraph.edges}
-                            locale={{ emptyText: "当前没有边关系。" }}
+                            locale={{ emptyText: t("pages.actors.index.there.are.currently.no.7", "There are currently no edge relationships.") }}
                             pagination={false}
                             rowKey={(record) => record.edgeId}
                             size="small"
@@ -1817,9 +1831,9 @@ export const TopologyExplorerPage: React.FC<{
                     },
                     {
                       key: "snapshot",
-                      label: "快照",
+                      label: t("pages.actors.index.snapshot", "Snapshot"),
                       children: (
-                        <AevatarPanel layoutMode="document" padding={16} title="Actor snapshot">
+                        <AevatarPanel layoutMode="document" padding={16} title={t("pages.actors.index.actor.snapshot", "Actor snapshot")}>
                           <div
                             style={{
                               display: "grid",
@@ -1828,20 +1842,20 @@ export const TopologyExplorerPage: React.FC<{
                             }}
                           >
                             <TopologyMetricCard
-                              label="Actor ID"
+                              label={t("pages.actors.index.actor.id.5", "Actor ID")}
                               value={<TopologyInlineToken monospace value={selectedSnapshot.actorId} />}
                             />
                             <TopologyMetricCard
-                              label="Last command"
+                              label={t("pages.actors.index.last.command", "Last command")}
                               value={<TopologyInlineToken monospace value={selectedSnapshot.lastCommandId || "n/a"} />}
                             />
                             <TopologyMetricCard
-                              label="Last event"
+                              label={t("pages.actors.index.last.event", "Last event")}
                               value={<TopologyInlineToken monospace value={selectedSnapshot.lastEventId || "n/a"} />}
                             />
                             <TopologyMetricCard label="Completion" value={focusStatusLabel} />
-                            <TopologyMetricCard label="Requested steps" value={selectedSnapshot.requestedSteps} />
-                            <TopologyMetricCard label="Total steps" value={selectedSnapshot.totalSteps} />
+                            <TopologyMetricCard label={t("pages.actors.index.requested.steps", "Requested steps")} value={selectedSnapshot.requestedSteps} />
+                            <TopologyMetricCard label={t("pages.actors.index.total.steps", "Total steps")} value={selectedSnapshot.totalSteps} />
                           </div>
                           <div
                             style={{
@@ -1860,10 +1874,9 @@ export const TopologyExplorerPage: React.FC<{
                               }}
                             >
                               <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-                                最近输出
-                              </Typography.Text>
+                                {t("pages.actors.index.recent.output", "recent output")}</Typography.Text>
                               <Typography.Paragraph style={{ marginBottom: 0 }}>
-                                {selectedSnapshot.lastOutput || "暂无输出。"}
+                                {selectedSnapshot.lastOutput || t("pages.actors.index.no.output.yet", "No output yet.")}
                               </Typography.Paragraph>
                             </div>
                             <div
@@ -1875,10 +1888,9 @@ export const TopologyExplorerPage: React.FC<{
                               }}
                             >
                               <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-                                最近错误
-                              </Typography.Text>
+                                {t("pages.actors.index.recent.errors", "recent errors")}</Typography.Text>
                               <Typography.Paragraph style={{ marginBottom: 0 }}>
-                                {selectedSnapshot.lastError || "当前没有错误。"}
+                                {selectedSnapshot.lastError || t("pages.actors.index.there.are.currently.no.8", "There are currently no errors.")}
                               </Typography.Paragraph>
                             </div>
                           </div>
@@ -1900,7 +1912,7 @@ export const TopologyExplorerPage: React.FC<{
             onCancel={() => setGraphFullscreenOpen(false)}
             open={graphFullscreenOpen}
             style={{ top: 24 }}
-            title="全屏关系图"
+            title={t("pages.actors.index.full.screen.relationship.diagram", "Full screen relationship diagram")}
             width="calc(100vw - 48px)"
           >
             <div
@@ -1944,7 +1956,7 @@ export const TopologyExplorerPage: React.FC<{
                 <AevatarPanel
                   layoutMode="document"
                   padding={16}
-                  title="图摘要"
+                  title={t("pages.actors.index.figure.summary", "Figure summary")}
                 >
                   <div
                     style={{
@@ -1953,10 +1965,10 @@ export const TopologyExplorerPage: React.FC<{
                       gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
                     }}
                   >
-                    <TopologyMetricCard compact label="节点" value={selectedSubgraph.nodes.length} />
-                    <TopologyMetricCard compact label="边" value={selectedSubgraph.edges.length} />
-                    <TopologyMetricCard compact label="深度" value={`${depth} 跳`} />
-                    <TopologyMetricCard compact label="方向" value={direction} />
+                    <TopologyMetricCard compact label={t("pages.actors.index.node.2", "node")} value={selectedSubgraph.nodes.length} />
+                    <TopologyMetricCard compact label={t("pages.actors.index.side.2", "side")} value={selectedSubgraph.edges.length} />
+                    <TopologyMetricCard compact label={t("pages.actors.index.depth", "depth")} value={t("pages.actors.index.jump.2", "{value1} jump", { value1: depth })} />
+                    <TopologyMetricCard compact label={t("pages.actors.index.direction", "direction")} value={direction} />
                   </div>
                 </AevatarPanel>
                 {selectionInspector}

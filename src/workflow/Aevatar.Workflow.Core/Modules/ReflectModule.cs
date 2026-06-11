@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
@@ -11,6 +12,9 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Self-reflection loop: draft → critique → improve → critique → ...
 /// Repeats until critique says "PASS" or max rounds reached.
 /// </summary>
+// Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+//   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+//   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
 public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "reflect";
@@ -29,8 +33,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         var payload = envelope.Payload;
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(TextMessageEndEvent.Descriptor) ||
-                payload.Is(ChatResponseEvent.Descriptor));
+                payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
@@ -95,29 +98,31 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        string? content = null;
-        string? sessionId = null;
-        if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-            content = evt.Content;
-            sessionId = evt.SessionId;
-        }
-        else if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ChatResponseEvent>();
-            content = evt.Content;
-            sessionId = evt.SessionId;
-        }
+        if (!payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor))
+            return;
 
-        if (string.IsNullOrWhiteSpace(sessionId))
+        var llmCompleted = payload.Unpack<WorkflowLlmInvocationCompletedEvent>();
+        if (string.IsNullOrWhiteSpace(llmCompleted.SessionId))
             return;
 
         var runtimeStateForCompletion = WorkflowExecutionStateAccess.Load<ReflectModuleState>(ctx, ModuleStateKey);
-        if (!runtimeStateForCompletion.PendingBySessionId.TryGetValue(sessionId, out var pendingState))
+        if (!runtimeStateForCompletion.PendingBySessionId.TryGetValue(llmCompleted.SessionId, out var pendingState))
             return;
 
-        content ??= string.Empty;
+        var content = llmCompleted.Content ?? string.Empty;
+        if (!llmCompleted.Success)
+        {
+            runtimeStateForCompletion.PendingBySessionId.Remove(llmCompleted.SessionId);
+            await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
+            await PublishFailedCompletionAsync(
+                pendingState.StepId,
+                pendingState.RunId,
+                string.IsNullOrWhiteSpace(llmCompleted.Error) ? "reflect LLM call failed." : llmCompleted.Error,
+                ctx,
+                ct);
+            return;
+        }
+
         if (pendingState.Phase == ReflectPhaseState.Critique)
         {
             var passed = content.Contains("PASS", StringComparison.OrdinalIgnoreCase);
@@ -142,12 +147,12 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
                 completed.Annotations["reflect.passed"] = passed.ToString();
                 await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
 
-                runtimeStateForCompletion.PendingBySessionId.Remove(sessionId);
+                runtimeStateForCompletion.PendingBySessionId.Remove(llmCompleted.SessionId);
                 await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
                 return;
             }
 
-            runtimeStateForCompletion.PendingBySessionId.Remove(sessionId);
+            runtimeStateForCompletion.PendingBySessionId.Remove(llmCompleted.SessionId);
             await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
 
             var next = pendingState.Clone();
@@ -165,7 +170,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        runtimeStateForCompletion.PendingBySessionId.Remove(sessionId);
+        runtimeStateForCompletion.PendingBySessionId.Remove(llmCompleted.SessionId);
         await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
 
         var nextCritique = pendingState.Clone();
@@ -201,17 +206,20 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         runtimeState.PendingBySessionId[sessionId] = state;
         await SaveStateAsync(runtimeState, ctx, ct);
 
-        var chatRequest = new ChatRequestEvent
+        var intent = new WorkflowLlmExecutionIntent
         {
             Prompt = prompt,
             SessionId = sessionId,
+            RunId = state.RunId,
+            StepId = state.StepId,
         };
-        CopyParameters(state.ChatMetadataParameters, chatRequest.Headers);
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+        CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
-            await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
+            await ctx.SendToAsync(state.TargetActorId, intent, ct);
         else
-            await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
+            await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
     }
 
     private async Task SendImproveAsync(
@@ -235,17 +243,20 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         runtimeState.PendingBySessionId[sessionId] = state;
         await SaveStateAsync(runtimeState, ctx, ct);
 
-        var chatRequest = new ChatRequestEvent
+        var intent = new WorkflowLlmExecutionIntent
         {
             Prompt = prompt,
             SessionId = sessionId,
+            RunId = state.RunId,
+            StepId = state.StepId,
         };
-        CopyParameters(state.ChatMetadataParameters, chatRequest.Headers);
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+        CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
-            await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
+            await ctx.SendToAsync(state.TargetActorId, intent, ct);
         else
-            await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
+            await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
     }
 
     private static Task SaveStateAsync(
@@ -277,6 +288,27 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             TopologyAudience.Self,
             ct);
 
+    private static void CopyParametersToIntent(
+        MapField<string, string> source,
+        WorkflowLlmExecutionIntent intent)
+    {
+        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+        //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
+        //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
+        foreach (var (key, value) in source)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                continue;
+
+            var normalizedKey = key.Trim();
+            var normalizedValue = value.Trim();
+            if (LLMCallModule.IsReservedParameter(normalizedKey))
+                continue;
+
+            intent.Annotations[normalizedKey] = normalizedValue;
+        }
+    }
+
     private static void CopyParameters(
         MapField<string, string> source,
         MapField<string, string> destination)
@@ -285,15 +317,13 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
-            if (string.Equals(key, "agent_type", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(key, "agent_id", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
 
             destination[key.Trim()] = value.Trim();
         }
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventContext ctx)
     {
@@ -309,6 +339,6 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
 
     private static string CreatePhaseSessionId(string scopeId, string runId, string stepToken) =>
         string.IsNullOrWhiteSpace(runId)
-            ? ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, stepToken)
-            : ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepToken, attempt: 1);
+            ? WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, stepToken)
+            : WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepToken, attempt: 1);
 }

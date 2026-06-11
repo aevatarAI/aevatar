@@ -1,18 +1,17 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Runtime;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
-using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelBotRegistrationStartupServiceTests
 {
     [Fact]
-    public async Task StartAsync_ActivatesProjection_AndDispatchesRebuildCommand()
+    public async Task StartAsync_ActivatesProjection_WithoutDispatchingSyntheticRebuild()
     {
         var activationService = Substitute.For<IProjectionScopeActivationService<ChannelBotRegistrationMaterializationRuntimeLease>>();
         activationService.EnsureAsync(Arg.Any<ProjectionScopeStartRequest>(), Arg.Any<CancellationToken>())
@@ -20,24 +19,12 @@ public sealed class ChannelBotRegistrationStartupServiceTests
                 new ChannelBotRegistrationMaterializationContext
                 {
                     RootActorId = ChannelBotRegistrationGAgent.WellKnownId,
-                    ProjectionKind = ChannelBotRegistrationProjectionPort.ProjectionKind,
+                    ProjectionKind = ChannelBotRegistrationProjectionBootstrapActivator.ProjectionKind,
                 })));
 
-        EventEnvelope? capturedEnvelope = null;
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var projectionPort = new ChannelBotRegistrationProjectionPort(activationService);
+        var projectionActivator = new ChannelBotRegistrationProjectionBootstrapActivator(activationService);
         var startupService = new ChannelBotRegistrationStartupService(
-            projectionPort,
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            projectionActivator,
             NullLogger<ChannelBotRegistrationStartupService>.Instance);
 
         await startupService.StartAsync(CancellationToken.None);
@@ -45,10 +32,33 @@ public sealed class ChannelBotRegistrationStartupServiceTests
         await activationService.Received(1).EnsureAsync(
             Arg.Is<ProjectionScopeStartRequest>(request =>
                 request.RootActorId == ChannelBotRegistrationGAgent.WellKnownId &&
-                request.ProjectionKind == ChannelBotRegistrationProjectionPort.ProjectionKind &&
+                request.ProjectionKind == ChannelBotRegistrationProjectionBootstrapActivator.ProjectionKind &&
                 request.Mode == ProjectionRuntimeMode.DurableMaterialization),
             Arg.Any<CancellationToken>());
-        capturedEnvelope.Should().NotBeNull();
-        capturedEnvelope!.Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("startup_projection_rebuild");
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenActivationFails_PropagatesFailure_AndAttemptsOnce()
+    {
+        var activationService = Substitute.For<IProjectionScopeActivationService<ChannelBotRegistrationMaterializationRuntimeLease>>();
+        activationService.EnsureAsync(Arg.Any<ProjectionScopeStartRequest>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ChannelBotRegistrationMaterializationRuntimeLease>>(_ => throw new InvalidOperationException("boom"));
+
+        var projectionActivator = new ChannelBotRegistrationProjectionBootstrapActivator(activationService);
+        var startupService = new ChannelBotRegistrationStartupService(
+            projectionActivator,
+            NullLogger<ChannelBotRegistrationStartupService>.Instance);
+
+        await startupService.Invoking(service => service.StartAsync(CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("boom");
+
+        await activationService.Received(1).EnsureAsync(
+            Arg.Is<ProjectionScopeStartRequest>(request =>
+                request.RootActorId == ChannelBotRegistrationGAgent.WellKnownId &&
+                request.ProjectionKind == ChannelBotRegistrationProjectionBootstrapActivator.ProjectionKind &&
+                request.Mode == ProjectionRuntimeMode.DurableMaterialization),
+            Arg.Any<CancellationToken>());
     }
 }

@@ -6,6 +6,9 @@ namespace Aevatar.GAgents.Platform.Lark;
 
 public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
 {
+    public const int DefaultMaxMessageLength = 30_000;
+    private const string TruncationMarker = "\n\n...[truncated]";
+
     public static readonly ChannelCapabilities DefaultCapabilities = new()
     {
         SupportsEphemeral = false,
@@ -14,7 +17,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         SupportsThread = true,
         Streaming = StreamingSupport.Native,
         SupportsFiles = false,
-        MaxMessageLength = 2000,
+        MaxMessageLength = DefaultMaxMessageLength,
         SupportsActionButtons = true,
         SupportsConfirmDialog = false,
         SupportsModal = false,
@@ -102,12 +105,25 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             });
         }
 
-        foreach (var card in intent.Cards)
+        for (var i = 0; i < intent.Cards.Count; i++)
         {
+            var card = intent.Cards[i];
+            // First card's Title is consumed by ResolveHeaderTitle as the card header (Title
+            // takes precedence over intent.Text there), so render its body markdown without the
+            // title to avoid header/body duplication. Form mode already does this; non-form mode
+            // used to leak the title twice and made every single-card response (e.g. /agents,
+            // /agent-status) show a redundant bold title row right under the header. When the
+            // first card has no Title, ResolveHeaderTitle falls back to intent.Text and this
+            // skip is a no-op (no title to elide).
+            var skipTitle = i == 0;
+            var markdown = BuildCardMarkdown(card, skipTitle);
+            if (string.IsNullOrWhiteSpace(markdown))
+                continue;
+
             elements.Add(new
             {
                 tag = "markdown",
-                content = BuildCardMarkdown(card),
+                content = markdown,
             });
         }
 
@@ -321,6 +337,8 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             ["action_id"] = action.ActionId,
             ["value"] = action.Value,
         };
+        CopyWorkflowResumePayload(action.WorkflowResume, map);
+        CopyLlmSelectionPayload(action.LlmSelection, map);
 
         foreach (var argument in action.Arguments)
         {
@@ -332,6 +350,52 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         }
 
         return map;
+    }
+
+    private static void CopyWorkflowResumePayload(
+        WorkflowResumeActionPayload? payload,
+        IDictionary<string, object?> map)
+    {
+        // Refactor (iter93/cluster-093):
+        // Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+        // New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+        // extension data plus legacy callback JSON inbound compatibility.
+        if (payload is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(payload.ActorId))
+            map["actor_id"] = payload.ActorId;
+        if (!string.IsNullOrWhiteSpace(payload.RunId))
+            map["run_id"] = payload.RunId;
+        if (!string.IsNullOrWhiteSpace(payload.StepId))
+            map["step_id"] = payload.StepId;
+        if (payload.HasApproved)
+            map["approved"] = payload.Approved;
+        if (!string.IsNullOrWhiteSpace(payload.UserInput))
+            map["user_input"] = payload.UserInput;
+        if (!string.IsNullOrWhiteSpace(payload.EditedContent))
+            map["edited_content"] = payload.EditedContent;
+        if (!string.IsNullOrWhiteSpace(payload.Feedback))
+            map["feedback"] = payload.Feedback;
+    }
+
+    private static void CopyLlmSelectionPayload(
+        LlmSelectionActionPayload? payload,
+        IDictionary<string, object?> map)
+    {
+        // Refactor (iter93/cluster-093):
+        // Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+        // New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+        // extension data plus legacy callback JSON inbound compatibility.
+        if (payload is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(payload.Action))
+            map["llm_action"] = payload.Action;
+        if (!string.IsNullOrWhiteSpace(payload.ServiceId))
+            map["service_id"] = payload.ServiceId;
+        if (!string.IsNullOrWhiteSpace(payload.PresetId))
+            map["preset_id"] = payload.PresetId;
     }
 
     private static object? CoerceArgumentValue(string raw)
@@ -372,6 +436,11 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         if (textInfo.LengthInTextElements <= maxLength)
             return text;
 
-        return textInfo.SubstringByTextElements(0, maxLength);
+        var markerInfo = new StringInfo(TruncationMarker);
+        var markerLength = markerInfo.LengthInTextElements;
+        if (maxLength <= markerLength)
+            return textInfo.SubstringByTextElements(0, maxLength);
+
+        return textInfo.SubstringByTextElements(0, maxLength - markerLength) + TruncationMarker;
     }
 }

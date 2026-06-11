@@ -50,6 +50,10 @@ internal static class StudioMemberEndpoints
         app.MapGet("/api/scopes/{scopeId}/members/{memberId}/binding", HandleGetBindingAsync)
             .WithTags("StudioMembers");
         app.MapGet(
+                "/api/scopes/{scopeId}/members/{memberId}/binding-runs/{bindingRunId}",
+                HandleGetBindingRunAsync)
+            .WithTags("StudioMembers");
+        app.MapGet(
                 "/api/scopes/{scopeId}/members/{memberId}/endpoints/{endpointId}/contract",
                 HandleGetEndpointContractAsync)
             .WithTags("StudioMembers");
@@ -60,6 +64,11 @@ internal static class StudioMemberEndpoints
         app.MapPost(
                 "/api/scopes/{scopeId}/members/{memberId}/binding/revisions/{revisionId}:retire",
                 HandleRetireBindingRevisionAsync)
+            .WithTags("StudioMembers");
+
+        // ADR-0017: PATCH a member's team assignment. Body shape carries
+        // Merge-Patch semantics for `teamId` — see HandlePatchAsync.
+        app.MapPatch("/api/scopes/{scopeId}/members/{memberId}", HandlePatchAsync)
             .WithTags("StudioMembers");
     }
 
@@ -170,11 +179,10 @@ internal static class StudioMemberEndpoints
 
         try
         {
-            return Results.Ok(await memberService.BindAsync(scopeId, memberId, request, ct));
-        }
-        catch (StudioMemberNotFoundException ex)
-        {
-            return NotFound(ex);
+            var receipt = await memberService.BindAsync(scopeId, memberId, request, ct);
+            return Results.Accepted(
+                $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding-runs/{Uri.EscapeDataString(receipt.BindingRunId)}",
+                receipt);
         }
         catch (InvalidOperationException ex)
         {
@@ -201,12 +209,36 @@ internal static class StudioMemberEndpoints
             // Bare `404 NotFound` for the "exists but never bound" case used
             // to overload 404 with two different meanings; the wrapper keeps
             // the response always a JSON object with a single nullable field.
-            var binding = await memberService.GetBindingAsync(scopeId, memberId, ct);
-            return Results.Ok(new StudioMemberBindingViewResponse(binding));
+            return Results.Ok(await memberService.GetBindingAsync(scopeId, memberId, ct));
         }
         catch (StudioMemberNotFoundException ex)
         {
             return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
+        }
+    }
+
+    internal static async Task<IResult> HandleGetBindingRunAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string bindingRunId,
+        [FromServices] IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            return Results.Ok(await memberService.GetBindingRunAsync(scopeId, memberId, bindingRunId, ct));
+        }
+        catch (StudioMemberBindingRunNotFoundException ex)
+        {
+            return BindingRunNotFound(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -299,6 +331,87 @@ internal static class StudioMemberEndpoints
         }
     }
 
+    /// <summary>
+    /// Wire body for PATCH. Mirrors the JSON Merge-Patch table locked in
+    /// ADR-0017 §Q6: <c>teamId</c> absent in JSON means "no change", explicit
+    /// <c>null</c> means "unassign", a non-empty string means "assign /
+    /// reassign", and the empty string is rejected with 400.
+    ///
+    /// Distinguishing absent from explicit null requires the field to be
+    /// modeled as <see cref="JsonElement"/> rather than <see cref="string"/>?.
+    /// The handler converts the wire form into a <see cref="PatchValue{T}"/>
+    /// before the application layer sees it.
+    /// </summary>
+    public sealed class StudioMemberPatchBody
+    {
+        public System.Text.Json.JsonElement? TeamId { get; set; }
+    }
+
+    internal static async Task<IResult> HandlePatchAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        StudioMemberPatchBody body,
+        [FromServices] IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        if (body == null)
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", "request body is required.");
+
+        // Translate the wire body into the application contract. JsonElement
+        // semantics:
+        //   - body.TeamId == null            → field absent in JSON → no change
+        //   - body.TeamId.ValueKind == Null  → explicit null → unassign
+        //   - body.TeamId.ValueKind == String → assign / reassign (empty rejected)
+        PatchValue<string> teamIdPatch;
+        if (!body.TeamId.HasValue)
+        {
+            teamIdPatch = PatchValue<string>.Absent;
+        }
+        else
+        {
+            var jsonValue = body.TeamId.Value;
+            switch (jsonValue.ValueKind)
+            {
+                case System.Text.Json.JsonValueKind.Null:
+                    teamIdPatch = PatchValue<string>.Of(null);
+                    break;
+                case System.Text.Json.JsonValueKind.String:
+                    {
+                        var raw = jsonValue.GetString();
+                        if (string.IsNullOrEmpty(raw))
+                            return BadRequest(
+                                "INVALID_STUDIO_MEMBER_REQUEST",
+                                "teamId must not be empty when present (use null to mean 'unassign').");
+                        teamIdPatch = PatchValue<string>.Of(raw);
+                        break;
+                    }
+                default:
+                    return BadRequest(
+                        "INVALID_STUDIO_MEMBER_REQUEST",
+                        "teamId must be a string, null, or absent.");
+            }
+        }
+
+        try
+        {
+            var detail = await memberService.UpdateAsync(
+                scopeId, memberId, new UpdateStudioMemberRequest(teamIdPatch), ct);
+            return Results.Ok(detail);
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
+        }
+    }
+
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });
 
@@ -310,6 +423,18 @@ internal static class StudioMemberEndpoints
                 message = ex.Message,
                 scopeId = ex.ScopeId,
                 memberId = ex.MemberId,
+            },
+            statusCode: StatusCodes.Status404NotFound);
+
+    private static IResult BindingRunNotFound(StudioMemberBindingRunNotFoundException ex) =>
+        Results.Json(
+            new
+            {
+                code = "STUDIO_MEMBER_BINDING_RUN_NOT_FOUND",
+                message = ex.Message,
+                scopeId = ex.ScopeId,
+                memberId = ex.MemberId,
+                bindingRunId = ex.BindingRunId,
             },
             statusCode: StatusCodes.Status404NotFound);
 }

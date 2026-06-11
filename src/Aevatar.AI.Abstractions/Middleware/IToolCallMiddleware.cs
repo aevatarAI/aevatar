@@ -11,6 +11,15 @@ public interface IToolCallMiddleware
     Task InvokeAsync(ToolCallContext context, Func<Task> next);
 }
 
+public sealed record ToolApprovalPendingContext(
+    string ApprovalRequestId,
+    string ToolName,
+    string ToolCallId,
+    string ArgumentsJson,
+    ToolApprovalMode ApprovalMode,
+    bool IsReadOnly,
+    bool IsDestructive);
+
 /// <summary>Context for tool call middleware.</summary>
 public sealed class ToolCallContext
 {
@@ -31,6 +40,9 @@ public sealed class ToolCallContext
 
     /// <summary>Tool execution result. Set after execution, or by middleware to override.</summary>
     public string? Result { get; set; }
+
+    /// <summary>Typed business keys for a tool approval yield.</summary>
+    public ToolApprovalPendingContext? PendingApproval { get; set; }
 
     /// <summary>When true, tool execution is skipped and Result is returned as-is.</summary>
     public bool Terminate { get; set; }

@@ -1,4 +1,3 @@
-using System.Text.Json.Nodes;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Domain.Studio.Services;
 using FluentAssertions;
@@ -121,7 +120,7 @@ public sealed class WorkflowDocumentNormalizerTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "transform",
-                Parameters = new Dictionary<string, JsonNode?> { [""] = JsonValue.Create("v"), ["key"] = JsonValue.Create("v") },
+                Parameters = new StudioStepParameters { [""] = StudioStepParameterValue.FromScalar("v"), ["key"] = StudioStepParameterValue.FromScalar("v") },
             }],
         };
         var result = _normalizer.NormalizeForExport(doc);
@@ -138,28 +137,29 @@ public sealed class WorkflowDocumentNormalizerTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "foreach",
-                Parameters = new Dictionary<string, JsonNode?> { ["sub_step_type"] = JsonValue.Create("loop") },
+                Parameters = new StudioStepParameters { ["sub_step_type"] = StudioStepParameterValue.FromScalar("loop") },
             }],
         };
         var result = _normalizer.NormalizeForExport(doc);
-        result.Steps[0].Parameters["sub_step_type"]!.ToString().Should().Be("while");
+        result.Steps[0].Parameters["sub_step_type"]!.ToWorkflowScalarString().Should().Be("while");
     }
 
     [Fact]
     public void NormalizeForExport_ShouldPreserveComplexParameters()
     {
-        var complex = new JsonObject { ["nested"] = "value" };
+        var complex = StudioStepParameterValue.FromObject([new KeyValuePair<string, StudioStepParameterValue?>("nested", StudioStepParameterValue.FromScalar("value"))]);
         var doc = new WorkflowDocument
         {
             Name = "wf",
             Steps = [new StepModel
             {
                 Id = "s1", Type = "transform",
-                Parameters = new Dictionary<string, JsonNode?> { ["data"] = complex },
+                Parameters = new StudioStepParameters { ["data"] = complex },
             }],
         };
         var result = _normalizer.NormalizeForExport(doc);
-        result.Steps[0].Parameters["data"].Should().BeOfType<JsonObject>();
+        result.Steps[0].Parameters["data"].Should().BeAssignableTo<StudioStepParameterValue>()
+            .Which.IsComplexValue().Should().BeTrue();
     }
 
     [Fact]
@@ -172,7 +172,7 @@ public sealed class WorkflowDocumentNormalizerTests
         };
         var result = _normalizer.NormalizeForExport(doc);
         result.Steps[0].Parameters.Should().ContainKey("method");
-        result.Steps[0].Parameters["method"]!.ToString().Should().Be("GET");
+        result.Steps[0].Parameters["method"]!.ToWorkflowScalarString().Should().Be("GET");
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public sealed class WorkflowDocumentNormalizerTests
             Steps = [new StepModel { Id = "s1", Type = "http_post" }],
         };
         var result = _normalizer.NormalizeForExport(doc);
-        result.Steps[0].Parameters["method"]!.ToString().Should().Be("POST");
+        result.Steps[0].Parameters["method"]!.ToWorkflowScalarString().Should().Be("POST");
     }
 
     [Fact]
@@ -196,11 +196,11 @@ public sealed class WorkflowDocumentNormalizerTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "http_get",
-                Parameters = new Dictionary<string, JsonNode?> { ["method"] = JsonValue.Create("PATCH") },
+                Parameters = new StudioStepParameters { ["method"] = StudioStepParameterValue.FromScalar("PATCH") },
             }],
         };
         var result = _normalizer.NormalizeForExport(doc);
-        result.Steps[0].Parameters["method"]!.ToString().Should().Be("PATCH");
+        result.Steps[0].Parameters["method"]!.ToWorkflowScalarString().Should().Be("PATCH");
     }
 
     [Fact]
@@ -213,7 +213,7 @@ public sealed class WorkflowDocumentNormalizerTests
         };
         var result = _normalizer.NormalizeForExport(doc);
         result.Steps[0].Parameters.Should().ContainKey("sub_step_type");
-        result.Steps[0].Parameters["sub_step_type"]!.ToString().Should().Be("llm_call");
+        result.Steps[0].Parameters["sub_step_type"]!.ToWorkflowScalarString().Should().Be("llm_call");
     }
 
     [Fact]
@@ -238,12 +238,12 @@ public sealed class WorkflowDocumentNormalizerTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "mcp_call",
-                Parameters = new Dictionary<string, JsonNode?> { ["tool"] = JsonValue.Create("my-tool") },
+                Parameters = new StudioStepParameters { ["tool"] = StudioStepParameterValue.FromScalar("my-tool") },
             }],
         };
         var result = _normalizer.NormalizeForExport(doc);
         result.Steps[0].Parameters.Should().ContainKey("operation");
-        result.Steps[0].Parameters["operation"]!.ToString().Should().Be("my-tool");
+        result.Steps[0].Parameters["operation"]!.ToWorkflowScalarString().Should().Be("my-tool");
     }
 
     [Fact]
@@ -256,7 +256,7 @@ public sealed class WorkflowDocumentNormalizerTests
         };
         var result = _normalizer.NormalizeForExport(doc);
         result.Steps[0].Parameters.Should().ContainKey("timeout_ms");
-        result.Steps[0].Parameters["timeout_ms"]!.ToString().Should().Be("5000");
+        result.Steps[0].Parameters["timeout_ms"]!.ToWorkflowScalarString().Should().Be("5000");
     }
 
     [Fact]
@@ -315,7 +315,7 @@ public sealed class WorkflowDocumentNormalizerTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "transform",
-                Parameters = new Dictionary<string, JsonNode?> { ["key"] = null },
+                Parameters = new StudioStepParameters { ["key"] = null },
             }],
         };
         var result = _normalizer.NormalizeForExport(doc);

@@ -27,6 +27,7 @@ import {
   summaryMetricValueStyle,
 } from '@/shared/ui/proComponents';
 import { AevatarHelpTooltip } from '@/shared/ui/aevatarPageShells';
+import { t } from "@/shared/i18n/messages";
 
 type StudioInspectorTab = 'node' | 'roles' | 'yaml';
 
@@ -334,7 +335,7 @@ const NoticePanel: React.FC<NoticePanelProps> = ({
 
 function renderConnectorTags(connectors: readonly string[]): React.ReactNode {
   if (connectors.length === 0) {
-    return <Typography.Text type="secondary">No connectors listed.</Typography.Text>;
+    return <Typography.Text type="secondary">{t("pages.studio.studioinspectorpane.no.connectors.listed", "No connectors listed.")}</Typography.Text>;
   }
 
   return (
@@ -342,7 +343,7 @@ function renderConnectorTags(connectors: readonly string[]): React.ReactNode {
       {connectors.slice(0, 3).map((connector) => (
         <Tag key={connector}>{connector}</Tag>
       ))}
-      {connectors.length > 3 ? <Tag>+{connectors.length - 3} more</Tag> : null}
+      {connectors.length > 3 ? <Tag>+{connectors.length - 3} {t("pages.studio.studioinspectorpane.more", "more")}</Tag> : null}
     </Space>
   );
 }
@@ -379,7 +380,7 @@ function renderValidationState(
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="Validation and YAML summary will appear after a draft is loaded."
+        description={t("pages.studio.studioinspectorpane.validation.and.yaml.summary.will", "Validation and YAML summary will appear after a draft is loaded.")}
       />
     );
   }
@@ -388,7 +389,7 @@ function renderValidationState(
     return (
       <NoticePanel
         type="error"
-        title="Studio YAML validation failed"
+        title={t("pages.studio.studioinspectorpane.studio.yaml.validation.failed", "Studio YAML validation failed")}
         description={
           validationError instanceof Error
             ? validationError.message
@@ -402,8 +403,8 @@ function renderValidationState(
     return (
       <NoticePanel
         type="info"
-        title="Validating workflow YAML"
-        description="Studio is parsing the active YAML through the workflow editor service."
+        title={t("pages.studio.studioinspectorpane.validating.workflow.yaml", "Validating workflow YAML")}
+        description={t("pages.studio.studioinspectorpane.studio.is.parsing.the.active", "Studio is parsing the active YAML through the workflow editor service.")}
       />
     );
   }
@@ -412,8 +413,8 @@ function renderValidationState(
     return (
       <NoticePanel
         type="success"
-        title="Validated by Studio editor"
-        description="The active YAML parsed cleanly through the workflow editor service."
+        title={t("pages.studio.studioinspectorpane.validated.by.studio.editor", "Validated by Studio editor")}
+        description={t("pages.studio.studioinspectorpane.the.active.yaml.parsed.cleanly", "The active YAML parsed cleanly through the workflow editor service.")}
       />
     );
   }
@@ -425,7 +426,7 @@ function renderValidationState(
     <NoticePanel
       type={hasError ? 'error' : 'warning'}
       title={`${validationFindings.length} validation finding(s)`}
-      description="Review the highest-signal issues first before saving or running this workflow."
+      description={t("pages.studio.studioinspectorpane.review.the.highest.signal.issues", "Review the highest-signal issues first before saving or running this workflow.")}
     >
       <div style={cardListStyle}>
         {preview.map((item) => (
@@ -458,8 +459,7 @@ function renderValidationState(
       </div>
       {validationFindings.length > preview.length ? (
         <Typography.Text type="secondary">
-          +{validationFindings.length - preview.length} more finding(s) hidden.
-        </Typography.Text>
+          +{validationFindings.length - preview.length} {t("pages.studio.studioinspectorpane.more.finding.hidden", "more finding(s) hidden.")}</Typography.Text>
       ) : null}
     </NoticePanel>
   );
@@ -586,7 +586,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
       <div style={cardStackStyle}>
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Step summary"
+            title={t("pages.studio.studioinspectorpane.step.summary", "Step summary")}
             help="A compact view of the currently selected step before you edit fields."
           />
           <div style={summaryMetricGridStyle}>
@@ -600,7 +600,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               value={Object.keys(selectedGraphStep.branches ?? {}).length}
             />
             <SummaryMetric
-              label="Connector mode"
+              label={t("pages.studio.studioinspectorpane.connector.mode", "Connector mode")}
               tone={nodeInspectorDraft.type === 'connector_call' ? 'warning' : 'default'}
               value={
                 nodeInspectorDraft.type === 'connector_call'
@@ -611,19 +611,19 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
           </div>
           <div style={summaryFieldGridStyle}>
             <SummaryField
-              label="Current step"
+              label={t("pages.studio.studioinspectorpane.current.step", "Current step")}
               value={<Typography.Text code>{selectedGraphStep.id}</Typography.Text>}
             />
             <SummaryField
-              label="Target role"
+              label={t("pages.studio.studioinspectorpane.target.role", "Target role")}
               value={selectedGraphStep.targetRole || 'Unassigned'}
             />
             <SummaryField
-              label="Next step"
+              label={t("pages.studio.studioinspectorpane.next.step", "Next step")}
               value={selectedGraphStep.next || 'None'}
             />
             <SummaryField
-              label="Draft step ID"
+              label={t("pages.studio.studioinspectorpane.draft.step.id", "Draft step ID")}
               value={<Typography.Text code>{nodeInspectorDraft.id}</Typography.Text>}
             />
           </div>
@@ -631,14 +631,14 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
 
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Identity and routing"
+            title={t("pages.studio.studioinspectorpane.identity.and.routing", "Identity and routing")}
             help="Update the step name, primitive type, and graph links."
           />
           <div style={formGridStyle}>
             <div style={cardStackStyle}>
-              <Typography.Text strong>Step ID</Typography.Text>
+              <Typography.Text strong>{t("pages.studio.studioinspectorpane.step.id", "Step ID")}</Typography.Text>
               <Input
-                aria-label="Studio step id"
+                aria-label={t("pages.studio.studioinspectorpane.studio.step.id", "Studio step id")}
                 value={nodeInspectorDraft.id}
                 onChange={(event) =>
                   onChangeNodeInspectorDraft({
@@ -649,9 +649,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               />
             </div>
             <div style={cardStackStyle}>
-              <Typography.Text strong>Primitive</Typography.Text>
+              <Typography.Text strong>{t("pages.studio.studioinspectorpane.primitive", "Primitive")}</Typography.Text>
               <Select
-                aria-label="Studio step type"
+                aria-label={t("pages.studio.studioinspectorpane.studio.step.type", "Studio step type")}
                 value={nodeInspectorDraft.type}
                 options={STUDIO_GRAPH_PRIMITIVE_CATEGORIES.map((category) => ({
                   label: category.label,
@@ -669,9 +669,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               />
             </div>
             <div style={cardStackStyle}>
-              <Typography.Text strong>Target role</Typography.Text>
+              <Typography.Text strong>{t("pages.studio.studioinspectorpane.target.role.2", "Target role")}</Typography.Text>
               <Select
-                aria-label="Studio step target role"
+                aria-label={t("pages.studio.studioinspectorpane.studio.step.target.role", "Studio step target role")}
                 allowClear
                 placeholder="optional"
                 value={nodeInspectorDraft.targetRole}
@@ -688,9 +688,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               />
             </div>
             <div style={cardStackStyle}>
-              <Typography.Text strong>Next step</Typography.Text>
+              <Typography.Text strong>{t("pages.studio.studioinspectorpane.next.step.2", "Next step")}</Typography.Text>
               <Input
-                aria-label="Studio step next"
+                aria-label={t("pages.studio.studioinspectorpane.studio.step.next", "Studio step next")}
                 list="studio-workflow-step-options"
                 placeholder="optional"
                 value={nodeInspectorDraft.next}
@@ -704,9 +704,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
             </div>
           </div>
           <div style={cardStackStyle}>
-            <Typography.Text strong>Branches</Typography.Text>
+            <Typography.Text strong>{t("pages.studio.studioinspectorpane.branches", "Branches")}</Typography.Text>
             <Input.TextArea
-              aria-label="Studio step branches"
+              aria-label={t("pages.studio.studioinspectorpane.studio.step.branches", "Studio step branches")}
               autoSize={{ minRows: 5, maxRows: 12 }}
               value={nodeInspectorDraft.branchesText}
               onChange={(event) =>
@@ -717,8 +717,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               }
             />
             <Typography.Text type="secondary">
-              Edit branches as a JSON object of label to target step ID.
-            </Typography.Text>
+              {t("pages.studio.studioinspectorpane.edit.branches.as.json.object", "Edit branches as a JSON object of label to target step ID.")}</Typography.Text>
           </div>
         </div>
 
@@ -729,14 +728,14 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
           />
           {nodeInspectorDraft.type === 'connector_call' ? (
             <div style={cardStackStyle}>
-              <Typography.Text strong>Connector</Typography.Text>
+              <Typography.Text strong>{t("pages.studio.studioinspectorpane.connector.3", "Connector")}</Typography.Text>
               <Select
-                aria-label="Studio connector call connector"
+                aria-label={t("pages.studio.studioinspectorpane.studio.connector.call.connector", "Studio connector call connector")}
                 allowClear
-                placeholder="Select connector"
+                placeholder={t("pages.studio.studioinspectorpane.select.connector", "Select connector")}
                 value={selectedConnectorName || undefined}
                 options={connectors.map((connector) => ({
-                  label: `${connector.name} · ${connector.type}`,
+                  label: t("pages.studio.studioinspectorpane.copy.2", "{value1} · {value2}", { value1: connector.name, value2: connector.type }),
                   value: connector.name,
                 }))}
                 onChange={(value) => {
@@ -768,9 +767,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
             </div>
           ) : null}
           <div style={cardStackStyle}>
-            <Typography.Text strong>Parameters</Typography.Text>
+            <Typography.Text strong>{t("pages.studio.studioinspectorpane.parameters", "Parameters")}</Typography.Text>
             <Input.TextArea
-              aria-label="Studio step parameters"
+              aria-label={t("pages.studio.studioinspectorpane.studio.step.parameters", "Studio step parameters")}
               autoSize={{ minRows: 8, maxRows: 16 }}
               value={nodeInspectorDraft.parametersText}
               onChange={(event) =>
@@ -781,14 +780,13 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               }
             />
             <Typography.Text type="secondary">
-              Edit parameters as a JSON object.
-            </Typography.Text>
+              {t("pages.studio.studioinspectorpane.edit.parameters.as.json.object", "Edit parameters as a JSON object.")}</Typography.Text>
           </div>
         </div>
 
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Outgoing connections"
+            title={t("pages.studio.studioinspectorpane.outgoing.connections", "Outgoing connections")}
             help="Inspect and remove the graph links owned by this step."
           />
           {selectedStepConnections.length > 0 ? (
@@ -813,8 +811,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
                           )
                         }
                       >
-                        Remove
-                      </Button>
+                        {t("pages.studio.studioinspectorpane.remove", "Remove")}</Button>
                     </div>
                   </div>
                 </div>
@@ -823,7 +820,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
           ) : (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="No outgoing connections"
+              description={t("pages.studio.studioinspectorpane.no.outgoing.connections", "No outgoing connections")}
             />
           )}
         </div>
@@ -832,7 +829,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
 
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Step actions"
+            title={t("pages.studio.studioinspectorpane.step.actions", "Step actions")}
             help="Apply the edited draft or update the workflow graph around this step."
           />
           <div style={cardListActionStyle}>
@@ -841,15 +838,12 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               loading={inspectorPending}
               onClick={onApplyNodeChanges}
             >
-              Apply node changes
-            </Button>
+              {t("pages.studio.studioinspectorpane.apply.node.changes", "Apply node changes")}</Button>
             <Button loading={inspectorPending} onClick={onInsertStep}>
-              Add step after
-            </Button>
+              {t("pages.studio.studioinspectorpane.add.step.after", "Add step after")}</Button>
             <Button danger loading={inspectorPending} onClick={onDeleteStep}>
-              Delete step
-            </Button>
-            <Button onClick={onResetSelectedNode}>Reset fields</Button>
+              {t("pages.studio.studioinspectorpane.delete.step", "Delete step")}</Button>
+            <Button onClick={onResetSelectedNode}>{t("pages.studio.studioinspectorpane.reset.fields", "Reset fields")}</Button>
           </div>
         </div>
       </div>
@@ -857,7 +851,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
       <div style={cardStackStyle}>
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Role summary"
+            title={t("pages.studio.studioinspectorpane.role.summary", "Role summary")}
             help="Review the selected role before editing provider, model, or prompt details."
           />
           <div style={summaryMetricGridStyle}>
@@ -879,27 +873,27 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
           </div>
           <div style={summaryFieldGridStyle}>
             <SummaryField
-              label="Current role"
+              label={t("pages.studio.studioinspectorpane.current.role", "Current role")}
               value={<Typography.Text code>{selectedGraphRole.id}</Typography.Text>}
             />
-            <SummaryField label="Role name" value={selectedGraphRole.name || 'n/a'} />
+            <SummaryField label={t("pages.studio.studioinspectorpane.role.name", "Role name")} value={selectedGraphRole.name || 'n/a'} />
           </div>
           <div>
-            <Typography.Text style={summaryFieldLabelStyle}>Allowed connectors</Typography.Text>
+            <Typography.Text style={summaryFieldLabelStyle}>{t("pages.studio.studioinspectorpane.allowed.connectors", "Allowed connectors")}</Typography.Text>
             <div style={{ marginTop: 8 }}>{renderConnectorTags(selectedGraphRole.connectors)}</div>
           </div>
         </div>
 
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Role details"
+            title={t("pages.studio.studioinspectorpane.role.details", "Role details")}
             help="Keep role identity, model configuration, and prompt text in one place."
           />
           <div style={formGridStyle}>
             <div style={cardStackStyle}>
-              <Typography.Text strong>Role ID</Typography.Text>
+              <Typography.Text strong>{t("pages.studio.studioinspectorpane.role.id", "Role ID")}</Typography.Text>
               <Input
-                aria-label="Studio role id"
+                aria-label={t("pages.studio.studioinspectorpane.studio.role.id", "Studio role id")}
                 value={nodeInspectorDraft.id}
                 onChange={(event) =>
                   onChangeNodeInspectorDraft({
@@ -910,9 +904,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               />
             </div>
             <div style={cardStackStyle}>
-              <Typography.Text strong>Role name</Typography.Text>
+              <Typography.Text strong>{t("pages.studio.studioinspectorpane.role.name.2", "Role name")}</Typography.Text>
               <Input
-                aria-label="Studio role name"
+                aria-label={t("pages.studio.studioinspectorpane.studio.role.name", "Studio role name")}
                 value={nodeInspectorDraft.name}
                 onChange={(event) =>
                   onChangeNodeInspectorDraft({
@@ -923,9 +917,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               />
             </div>
             <div style={cardStackStyle}>
-              <Typography.Text strong>Provider</Typography.Text>
+              <Typography.Text strong>{t("pages.studio.studioinspectorpane.provider", "Provider")}</Typography.Text>
               <Input
-                aria-label="Studio role provider"
+                aria-label={t("pages.studio.studioinspectorpane.studio.role.provider", "Studio role provider")}
                 value={nodeInspectorDraft.provider}
                 onChange={(event) =>
                   onChangeNodeInspectorDraft({
@@ -936,9 +930,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               />
             </div>
             <div style={cardStackStyle}>
-              <Typography.Text strong>Model</Typography.Text>
+              <Typography.Text strong>{t("pages.studio.studioinspectorpane.model", "Model")}</Typography.Text>
               <Input
-                aria-label="Studio role model"
+                aria-label={t("pages.studio.studioinspectorpane.studio.role.model", "Studio role model")}
                 value={nodeInspectorDraft.model}
                 onChange={(event) =>
                   onChangeNodeInspectorDraft({
@@ -950,9 +944,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
             </div>
           </div>
           <div style={cardStackStyle}>
-            <Typography.Text strong>System prompt</Typography.Text>
+            <Typography.Text strong>{t("pages.studio.studioinspectorpane.system.prompt", "System prompt")}</Typography.Text>
             <Input.TextArea
-              aria-label="Studio role system prompt"
+              aria-label={t("pages.studio.studioinspectorpane.studio.role.system.prompt", "Studio role system prompt")}
               autoSize={{ minRows: 4, maxRows: 10 }}
               value={nodeInspectorDraft.systemPrompt}
               onChange={(event) =>
@@ -964,9 +958,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
             />
           </div>
           <div style={cardStackStyle}>
-            <Typography.Text strong>Allowed connectors</Typography.Text>
+            <Typography.Text strong>{t("pages.studio.studioinspectorpane.allowed.connectors.2", "Allowed connectors")}</Typography.Text>
             <Input.TextArea
-              aria-label="Studio role connectors"
+              aria-label={t("pages.studio.studioinspectorpane.studio.role.connectors", "Studio role connectors")}
               autoSize={{ minRows: 3, maxRows: 8 }}
               value={nodeInspectorDraft.connectorsText}
               onChange={(event) =>
@@ -977,8 +971,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               }
             />
             <Typography.Text type="secondary">
-              One connector per line, or use commas.
-            </Typography.Text>
+              {t("pages.studio.studioinspectorpane.one.connector.per.line.or", "One connector per line, or use commas.")}</Typography.Text>
           </div>
         </div>
 
@@ -986,7 +979,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
 
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Role actions"
+            title={t("pages.studio.studioinspectorpane.role.actions", "Role actions")}
             help="Apply the updated role fields back into the workflow draft."
           />
           <div style={cardListActionStyle}>
@@ -995,9 +988,8 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               loading={inspectorPending}
               onClick={onApplyNodeChanges}
             >
-              Apply node changes
-            </Button>
-            <Button onClick={onResetSelectedNode}>Reset fields</Button>
+              {t("pages.studio.studioinspectorpane.apply.node.changes.2", "Apply node changes")}</Button>
+            <Button onClick={onResetSelectedNode}>{t("pages.studio.studioinspectorpane.reset.fields.2", "Reset fields")}</Button>
           </div>
         </div>
       </div>
@@ -1015,8 +1007,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         }}
       >
         <Typography.Text type="secondary">
-          请先在画布里选择一个步骤或角色。
-        </Typography.Text>
+          {t("pages.studio.studioinspectorpane.please.select.step.or", "Please select a step or role in the canvas first.")}</Typography.Text>
       </div>
     );
 
@@ -1025,26 +1016,26 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
       <div style={cardStackStyle}>
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Role library"
+            title={t("pages.studio.studioinspectorpane.role.library", "Role library")}
             help="Search saved roles, add new workflow roles, and expand the ones that need edits."
-            action={<Button onClick={onAddWorkflowRole}>Add role</Button>}
+            action={<Button onClick={onAddWorkflowRole}>{t("pages.studio.studioinspectorpane.add.role", "Add role")}</Button>}
           />
           <div style={summaryMetricGridStyle}>
-            <SummaryMetric label="Saved roles" value={savedRoles.length} />
-            <SummaryMetric label="Workflow roles" value={workflowRoles.length} />
+            <SummaryMetric label={t("pages.studio.studioinspectorpane.saved.roles", "Saved roles")} value={savedRoles.length} />
+            <SummaryMetric label={t("pages.studio.studioinspectorpane.workflow.roles", "Workflow roles")} value={workflowRoles.length} />
             <SummaryMetric
-              label="Filtered saved"
+              label={t("pages.studio.studioinspectorpane.filtered.saved", "Filtered saved")}
               value={filteredSavedRoles.length}
             />
             <SummaryMetric
-              label="Filtered workflow"
+              label={t("pages.studio.studioinspectorpane.filtered.workflow", "Filtered workflow")}
               value={filteredWorkflowRoles.length}
             />
           </div>
           <Input
             allowClear
-            aria-label="Studio roles search"
-            placeholder="Search saved roles"
+            aria-label={t("pages.studio.studioinspectorpane.studio.roles.search", "Studio roles search")}
+            placeholder={t("pages.studio.studioinspectorpane.search.saved.roles", "Search saved roles")}
             value={roleSearch}
             onChange={(event) => setRoleSearch(event.target.value)}
           />
@@ -1052,7 +1043,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
 
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Saved roles"
+            title={t("pages.studio.studioinspectorpane.saved.roles.2", "Saved roles")}
             help="Promote a catalog role into the active workflow when you want a reusable starting point."
           />
           {filteredSavedRoles.length > 0 ? (
@@ -1068,13 +1059,12 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
                         {role.model ? <Tag>{role.model}</Tag> : null}
                         {role.connectors.length > 0 ? (
                           <Tag color="processing">
-                            {role.connectors.length} connector(s)
-                          </Tag>
+                            {role.connectors.length} {t("pages.studio.studioinspectorpane.connector", "connector(s)")}</Tag>
                         ) : null}
                       </Space>
                     </div>
                     <div style={cardListActionStyle}>
-                      <Button onClick={() => onUseSavedRole(role.id)}>Use</Button>
+                      <Button onClick={() => onUseSavedRole(role.id)}>{t("pages.studio.studioinspectorpane.use", "Use")}</Button>
                     </div>
                   </div>
                 </div>
@@ -1083,14 +1073,14 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
           ) : (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="No saved roles matched"
+              description={t("pages.studio.studioinspectorpane.no.saved.roles.matched", "No saved roles matched")}
             />
           )}
         </div>
 
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Workflow roles"
+            title={t("pages.studio.studioinspectorpane.workflow.roles.2", "Workflow roles")}
             help="Expand a role to edit its ID, model, system prompt, and connector allow-list."
           />
           {filteredWorkflowRoles.length > 0 ? (
@@ -1109,8 +1099,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
                           {role.model ? <Tag>{role.model}</Tag> : null}
                           {role.connectors.length > 0 ? (
                             <Tag color="processing">
-                              {role.connectors.length} connector(s)
-                            </Tag>
+                              {role.connectors.length} {t("pages.studio.studioinspectorpane.connector.2", "connector(s)")}</Tag>
                           ) : null}
                         </Space>
                       </div>
@@ -1124,15 +1113,16 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
                             )
                           }
                         >
-                          {expanded ? 'Collapse' : 'Edit'}
+                          {expanded
+                            ? t("pages.studio.studioinspectorpane.collapse", "Collapse")
+                            : t("pages.studio.studioinspectorpane.edit", "Edit")}
                         </Button>
                         <Button
                           danger
                           size="small"
                           onClick={() => onDeleteWorkflowRole(role.id)}
                         >
-                          Remove
-                        </Button>
+                          {t("pages.studio.studioinspectorpane.remove.2", "Remove")}</Button>
                       </div>
                     </div>
 
@@ -1238,7 +1228,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
           ) : (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="No workflow roles matched"
+              description={t("pages.studio.studioinspectorpane.no.workflow.roles.matched", "No workflow roles matched")}
             />
           )}
         </div>
@@ -1246,7 +1236,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
     ) : (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="No workflow roles were parsed from the active draft."
+        description={t("pages.studio.studioinspectorpane.no.workflow.roles.were.parsed", "No workflow roles were parsed from the active draft.")}
       />
     );
 
@@ -1254,29 +1244,28 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
     <div style={cardStackStyle}>
       <div style={sectionPanelStyle}>
         <SectionHeader
-          title="YAML workspace"
+          title={t("pages.studio.studioinspectorpane.yaml.workspace", "YAML workspace")}
           help="Edit the source document directly, then validate it before saving or running."
           action={
             <Space wrap size={[8, 8]}>
-              <Button onClick={onValidateDraft}>Validate</Button>
+              <Button onClick={onValidateDraft}>{t("pages.studio.studioinspectorpane.validate", "Validate")}</Button>
               <Button
                 onClick={() => {
                   void navigator.clipboard?.writeText(draftYaml || '');
                 }}
               >
-                Copy
-              </Button>
+                {t("pages.studio.studioinspectorpane.copy", "Copy")}</Button>
             </Space>
           }
         />
         <div style={summaryMetricGridStyle}>
           <SummaryMetric
-            label="Parsed roles"
+            label={t("pages.studio.studioinspectorpane.parsed.roles", "Parsed roles")}
             value={workflowRoles.length}
             tone="info"
           />
           <SummaryMetric
-            label="Parsed steps"
+            label={t("pages.studio.studioinspectorpane.parsed.steps", "Parsed steps")}
             value={workflowSteps.length}
             tone="info"
           />
@@ -1301,11 +1290,11 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         </div>
         <div style={summaryFieldGridStyle}>
           <SummaryField
-            label="Parsed workflow"
+            label={t("pages.studio.studioinspectorpane.parsed.workflow", "Parsed workflow")}
             value={parsedWorkflowName || activeWorkflowName || 'n/a'}
           />
           <SummaryField
-            label="Validation status"
+            label={t("pages.studio.studioinspectorpane.validation.status", "Validation status")}
             value={
               validationLoading
                 ? 'In progress'
@@ -1318,23 +1307,24 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
           />
         </div>
         <div>
-          <Typography.Text style={summaryFieldLabelStyle}>Description</Typography.Text>
+          <Typography.Text style={summaryFieldLabelStyle}>{t("pages.studio.studioinspectorpane.description", "Description")}</Typography.Text>
           <Typography.Paragraph
             ellipsis={{ rows: 3, expandable: true, symbol: 'more' }}
             style={{ margin: '8px 0 0', whiteSpace: 'pre-wrap' }}
           >
-            {activeWorkflowDescription || 'No description'}
+            {activeWorkflowDescription ||
+              t("pages.studio.studioinspectorpane.no.description", "No description")}
           </Typography.Paragraph>
         </div>
       </div>
 
       <div style={sectionPanelStyle}>
         <SectionHeader
-          title="Workflow YAML"
+          title={t("pages.studio.studioinspectorpane.workflow.yaml", "Workflow YAML")}
           help="Direct source editing stays available here, but validation and summary stay separated above and below."
         />
         <Input.TextArea
-          aria-label="Studio workflow yaml panel"
+          aria-label={t("pages.studio.studioinspectorpane.studio.workflow.yaml.panel", "Studio workflow yaml panel")}
           autoSize={{ minRows: 14, maxRows: 24 }}
           spellCheck={false}
           value={draftYaml}
@@ -1345,7 +1335,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
 
       <div style={sectionPanelStyle}>
         <SectionHeader
-          title="Validation digest"
+          title={t("pages.studio.studioinspectorpane.validation.digest", "Validation digest")}
           help="Studio keeps the most important parsing feedback visible without taking over the whole inspector."
         />
         {renderValidationState(
@@ -1376,7 +1366,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
       {showTabSwitcher ? (
         <div style={sectionPanelStyle}>
           <SectionHeader
-            title="Inspector views"
+            title={t("pages.studio.studioinspectorpane.inspector.views", "Inspector views")}
             help="Switch between node edits, reusable roles, and the underlying YAML without leaving the current drawer."
           />
           <Space wrap size={[8, 8]}>
@@ -1385,20 +1375,17 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
               disabled={!hasSelectedNode}
               onClick={() => onSetInspectorTab('node')}
             >
-              Node
-            </Button>
+              {t("pages.studio.studioinspectorpane.node", "Node")}</Button>
             <Button
               type={inspectorTab === 'roles' ? 'primary' : 'default'}
               onClick={() => onSetInspectorTab('roles')}
             >
-              Roles
-            </Button>
+              {t("pages.studio.studioinspectorpane.roles", "Roles")}</Button>
             <Button
               type={inspectorTab === 'yaml' ? 'primary' : 'default'}
               onClick={() => onSetInspectorTab('yaml')}
             >
-              YAML
-            </Button>
+              {t("pages.studio.studioinspectorpane.yaml", "YAML")}</Button>
             <Tag color={hasSelectedNode ? 'processing' : 'default'}>
               {selectedNodeLabel}
             </Tag>

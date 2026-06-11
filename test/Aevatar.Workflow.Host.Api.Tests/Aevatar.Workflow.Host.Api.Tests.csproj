@@ -14,7 +14,12 @@
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Projection\Aevatar.AI.Projection.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Core\Aevatar.GAgentService.Core.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Infrastructure\Aevatar.GAgentService.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Projection\Aevatar.GAgentService.Projection.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Host.Api\Aevatar.Workflow.Host.Api.csproj" />
@@ -26,5 +31,8 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="FluentAssertions" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\ProjectionActivationPlanProviderTestBase.cs" Link="Shared\ProjectionActivationPlanProviderTestBase.cs" />
   </ItemGroup>
 </Project>

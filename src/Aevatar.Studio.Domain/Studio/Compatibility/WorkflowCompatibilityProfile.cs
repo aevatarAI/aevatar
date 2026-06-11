@@ -2,6 +2,9 @@ using System.Collections.Immutable;
 
 namespace Aevatar.Studio.Domain.Studio.Compatibility;
 
+// Refactor (iter72/cluster-072-workflow-closed-world-false-capability):
+//   Old pattern: ClosedWorldBlocked flag retained as always-false compatibility field
+//   New principle: Removed dead capability flag; output describes available primitives only
 public sealed class WorkflowCompatibilityProfile
 {
     public static WorkflowCompatibilityProfile AevatarV1 { get; } = CreateAevatarV1();
@@ -31,8 +34,6 @@ public sealed class WorkflowCompatibilityProfile
     public required ImmutableHashSet<string> AdvancedImportOnlyStepTypes { get; init; }
 
     public required ImmutableHashSet<string> ForbiddenAuthoringStepTypes { get; init; }
-
-    public required ImmutableHashSet<string> ClosedWorldBlockedStepTypes { get; init; }
 
     public required ImmutableHashSet<string> RootParameterFields { get; init; }
 
@@ -73,9 +74,6 @@ public sealed class WorkflowCompatibilityProfile
 
     public bool IsForbiddenAuthoringType(string? value) =>
         ForbiddenAuthoringStepTypes.Contains(ToCanonicalType(value));
-
-    public bool IsClosedWorldBlocked(string? value) =>
-        ClosedWorldBlockedStepTypes.Contains(ToCanonicalType(value));
 
     public bool IsStepTypeParameterKey(string? key)
     {
@@ -178,7 +176,6 @@ public sealed class WorkflowCompatibilityProfile
                 "max_tokens",
                 "max_tool_rounds",
                 "max_history_messages",
-                "stream_buffer_capacity",
                 "event_modules",
                 "event_routes",
                 "connectors",
@@ -223,7 +220,6 @@ public sealed class WorkflowCompatibilityProfile
             CanonicalStepTypes = canonicalTypes,
             AdvancedImportOnlyStepTypes = ImmutableHashSet.Create(comparer, "actor_send"),
             ForbiddenAuthoringStepTypes = ImmutableHashSet.Create(comparer, "workflow_loop"),
-            ClosedWorldBlockedStepTypes = ImmutableHashSet<string>.Empty.WithComparer(comparer),
             RootParameterFields = rootParameterFields,
             SupportedWorkflowCallLifecycles = ImmutableHashSet.Create(comparer, "singleton", "transient", "scope"),
             ExpressionFunctions = ImmutableHashSet.Create(

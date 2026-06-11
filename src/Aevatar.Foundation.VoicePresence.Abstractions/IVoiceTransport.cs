@@ -1,9 +1,8 @@
 namespace Aevatar.Foundation.VoicePresence.Abstractions;
 
 /// <summary>
-/// User-side voice transport. Audio frames flow directly between this transport
-/// and the voice provider without entering the grain inbox or event pipeline.
-/// Only control frames are dispatched as actor events.
+/// User-side voice transport. Implementations expose raw media frames; the owner
+/// module decides whether to forward them from its actor turn.
 /// </summary>
 public interface IVoiceTransport : IAsyncDisposable
 {

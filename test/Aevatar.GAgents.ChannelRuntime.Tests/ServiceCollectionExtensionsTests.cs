@@ -1,11 +1,21 @@
 using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
+using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,6 +42,19 @@ public sealed class ServiceCollectionExtensionsTests
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeStatusDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
+            descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>
@@ -40,20 +63,81 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(INyxIdRelayReplayGuard));
+        services.Any(descriptor =>
+                descriptor.ServiceType.FullName is { } name &&
+                name.Contains("NyxIdRelayReplayGuard", StringComparison.Ordinal))
+            .Should().BeFalse();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IHostedService) &&
-            descriptor.ImplementationType == typeof(LarkConversationInboxHostedService));
+        AssertProjectionActivationProviderRegistered<ChannelBotRegistrationCommittedStateProjectionActivationPlanProvider>(
+            services);
+        // Refactor (iter20/cluster-003):
+        //   Old pattern: Lark-local durable inbox subscriber worker stream path(orphan)
+        //   New principle: delete orphan path,NyxID relay 唯一 ingress
+        AssertNoRetiredLarkConversationInboxRegistration(services);
+        // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
+        //   Old pattern: AddChannelRuntime registered singleton process-local ChannelRuntimeDiagnostics as a queryable fact source.
+        //   New principle: channel diagnostics are logs/metrics only unless backed by actor/projection readmodels; DI must not restore the retired singleton.
+        AssertNoRetiredChannelRuntimeDiagnosticsRegistration(services);
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
             .Should().Be(0);
         services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
             .Should().Be(2);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ChannelRelayRegistrationFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ChannelRegistrationCommandFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
         registry.Get(ChannelId.From("telegram")).Should().BeOfType<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>();
+    }
+
+    [Fact]
+    public void AddDeviceRegistration_RegistersDeviceCommandFacades()
+    {
+        var services = new ServiceCollection();
+
+        var result = services.AddDeviceRegistration();
+
+        result.Should().BeSameAs(services);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(DeviceRegistrationCommandFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IDeviceCallbackCommandService) &&
+            descriptor.ImplementationType == typeof(DeviceCallbackCommandFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchService<DeviceRegisterCommand, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchService<DeviceCallbackDispatchCommand, DeviceCommandAcceptedReceipt, DeviceCallbackCommandStartError>));
+        AssertProjectionActivationProviderRegistered<DeviceRegistrationCommittedStateProjectionActivationPlanProvider>(
+            services);
+    }
+
+    [Fact]
+    public void AddScheduledAgents_RegistersCommittedStateProjectionActivationProvider()
+    {
+        var services = new ServiceCollection();
+
+        services.AddScheduledAgents();
+
+        AssertProjectionActivationProviderRegistered<UserAgentCatalogCommittedStateProjectionActivationPlanProvider>(
+            services);
+    }
+
+    [Fact]
+    public void AddChannelIdentity_RegistersCommittedStateProjectionActivationProvider()
+    {
+        var services = new ServiceCollection();
+
+        services.AddChannelIdentity(new ConfigurationBuilder().Build());
+
+        AssertProjectionActivationProviderRegistered<ChannelIdentityCommittedStateProjectionActivationPlanProvider>(
+            services);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
     }
 
     [Fact]
@@ -73,6 +157,61 @@ public sealed class ServiceCollectionExtensionsTests
         provider.GetRequiredService<IInteractiveReplyCollector>().Should().NotBeNull();
         registry.GetNativeProducer(ChannelId.From("lark")).Should().BeOfType<LarkChannelNativeMessageProducer>();
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
+    }
+
+    [Fact]
+    public void AddChannelRuntime_WithConfiguredInMemoryDenied_ShouldFailFast()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Policies:DenyInMemoryDocumentReadStore"] = "true",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        var act = () => services.AddChannelRuntime(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*InMemory document provider is not allowed by projection policy*");
+    }
+
+    [Fact]
+    public void AddChannelRuntime_WithProductionConfigurationAndImplicitInMemory_ShouldFailFast()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Policies:Environment"] = "Production",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        var act = () => services.AddChannelRuntime(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*InMemory document provider is not allowed by projection policy*");
+    }
+
+    [Fact]
+    public void AddChannelRuntime_WithElasticsearchEnabledButMissingEndpoints_ShouldFailOnStoreResolution()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddChannelRuntime(configuration);
+        using var provider = services.BuildServiceProvider();
+        var act = () => provider.GetRequiredService<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Projection:Document:Providers:Elasticsearch is enabled but Endpoints is empty*");
     }
 
     [Fact]
@@ -98,6 +237,19 @@ public sealed class ServiceCollectionExtensionsTests
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeStatusDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
+            descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>
@@ -106,16 +258,57 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(INyxIdRelayReplayGuard));
+        services.Any(descriptor =>
+                descriptor.ServiceType.FullName is { } name &&
+                name.Contains("NyxIdRelayReplayGuard", StringComparison.Ordinal))
+            .Should().BeFalse();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IHostedService) &&
-            descriptor.ImplementationType == typeof(LarkConversationInboxHostedService));
+        AssertNoRetiredLarkConversationInboxRegistration(services);
+        // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
+        //   Old pattern: AddChannelRuntime(IConfiguration) registered singleton process-local ChannelRuntimeDiagnostics as a queryable fact source.
+        //   New principle: channel diagnostics are logs/metrics only unless backed by actor/projection readmodels; configured DI must not restore the retired singleton.
+        AssertNoRetiredChannelRuntimeDiagnosticsRegistration(services);
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("ChannelBotDirectCallbackBinding", StringComparison.Ordinal));
+    }
+
+    private static void AssertNoRetiredLarkConversationInboxRegistration(IServiceCollection services)
+    {
+        services.Any(descriptor =>
+            ContainsLarkConversationInboxName(descriptor.ServiceType.FullName) ||
+            ContainsLarkConversationInboxName(descriptor.ImplementationType?.FullName))
+            .Should().BeFalse();
+    }
+
+    private static bool ContainsLarkConversationInboxName(string? name) =>
+        name is not null && name.Contains("LarkConversationInbox", StringComparison.Ordinal);
+
+    private static void AssertNoRetiredChannelRuntimeDiagnosticsRegistration(IServiceCollection services)
+    {
+        services.Any(descriptor =>
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ServiceType.FullName) ||
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ImplementationType?.FullName) ||
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ImplementationInstance?.GetType().FullName) ||
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ImplementationFactory?.Method.ReturnType.FullName))
+            .Should().BeFalse();
+    }
+
+    private static bool ContainsChannelRuntimeDiagnosticsName(string? name) =>
+        name is not null && name.Contains("ChannelRuntimeDiagnostics", StringComparison.Ordinal);
+
+    private static void AssertProjectionActivationProviderRegistered<TProvider>(IServiceCollection services)
+        where TProvider : IProjectionActivationPlanProvider
+    {
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ProjectionActivationPlanDispatcher));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            descriptor.ImplementationType == typeof(CommittedStateProjectionActivationHook));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionActivationPlanProvider) &&
+            descriptor.ImplementationType == typeof(TProvider));
     }
 }

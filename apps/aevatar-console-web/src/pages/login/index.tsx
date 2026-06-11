@@ -13,6 +13,7 @@ import {
 } from '@/shared/auth/session';
 import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
 import { describeError } from '@/shared/ui/errorText';
+import { t } from "@/shared/i18n/messages";
 
 const pageStyle: React.CSSProperties = {
   minHeight: '100vh',
@@ -118,17 +119,13 @@ const LoginPage: React.FC = () => {
           <div style={brandBlockStyle}>
             <BrandLogo size={52} />
             <Typography.Title level={2} style={{ marginBottom: 0 }}>
-              Aevatar Console
-            </Typography.Title>
+              {t("pages.login.index.aevatar.console", "Aevatar Console")}</Typography.Title>
           </div>
           <Space orientation="vertical" size={8} style={{ width: '100%' }}>
             <Typography.Title level={4} style={{ marginBottom: 0 }}>
-              Sign in with NyxID
-            </Typography.Title>
+              {t("pages.login.index.sign.in.with.nyxid", "Sign in with NyxID")}</Typography.Title>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              Authenticate with NyxID to access workflows, runs, actors, and
-              configuration surfaces.
-            </Typography.Paragraph>
+              {t("pages.login.index.authenticate.with.nyxid.to.access", "Authenticate with NyxID to access workflows, runs, actors, and configuration surfaces.")}</Typography.Paragraph>
           </Space>
           <Button
             icon={<LockOutlined />}
@@ -137,8 +134,7 @@ const LoginPage: React.FC = () => {
             size="large"
             type="primary"
           >
-            Continue with NyxID
-          </Button>
+            {t("pages.login.index.continue.with.nyxid", "Continue with NyxID")}</Button>
           {errorText ? (
             <Typography.Text type="danger">{errorText}</Typography.Text>
           ) : null}

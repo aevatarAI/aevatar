@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Materialization;
@@ -10,14 +10,21 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptNativeGraphProjector
     : ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>
 {
+    // Refactor (issue1289): native graphs consume materializer-derived payloads instead of event-embedded payloads.
+    // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
+    //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
+    //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root
     private readonly IProjectionGraphWriter<ScriptNativeGraphReadModel> _graphWriter;
+    private readonly IScriptProjectionPayloadMaterializer _payloadMaterializer;
     private readonly IScriptNativeGraphMaterializer _materializer;
 
     public ScriptNativeGraphProjector(
         IProjectionGraphWriter<ScriptNativeGraphReadModel> graphWriter,
+        IScriptProjectionPayloadMaterializer payloadMaterializer,
         IScriptNativeGraphMaterializer materializer)
     {
         _graphWriter = graphWriter ?? throw new ArgumentNullException(nameof(graphWriter));
+        _payloadMaterializer = payloadMaterializer ?? throw new ArgumentNullException(nameof(payloadMaterializer));
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
     }
 
@@ -37,12 +44,20 @@ public sealed class ScriptNativeGraphProjector
         }
 
         var fact = observedPayload.Unpack<ScriptDomainFactCommitted>();
-        if (fact.NativeGraph == null)
-            return;
-
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(
             envelope,
             DateTimeOffset.FromUnixTimeMilliseconds(fact.OccurredAtUnixTimeMs));
+        var payload = await _payloadMaterializer.MaterializeAsync(
+            new ScriptProjectionMaterializationInput(
+                fact,
+                envelope,
+                context.RootActorId,
+                sourceEventId,
+                updatedAt),
+            ct);
+        if (payload.NativeGraph == null)
+            return;
+
         var graphReadModel = _materializer.Materialize(
             context.RootActorId,
             fact.ScriptId ?? string.Empty,
@@ -51,7 +66,7 @@ public sealed class ScriptNativeGraphProjector
             fact,
             sourceEventId,
             updatedAt,
-            fact.NativeGraph);
+            payload.NativeGraph);
         await _graphWriter.UpsertAsync(graphReadModel, ct);
     }
 

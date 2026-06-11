@@ -12,13 +12,13 @@ export type StudioBuildFocus = `workflow:${string}` | `script:${string}` | `temp
 export type StudioIntent = 'create-member';
 export type StudioMemberKey =
   | `member:${string}`
-  | `workflow:${string}`
-  | `script:${string}`;
+  | `workflow:${string}`;
 
 type StudioRouteOptions = {
   scopeId?: string;
   memberId?: string;
   memberKey?: StudioMemberKey | string;
+  teamId?: string;
   step?: StudioStep;
   focus?: StudioBuildFocus;
   tab?: StudioTab;
@@ -26,6 +26,7 @@ type StudioRouteOptions = {
   prompt?: string;
   executionId?: string;
   logsMode?: 'popout';
+  returnTo?: string;
 } & Record<string, unknown>;
 
 function trimOptional(value: string | null | undefined): string {
@@ -62,6 +63,30 @@ export function buildStudioWorkflowMemberKey(options?: {
   return routeValue ? (`workflow:${routeValue}` as const) : undefined;
 }
 
+export function resolveStudioMemberRouteKey(input?: {
+  memberId?: string | null;
+  memberKey?: StudioMemberKey | string | null;
+  workflowId?: string | null;
+  scriptId?: string | null;
+}): StudioMemberKey | undefined {
+  const memberId = trimOptional(input?.memberId);
+  if (memberId) {
+    return `member:${memberId}`;
+  }
+
+  const memberKey = normalizeStudioMemberKey(input?.memberKey);
+  if (memberKey) {
+    return memberKey;
+  }
+
+  const workflowId = trimOptional(input?.workflowId);
+  if (workflowId) {
+    return `workflow:${workflowId}`;
+  }
+
+  return undefined;
+}
+
 function normalizeStudioBuildFocus(
   value: StudioBuildFocus | string | null | undefined,
 ): StudioBuildFocus | undefined {
@@ -84,8 +109,7 @@ function normalizeStudioMemberKey(
   const normalizedValue = trimOptional(value);
   if (
     normalizedValue.startsWith('member:') ||
-    normalizedValue.startsWith('workflow:') ||
-    normalizedValue.startsWith('script:')
+    normalizedValue.startsWith('workflow:')
   ) {
     return normalizedValue as StudioMemberKey;
   }
@@ -134,6 +158,9 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   if (options?.scopeId?.trim()) {
     params.set('scopeId', options.scopeId.trim());
   }
+  if (options?.teamId?.trim()) {
+    params.set('teamId', options.teamId.trim());
+  }
   const memberKey = normalizeStudioMemberKey(
     options?.memberKey,
     options?.memberId,
@@ -163,6 +190,9 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   }
   if (options?.logsMode === 'popout') {
     params.set('logs', 'popout');
+  }
+  if (options?.returnTo?.trim()) {
+    params.set('returnTo', options.returnTo.trim());
   }
 
   const query = params.toString();
@@ -247,8 +277,8 @@ export function buildStudioScriptsWorkspaceRoute(options?: {
   const scriptFocus = scriptId ? (`script:${scriptId}` as const) : undefined;
   return buildStudioRoute({
     ...options,
-    focus:
-      scriptFocus && scriptFocus !== memberKey ? scriptFocus : undefined,
+    memberKey: memberKey || undefined,
+    focus: scriptFocus,
     tab: 'scripts',
   });
 }

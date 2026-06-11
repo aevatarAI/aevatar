@@ -1,8 +1,7 @@
-#pragma warning disable CS0618 // Tests exercise legacy migration utilities pending removal
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
-using Aevatar.GAgentService.Governance.Hosting.Migration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Aevatar.GAgentService.Projection.ReadModels;
@@ -13,11 +12,14 @@ using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Adapters;
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.Hosting;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
@@ -44,14 +46,24 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IServiceCommandPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceLifecycleQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceServingQueryPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeBindingReadinessQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IStaticGAgentStreamInvocationPort<AGUIEvent>));
+        services.Should().NotContain(x => x.ServiceType == typeof(ITeamEntryMemberResolver));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceCommandPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IActivationCapabilityViewReader));
         services.Should().Contain(x => x.ServiceType == typeof(IInvokeAdmissionAuthorizer));
-        services.Should().Contain(x =>
+        // Refactor (iter23/cluster-003-governance-legacy-startup-eventstore-fold):
+        //   Old pattern: capability registration added a startup hosted service that folded legacy events.
+        //   New principle: startup must not own migration replay; only explicit runtime services are composed.
+        services.Should().NotContain(x =>
             x.ServiceType == typeof(IHostedService) &&
-            x.ImplementationType == typeof(ServiceGovernanceLegacyMigrationHostedService));
+            x.ImplementationType != null &&
+            string.Equals(
+                x.ImplementationType.FullName,
+                "Aevatar.GAgentService.Governance.Hosting.Migration.ServiceGovernanceLegacyMigrationHostedService",
+                StringComparison.Ordinal));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType != null &&
@@ -62,7 +74,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ImplementationType == typeof(WorkflowServiceImplementationAdapter));
 
         using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();
         provider.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
+        provider.GetRequiredService<IGAgentRunTerminalQueryPort>().Should().NotBeNull();
     }
 
     [Fact]
@@ -182,18 +196,66 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/scopes/{scopeId}/workflow/draft-run");
         endpoints.Should().Contain("/api/scopes/{scopeId}/invoke/chat:stream");
         endpoints.Should().Contain("/api/scopes/{scopeId}/invoke/{endpointId}");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}/audit");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}:resume");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}:signal");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}:stop");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/services");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/revisions/{revisionId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/revisions/{revisionId}:retire");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/runs");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/runs/{runId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/runs/{runId}/audit");
+    }
+
+    [Fact]
+    public async Task AddGAgentServiceCapabilityBundle_ShouldStartStandaloneWithoutMainnetWorkflowProviders()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Host.UseDefaultServiceProvider(options =>
+        {
+            options.ValidateOnBuild = false;
+            options.ValidateScopes = false;
+        });
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["GAgentService:Demo:Enabled"] = "false",
+            ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+            ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+            ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+            ["Projection:Policies:Environment"] = "Development",
+        });
+
+        builder.AddAevatarDefaultHost(options =>
+        {
+            options.ServiceName = "Aevatar.GAgentService.StandaloneStartup.Tests";
+            options.EnableConnectorBootstrap = false;
+            options.EnableHealthEndpoints = false;
+            options.MapRootHealthEndpoint = false;
+            options.EnableOpenApiDocument = false;
+            options.AutoMapCapabilities = false;
+        });
+        builder.AddGAgentServiceCapabilityBundle();
+
+        await using var app = builder.Build();
+        app.MapAevatarCapabilities();
+
+        await app.StartAsync();
+
+        app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>()
+            .Should()
+            .NotBeNull();
+        AssertNoWorkflowCapabilitiesStartupArtifactServices(builder.Services);
     }
 
     [Fact]
@@ -264,6 +326,8 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
+        AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
         services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)).Should().Be(1);
     }
 
@@ -313,6 +377,10 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceCatalogReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<GAgentRunTerminalReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
+        AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
     }
 
     [Fact]
@@ -439,5 +507,24 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         nullServicesAct.Should().Throw<ArgumentNullException>();
         nullConfigurationAct.Should().Throw<ArgumentNullException>();
+    }
+
+    private static bool ServiceTypeContains(Type serviceType, string typeName)
+    {
+        if (serviceType.Name.Contains(typeName, StringComparison.Ordinal))
+            return true;
+
+        return serviceType.IsGenericType &&
+               serviceType.GenericTypeArguments.Any(argument =>
+                   argument.Name.Contains(typeName, StringComparison.Ordinal));
+    }
+
+    private static void AssertNoWorkflowCapabilitiesStartupArtifactServices(IServiceCollection services)
+    {
+        // Refactor (iter161-cluster-001 #1257-first):
+        //   Old pattern: DI tests referenced the obsolete WorkflowCapabilitiesStartupArtifact type through nameof.
+        //   New principle: tests protect against service registration by symbol name without keeping the deleted type alive.
+        services.Should().NotContain(service =>
+            ServiceTypeContains(service.ServiceType, "WorkflowCapabilitiesStartupArtifact"));
     }
 }

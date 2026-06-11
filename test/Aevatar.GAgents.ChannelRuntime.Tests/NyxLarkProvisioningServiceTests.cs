@@ -19,6 +19,7 @@ public class NyxLarkProvisioningServiceTests
         handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456","status":"pending_webhook"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789","default_agent":true}""");
+        handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
 
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
@@ -33,13 +34,13 @@ public class NyxLarkProvisioningServiceTests
                 ChannelBotRegistrationGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
 
         var service = new NyxLarkProvisioningService(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            commandFacade,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(
@@ -68,13 +69,15 @@ public class NyxLarkProvisioningServiceTests
         MatchesLocalMirror(capturedEnvelope.Payload.Unpack<ChannelBotRegisterCommand>(), result.RegistrationId!)
             .Should().BeTrue();
 
-        handler.Requests.Should().HaveCount(3);
+        handler.Requests.Should().HaveCount(4);
         handler.Requests[0].Body.Should().Contain("\"callback_url\":\"https://aevatar.example.com/api/webhooks/nyxid-relay\"");
         handler.Requests[0].Body.Should().Contain("\"platform\":\"generic\"");
         handler.Requests[1].Body.Should().Contain("\"bot_token\":\"__unused_for_lark__\"");
         handler.Requests[1].Body.Should().Contain("\"app_id\":\"cli_a1b2c3\"");
         handler.Requests[1].Body.Should().Contain("\"verification_token\":\"verify-123\"");
         handler.Requests[2].Body.Should().Contain("\"default_agent\":true");
+        handler.Requests[3].Body.Should().Contain("\"label\":\"Lark App cli_a1b2c3\"");
+        handler.Requests[3].Body.Should().Contain("\"service_slug\":\"api-lark-bot\"");
     }
 
     [Theory]
@@ -117,12 +120,11 @@ public class NyxLarkProvisioningServiceTests
     {
         var handler = new RecordingHandler();
         var nyxClient = new NyxIdApiClient(new NyxIdToolOptions(), new HttpClient(handler));
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var service = new NyxLarkProvisioningService(
             nyxClient,
             new NyxIdToolOptions(),
-            actorRuntime,
-            Substitute.For<IActorDispatchPort>(),
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
@@ -139,6 +141,7 @@ public class NyxLarkProvisioningServiceTests
         handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
+        handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-conversations/route-789", """{"ok":true}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-bots/bot-456", """{"ok":true}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
@@ -151,210 +154,27 @@ public class NyxLarkProvisioningServiceTests
                 ChannelBotRegistrationGAgent.WellKnownId,
                 Arg.Any<EventEnvelope>(),
                 Arg.Any<CancellationToken>())
-            .Returns(_ => throw new InvalidOperationException("mirror failed"));
+            .Returns(_ => Task.FromException<DispatchAdmission>(new InvalidOperationException("mirror failed")));
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
 
         var service = new NyxLarkProvisioningService(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            commandFacade,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be("mirror failed");
-        handler.Requests.Should().HaveCount(6);
-        handler.Requests[3].Method.Should().Be(HttpMethod.Delete);
-        handler.Requests[3].Path.Should().Be("/api/v1/channel-conversations/route-789");
-        handler.Requests[4].Path.Should().Be("/api/v1/channel-bots/bot-456");
-        handler.Requests[5].Path.Should().Be("/api/v1/api-keys/key-123");
-    }
-
-    [Fact]
-    public async Task RepairLocalMirrorAsync_ReusesExistingNyxResources_AndDispatchesLocalMirror()
-    {
-        var handler = new RecordingHandler();
-        handler.Enqueue(HttpMethod.Get, "/api/v1/api-keys/key-123", """{"id":"key-123","callback_url":"https://aevatar.example.com/api/webhooks/nyxid-relay"}""");
-        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-bots/bot-456", """{"id":"bot-456","platform":"lark","webhook_url":"https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456"}""");
-        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-conversations/route-789", """{"id":"route-789","channel_bot_id":"bot-456","agent_api_key_id":"key-123","default_agent":true}""");
-
-        EventEnvelope? capturedEnvelope = null;
-        var actor = Substitute.For<IActor>();
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var service = new NyxLarkProvisioningService(
-            new NyxIdApiClient(
-                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-                new HttpClient(handler)),
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
-            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
-
-        var result = await service.RepairLocalMirrorAsync(
-            new NyxLarkMirrorRepairRequest(
-                AccessToken: "user-token",
-                RequestedRegistrationId: "reg-restore-1",
-                ScopeId: "scope-1",
-                NyxProviderSlug: "api-lark-bot",
-                WebhookBaseUrl: "https://aevatar.example.com",
-                NyxChannelBotId: "bot-456",
-                NyxAgentApiKeyId: "key-123",
-                NyxConversationRouteId: "route-789"),
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeTrue();
-        result.Status.Should().Be("accepted");
-        result.RegistrationId.Should().Be("reg-restore-1");
-        result.WebhookUrl.Should().Be("https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456");
-        handler.Requests.Should().HaveCount(3);
-
-        capturedEnvelope.Should().NotBeNull();
-        capturedEnvelope!.Payload.Is(ChannelBotRegisterCommand.Descriptor).Should().BeTrue();
-        MatchesLocalMirror(
-                capturedEnvelope.Payload.Unpack<ChannelBotRegisterCommand>(),
-                "reg-restore-1")
-            .Should()
-            .BeTrue();
-    }
-
-    [Fact]
-    public async Task RepairLocalMirrorAsync_DiscoversDefaultRouteFromNyxConversationList()
-    {
-        var handler = new RecordingHandler();
-        handler.Enqueue(HttpMethod.Get, "/api/v1/api-keys/key-123", """{"id":"key-123","callback_url":"https://aevatar.example.com/api/webhooks/nyxid-relay"}""");
-        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-bots/bot-456", """{"id":"bot-456","platform":"lark","webhook_url":"https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456"}""");
-        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-conversations", """{"conversations":[{"id":"route-789","channel_bot_id":"bot-456","agent_api_key_id":"key-123","default_agent":true}],"total":1}""");
-
-        EventEnvelope? capturedEnvelope = null;
-        var actor = Substitute.For<IActor>();
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var service = new NyxLarkProvisioningService(
-            new NyxIdApiClient(
-                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-                new HttpClient(handler)),
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
-            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
-
-        var result = await service.RepairLocalMirrorAsync(
-            new NyxLarkMirrorRepairRequest(
-                AccessToken: "user-token",
-                RequestedRegistrationId: "reg-restore-1",
-                ScopeId: "scope-1",
-                NyxProviderSlug: "api-lark-bot",
-                WebhookBaseUrl: "https://aevatar.example.com",
-                NyxChannelBotId: "bot-456",
-                NyxAgentApiKeyId: "key-123",
-                NyxConversationRouteId: string.Empty),
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeTrue();
-        result.NyxConversationRouteId.Should().Be("route-789");
-        handler.Requests.Should().HaveCount(3);
-
-        capturedEnvelope.Should().NotBeNull();
-        capturedEnvelope!.Payload.Is(ChannelBotRegisterCommand.Descriptor).Should().BeTrue();
-        MatchesLocalMirror(
-                capturedEnvelope.Payload.Unpack<ChannelBotRegisterCommand>(),
-                "reg-restore-1")
-            .Should()
-            .BeTrue();
-    }
-
-    [Fact]
-    public async Task RepairLocalMirrorAsync_ShouldReject_WhenRelayApiKeyCallbackDoesNotMatchAevatarRelay()
-    {
-        var handler = new RecordingHandler();
-        handler.Enqueue(HttpMethod.Get, "/api/v1/api-keys/key-123", """{"id":"key-123","callback_url":"https://wrong.example.com/api/webhooks/nyxid-relay"}""");
-
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-
-        var service = new NyxLarkProvisioningService(
-            new NyxIdApiClient(
-                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-                new HttpClient(handler)),
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
-            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
-
-        var result = await service.RepairLocalMirrorAsync(
-            new NyxLarkMirrorRepairRequest(
-                AccessToken: "user-token",
-                RequestedRegistrationId: "reg-restore-1",
-                ScopeId: "scope-1",
-                NyxProviderSlug: "api-lark-bot",
-                WebhookBaseUrl: "https://aevatar.example.com",
-                NyxChannelBotId: "bot-456",
-                NyxAgentApiKeyId: "key-123",
-                NyxConversationRouteId: "route-789"),
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeFalse();
-        result.Error.Should().Contain("api_key_callback_url_mismatch");
-        await ((IActorDispatchPort)actorRuntime).DidNotReceiveWithAnyArgs()
-            .DispatchAsync(default!, default!, default);
-    }
-
-    [Fact]
-    public async Task RepairLocalMirrorAsync_ShouldReject_WhenNoMatchingConversationRouteExistsInNyx()
-    {
-        var handler = new RecordingHandler();
-        handler.Enqueue(HttpMethod.Get, "/api/v1/api-keys/key-123", """{"id":"key-123","callback_url":"https://aevatar.example.com/api/webhooks/nyxid-relay"}""");
-        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-bots/bot-456", """{"id":"bot-456","platform":"lark","webhook_url":"https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456"}""");
-        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-conversations", """{"conversations":[],"total":0}""");
-
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-
-        var service = new NyxLarkProvisioningService(
-            new NyxIdApiClient(
-                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-                new HttpClient(handler)),
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
-            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
-
-        var result = await service.RepairLocalMirrorAsync(
-            new NyxLarkMirrorRepairRequest(
-                AccessToken: "user-token",
-                RequestedRegistrationId: "reg-restore-1",
-                ScopeId: "scope-1",
-                NyxProviderSlug: "api-lark-bot",
-                WebhookBaseUrl: "https://aevatar.example.com",
-                NyxChannelBotId: "bot-456",
-                NyxAgentApiKeyId: "key-123",
-                NyxConversationRouteId: string.Empty),
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeFalse();
-        result.Error.Should().Contain("missing_matching_nyx_conversation_route");
-        await ((IActorDispatchPort)actorRuntime).DidNotReceiveWithAnyArgs()
-            .DispatchAsync(default!, default!, default);
+        handler.Requests.Should().HaveCount(7);
+        handler.Requests[3].Path.Should().Be("/api/v1/keys");
+        handler.Requests[4].Method.Should().Be(HttpMethod.Delete);
+        handler.Requests[4].Path.Should().Be("/api/v1/channel-conversations/route-789");
+        handler.Requests[5].Path.Should().Be("/api/v1/channel-bots/bot-456");
+        handler.Requests[6].Path.Should().Be("/api/v1/api-keys/key-123");
     }
 
     private static bool MatchesLocalMirror(ChannelBotRegisterCommand command, string registrationId) =>
@@ -385,11 +205,12 @@ public class NyxLarkProvisioningServiceTests
             new HttpClient(handler));
 
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
         return new NyxLarkProvisioningService(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
     }
 

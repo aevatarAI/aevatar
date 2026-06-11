@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 
@@ -35,14 +34,16 @@ public interface INyxTelegramProvisioningService
 
 public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningService, INyxChannelBotProvisioningService
 {
+    // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+    //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
+    //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
     private const string DefaultNyxProviderSlug = "api-telegram-bot";
     private const string NyxRelayApiKeyPlatform = "generic";
     public const string PlatformId = "telegram";
 
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdToolOptions _nyxOptions;
-    private readonly IActorRuntime _actorRuntime;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly ChannelRegistrationCommandFacade _commandFacade;
     private readonly ILogger<NyxTelegramProvisioningService> _logger;
 
     private sealed record RelayApiKeyCredentials(string Id);
@@ -50,14 +51,12 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
     public NyxTelegramProvisioningService(
         NyxIdApiClient nyxClient,
         NyxIdToolOptions nyxOptions,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
+        ChannelRegistrationCommandFacade commandFacade,
         ILogger<NyxTelegramProvisioningService> logger)
     {
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
-        _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -65,6 +64,12 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
 
     public async Task<NyxTelegramProvisioningResult> ProvisionAsync(NyxTelegramProvisioningRequest request, CancellationToken ct)
     {
+        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+        //   Old pattern: Telegram provisioning service owned remote Nyx saga and raw local actor dispatch.
+        //   New principle: provisioning only calls existing NyxID REST surfaces; local mirror command enters via facade.
+        // Refactor (iter113/cluster-113-telegram-connector-inmemory-updates):
+        //   Old pattern: Telegram connector keeps inbound updates as in-memory state (process-local queue/dictionary).
+        //   New principle: Delete telegram_user /getUpdates in-memory queue and route inbound Telegram through existing NyxID relay/proxy; no new actor type; no in-memory state on connector side.
         ArgumentNullException.ThrowIfNull(request);
 
         if (string.IsNullOrWhiteSpace(request.AccessToken))
@@ -260,6 +265,9 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
         string routeId,
         CancellationToken ct)
     {
+        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+        //   Old pattern: provisioning service injected runtime/dispatch and hand-built local mirror dispatch.
+        //   New principle: local mirror write enters the typed application command facade only.
         var cmd = new ChannelBotRegisterCommand
         {
             RequestedId = registrationId,
@@ -272,11 +280,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
             NyxConversationRouteId = routeId,
         };
 
-        await ChannelBotRegistrationStoreCommands.DispatchRegisterAsync(
-            _actorRuntime,
-            _dispatchPort,
-            cmd,
-            ct);
+        await _commandFacade.RegisterLocalMirrorAsync(cmd, ct);
     }
 
     private static NyxTelegramProvisioningResult Failure(string error) =>

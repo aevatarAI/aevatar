@@ -21,6 +21,42 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 {
     public static string ProjectionKind => "studio-member";
 
+    // Refactor (iter1345/cluster-519-draft-member-authority):
+    //   Old pattern: workflow draft saves could leave member authority creation
+    //   to API-side orchestration or read-model freshness assumptions.
+    //   New principle: committed draft facts enter projection fanout, then the
+    //   standard actor command path asks this member actor to own creation
+    //   idempotently from its authoritative state.
+    [EventHandler(EndpointName = "ensureMember")]
+    public async Task HandleEnsureStudioMember(EnsureStudioMember command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!string.IsNullOrEmpty(State.MemberId))
+        {
+            if (!string.Equals(State.MemberId, command.MemberId, StringComparison.Ordinal)
+                || !string.Equals(State.ScopeId, command.ScopeId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"member already initialized as '{State.ScopeId}/{State.MemberId}'.");
+            }
+
+            return;
+        }
+
+        await PersistDomainEventAsync(new StudioMemberCreatedEvent
+        {
+            MemberId = command.MemberId,
+            ScopeId = command.ScopeId,
+            DisplayName = command.DisplayName,
+            Description = command.Description,
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = StudioMemberConventions.BuildPublishedServiceId(command.MemberId),
+            CreatedAtUtc = command.RequestedAtUtc
+                ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+    }
+
     [EventHandler(EndpointName = "createMember")]
     public async Task HandleCreated(StudioMemberCreatedEvent evt)
     {
@@ -90,15 +126,275 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         await PersistDomainEventAsync(evt);
     }
 
-    [EventHandler(EndpointName = "recordBinding")]
-    public async Task HandleBound(StudioMemberBoundEvent evt)
+    [EventHandler(EndpointName = "requestBindingAdmission")]
+    public async Task HandleBindingAdmissionRequested(StudioMemberBindAdmissionRequested evt)
+    {
+        var runActorId = StudioMemberConventions.BuildBindingRunActorId(evt.BindingRunId);
+        var failedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member not yet created.", failedAt));
+            return;
+        }
+
+        if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal)
+            || !string.Equals(State.MemberId, evt.MemberId, StringComparison.Ordinal))
+        {
+            await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_TARGET_MISMATCH", "binding admission target does not match member authority state.", failedAt));
+            return;
+        }
+
+        if (TryBuildTerminalBindingRunReplayResponse(State, evt, failedAt, out var terminalReplayResponse))
+        {
+            await SendToAsync(runActorId, terminalReplayResponse);
+            return;
+        }
+
+        if (IsTerminalBindingRunReplay(State, evt.BindingRunId))
+        {
+            return;
+        }
+
+        if (HasActiveBindingRun(State, evt.BindingRunId))
+        {
+            await SendToAsync(runActorId, BuildRejected(
+                evt,
+                "STUDIO_MEMBER_BINDING_RUN_ALREADY_ACTIVE",
+                "member already has an active binding run.",
+                failedAt));
+            return;
+        }
+
+        if (IsSupersededBindingRun(State, evt.BindingRunId, evt.RequestedAtUtc))
+        {
+            await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_BINDING_RUN_SUPERSEDED", "binding run was superseded by a newer member binding run.", failedAt));
+            return;
+        }
+
+        var requestedKind = GetRequestImplementationKind(evt.Request);
+        if (requestedKind != State.ImplementationKind)
+        {
+            var rejected = BuildRejected(
+                evt,
+                "STUDIO_MEMBER_IMPLEMENTATION_KIND_MISMATCH",
+                $"binding request kind '{requestedKind}' does not match member kind '{State.ImplementationKind}'.",
+                failedAt);
+            await PersistDomainEventsAsync([evt, rejected]);
+            await SendToAsync(runActorId, rejected);
+            return;
+        }
+
+        var admitted = new StudioMemberBindingAdmittedEvent
+        {
+            BindingRunId = evt.BindingRunId,
+            ScopeId = State.ScopeId,
+            MemberId = State.MemberId,
+            PublishedServiceId = State.PublishedServiceId,
+            ImplementationKind = State.ImplementationKind,
+            DisplayName = State.DisplayName,
+            AdmittedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        await PersistDomainEventsAsync([evt, admitted]);
+        await SendToAsync(runActorId, admitted);
+    }
+
+    [EventHandler(EndpointName = "markBindingPlatformPending")]
+    public async Task HandleBindingPlatformPending(StudioMemberBindingPlatformPendingEvent evt)
     {
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
         }
 
+        if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
+        {
+            return;
+        }
+
+        if (State.Binding?.CurrentStatus == StudioMemberBindingRunStatus.PlatformBindingPending
+            && string.Equals(State.Binding.CurrentBindingRunId, evt.BindingRunId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         await PersistDomainEventAsync(evt);
+    }
+
+    [EventHandler(EndpointName = "completeBinding")]
+    public async Task HandleBindingCompleted(StudioMemberBindingCompletedEvent evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded))
+        {
+            await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
+            return;
+        }
+
+        if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(evt);
+        await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
+    }
+
+    [EventHandler(EndpointName = "failBinding")]
+    public async Task HandleBindingFailed(StudioMemberBindingFailedEvent evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Failed))
+        {
+            await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
+            return;
+        }
+
+        if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(evt);
+        await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
+    }
+
+    /// <summary>
+    /// Mutates the member's team assignment (ADR-0017 Locked Rule 3).
+    /// The single event shape covers assign / unassign / move; from/to are
+    /// proto3 <c>optional string</c> so absence means "unassigned".
+    ///
+    /// from_team_id must agree with the current state.team_id — this guards
+    /// against stale or hand-crafted events committing against a roster the
+    /// member no longer claims to be on. Durable TeamGAgent fanout is driven
+    /// by this committed event through the projection materialization actor.
+    /// </summary>
+    [EventHandler(EndpointName = "reassignTeam")]
+    public async Task HandleReassigned(StudioMemberReassignedEvent evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"member '{State.MemberId}' (scope {State.ScopeId}) cannot accept reassignment in scope {evt.ScopeId}.");
+        }
+
+        // At least one side must be present; otherwise the event has no semantic effect.
+        if (!evt.HasFromTeamId && !evt.HasToTeamId)
+        {
+            throw new InvalidOperationException(
+                "reassign event must carry at least one of from_team_id / to_team_id.");
+        }
+
+        // Both present and equal is a no-op move — reject so the wire never carries it.
+        if (evt.HasFromTeamId && evt.HasToTeamId
+            && string.Equals(evt.FromTeamId, evt.ToTeamId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "from_team_id and to_team_id must differ when both are present.");
+        }
+
+        // Empty-string check (defensive — wire layer should already reject).
+        if (evt.HasFromTeamId && string.IsNullOrEmpty(evt.FromTeamId))
+        {
+            throw new InvalidOperationException(
+                "from_team_id must not be empty when present.");
+        }
+        if (evt.HasToTeamId && string.IsNullOrEmpty(evt.ToTeamId))
+        {
+            throw new InvalidOperationException(
+                "to_team_id must not be empty when present.");
+        }
+
+        // from_team_id must reflect the current assignment so the event is
+        // a real transition relative to this actor's authority. Idempotent
+        // replays of the same transition are accepted (state already matches
+        // the to_team_id).
+        var currentTeam = State.HasTeamId ? State.TeamId : null;
+        var fromTeam = evt.HasFromTeamId ? evt.FromTeamId : null;
+        var toTeam = evt.HasToTeamId ? evt.ToTeamId : null;
+
+        if (!string.Equals(currentTeam, fromTeam, StringComparison.Ordinal))
+        {
+            // Allow idempotent replay: if the state already matches the
+            // destination, swallow the event without persisting.
+            if (string.Equals(currentTeam, toTeam, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"member '{State.MemberId}' current team_id is '{currentTeam ?? "<unassigned>"}' but " +
+                $"reassign event names from_team_id '{fromTeam ?? "<unassigned>"}'.");
+        }
+
+        await PersistDomainEventAsync(evt);
+    }
+
+    /// <summary>
+    /// Evaluates PATCH team-assignment intent inside the member authority
+    /// boundary. Callers provide only the desired target; this actor derives
+    /// the current source team from <see cref="State"/>, suppresses no-ops,
+    /// commits the resulting reassignment event. Team roster fanout is driven
+    /// later by the durable committed-state materializer.
+    /// </summary>
+    // Refactor (iter96/cluster-545):
+    //   Old pattern: member actor 直发 team(部分失败不可 replay).
+    //   New principle: 只 persist committed event,fanout 由 StudioTeamRosterFanoutMaterializer 物化(committed-state idempotent).
+    [EventHandler(EndpointName = "patchTeamAssignment")]
+    public async Task HandleTeamAssignmentPatchRequested(StudioMemberTeamAssignmentPatchRequested evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal)
+            || !string.Equals(State.MemberId, evt.MemberId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "team assignment patch target does not match member authority state.");
+        }
+
+        if (evt.HasTargetTeamId && string.IsNullOrWhiteSpace(evt.TargetTeamId))
+        {
+            throw new InvalidOperationException(
+                "target_team_id must not be empty when present.");
+        }
+
+        var currentTeam = State.HasTeamId ? State.TeamId : null;
+        var targetTeam = evt.HasTargetTeamId ? NormalizeActorIdSegment(evt.TargetTeamId, "target_team_id") : null;
+        if (string.Equals(currentTeam, targetTeam, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var reassigned = new StudioMemberReassignedEvent
+        {
+            MemberId = State.MemberId,
+            ScopeId = State.ScopeId,
+            ReassignedAtUtc = evt.RequestedAtUtc
+                ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        if (currentTeam != null)
+            reassigned.FromTeamId = currentTeam;
+        if (targetTeam != null)
+            reassigned.ToTeamId = targetTeam;
+
+        await PersistDomainEventAsync(reassigned);
     }
 
     protected override StudioMemberState TransitionState(
@@ -109,7 +405,13 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             .On<StudioMemberCreatedEvent>(ApplyCreated)
             .On<StudioMemberRenamedEvent>(ApplyRenamed)
             .On<StudioMemberImplementationUpdatedEvent>(ApplyImplementationUpdated)
-            .On<StudioMemberBoundEvent>(ApplyBound)
+            .On<StudioMemberBindAdmissionRequested>(ApplyBindingAdmissionRequested)
+            .On<StudioMemberBindingAdmittedEvent>(ApplyBindingAdmitted)
+            .On<StudioMemberBindingRejectedEvent>(ApplyBindingRejected)
+            .On<StudioMemberBindingPlatformPendingEvent>(ApplyBindingPlatformPending)
+            .On<StudioMemberBindingCompletedEvent>(ApplyBindingCompleted)
+            .On<StudioMemberBindingFailedEvent>(ApplyBindingFailed)
+            .On<StudioMemberReassignedEvent>(ApplyReassigned)
             .OrCurrent();
     }
 
@@ -149,6 +451,71 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return next;
     }
 
+    private static StudioMemberState ApplyBindingAdmissionRequested(
+        StudioMemberState state,
+        StudioMemberBindAdmissionRequested evt)
+    {
+        if (ShouldIgnoreBindingRunStart(state, evt.BindingRunId, evt.RequestedAtUtc))
+            return state;
+
+        var next = state.Clone();
+        next.Binding = new StudioMemberBindingAuthorityState
+        {
+            CurrentBindingRunId = evt.BindingRunId,
+            CurrentStatus = StudioMemberBindingRunStatus.AdmissionPending,
+            LastTerminalBindingRunId = next.Binding?.LastTerminalBindingRunId ?? string.Empty,
+            LastFailure = next.Binding?.LastFailure?.Clone(),
+            UpdatedAtUtc = evt.RequestedAtUtc,
+        };
+        next.UpdatedAtUtc = evt.RequestedAtUtc;
+        return next;
+    }
+
+    private static StudioMemberState ApplyBindingAdmitted(
+        StudioMemberState state,
+        StudioMemberBindingAdmittedEvent evt)
+    {
+        if (!CanAcceptBindingRunProgress(state, evt.BindingRunId))
+            return state;
+
+        var currentStatus = state.Binding?.CurrentStatus ?? StudioMemberBindingRunStatus.Unspecified;
+        if (currentStatus == StudioMemberBindingRunStatus.PlatformBindingPending)
+            return state;
+
+        var next = state.Clone();
+        next.Binding = new StudioMemberBindingAuthorityState
+        {
+            CurrentBindingRunId = evt.BindingRunId,
+            CurrentStatus = StudioMemberBindingRunStatus.Admitted,
+            LastTerminalBindingRunId = next.Binding?.LastTerminalBindingRunId ?? string.Empty,
+            LastFailure = next.Binding?.LastFailure?.Clone(),
+            UpdatedAtUtc = evt.AdmittedAtUtc,
+        };
+        next.UpdatedAtUtc = evt.AdmittedAtUtc;
+        return next;
+    }
+
+    private static StudioMemberState ApplyBindingRejected(
+        StudioMemberState state,
+        StudioMemberBindingRejectedEvent evt)
+    {
+        if (!CanAcceptBindingRunProgress(state, evt.BindingRunId))
+            return state;
+
+        var failedAt = evt.Failure?.FailedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var next = state.Clone();
+        next.Binding = new StudioMemberBindingAuthorityState
+        {
+            CurrentBindingRunId = evt.BindingRunId,
+            CurrentStatus = StudioMemberBindingRunStatus.Rejected,
+            LastTerminalBindingRunId = evt.BindingRunId,
+            LastFailure = evt.Failure?.Clone(),
+            UpdatedAtUtc = failedAt,
+        };
+        next.UpdatedAtUtc = failedAt;
+        return next;
+    }
+
     private static StudioMemberState ApplyImplementationUpdated(
         StudioMemberState state, StudioMemberImplementationUpdatedEvent evt)
     {
@@ -184,20 +551,238 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return next;
     }
 
-    private static StudioMemberState ApplyBound(
-        StudioMemberState state, StudioMemberBoundEvent evt)
+    private static StudioMemberState ApplyBindingPlatformPending(
+        StudioMemberState state,
+        StudioMemberBindingPlatformPendingEvent evt)
     {
+        if (!CanAcceptBindingRunProgress(state, evt.BindingRunId))
+            return state;
+
+        var next = state.Clone();
+        next.Binding = new StudioMemberBindingAuthorityState
+        {
+            CurrentBindingRunId = evt.BindingRunId,
+            CurrentStatus = StudioMemberBindingRunStatus.PlatformBindingPending,
+            LastTerminalBindingRunId = next.Binding?.LastTerminalBindingRunId ?? string.Empty,
+            LastFailure = next.Binding?.LastFailure?.Clone(),
+            UpdatedAtUtc = evt.PendingAtUtc,
+        };
+        next.UpdatedAtUtc = evt.PendingAtUtc;
+        return next;
+    }
+
+    private static StudioMemberState ApplyBindingCompleted(
+        StudioMemberState state, StudioMemberBindingCompletedEvent evt)
+    {
+        if (!CanAcceptBindingRunProgress(state, evt.BindingRunId))
+            return state;
+
         var next = state.Clone();
         next.LastBinding = new StudioMemberBindingContract
         {
             PublishedServiceId = evt.PublishedServiceId,
             RevisionId = evt.RevisionId,
             ImplementationKind = evt.ImplementationKind,
-            BoundAtUtc = evt.BoundAtUtc,
+            BoundAtUtc = evt.CompletedAtUtc,
+        };
+        if (HasResolvedImplementationRef(evt.ImplementationRef))
+        {
+            next.ImplementationRef = evt.ImplementationRef.Clone();
+        }
+        next.Binding = new StudioMemberBindingAuthorityState
+        {
+            CurrentBindingRunId = evt.BindingRunId,
+            CurrentStatus = StudioMemberBindingRunStatus.Succeeded,
+            LastTerminalBindingRunId = evt.BindingRunId,
+            LastFailure = null,
+            UpdatedAtUtc = evt.CompletedAtUtc,
         };
         next.LifecycleStage = StudioMemberLifecycleStage.BindReady;
-        next.UpdatedAtUtc = evt.BoundAtUtc;
+        next.UpdatedAtUtc = evt.CompletedAtUtc;
         return next;
+    }
+
+    private static StudioMemberState ApplyBindingFailed(
+        StudioMemberState state,
+        StudioMemberBindingFailedEvent evt)
+    {
+        if (!CanAcceptBindingRunProgress(state, evt.BindingRunId))
+            return state;
+
+        var failedAt = evt.Failure?.FailedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var next = state.Clone();
+        next.Binding = new StudioMemberBindingAuthorityState
+        {
+            CurrentBindingRunId = evt.BindingRunId,
+            CurrentStatus = StudioMemberBindingRunStatus.Failed,
+            LastTerminalBindingRunId = evt.BindingRunId,
+            LastFailure = evt.Failure?.Clone(),
+            UpdatedAtUtc = failedAt,
+        };
+        next.UpdatedAtUtc = failedAt;
+        return next;
+    }
+
+    private static bool CanAcceptBindingRunProgress(StudioMemberState state, string bindingRunId)
+    {
+        var currentRun = state.Binding?.CurrentBindingRunId;
+        return !string.IsNullOrEmpty(currentRun)
+               && string.Equals(currentRun, bindingRunId, StringComparison.Ordinal)
+               && !IsCurrentBindingTerminal(state);
+    }
+
+    private static bool HasActiveBindingRun(StudioMemberState state, string incomingBindingRunId)
+    {
+        var currentBinding = state.Binding;
+        return currentBinding != null
+               && !string.IsNullOrEmpty(currentBinding.CurrentBindingRunId)
+               && !string.Equals(currentBinding.CurrentBindingRunId, incomingBindingRunId, StringComparison.Ordinal)
+               && !IsTerminalBindingStatus(currentBinding.CurrentStatus);
+    }
+
+    private static bool ShouldIgnoreBindingRunStart(
+        StudioMemberState state,
+        string bindingRunId,
+        Timestamp? requestedAtUtc)
+    {
+        var currentBinding = state.Binding;
+        if (currentBinding == null || string.IsNullOrEmpty(currentBinding.CurrentBindingRunId))
+            return false;
+
+        if (string.Equals(currentBinding.CurrentBindingRunId, bindingRunId, StringComparison.Ordinal))
+            return true;
+
+        if (!IsTerminalBindingStatus(currentBinding.CurrentStatus))
+            return true;
+
+        if (currentBinding.UpdatedAtUtc == null)
+            return false;
+
+        return CompareTimestamp(requestedAtUtc, currentBinding.UpdatedAtUtc) <= 0;
+    }
+
+    private static bool IsSupersededBindingRun(
+        StudioMemberState state,
+        string bindingRunId,
+        Timestamp? requestedAtUtc)
+    {
+        var currentBinding = state.Binding;
+        if (currentBinding == null || string.IsNullOrEmpty(currentBinding.CurrentBindingRunId))
+            return false;
+
+        if (string.Equals(currentBinding.CurrentBindingRunId, bindingRunId, StringComparison.Ordinal))
+            return false;
+
+        if (currentBinding.UpdatedAtUtc == null)
+            return false;
+
+        return CompareTimestamp(requestedAtUtc, currentBinding.UpdatedAtUtc) <= 0;
+    }
+
+    private static bool IsTerminalBindingRunReplay(StudioMemberState state, string bindingRunId)
+    {
+        var currentBinding = state.Binding;
+        return currentBinding != null
+               && string.Equals(currentBinding.CurrentBindingRunId, bindingRunId, StringComparison.Ordinal)
+               && IsTerminalBindingStatus(currentBinding.CurrentStatus);
+    }
+
+    private static bool IsTerminalBindingRunReplay(
+        StudioMemberState state,
+        string bindingRunId,
+        StudioMemberBindingRunStatus expectedStatus)
+    {
+        var currentBinding = state.Binding;
+        return currentBinding != null
+               && string.Equals(currentBinding.CurrentBindingRunId, bindingRunId, StringComparison.Ordinal)
+               && currentBinding.CurrentStatus == expectedStatus;
+    }
+
+    private static bool TryBuildTerminalBindingRunReplayResponse(
+        StudioMemberState state,
+        StudioMemberBindAdmissionRequested request,
+        Timestamp failedAt,
+        out StudioMemberBindingRejectedEvent response)
+    {
+        response = new StudioMemberBindingRejectedEvent();
+
+        var currentBinding = state.Binding;
+        if (currentBinding == null
+            || !string.Equals(currentBinding.CurrentBindingRunId, request.BindingRunId, StringComparison.Ordinal)
+            || currentBinding.CurrentStatus != StudioMemberBindingRunStatus.Rejected)
+        {
+            return false;
+        }
+
+        response = new StudioMemberBindingRejectedEvent
+        {
+            BindingRunId = request.BindingRunId,
+            ScopeId = state.ScopeId,
+            MemberId = state.MemberId,
+            Failure = currentBinding.LastFailure?.Clone() ?? new StudioMemberBindingFailure
+            {
+                Code = "STUDIO_MEMBER_BINDING_RUN_REJECTED",
+                Message = "binding run was already rejected.",
+                FailedAtUtc = failedAt,
+            },
+        };
+        return true;
+    }
+
+    private static bool IsCurrentBindingTerminal(StudioMemberState state) =>
+        IsTerminalBindingStatus(state.Binding?.CurrentStatus ?? StudioMemberBindingRunStatus.Unspecified);
+
+    private static bool IsTerminalBindingStatus(StudioMemberBindingRunStatus status) =>
+        status is StudioMemberBindingRunStatus.Succeeded
+            or StudioMemberBindingRunStatus.Failed
+            or StudioMemberBindingRunStatus.Rejected;
+
+    private Task SendTerminalAcknowledgementAsync(string bindingRunId, StudioMemberBindingRunStatus status) =>
+        SendToAsync(
+            StudioMemberConventions.BuildBindingRunActorId(bindingRunId),
+            new StudioMemberBindingTerminalAcknowledged
+            {
+                BindingRunId = bindingRunId,
+                Status = status,
+                AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+
+    private static int CompareTimestamp(Timestamp? left, Timestamp? right)
+    {
+        if (left == null && right == null)
+            return 0;
+        if (left == null)
+            return -1;
+        if (right == null)
+            return 1;
+
+        return left.ToDateTimeOffset().CompareTo(right.ToDateTimeOffset());
+    }
+
+    private static StudioMemberState ApplyReassigned(
+        StudioMemberState state, StudioMemberReassignedEvent evt)
+    {
+        var next = state.Clone();
+        if (evt.HasToTeamId)
+        {
+            next.TeamId = evt.ToTeamId;
+        }
+        else
+        {
+            next.ClearTeamId();
+        }
+        next.UpdatedAtUtc = evt.ReassignedAtUtc;
+        return next;
+    }
+
+    private static string NormalizeActorIdSegment(string? value, string fieldName)
+    {
+        var trimmed = value?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+            throw new InvalidOperationException($"{fieldName} is required.");
+        if (trimmed.Contains(':'))
+            throw new InvalidOperationException($"{fieldName} must not contain ':'.");
+        return trimmed;
     }
 
     private static bool HasResolvedImplementationRef(StudioMemberImplementationRef? implRef)
@@ -214,4 +799,31 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 
         return false;
     }
+
+    private static StudioMemberImplementationKind GetRequestImplementationKind(StudioMemberBindingRequest request) =>
+        request.ImplementationCase switch
+        {
+            StudioMemberBindingRequest.ImplementationOneofCase.Workflow => StudioMemberImplementationKind.Workflow,
+            StudioMemberBindingRequest.ImplementationOneofCase.Script => StudioMemberImplementationKind.Script,
+            StudioMemberBindingRequest.ImplementationOneofCase.Gagent => StudioMemberImplementationKind.Gagent,
+            _ => StudioMemberImplementationKind.Unspecified,
+        };
+
+    private static StudioMemberBindingRejectedEvent BuildRejected(
+        StudioMemberBindAdmissionRequested evt,
+        string code,
+        string message,
+        Timestamp failedAt) =>
+        new()
+        {
+            BindingRunId = evt.BindingRunId,
+            ScopeId = evt.ScopeId,
+            MemberId = evt.MemberId,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = code,
+                Message = message,
+                FailedAtUtc = failedAt,
+            },
+        };
 }

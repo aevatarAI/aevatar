@@ -125,6 +125,17 @@ describe("scopeConsole", () => {
       correlationId: "corr-1",
       runId: "run-1",
     });
+    expect(
+      extractRuntimeInvokeReceipt({
+        commandId: "cmd-only",
+        targetActorId: "actor://svc",
+      })
+    ).toEqual({
+      actorId: "actor://svc",
+      commandId: "cmd-only",
+      correlationId: "",
+      runId: "",
+    });
 
     expect(
       getPreferredScopeConsoleServiceId(
@@ -135,5 +146,19 @@ describe("scopeConsole", () => {
         "missing"
       )
     ).toBe(nyxIdChatServiceId);
+  });
+
+  it("does not treat command id as a fallback run id", () => {
+    expect(
+      extractRuntimeInvokeReceipt({
+        commandId: "cmd-only",
+        targetActorId: "actor://svc",
+      })
+    ).toEqual({
+      actorId: "actor://svc",
+      commandId: "cmd-only",
+      correlationId: "",
+      runId: "",
+    });
   });
 });

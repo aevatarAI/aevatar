@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using System.Reflection;
+using System.ClientModel.Primitives;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
@@ -50,6 +51,194 @@ public class AIComponentCoverageTests
 
         imported.Clear();
         imported.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void ChatHistory_ShouldPreserveReasoningContentOnExportImport()
+    {
+        var history = new ChatHistory();
+        history.Add(new AevatarChatMessage { Role = "assistant", Content = "hello", ReasoningContent = "thinking..." });
+        history.Add(new AevatarChatMessage { Role = "user", Content = "follow-up" });
+
+        var exported = history.Export();
+        exported[0].ReasoningContent.Should().Be("thinking...");
+        exported[1].ReasoningContent.Should().BeNull();
+
+        var imported = new ChatHistory();
+        imported.Import(exported);
+        imported.Messages[0].ReasoningContent.Should().Be("thinking...");
+        imported.Messages[1].ReasoningContent.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task MEAILLMProvider_ConvertMessages_ShouldIncludeReasoningContent()
+    {
+        IReadOnlyList<MeaiChatMessage>? capturedMessages = null;
+        var client = new StubChatClient
+        {
+            OnGetStreamingResponse = (messages, _, _) =>
+            {
+                capturedMessages = messages.ToList();
+                return Stream(["ok"]);
+            },
+        };
+
+        var provider = new MEAILLMProvider("meai-reasoning-outbound", client);
+        await foreach (var _ in provider.ChatStreamAsync(new LLMRequest
+        {
+            Messages =
+            [
+                new AevatarChatMessage { Role = "user", Content = "hi" },
+                new AevatarChatMessage { Role = "assistant", Content = "thought", ReasoningContent = "reasoning-text" },
+            ],
+        }))
+        {
+        }
+
+        capturedMessages.Should().NotBeNull();
+        capturedMessages!.Should().HaveCount(2);
+        var assistantMsg = capturedMessages[1];
+        assistantMsg.Role.Should().Be(ChatRole.Assistant);
+        assistantMsg.Contents.OfType<TextReasoningContent>().Should().ContainSingle()
+            .Which.Text.Should().Be("reasoning-text");
+        assistantMsg.RawRepresentation.Should().BeAssignableTo<OpenAI.Chat.AssistantChatMessage>();
+
+        var openAiMessages = OpenAI.Chat.MicrosoftExtensionsAIChatExtensions
+            .AsOpenAIChatMessages(capturedMessages!)
+            .ToList();
+        var assistantJson = ModelReaderWriter.Write(openAiMessages[1]).ToString();
+        assistantJson.Should().Contain("\"reasoning_content\":\"reasoning-text\"");
+    }
+
+    [Fact]
+    public async Task MEAILLMProvider_ConvertMessages_ShouldIncludeReasoningContentWithToolCalls()
+    {
+        IReadOnlyList<MeaiChatMessage>? capturedMessages = null;
+        var client = new StubChatClient
+        {
+            OnGetStreamingResponse = (messages, _, _) =>
+            {
+                capturedMessages = messages.ToList();
+                return Stream(["ok"]);
+            },
+        };
+
+        var provider = new MEAILLMProvider("meai-reasoning-tools", client);
+        await foreach (var _ in provider.ChatStreamAsync(new LLMRequest
+        {
+            Messages =
+            [
+                new AevatarChatMessage { Role = "user", Content = "hi" },
+                new AevatarChatMessage
+                {
+                    Role = "assistant",
+                    Content = "using tool",
+                    ReasoningContent = "thinking about tools",
+                    ToolCalls =
+                    [
+                        new Aevatar.AI.Abstractions.LLMProviders.ToolCall
+                        {
+                            Id = "tc1", Name = "search", ArgumentsJson = "{}",
+                        },
+                    ],
+                },
+                new AevatarChatMessage { Role = "tool", ToolCallId = "tc1", Content = "result" },
+            ],
+        }))
+        {
+        }
+
+        capturedMessages.Should().NotBeNull();
+        var assistantWithTools = capturedMessages![1];
+        assistantWithTools.Role.Should().Be(ChatRole.Assistant);
+        assistantWithTools.Contents.OfType<TextReasoningContent>().Should().ContainSingle()
+            .Which.Text.Should().Be("thinking about tools");
+        assistantWithTools.Contents.OfType<FunctionCallContent>().Should().ContainSingle();
+        assistantWithTools.RawRepresentation.Should().BeAssignableTo<OpenAI.Chat.AssistantChatMessage>();
+
+        var openAiMessages = OpenAI.Chat.MicrosoftExtensionsAIChatExtensions
+            .AsOpenAIChatMessages(capturedMessages!)
+            .ToList();
+        var assistantJson = ModelReaderWriter.Write(openAiMessages[1]).ToString();
+        assistantJson.Should().Contain("\"reasoning_content\":\"thinking about tools\"");
+        assistantJson.Should().Contain("\"tool_calls\"");
+        assistantJson.Should().Contain("\"name\":\"search\"");
+    }
+
+    [Fact]
+    public async Task MEAILLMProvider_ConvertMessages_ShouldSkipRawReasoningPatchForEmptyAssistantContent()
+    {
+        IReadOnlyList<MeaiChatMessage>? capturedMessages = null;
+        var client = new StubChatClient
+        {
+            OnGetStreamingResponse = (messages, _, _) =>
+            {
+                capturedMessages = messages.ToList();
+                return Stream(["ok"]);
+            },
+        };
+
+        var provider = new MEAILLMProvider("meai-reasoning-empty-assistant", client);
+        await foreach (var _ in provider.ChatStreamAsync(new LLMRequest
+        {
+            Messages =
+            [
+                new AevatarChatMessage { Role = "user", Content = "hi" },
+                new AevatarChatMessage { Role = "assistant", Content = string.Empty, ReasoningContent = "thinking-only" },
+            ],
+        }))
+        {
+        }
+
+        capturedMessages.Should().NotBeNull();
+        var assistantMsg = capturedMessages![1];
+        assistantMsg.Contents.OfType<TextReasoningContent>().Should().ContainSingle()
+            .Which.Text.Should().Be("thinking-only");
+        assistantMsg.RawRepresentation.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task MEAILLMProvider_ChatStreamAsync_ShouldExtractReasoningDeltaFromOpenAIRawPatch()
+    {
+        var handler = new CapturingHttpHandler(_ =>
+        {
+            var responseContent = string.Join("\n\n",
+                """
+                data: {"id":"x","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"thinking from raw patch"},"finish_reason":null}]}
+                """,
+                """
+                data: {"id":"x","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":"final"},"finish_reason":"stop"}]}
+                """,
+                "data: [DONE]",
+                string.Empty);
+
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseContent, System.Text.Encoding.UTF8, "text/event-stream"),
+            });
+        });
+
+        var clientOptions = new OpenAI.OpenAIClientOptions
+        {
+            Endpoint = new Uri("https://test.example.com/v1/"),
+            Transport = new System.ClientModel.Primitives.HttpClientPipelineTransport(new HttpClient(handler)),
+        };
+        var openAiClient = new OpenAI.OpenAIClient(
+            new System.ClientModel.ApiKeyCredential("test-key"), clientOptions);
+        var provider = new MEAILLMProvider("deepseek", openAiClient.GetChatClient("deepseek-v4-pro").AsIChatClient());
+
+        var chunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in provider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
+        }))
+        {
+            chunks.Add(chunk);
+        }
+
+        chunks.Select(chunk => chunk.DeltaReasoningContent)
+            .Should().Contain("thinking from raw patch");
+        chunks.Select(chunk => chunk.DeltaContent).Should().Contain("final");
     }
 
     [Fact]
@@ -132,39 +321,29 @@ public class AIComponentCoverageTests
 
         var client = new StubChatClient
         {
-            OnGetResponse = (messages, options, _) =>
+            OnGetStreamingResponse = (messages, options, _) =>
             {
                 capturedMessages = messages.ToList();
                 capturedOptions = options;
 
-                var assistant = new MeaiChatMessage(ChatRole.Assistant, "hello");
-                assistant.Contents.Add(new FunctionCallContent("call-1", "calc", new Dictionary<string, object?>
-                {
-                    ["x"] = 1,
-                }));
-
-                var response = new ChatResponse(assistant)
-                {
-                    Usage = new UsageDetails
-                    {
-                        InputTokenCount = 3,
-                        OutputTokenCount = 2,
-                        TotalTokenCount = 5,
-                    },
-                };
-                return Task.FromResult(response);
-            },
-            OnGetStreamingResponse = (_, options, _) =>
-            {
-                capturedStreamingOptions = options;
-                return Stream(["a", "b"]);
+                return Stream([
+                    new ChatResponseUpdate(ChatRole.Assistant, "hello"),
+                    new ChatResponseUpdate(
+                        ChatRole.Assistant,
+                        [
+                            new FunctionCallContent("call-1", "calc", new Dictionary<string, object?>
+                            {
+                                ["x"] = 1,
+                            }),
+                        ]),
+                ]);
             },
         };
 
         var provider = new MEAILLMProvider("meai", client);
 
         var tool = new StubTool("search");
-        var response = await provider.ChatAsync(new LLMRequest
+        var response = await ChatStreamContentAggregator.AggregateResponseAsync(provider, new LLMRequest
         {
             RequestId = "session-1",
             Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -199,10 +378,6 @@ public class AIComponentCoverageTests
         response.ToolCalls.Should().NotBeNull();
         response.ToolCalls![0].Id.Should().Be("call-1");
         response.ToolCalls[0].Name.Should().Be("calc");
-        response.Usage.Should().NotBeNull();
-        response.Usage!.PromptTokens.Should().Be(3);
-        response.Usage.CompletionTokens.Should().Be(2);
-        response.Usage.TotalTokens.Should().Be(5);
 
         capturedMessages.Should().NotBeNull();
         capturedMessages!.Should().HaveCount(2);
@@ -217,6 +392,16 @@ public class AIComponentCoverageTests
         capturedOptions.MaxOutputTokens.Should().Be(42);
         capturedOptions.Tools.Should().NotBeNull();
         capturedOptions.Tools.Should().ContainSingle();
+
+        client = new StubChatClient
+        {
+            OnGetStreamingResponse = (_, options, _) =>
+            {
+                capturedStreamingOptions = options;
+                return Stream(["a", "b"]);
+            },
+        };
+        provider = new MEAILLMProvider("meai", client);
 
         var chunks = new List<LLMStreamChunk>();
         await foreach (var chunk in provider.ChatStreamAsync(new LLMRequest
@@ -247,22 +432,31 @@ public class AIComponentCoverageTests
             OnGetResponse = (_, _, _) =>
             {
                 nonStreamingFallbackCalls++;
-                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "fallback-content")));
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "fallback-content"))
+                {
+                    Usage = new UsageDetails
+                    {
+                        InputTokenCount = 3,
+                        OutputTokenCount = 2,
+                        TotalTokenCount = 5,
+                    },
+                });
             },
         };
         var emptyStreamProvider = new MEAILLMProvider("meai-empty-stream", emptyStreamClient);
-        var emptyStreamChunks = new List<LLMStreamChunk>();
-        await foreach (var chunk in emptyStreamProvider.ChatStreamAsync(new LLMRequest
-        {
-            Messages = [new AevatarChatMessage { Role = "user", Content = "hello fallback" }],
-        }))
-        {
-            emptyStreamChunks.Add(chunk);
-        }
+        var emptyStreamResponse = await ChatStreamContentAggregator.AggregateResponseAsync(
+            emptyStreamProvider,
+            new LLMRequest
+            {
+                Messages = [new AevatarChatMessage { Role = "user", Content = "hello fallback" }],
+            });
 
         nonStreamingFallbackCalls.Should().Be(1);
-        emptyStreamChunks.Should().Contain(x => x.DeltaContent == "fallback-content");
-        emptyStreamChunks.Last().IsLast.Should().BeTrue();
+        emptyStreamResponse.Content.Should().Be("fallback-content");
+        emptyStreamResponse.Usage.Should().NotBeNull();
+        emptyStreamResponse.Usage!.PromptTokens.Should().Be(3);
+        emptyStreamResponse.Usage.CompletionTokens.Should().Be(2);
+        emptyStreamResponse.Usage.TotalTokens.Should().Be(5);
 
         var reasoningOnlyFallbackCalls = 0;
         var reasoningOnlyClient = new StubChatClient
@@ -344,7 +538,7 @@ public class AIComponentCoverageTests
         };
 
         var provider = new MEAILLMProvider("meai-text-content", client);
-        var response = await provider.ChatAsync(new LLMRequest
+        var response = await ChatStreamContentAggregator.AggregateResponseAsync(provider, new LLMRequest
         {
             Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
         });
@@ -402,7 +596,7 @@ public class AIComponentCoverageTests
             skills.Should().HaveCount(2);
             skills.All(x => x.DirectoryPath.Length > 0).Should().BeTrue();
 
-            var registry = new SkillRegistry();
+            var registry = new LocalSkillCatalog();
             var source = new SkillsAgentToolSource(
                 new SkillsOptions { Directories = { dirA, dirB } },
                 discovery,
@@ -442,7 +636,7 @@ public class AIComponentCoverageTests
     }
 
     [Fact]
-    public void TornadoProvider_PrivateMappers_ShouldMapRequestAndResponse()
+    public void TornadoProvider_PrivateMappers_ShouldMapRequestAndStreamDeltas()
     {
         var provider = new TornadoLLMProvider(
             "tor",
@@ -484,53 +678,6 @@ public class AIComponentCoverageTests
         mappedRequest.Metadata.Should().NotBeNull();
         mappedRequest.Metadata![LLMRequestMetadataKeys.RequestId].Should().Be("session-tornado");
         mappedRequest.Metadata["workflow.run_id"].Should().Be("run-tornado");
-
-        var chatResult = new ChatResult
-        {
-            Choices =
-            [
-                new ChatChoice
-                {
-                    Message = new LlmTornado.Chat.ChatMessage(ChatMessageRoles.Assistant, "reply")
-                    {
-                        ToolCalls =
-                        [
-                            new LlmTornado.ChatFunctions.ToolCall
-                            {
-                                Id = "tc-1",
-                                FunctionCall = new FunctionCall
-                                {
-                                    Name = "calc",
-                                    Arguments = "{\"x\":1}",
-                                },
-                            },
-                        ],
-                    },
-                    FinishReason = ChatMessageFinishReasons.StopSequence,
-                },
-            ],
-            Usage = new ChatUsage(LLmProviders.OpenAi)
-            {
-                PromptTokens = 2,
-                CompletionTokens = 3,
-                TotalTokens = 5,
-            },
-        };
-
-        var mappedResponse = InvokePrivateStatic<LLMResponse>(typeof(TornadoLLMProvider), "MapResponse", chatResult);
-        mappedResponse.Content.Should().Be("reply");
-        mappedResponse.ToolCalls.Should().NotBeNull();
-        mappedResponse.ToolCalls![0].Id.Should().Be("tc-1");
-        mappedResponse.ToolCalls[0].Name.Should().Be("calc");
-        mappedResponse.ToolCalls[0].ArgumentsJson.Should().Be("{\"x\":1}");
-        mappedResponse.Usage.Should().NotBeNull();
-        mappedResponse.Usage!.PromptTokens.Should().Be(2);
-        mappedResponse.Usage.CompletionTokens.Should().Be(3);
-        mappedResponse.Usage.TotalTokens.Should().Be(5);
-        mappedResponse.FinishReason.Should().Contain("Stop");
-
-        var mappedNullResponse = InvokePrivateStatic<LLMResponse>(typeof(TornadoLLMProvider), "MapResponse", new object?[] { null });
-        mappedNullResponse.FinishReason.Should().Be("error");
 
         var deltaToolCall = InvokePrivateStatic<Aevatar.AI.Abstractions.LLMProviders.ToolCall>(
             typeof(TornadoLLMProvider),
@@ -576,37 +723,42 @@ public class AIComponentCoverageTests
     }
 
     [Fact]
-    public void TornadoProvider_MapResponseAndToolCallConverters_ShouldHandleSparsePayloads()
+    public void TornadoProvider_StripNonTextContentParts_ShouldPreserveReasoningAndToolCalls()
     {
-        var sparseResult = new ChatResult
-        {
-            Choices =
-            [
-                new ChatChoice
-                {
-                    Message = null,
-                    FinishReason = ChatMessageFinishReasons.Length,
-                },
-            ],
-        };
-
-        var response = InvokePrivateStatic<LLMResponse>(typeof(TornadoLLMProvider), "MapResponse", sparseResult);
-        response.Content.Should().BeNull();
-        response.ToolCalls.Should().BeNull();
-        response.Usage.Should().BeNull();
-        response.FinishReason.Should().Contain("Length");
-
-        var generatedToolCall = InvokePrivateStatic<Aevatar.AI.Abstractions.LLMProviders.ToolCall>(
+        var stripped = InvokePrivateStatic<AevatarChatMessage>(
             typeof(TornadoLLMProvider),
-            "ConvertToolCall",
-            new LlmTornado.ChatFunctions.ToolCall
+            "StripNonTextContentParts",
+            new AevatarChatMessage
             {
-                FunctionCall = null,
+                Role = "assistant",
+                Content = "fallback",
+                ReasoningContent = "thinking",
+                ContentParts =
+                [
+                    ContentPart.TextPart("visible"),
+                    ContentPart.ImagePart("aW1n", "image/png"),
+                ],
+                ToolCalls =
+                [
+                    new Aevatar.AI.Abstractions.LLMProviders.ToolCall
+                    {
+                        Id = "tc-1",
+                        Name = "lookup",
+                        ArgumentsJson = "{}",
+                    },
+                ],
             });
-        generatedToolCall.Id.Should().NotBeNullOrWhiteSpace();
-        generatedToolCall.Name.Should().BeEmpty();
-        generatedToolCall.ArgumentsJson.Should().Be("{}");
 
+        stripped.Content.Should().Contain("visible");
+        stripped.Content.Should().Contain("image content was attached");
+        stripped.ReasoningContent.Should().Be("thinking");
+        stripped.ToolCalls.Should().ContainSingle()
+            .Which.Id.Should().Be("tc-1");
+    }
+
+    [Fact]
+    public void TornadoProvider_ToolCallDeltaConverter_ShouldHandleSparsePayloads()
+    {
         var emptyDelta = InvokePrivateStatic<Aevatar.AI.Abstractions.LLMProviders.ToolCall>(
             typeof(TornadoLLMProvider),
             "ConvertToolCallDelta",
@@ -630,7 +782,7 @@ public class AIComponentCoverageTests
             allowedInputKeys: ["q"]);
 
         SetPrivateField(connector, "_tools",
-            Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+            CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
                 new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-a"] = new StubTool("tool-a") }));
 
         var success = await connector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
@@ -661,7 +813,7 @@ public class AIComponentCoverageTests
             allowedTools: [],
             allowedInputKeys: []);
         SetPrivateField(discoveredMiss, "_tools",
-            Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+            CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
                 new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase)));
 
         var notDiscovered = await discoveredMiss.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
@@ -676,7 +828,7 @@ public class AIComponentCoverageTests
             serverConfig: new MCPServerConfig { Name = "server-3", Command = "missing-cmd" },
             defaultTool: "tool-x");
         SetPrivateField(throwingConnector, "_tools",
-            Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+            CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
                 new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-x"] = new ThrowingTool("tool-x") }));
 
         var caught = await throwingConnector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
@@ -704,11 +856,41 @@ public class AIComponentCoverageTests
         await manager.DisposeAsync();
     }
 
+    [Fact]
+    public async Task MCPConnector_DisposeAsync_BeforeConnect_ShouldDisposeOwnedRemoteHttpClient()
+    {
+        var handler = new RecordingDisposeHandler();
+        var client = new HttpClient(handler);
+        var connector = new MCPConnector(
+            name: "mcp-owned-http",
+            serverConfig: new MCPServerConfig
+            {
+                Name = "server-owned-http",
+                Url = "https://example.com/mcp",
+                HttpClient = client,
+                OwnsHttpClient = true,
+            });
+
+        await connector.DisposeAsync();
+        await connector.DisposeAsync();
+
+        handler.DisposeCount.Should().Be(1);
+    }
+
     private static async IAsyncEnumerable<ChatResponseUpdate> Stream(IEnumerable<string> parts)
     {
         foreach (var part in parts)
         {
             yield return new ChatResponseUpdate(ChatRole.Assistant, part);
+            await Task.Yield();
+        }
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> Stream(IEnumerable<ChatResponseUpdate> updates)
+    {
+        foreach (var update in updates)
+        {
+            yield return update;
             await Task.Yield();
         }
     }
@@ -846,6 +1028,9 @@ public class AIComponentCoverageTests
         field!.SetValue(target, value);
     }
 
+    private static Lazy<Task<T>> CompletedLazy<T>(T value) =>
+        new(() => Task.FromResult(value), LazyThreadSafetyMode.ExecutionAndPublication);
+
     private static T GetPrivateField<T>(object target, string fieldName)
     {
         var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
@@ -865,9 +1050,11 @@ public class AIComponentCoverageTests
         string? capturedRequestBody = null;
 
         // Create a mock HTTP transport that captures the request body
-        var handler = new CapturingHttpHandler(request =>
+        var handler = new CapturingHttpHandler(async request =>
         {
-            capturedRequestBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            capturedRequestBody = request.Content == null
+                ? null
+                : await request.Content.ReadAsStringAsync();
 
             // Return a minimal valid streaming response so the SDK doesn't throw
             var responseContent = "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"test\"," +
@@ -876,7 +1063,7 @@ public class AIComponentCoverageTests
             {
                 Content = new StringContent(responseContent, System.Text.Encoding.UTF8, "text/event-stream"),
             };
-            return Task.FromResult(response);
+            return response;
         });
 
         // Build the same pipeline as NyxIdLLMProvider: OpenAIClient → IChatClient → MEAILLMProvider
@@ -938,5 +1125,26 @@ public class AIComponentCoverageTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken) =>
             onSend(request);
+    }
+
+    private sealed class RecordingDisposeHandler : HttpMessageHandler
+    {
+        public int DisposeCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _ = request;
+            _ = cancellationToken;
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                DisposeCount++;
+
+            base.Dispose(disposing);
+        }
     }
 }

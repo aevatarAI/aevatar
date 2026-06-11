@@ -8,6 +8,9 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 /// relevant API hints into the system prompt based on the user's
 /// actually connected services.
 /// </summary>
+// Refactor (iter113/cluster-113-telegram-connector-inmemory-updates):
+//   Old pattern: Telegram connector keeps inbound updates as in-memory state (process-local queue/dictionary).
+//   New principle: Delete telegram_user /getUpdates in-memory queue and route inbound Telegram through existing NyxID relay/proxy; no new actor type; no in-memory state on connector side.
 public static class NyxIdServiceApiHints
 {
     private static readonly (string Pattern, string Hint)[] HintEntries =
@@ -17,11 +20,11 @@ public static class NyxIdServiceApiHints
 Base URL includes bot token — paths are relative.
 POST /getMe {} — Bot info
 POST /sendMessage {"chat_id":"...","text":"...","parse_mode":"Markdown"} — Send message
-POST /getUpdates {} — Get incoming messages (use to find chat_id)
 POST /sendPhoto {"chat_id":"...","photo":"https://...","caption":"..."} — Send photo
 POST /editMessageText {"chat_id":"...","message_id":N,"text":"..."} — Edit message
 POST /deleteMessage {"chat_id":"...","message_id":N} — Delete message
 POST /setMyCommands {"commands":[{"command":"start","description":"..."}]} — Set commands
+Inbound messages are delivered through NyxID Channel Bot Relay to /api/webhooks/nyxid-relay; do not poll getUpdates from Aevatar connectors.
 """),
 
         ("github", """
@@ -159,6 +162,9 @@ Use the code_execute tool for a simpler interface.
         string accessToken,
         CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
         var sb = new StringBuilder();
         var seenSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -217,7 +223,7 @@ Use the code_execute tool for a simpler interface.
         }
 
         if (operations.Length > maxEndpoints)
-            sb.AppendLine($"... and {operations.Length - maxEndpoints} more. Use nyxid_search_capabilities to discover them.");
+            sb.AppendLine($"... and {operations.Length - maxEndpoints} more. Use nyxid_proxy with the service slug for uncovered endpoints.");
 
         return sb.ToString();
     }

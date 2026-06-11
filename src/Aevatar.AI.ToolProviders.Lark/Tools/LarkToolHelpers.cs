@@ -8,6 +8,22 @@ internal static class LarkMessageIdResolver
     private const string ChannelMessageIdKey = "channel.message_id";
     private const string ChannelPlatformMessageIdKey = "channel.platform_message_id";
 
+    // Refactor (issue1378/first-slice):
+    //   Old pattern: ResolveOrCurrent used current message when explicit message_id was missing.
+    //   New principle: ResolveExplicit returns structured error; external tools path remains.
+    public static string? ResolveExplicit(string? messageId, out string? error)
+    {
+        error = null;
+
+        if (TryValidate(messageId, out var explicitMessageId, out var explicitError))
+            return explicitMessageId;
+
+        error = !string.IsNullOrWhiteSpace(explicitError)
+            ? explicitError
+            : "message_id is required";
+        return null;
+    }
+
     public static string? ResolveOrCurrent(string? messageId, out bool usedCurrentMessage, out string? error)
     {
         usedCurrentMessage = false;
@@ -22,8 +38,10 @@ internal static class LarkMessageIdResolver
             return null;
         }
 
-        var currentMessageId = AgentToolRequestContext.TryGet(ChannelPlatformMessageIdKey) ??
-                               AgentToolRequestContext.TryGet(ChannelMessageIdKey);
+        var currentMessageId = AgentToolRequestContext.ChannelPlatformMessageId ??
+                               AgentToolRequestContext.ChannelMessageId ??
+                               AgentToolRequestContext.TryGetExternalMetadata(ChannelPlatformMessageIdKey) ??
+                               AgentToolRequestContext.TryGetExternalMetadata(ChannelMessageIdKey);
         if (TryValidate(currentMessageId, out var current, out _))
         {
             usedCurrentMessage = true;

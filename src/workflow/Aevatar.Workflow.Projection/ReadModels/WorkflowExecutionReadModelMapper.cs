@@ -26,32 +26,6 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
-    public WorkflowActorSnapshot ToActorSnapshot(
-        WorkflowExecutionCurrentStateDocument source,
-        WorkflowRunInsightReportDocument? report)
-    {
-        var snapshot = ToActorSnapshot(source);
-        if (report == null)
-            return snapshot;
-
-        snapshot.WorkflowName = string.IsNullOrWhiteSpace(snapshot.WorkflowName)
-            ? report.WorkflowName
-            : snapshot.WorkflowName;
-        snapshot.CompletionStatus = MapCompletionStatus(report.CompletionStatus);
-        snapshot.LastSuccess = report.Success;
-        snapshot.LastOutput = string.IsNullOrWhiteSpace(snapshot.LastOutput)
-            ? report.FinalOutput
-            : snapshot.LastOutput;
-        snapshot.LastError = string.IsNullOrWhiteSpace(snapshot.LastError)
-            ? report.FinalError
-            : snapshot.LastError;
-        snapshot.TotalSteps = report.Summary.TotalSteps;
-        snapshot.RequestedSteps = report.Summary.RequestedSteps;
-        snapshot.CompletedSteps = report.Summary.CompletedSteps;
-        snapshot.RoleReplyCount = report.Summary.RoleReplyCount;
-        return snapshot;
-    }
-
     public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
     {
         return new WorkflowActorProjectionState
@@ -98,9 +72,12 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
-    public WorkflowActorTimelineItem ToActorTimelineItem(WorkflowExecutionTimelineEvent source)
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: timeline mapper methods produced actor current-state timeline items.
+    //   New principle: timeline mapper methods produce workflow-run export items from the report artifact.
+    public WorkflowRunTimelineExportItem ToWorkflowRunTimelineExportItem(WorkflowExecutionTimelineEvent source)
     {
-        var item = new WorkflowActorTimelineItem
+        var item = new WorkflowRunTimelineExportItem
         {
             Timestamp = source.Timestamp,
             Stage = source.Stage,
@@ -114,9 +91,12 @@ public sealed class WorkflowExecutionReadModelMapper
         return item;
     }
 
-    public WorkflowActorGraphNode ToActorGraphNode(ProjectionGraphNode source)
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: graph mapper methods produced actor graph readmodel nodes.
+    //   New principle: graph mapper methods produce workflow-run graph export nodes.
+    public WorkflowRunGraphExportNode ToWorkflowRunGraphExportNode(ProjectionGraphNode source)
     {
-        var node = new WorkflowActorGraphNode
+        var node = new WorkflowRunGraphExportNode
         {
             NodeId = source.NodeId,
             NodeType = source.NodeType,
@@ -126,9 +106,12 @@ public sealed class WorkflowExecutionReadModelMapper
         return node;
     }
 
-    public WorkflowActorGraphEdge ToActorGraphEdge(ProjectionGraphEdge source)
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: graph mapper methods produced actor graph readmodel edges.
+    //   New principle: graph mapper methods produce workflow-run graph export edges.
+    public WorkflowRunGraphExportEdge ToWorkflowRunGraphExportEdge(ProjectionGraphEdge source)
     {
-        var edge = new WorkflowActorGraphEdge
+        var edge = new WorkflowRunGraphExportEdge
         {
             EdgeId = source.EdgeId,
             FromNodeId = source.FromNodeId,
@@ -140,16 +123,19 @@ public sealed class WorkflowExecutionReadModelMapper
         return edge;
     }
 
-    public WorkflowActorGraphSubgraph ToActorGraphSubgraph(
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: graph mapper methods produced actor graph readmodel subgraphs.
+    //   New principle: graph mapper methods produce workflow-run graph export subgraphs.
+    public WorkflowRunGraphExportSubgraph ToWorkflowRunGraphExportSubgraph(
         string rootNodeId,
         ProjectionGraphSubgraph source)
     {
-        var subgraph = new WorkflowActorGraphSubgraph
+        var subgraph = new WorkflowRunGraphExportSubgraph
         {
             RootNodeId = rootNodeId,
         };
-        subgraph.Nodes.Add(source.Nodes.Select(ToActorGraphNode));
-        subgraph.Edges.Add(source.Edges.Select(ToActorGraphEdge));
+        subgraph.Nodes.Add(source.Nodes.Select(ToWorkflowRunGraphExportNode));
+        subgraph.Edges.Add(source.Edges.Select(ToWorkflowRunGraphExportEdge));
         return subgraph;
     }
 
@@ -193,7 +179,7 @@ public sealed class WorkflowExecutionReadModelMapper
     private static WorkflowRunTopologySource MapTopologySource(WorkflowExecutionTopologySource source) =>
         source switch
         {
-            WorkflowExecutionTopologySource.RuntimeSnapshot => WorkflowRunTopologySource.RuntimeSnapshot,
+            WorkflowExecutionTopologySource.CommittedProjection => WorkflowRunTopologySource.CommittedProjection,
             _ => WorkflowRunTopologySource.Unknown,
         };
 

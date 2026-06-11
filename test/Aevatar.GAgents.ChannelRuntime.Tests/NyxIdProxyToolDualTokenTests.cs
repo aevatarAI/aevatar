@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using FluentAssertions;
@@ -8,7 +10,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 /// <summary>
 /// Unit tests for NyxIdProxyTool dual-token routing helpers:
-/// ParseServiceSlugs, InMemoryServiceDiscoveryCache.
+/// ParseServiceSlugs and NyxID error envelope detection.
 /// </summary>
 public class NyxIdProxyToolDualTokenTests
 {
@@ -91,55 +93,91 @@ public class NyxIdProxyToolDualTokenTests
         slugs.Should().Contain("API-GITHUB");
     }
 
-    // ─── InMemoryServiceDiscoveryCache ───
-
     [Fact]
-    public void Cache_SetAndGet_ReturnsSlugs()
+    public async Task ProxyExecution_UsesLiveNyxIdDiscoveryForEachRouteDecision()
     {
-        var cache = new InMemoryServiceDiscoveryCache();
-        var slugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "api-github", "llm-openai" };
+        var handler = new RecordingNyxIdHandler();
+        using var http = new HttpClient(handler);
+        var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, http);
+        var tool = new NyxIdProxyTool(client);
 
-        cache.SetSlugs("token-hash-1", slugs);
-        var result = cache.GetSlugs("token-hash-1");
+        using var _ = AgentToolContextScope.Push(new AgentToolExecutionContext(
+            AgentToolRequestIdentity.Empty,
+            new AgentToolCredentials("user-token", "org-token", null),
+            AgentToolCallerContext.Empty,
+            AgentToolChannelContext.Empty,
+            AgentToolSenderBindingContext.Empty,
+            LLMRequestRoutingContext.Empty,
+            AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal)));
 
-        result.Should().NotBeNull();
-        result.Should().Contain("api-github");
-        result.Should().Contain("llm-openai");
+        var first = await tool.ExecuteAsync("""{"slug":"org-service","path":"/ping"}""");
+        var second = await tool.ExecuteAsync("""{"slug":"org-service","path":"/ping"}""");
+
+        first.Should().Be("""{"ok":true,"token":"org-token"}""");
+        second.Should().Be("""{"ok":true,"token":"org-token"}""");
+        handler.ServiceDiscoveryRequests.Should().Be(4, "routing must read live NyxID service discovery instead of keeping slug facts in a tool-instance cache");
+        handler.ProxyRequests.Should().Be(2);
     }
 
-    [Fact]
-    public void Cache_Miss_ReturnsNull()
+    // ─── LooksLikeErrorEnvelope ───
+
+    [Theory]
+    [InlineData("""{"error":true,"status":401,"body":""}""")]
+    [InlineData("""{"error":"unauthorized"}""")]
+    public void LooksLikeErrorEnvelope_TruthyError_True(string input)
     {
-        var cache = new InMemoryServiceDiscoveryCache();
-
-        var result = cache.GetSlugs("nonexistent");
-
-        result.Should().BeNull();
+        // Used by DiscoverMergedServicesAsync to short-circuit when both user and org
+        // discovery returned NyxID error envelopes — without it, the merge synthesizes
+        // an empty array and the SkillRunner safety net misclassifies the run as
+        // successful (PR #471 review round 2).
+        NyxIdProxyTool.LooksLikeErrorEnvelope(input).Should().BeTrue();
     }
 
-    [Fact]
-    public void Cache_OverwritesSameKey()
+    [Theory]
+    [InlineData("""{"error":false,"data":{}}""")]
+    [InlineData("""{"error":null}""")]
+    [InlineData("""{"data":[]}""")]
+    [InlineData("""[{"slug":"api-github"}]""")]
+    [InlineData("plain text")]
+    [InlineData("")]
+    public void LooksLikeErrorEnvelope_NotAnEnvelope_False(string input)
     {
-        var cache = new InMemoryServiceDiscoveryCache();
-        cache.SetSlugs("hash-1", new HashSet<string> { "old-service" });
-        cache.SetSlugs("hash-1", new HashSet<string> { "new-service" });
-
-        var result = cache.GetSlugs("hash-1");
-
-        result.Should().Contain("new-service");
-        result.Should().NotContain("old-service");
+        NyxIdProxyTool.LooksLikeErrorEnvelope(input).Should().BeFalse();
     }
 
-    [Fact]
-    public void Cache_DifferentKeys_Independent()
+    private sealed class RecordingNyxIdHandler : HttpMessageHandler
     {
-        var cache = new InMemoryServiceDiscoveryCache();
-        cache.SetSlugs("user-hash", new HashSet<string> { "user-service" });
-        cache.SetSlugs("org-hash", new HashSet<string> { "org-service" });
+        public int ServiceDiscoveryRequests { get; private set; }
+        public int ProxyRequests { get; private set; }
 
-        cache.GetSlugs("user-hash").Should().Contain("user-service");
-        cache.GetSlugs("user-hash").Should().NotContain("org-service");
-        cache.GetSlugs("org-hash").Should().Contain("org-service");
-        cache.GetSlugs("org-hash").Should().NotContain("user-service");
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var token = request.Headers.Authorization?.Parameter ?? string.Empty;
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+
+            if (path == "/api/v1/proxy/services")
+            {
+                ServiceDiscoveryRequests++;
+                var body = token == "user-token"
+                    ? """[{"slug":"user-service"}]"""
+                    : """[{"slug":"org-service"}]""";
+                return Task.FromResult(Json(body));
+            }
+
+            if (path == "/api/v1/proxy/s/org-service/ping")
+            {
+                ProxyRequests++;
+                return Task.FromResult(Json($$"""{"ok":true,"token":"{{token}}"}"""));
+            }
+
+            return Task.FromResult(Json($$"""{"error":"unexpected_request","path":"{{path}}"}"""));
+        }
+
+        private static HttpResponseMessage Json(string body) => new()
+        {
+            Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json"),
+        };
     }
 }

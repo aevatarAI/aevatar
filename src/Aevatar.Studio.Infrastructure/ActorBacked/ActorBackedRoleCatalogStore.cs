@@ -9,38 +9,38 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
-/// Actor-backed implementation of <see cref="IRoleCatalogStore"/>.
+/// Actor-backed implementation of role catalog query and command ports.
 /// Reads from the projection document store (CQRS read model).
-/// Writes send commands to the Write GAgent.
-/// Local workspace operations (import, draft backup) delegate to
-/// <see cref="IStudioWorkspaceStore"/>.
+/// Writes send commands to the Write GAgent through CQRS Core dispatch.
+/// Local JSON is only an explicit import boundary, never a draft backup.
 /// Per-scope isolation: each scope gets its own <c>role-catalog-{scopeId}</c> actor.
 /// </summary>
-internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
+internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogQueryPort, IRoleCatalogCommandPort
 {
     private const string WriteActorIdPrefix = "role-catalog-";
     private const string ActorHomeDirectory = "actor://role-catalog";
     private const string ActorFilePath = "actor://role-catalog/roles";
+    private const string PublisherId = "aevatar.studio.infrastructure.role-catalog";
 
     private readonly IStudioActorBootstrap _bootstrap;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioActorCommandDispatch _commandDispatch;
     private readonly IAppScopeResolver _scopeResolver;
-    private readonly IStudioWorkspaceStore _localWorkspaceStore;
+    private readonly IStudioLocalRoleCatalogImportReader _localImportReader;
     private readonly IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedRoleCatalogStore> _logger;
 
     public ActorBackedRoleCatalogStore(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort,
+        StudioActorCommandDispatch commandDispatch,
         IAppScopeResolver scopeResolver,
-        IStudioWorkspaceStore localWorkspaceStore,
+        IStudioLocalRoleCatalogImportReader localImportReader,
         IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedRoleCatalogStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
-        _localWorkspaceStore = localWorkspaceStore ?? throw new ArgumentNullException(nameof(localWorkspaceStore));
+        _localImportReader = localImportReader ?? throw new ArgumentNullException(nameof(localImportReader));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -72,7 +72,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         evt.Roles.AddRange(catalog.Roles.Select(ToProtoRoleDefinition));
         if (expectedVersion is not null)
             evt.ExpectedVersion = expectedVersion.Value;
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
         return new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -84,7 +84,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
 
     public async Task<ImportedRoleCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var localCatalog = await _localWorkspaceStore.GetRoleCatalogAsync(cancellationToken);
+        var localCatalog = await _localImportReader.ReadAsync(cancellationToken);
         if (!localCatalog.FileExists)
         {
             throw new InvalidOperationException($"Local role catalog not found at '{localCatalog.FilePath}'.");
@@ -93,7 +93,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(localCatalog.Roles.Select(ToProtoRoleDefinition));
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
         var importedCatalog = new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -143,9 +143,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         };
         if (expectedVersion is not null)
             evt.ExpectedVersion = expectedVersion.Value;
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
-
-        await _localWorkspaceStore.SaveRoleDraftAsync(draft, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
         return new StoredRoleDraft(
             HomeDirectory: ActorHomeDirectory,
@@ -164,9 +162,8 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var evt = new RoleDraftDeletedEvent();
         if (expectedVersion is not null)
             evt.ExpectedVersion = expectedVersion.Value;
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
-        await _localWorkspaceStore.DeleteRoleDraftAsync(cancellationToken);
     }
 
     // Post-write version is deterministic only when caller supplied expected_version

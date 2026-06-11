@@ -33,15 +33,28 @@ public interface IStudioMemberCommandPort
         CancellationToken ct = default);
 
     /// <summary>
-    /// Records that the member has been bound to its published service at the
-    /// given revision. Called by the member binding orchestrator after the
-    /// underlying scope binding upsert succeeds.
+    /// Starts an asynchronous binding run. Implementations dispatch a
+    /// <c>StudioMemberBindingRunRequested</c> message to a run actor and
+    /// return after the message is accepted for dispatch; they do not wait
+    /// for member admission, platform binding, or read-model visibility.
     /// </summary>
-    Task RecordBindingAsync(
+    Task StartBindingRunAsync(
+        StudioMemberBindingRunStartRequest request,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Dispatches the caller's PATCH team-assignment intent to the
+    /// StudioMember actor. <paramref name="targetTeamId"/> null means explicit
+    /// unassign; a non-empty value means assign / move. The member actor owns
+    /// the current-team lookup, no-op decision, and committed reassignment
+    /// event construction.
+    /// </summary>
+    // Refactor (iter96/cluster-545):
+    //   Old pattern: ReassignTeamAsync(fromTeamId, toTeamId) — application service constructed reassignment event with both team ids
+    //   New principle: PatchTeamAssignmentAsync(targetTeamId) — forwards PATCH intent to StudioMemberGAgent which evaluates current vs target from authoritative actor state
+    Task PatchTeamAssignmentAsync(
         string scopeId,
         string memberId,
-        string publishedServiceId,
-        string revisionId,
-        string implementationKindName,
+        string? targetTeamId,
         CancellationToken ct = default);
 }

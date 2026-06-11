@@ -18,7 +18,4 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
-  <ItemGroup>
-    <Protobuf Include="MultiAgent/multi_agent_state.proto" GrpcServices="None" />
-  </ItemGroup>
 </Project>

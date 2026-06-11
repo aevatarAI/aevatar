@@ -2,6 +2,7 @@ using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core.Ports;
@@ -360,7 +361,7 @@ public sealed class ScopeScriptEndpointsTests
         public Task<ScopeScriptUpsertResult> UpsertAsync(ScopeScriptUpsertRequest request, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            var normalized = request.SourceText?.Trim() ?? string.Empty;
+            var normalized = request.ScriptPackage.GetPrimaryCSharpSource().Trim();
             if (normalized.Length == 0)
                 throw new InvalidOperationException("SourceText is required.");
 

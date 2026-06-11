@@ -1,3 +1,6 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+using System.Text.Json.Serialization;
+
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 internal static class ChatCapabilityMessageTypes
@@ -5,6 +8,10 @@ internal static class ChatCapabilityMessageTypes
     public const string ChatCommand = "chat.command";
 }
 
+// Refactor (phase9/cluster-349):
+//   Old pattern: public chat input duplicated actor authority through top-level agentId and source actorId aliases.
+//   New principle: actor targeting is owned only by typed source variant submessages; deleted aliases are rejected at the JSON boundary.
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChatInput
 {
     /// <summary>User prompt for this chat run.</summary>
@@ -13,18 +20,12 @@ public sealed record ChatInput
     /// <summary>Structured multimodal input parts for this chat run.</summary>
     public IReadOnlyList<ChatInputContentPart>? InputParts { get; init; }
 
-    /// <summary>
-    /// Workflow identifier lookup (built-ins and file-loaded workflows).
-    /// This field does not accept inline YAML semantics.
-    /// </summary>
+    public WorkflowChatSourceInput? Source { get; init; }
+
+    /// <summary>Legacy workflow identifier lookup. Prefer <see cref="Source"/>.</summary>
     public string? Workflow { get; init; }
 
     /// <summary>
-    /// Existing workflow definition source actor id for a new run.
-    /// Resume/signal APIs must target the returned run actor id instead.
-    /// </summary>
-    public string? AgentId { get; init; }
-
     /// Optional client-controlled session identifier for downstream chat correlation.
     /// When omitted, the server correlation id becomes the chat session id.
     /// </summary>
@@ -45,14 +46,79 @@ public sealed record ChatInput
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
 
     /// <summary>
-    /// Optional workflow scope identifier. Prefer this typed field over metadata keys.
+    /// Optional workflow scope identifier.
     /// </summary>
+    // Refactor (iter15/cluster-029):
+    //   Old pattern: scope id / channel facts fell back to metadata bag string keys.
+    //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     public string? ScopeId { get; init; }
 
     /// <summary>
     /// Optional run metadata passthrough for internal bridge integrations.
     /// </summary>
     public IDictionary<string, string>? Metadata { get; init; }
+
+    /// <summary>
+    /// Optional command transport headers for downstream runtime adapters.
+    /// </summary>
+    public IDictionary<string, string>? Headers { get; init; }
+
+    public ChatLlmControlInput? LlmControl { get; init; }
+
+    // Refactor (issue1332): Old pattern: workflow chat control used metadata or LlmControl only. New principle: reuse AgentToolExecutionContext as typed ToolContext without adding a workflow-specific abstraction.
+    public AgentToolExecutionContext? ToolContext { get; init; }
+}
+
+public sealed record ChatLlmControlInput
+{
+    public string? NyxIdAccessToken { get; init; }
+    public string? NyxIdOrgToken { get; init; }
+    public string? NyxIdRoutePreference { get; init; }
+    public string? ModelOverride { get; init; }
+    public int? MaxToolRoundsOverride { get; init; }
+    public string? UserMemoryPrompt { get; init; }
+}
+
+// Refactor (phase9/cluster-349):
+//   Old pattern: source.actorId acted as a flat alias whose meaning changed with source kind.
+//   New principle: actor id is explicit on definitionActor or inlineBundle, and strict JSON rejects the removed flat alias.
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record WorkflowChatSourceInput
+{
+    public string? Kind { get; init; }
+    public WorkflowChatCatalogNameSourceInput? CatalogName { get; init; }
+    public WorkflowChatDefinitionActorSourceInput? DefinitionActor { get; init; }
+    public WorkflowChatInlineYamlBundleSourceInput? InlineBundle { get; init; }
+
+    /// <summary>Legacy source workflow name alias. Prefer the typed source variant submessages.</summary>
+    public string? WorkflowName { get; init; }
+
+    /// <summary>Legacy inline YAML bundle alias. Prefer <see cref="InlineBundle"/>.</summary>
+    public IReadOnlyList<string>? WorkflowYamls { get; init; }
+}
+
+public sealed record WorkflowChatCatalogNameSourceInput
+{
+    public string? WorkflowName { get; init; }
+}
+
+public sealed record WorkflowChatDefinitionActorSourceInput
+{
+    public string? ActorId { get; init; }
+    public string? WorkflowName { get; init; }
+}
+
+public sealed record WorkflowChatInlineYamlBundleSourceInput
+{
+    public string? EntryName { get; init; }
+    public IReadOnlyList<WorkflowChatInlineYamlDocumentInput>? YamlDocuments { get; init; }
+    public string? ActorId { get; init; }
+}
+
+public sealed record WorkflowChatInlineYamlDocumentInput
+{
+    public string? Name { get; init; }
+    public string? Yaml { get; init; }
 }
 
 public sealed record ChatInputContentPart

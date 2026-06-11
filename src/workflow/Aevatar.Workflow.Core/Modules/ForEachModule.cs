@@ -19,6 +19,8 @@ namespace Aevatar.Workflow.Core.Modules;
 /// ForEach iteration module. Handles step_type == "foreach".
 /// Splits input by delimiter, dispatches a sub-step per item,
 /// collects results, and publishes merged output.
+/// Refactor (iter11/cluster-021): Old backpressure reporting read raw Queue.Count after head removals.
+/// Refactor (iter11/cluster-021): New reporting uses cursor-aware queued count while helper preserves FIFO.
 /// </summary>
 public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 {
@@ -110,7 +112,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     {
                         StepId = evt.StepId,
                         RunId = runId,
-                        QueuedCount = state.Backpressure.Queue.Count,
+                        QueuedCount = BackpressureHelper.QueuedCount(state.Backpressure),
                         ActiveCount = state.Backpressure.ActiveWorkers,
                         MaxConcurrent = state.Backpressure.MaxConcurrentWorkers,
                     }, TopologyAudience.Self, ct);

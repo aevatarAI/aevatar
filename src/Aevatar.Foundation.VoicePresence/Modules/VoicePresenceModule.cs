@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Events;
 using Aevatar.Foundation.VoicePresence.Transport;
@@ -16,13 +17,14 @@ namespace Aevatar.Foundation.VoicePresence.Modules;
 
 /// <summary>
 /// EventModule for voice presence. Bridges user-side <see cref="IVoiceTransport"/>
-/// with <see cref="IRealtimeVoiceProvider"/>. Audio flows directly between the two
-/// transports without entering the grain inbox or event pipeline. Only control events
-/// (state transitions, tool calls, drain ack) are dispatched as actor events.
+/// with <see cref="IRealtimeVoiceProvider"/>. Transport attachment is actor-owned;
+/// this module only applies typed actor signals during event turns.
 /// </summary>
-public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFastPath, IRouteBypassModule
+public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypassModule
 {
     private static readonly JsonFormatter PayloadJsonFormatter = new(JsonFormatter.Settings.Default);
+    private const int DefaultLastDrainAckResponseId = -1;
+    private const long DefaultLastDrainAckPlayoutSequence = -1;
 
     private readonly IRealtimeVoiceProvider _provider;
     private readonly VoiceProviderConfig _providerConfig;
@@ -31,15 +33,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private readonly IVoiceToolInvoker? _toolInvoker;
     private readonly IVoiceToolCatalog? _toolCatalog;
     private readonly ILogger _logger;
-    private readonly Queue<VoiceConversationEventInjection> _pendingInjections = [];
-
-    private IVoiceTransport? _userTransport;
-    private Func<IMessage, CancellationToken, Task>? _selfEventDispatcher;
-    private CancellationTokenSource? _relayCts;
-    private Task? _userToProviderRelay;
-    private Task? _providerToUserRelay;
-    private bool _awaitingInjectedResponseStart;
-    private string? _remoteSessionId;
 
     public VoicePresenceModule(
         IRealtimeVoiceProvider provider,
@@ -57,7 +50,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         _toolInvoker = toolInvoker;
         _toolCatalog = toolCatalog;
         _logger = logger ?? NullLogger.Instance;
-        StateMachine = new VoicePresenceStateMachine();
         EventPolicy = new VoicePresenceEventPolicy
         {
             StaleAfter = _options.StaleAfter,
@@ -69,13 +61,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
     public int Priority => _options.Priority;
 
-    public VoicePresenceStateMachine StateMachine { get; }
-
     public VoicePresenceEventPolicy EventPolicy { get; }
 
     public bool IsInitialized { get; private set; }
-
-    public bool IsTransportAttached => _userTransport != null;
 
     public int PcmSampleRateHz =>
         _sessionConfig is { SampleRateHz: > 0 }
@@ -114,7 +102,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
         if (envelope.Payload.Is(VoiceControlFrame.Descriptor))
         {
-            await HandleControlFrameAsync(envelope.Payload.Unpack<VoiceControlFrame>(), ct);
+            await HandleControlFrameAsync(envelope.Payload.Unpack<VoiceControlFrame>(), ctx, ct);
             return;
         }
 
@@ -135,7 +123,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                 await HandleProviderEventAsync(signal.ProviderEvent, ctx, ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.ControlFrame:
-                await HandleControlFrameAsync(signal.ControlFrame, ct);
+                await HandleControlFrameAsync(signal.ControlFrame, ctx, ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.RemoteSessionOpenRequested:
                 await HandleRemoteSessionOpenRequestedAsync(signal.RemoteSessionOpenRequested, ctx, ct);
@@ -143,11 +131,35 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             case VoiceModuleSignal.SignalOneofCase.RemoteSessionCloseRequested:
                 await HandleRemoteSessionCloseRequestedAsync(signal.RemoteSessionCloseRequested, ctx, ct);
                 break;
-            case VoiceModuleSignal.SignalOneofCase.RemoteAudioInputReceived:
-                await HandleRemoteAudioInputReceivedAsync(signal.RemoteAudioInputReceived, ct);
-                break;
             case VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived:
-                await HandleRemoteControlInputReceivedAsync(signal.RemoteControlInputReceived, ct);
+                await HandleRemoteControlInputReceivedAsync(signal.RemoteControlInputReceived, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.SessionLeaseRequested:
+                await HandleSessionLeaseRequestedAsync(signal.SessionLeaseRequested, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.SessionLeaseReleased:
+                await HandleSessionLeaseReleasedAsync(signal.SessionLeaseReleased, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.TransportAttachRequested:
+                await HandleTransportAttachRequestedAsync(signal.TransportAttachRequested, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.TransportDetachRequested:
+                await HandleTransportDetachRequestedAsync(signal.TransportDetachRequested, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.TransportControlFrameReceived:
+                await HandleTransportControlFrameReceivedAsync(signal.TransportControlFrameReceived, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.TransportRelayStopped:
+                await HandleTransportRelayStoppedAsync(signal.TransportRelayStopped, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.TransportLifetimeCompleted:
+                await HandleTransportLifetimeCompletedAsync(signal.TransportLifetimeCompleted, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.ProviderEventReceived:
+                await HandleProviderEventReceivedAsync(signal.ProviderEventReceived, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived:
+                await HandleTransportAudioFrameReceivedAsync(signal.TransportAudioFrameReceived, ctx, ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.None:
             default:
@@ -162,166 +174,17 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         if (IsInitialized)
             return;
 
-        await _provider.ConnectAsync(_providerConfig, ct);
-        var effectiveSessionConfig = await BuildEffectiveSessionConfigAsync(ct);
-        if (effectiveSessionConfig != null)
-            await _provider.UpdateSessionAsync(effectiveSessionConfig, ct);
-
         IsInitialized = true;
-        await FlushPendingEventInjectionsAsync(ct);
     }
 
     public async ValueTask DisposeAsync()
     {
         IsInitialized = false;
-        await StopRelayAsync();
-
-        if (_userTransport != null)
-        {
-            await _userTransport.DisposeAsync();
-            _userTransport = null;
-        }
 
         await _provider.DisposeAsync();
-        _pendingInjections.Clear();
-        _awaitingInjectedResponseStart = false;
-        _remoteSessionId = null;
-        _selfEventDispatcher = null;
-    }
-
-    // ── IAudioFastPath (Phase 1 legacy, still usable for non-transport callers) ──
-
-    public bool CanHandleAudio(VoiceAudioFastPathFrame frame) =>
-        string.IsNullOrWhiteSpace(_options.LinkId) || string.Equals(_options.LinkId, frame.LinkId, StringComparison.Ordinal);
-
-    public Task HandleAudioAsync(VoiceAudioFastPathFrame frame, CancellationToken ct)
-    {
-        if (!CanHandleAudio(frame))
-        {
-            throw new InvalidOperationException(
-                $"VoicePresenceModule cannot handle audio for link '{frame.LinkId}'.");
-        }
-
-        return _provider.SendAudioAsync(frame.Pcm16, ct);
     }
 
     // ── Phase 3: Transport attachment + bidirectional relay ──
-
-    /// <summary>
-    /// Attaches a user-side voice transport and starts bidirectional audio relay.
-    /// Audio flows directly between transport and provider (no grain inbox).
-    /// Control events are dispatched to the grain inbox via <paramref name="selfEventDispatcher"/>.
-    /// </summary>
-    public void AttachTransport(
-        IVoiceTransport userTransport,
-        Func<IMessage, CancellationToken, Task> selfEventDispatcher)
-    {
-        ArgumentNullException.ThrowIfNull(userTransport);
-        ArgumentNullException.ThrowIfNull(selfEventDispatcher);
-
-        if (_userTransport != null || !string.IsNullOrWhiteSpace(_remoteSessionId))
-            throw new InvalidOperationException("A voice transport is already attached.");
-
-        _userTransport = userTransport;
-        _selfEventDispatcher = selfEventDispatcher;
-        _relayCts = new CancellationTokenSource();
-
-        _provider.OnEvent = OnProviderEventAsync;
-        _userToProviderRelay = RunUserToProviderRelayAsync(_relayCts.Token);
-        _providerToUserRelay = Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// Detaches the current transport and stops the relay loops.
-    /// </summary>
-    public async Task DetachTransportAsync(IVoiceTransport? expectedTransport = null)
-    {
-        if (expectedTransport != null && !ReferenceEquals(expectedTransport, _userTransport))
-            return;
-
-        await StopRelayAsync();
-
-        if (_userTransport != null)
-        {
-            await _userTransport.DisposeAsync();
-            _userTransport = null;
-        }
-
-        _selfEventDispatcher = null;
-    }
-
-    private async Task RunUserToProviderRelayAsync(CancellationToken ct)
-    {
-        var transport = _userTransport;
-        if (transport == null) return;
-
-        try
-        {
-            await foreach (var frame in transport.ReceiveFramesAsync(ct))
-            {
-                if (frame.IsAudio)
-                {
-                    if (!frame.AudioPcm16.IsEmpty)
-                        await _provider.SendAudioAsync(frame.AudioPcm16, ct);
-                }
-                else if (frame.Control != null)
-                {
-                    await DispatchSelfEventAsync(frame.Control, ct);
-                }
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "User-to-provider relay terminated unexpectedly.");
-        }
-    }
-
-    private async Task OnProviderEventAsync(VoiceProviderEvent evt, CancellationToken ct)
-    {
-        if (evt.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived &&
-            _userTransport != null)
-        {
-            try
-            {
-                await _userTransport.SendAudioAsync(evt.AudioReceived.Pcm16.Memory, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to send audio to user transport.");
-            }
-
-            return;
-        }
-
-        await DispatchSelfEventAsync(evt, ct);
-    }
-
-    private async Task StopRelayAsync()
-    {
-        var cts = _relayCts;
-        _relayCts = null;
-        cts?.Cancel();
-
-        if (_userToProviderRelay != null)
-        {
-            try { await _userToProviderRelay; }
-            catch (OperationCanceledException) { }
-        }
-
-        if (_providerToUserRelay != null)
-        {
-            try { await _providerToUserRelay; }
-            catch (OperationCanceledException) { }
-        }
-
-        _userToProviderRelay = null;
-        _providerToUserRelay = null;
-        _provider.OnEvent = null;
-        cts?.Dispose();
-    }
 
     // ── State machine dispatch (used by both event pipeline and relay) ──
 
@@ -330,104 +193,504 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        EnsureSelfEventDispatcher(ctx);
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (!TryNormalizeProviderEvent(state, providerEvent, out var normalizedEvent))
+            return;
 
-        switch (providerEvent.EventCase)
+        var stateChanged = false;
+        switch (normalizedEvent.EventCase)
         {
             case VoiceProviderEvent.EventOneofCase.ResponseStarted:
-                _awaitingInjectedResponseStart = false;
-                StateMachine.OnResponseStarted(providerEvent.ResponseStarted.ResponseId);
+                state.AwaitingInjectedResponseStart = false;
+                ApplyResponseStarted(state, normalizedEvent.ResponseStarted.ResponseId);
+                stateChanged = true;
                 break;
             case VoiceProviderEvent.EventOneofCase.ResponseDone:
-                StateMachine.OnResponseDone(providerEvent.ResponseDone.ResponseId);
+                ApplyResponseDone(state, normalizedEvent.ResponseDone.ResponseId);
+                RetireProviderResponse(state, normalizedEvent.ResponseDone.ProviderResponseId);
+                stateChanged = true;
                 break;
             case VoiceProviderEvent.EventOneofCase.ResponseCancelled:
-                _awaitingInjectedResponseStart = false;
-                StateMachine.OnResponseCancelled(providerEvent.ResponseCancelled.ResponseId);
-                await FlushPendingEventInjectionsAsync(ct);
+                state.AwaitingInjectedResponseStart = false;
+                ApplyResponseCancelled(state, normalizedEvent.ResponseCancelled.ResponseId);
+                RetireProviderResponse(state, normalizedEvent.ResponseCancelled.ProviderResponseId);
+                stateChanged = true;
+                await FlushPendingEventInjectionsAsync(state, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.SpeechStarted:
             {
-                var wasInProgress = StateMachine.State == VoicePresenceState.ResponseInProgress;
-                StateMachine.OnSpeechStarted();
+                var wasInProgress = state.Status == VoicePresenceRuntimeStatus.ResponseInProgress;
                 if (wasInProgress)
-                    await _provider.CancelResponseAsync(ct);
+                {
+                    var responseId = state.CurrentResponseId;
+                    var providerResponseId = state.ActiveProviderResponseId;
+                    await using var providerSession = await ConnectProviderSessionAsync(state, ct);
+                    await providerSession.CancelResponseAsync(ct);
+                    if (!string.IsNullOrWhiteSpace(providerResponseId))
+                    {
+                        if (!state.CancelledProviderResponseIds.Contains(providerResponseId))
+                            state.CancelledProviderResponseIds.Add(providerResponseId);
+                        RetireProviderResponse(state, providerResponseId);
+                    }
+
+                    ApplyResponseCancelled(state, responseId);
+                }
+
+                ApplySpeechStarted(state);
+                stateChanged = true;
                 break;
             }
             case VoiceProviderEvent.EventOneofCase.SpeechStopped:
-                StateMachine.OnSpeechStopped();
+                ApplySpeechStopped(state);
+                stateChanged = true;
                 break;
             case VoiceProviderEvent.EventOneofCase.FunctionCall:
-                await ExecuteToolCallAsync(providerEvent.FunctionCall, ctx, ct);
+                await ExecuteToolCallAsync(normalizedEvent.FunctionCall, ctx, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.Disconnected:
-                _awaitingInjectedResponseStart = false;
-                StateMachine.OnProviderDisconnected();
-                await CloseRemoteSessionAsync("provider_disconnected", ctx, ct);
+                state.AwaitingInjectedResponseStart = false;
+                ApplyProviderDisconnected(state);
+                state.ProviderResponseBindings.Clear();
+                state.CancelledProviderResponseIds.Clear();
+                state.ActiveProviderResponseId = string.Empty;
+                stateChanged = true;
+                if (await CloseRemoteSessionAsync(state, "provider_disconnected", ctx, ct))
+                    stateChanged = false;
                 break;
             case VoiceProviderEvent.EventOneofCase.AudioReceived:
-                if (!string.IsNullOrWhiteSpace(_remoteSessionId))
-                {
-                    await PublishRemoteOutputAsync(
-                        new VoiceRemoteTransportOutput
-                        {
-                            ModuleName = Name,
-                            SessionId = _remoteSessionId,
-                            AudioOutput = providerEvent.AudioReceived.Clone(),
-                        },
-                        ctx,
-                        ct);
-                }
-
                 break;
             case VoiceProviderEvent.EventOneofCase.Error:
             case VoiceProviderEvent.EventOneofCase.None:
             default:
                 break;
         }
+
+        await PublishRealtimeFrameAsync(normalizedEvent, state, ctx, ct);
+        await PersistRuntimeStateIfChangedAsync(ctx, state, stateChanged, ct);
     }
 
-    private async Task DispatchSelfEventAsync(IMessage message, CancellationToken ct)
+    private bool TryNormalizeProviderEvent(
+        VoicePresenceRuntimeState state,
+        VoiceProviderEvent providerEvent,
+        out VoiceProviderEvent normalizedEvent)
     {
-        var dispatcher = _selfEventDispatcher;
-        if (dispatcher == null)
-            return;
+        normalizedEvent = providerEvent;
+        switch (providerEvent.EventCase)
+        {
+            case VoiceProviderEvent.EventOneofCase.ResponseStarted:
+                return TryNormalizeResponseEvent(
+                    providerEvent.ResponseStarted,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { ResponseStarted = message },
+                    state,
+                    out normalizedEvent);
+            case VoiceProviderEvent.EventOneofCase.ResponseDone:
+                return TryNormalizeResponseEvent(
+                    providerEvent.ResponseDone,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { ResponseDone = message },
+                    state,
+                    out normalizedEvent);
+            case VoiceProviderEvent.EventOneofCase.ResponseCancelled:
+                return TryNormalizeResponseEvent(
+                    providerEvent.ResponseCancelled,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { ResponseCancelled = message },
+                    state,
+                    out normalizedEvent);
+            case VoiceProviderEvent.EventOneofCase.FunctionCall:
+                return TryNormalizeResponseEvent(
+                    providerEvent.FunctionCall,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { FunctionCall = message },
+                    state,
+                    out normalizedEvent);
+            case VoiceProviderEvent.EventOneofCase.AudioReceived:
+            {
+                var audioReceived = providerEvent.AudioReceived;
+                if (!string.IsNullOrWhiteSpace(audioReceived.ProviderResponseId) &&
+                    state.CancelledProviderResponseIds.Contains(audioReceived.ProviderResponseId))
+                {
+                    return false;
+                }
 
-        try
-        {
-            await dispatcher(message, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to dispatch voice self event {MessageType}.", message.GetType().Name);
+                return true;
+            }
+            case VoiceProviderEvent.EventOneofCase.Disconnected:
+            case VoiceProviderEvent.EventOneofCase.Error:
+            case VoiceProviderEvent.EventOneofCase.SpeechStarted:
+            case VoiceProviderEvent.EventOneofCase.SpeechStopped:
+            case VoiceProviderEvent.EventOneofCase.None:
+            default:
+                return true;
         }
     }
 
-    private void EnsureSelfEventDispatcher(IEventHandlerContext ctx)
+    private bool TryNormalizeResponseEvent<TMessage>(
+        TMessage source,
+        Func<TMessage, string> getProviderResponseId,
+        Func<TMessage, int> getResponseId,
+        Action<TMessage, int> setResponseId,
+        Func<TMessage, VoiceProviderEvent> buildEvent,
+        VoicePresenceRuntimeState state,
+        out VoiceProviderEvent normalizedEvent)
+        where TMessage : IMessage<TMessage>
     {
-        if (_selfEventDispatcher != null)
+        var message = source.Clone();
+        if (!TryNormalizeResponseIdentity(state, getProviderResponseId(message), getResponseId(message), out var responseId))
+        {
+            normalizedEvent = default!;
+            return false;
+        }
+
+        setResponseId(message, responseId);
+        normalizedEvent = buildEvent(message);
+        return true;
+    }
+
+    private bool TryNormalizeResponseIdentity(
+        VoicePresenceRuntimeState state,
+        string providerResponseId,
+        int suppliedResponseId,
+        out int responseId)
+    {
+        if (!string.IsNullOrWhiteSpace(providerResponseId))
+        {
+            if (state.CancelledProviderResponseIds.Contains(providerResponseId))
+            {
+                responseId = 0;
+                return false;
+            }
+
+            responseId = GetOrCreateProviderResponse(state, providerResponseId, suppliedResponseId);
+            return true;
+        }
+
+        if (suppliedResponseId > 0)
+        {
+            state.NextResponseId = Math.Max(state.NextResponseId, suppliedResponseId + 1);
+            responseId = suppliedResponseId;
+            return true;
+        }
+
+        responseId = AllocateNextResponseId(state);
+        return true;
+    }
+
+    private int GetOrCreateProviderResponse(
+        VoicePresenceRuntimeState state,
+        string providerResponseId,
+        int suppliedResponseId)
+    {
+        foreach (var binding in state.ProviderResponseBindings)
+        {
+            if (string.Equals(binding.ProviderResponseId, providerResponseId, StringComparison.Ordinal))
+                return binding.ResponseId;
+        }
+
+        var responseId = suppliedResponseId > 0 ? suppliedResponseId : AllocateNextResponseId(state);
+        if (suppliedResponseId > 0)
+            state.NextResponseId = Math.Max(state.NextResponseId, suppliedResponseId + 1);
+        state.ProviderResponseBindings.Add(new VoiceProviderResponseBinding
+        {
+            ProviderResponseId = providerResponseId,
+            ResponseId = responseId,
+        });
+        state.ActiveProviderResponseId = providerResponseId;
+        return responseId;
+    }
+
+    private int AllocateNextResponseId(VoicePresenceRuntimeState state)
+    {
+        var responseId = Math.Max(state.NextResponseId, state.CurrentResponseId + 1);
+        state.NextResponseId = responseId + 1;
+        ApplyResponseStarted(state, responseId);
+        return responseId;
+    }
+
+    private void RetireProviderResponse(VoicePresenceRuntimeState state, string providerResponseId)
+    {
+        if (string.IsNullOrWhiteSpace(providerResponseId))
             return;
 
-        var dispatchPort = ctx.Services.GetService<IActorDispatchPort>();
-        if (dispatchPort == null)
-            return;
+        for (var i = state.ProviderResponseBindings.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(state.ProviderResponseBindings[i].ProviderResponseId, providerResponseId, StringComparison.Ordinal))
+                state.ProviderResponseBindings.RemoveAt(i);
+        }
 
-        _selfEventDispatcher = (message, token) => dispatchPort.DispatchAsync(
-            ctx.AgentId,
-            Hosting.VoicePresenceSessionDispatch.BuildSelfEnvelope(ctx.AgentId, Name, message),
-            token);
+        if (string.Equals(state.ActiveProviderResponseId, providerResponseId, StringComparison.Ordinal))
+            state.ActiveProviderResponseId = string.Empty;
     }
 
     private bool MatchesModuleName(string? moduleName) =>
         !string.IsNullOrWhiteSpace(moduleName) &&
         string.Equals(Name, moduleName, StringComparison.OrdinalIgnoreCase);
 
+    private async Task HandleProviderEventReceivedAsync(
+        VoiceProviderEventReceived request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (!IsAcceptedProviderCallbackSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt,
+                request.LeaseEpoch))
+        {
+            return;
+        }
+
+        if (request.ProviderEvent == null)
+            return;
+
+        await HandleProviderEventAsync(request.ProviderEvent, ctx, ct);
+    }
+
+    private async Task HandleTransportAudioFrameReceivedAsync(
+        VoiceTransportAudioFrameReceived request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (request.Pcm16.IsEmpty ||
+            !IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt,
+                request.LeaseEpoch))
+        {
+            return;
+        }
+
+        await using var providerSession = await ConnectProviderSessionAsync(state, ct);
+        await providerSession.SendAudioAsync(request.Pcm16.Memory, ct);
+    }
+
+    private async Task HandleTransportAttachRequestedAsync(
+        VoiceTransportAttachRequested request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (request == null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            string.IsNullOrWhiteSpace(request.TransportLeaseId) ||
+            !string.Equals(state.ActiveSessionId, request.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!MatchesLeaseOwner(state, request.OwnerId) ||
+            !MatchesLeaseExpiry(state, request.LeaseExpiresAt) ||
+            IsLeaseExpired(state.LeaseExpiresAt))
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(state.RemoteSessionId) &&
+            !string.Equals(state.RemoteSessionId, request.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.TransportAttached = true;
+        state.ActiveLeaseOwnerId = request.OwnerId;
+        state.ActiveTransportLeaseId = request.TransportLeaseId;
+        state.LeaseEpoch = request.LeaseEpoch > 0 ? request.LeaseEpoch : NextLeaseEpoch(state);
+        state.Initialized = IsInitialized;
+        state.PcmSampleRateHz = PcmSampleRateHz;
+        if (state.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified)
+            state.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
+
+        await PersistRuntimeStateAsync(ctx, state, ct);
+
+        await using (await ConnectProviderSessionAsync(state, ct))
+        {
+        }
+    }
+
+    private async Task HandleTransportDetachRequestedAsync(
+        VoiceTransportDetachRequested request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (!IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt,
+                request.LeaseEpoch))
+            return;
+
+        ClearTransportLeaseState(state);
+        await PersistRuntimeStateAsync(ctx, state, ct);
+    }
+
+    private async Task HandleTransportControlFrameReceivedAsync(
+        VoiceTransportControlFrameReceived request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (!IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt,
+                request.LeaseEpoch) ||
+            request.ControlFrame == null)
+        {
+            return;
+        }
+
+        await HandleControlFrameAsync(request.ControlFrame, ctx, state, ct);
+    }
+
+    private async Task HandleTransportRelayStoppedAsync(
+        VoiceTransportRelayStopped request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (!IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt,
+                request.LeaseEpoch))
+            return;
+
+        ClearTransportLeaseState(state);
+        await PersistRuntimeStateAsync(ctx, state, ct);
+    }
+
+    private async Task HandleTransportLifetimeCompletedAsync(
+        VoiceTransportLifetimeCompleted request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (!IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt,
+                request.LeaseEpoch))
+            return;
+
+        ClearTransportLeaseState(state);
+        state.ActiveSessionId = string.Empty;
+        state.LeaseExpiresAt = null;
+        state.ActiveLeaseOwnerId = string.Empty;
+        await PersistRuntimeStateAsync(ctx, state, ct);
+    }
+
+    private bool IsAcceptedTransportSignal(
+        VoicePresenceRuntimeState state,
+        string sessionId,
+        string transportLeaseId,
+        string? ownerId = null,
+        Timestamp? leaseExpiresAt = null,
+        long leaseEpoch = 0)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) ||
+            string.IsNullOrWhiteSpace(transportLeaseId) ||
+            !state.TransportAttached ||
+            IsLeaseExpired(state.LeaseExpiresAt))
+        {
+            return false;
+        }
+
+        return string.Equals(state.ActiveSessionId, sessionId, StringComparison.Ordinal) &&
+               string.Equals(state.ActiveTransportLeaseId, transportLeaseId, StringComparison.Ordinal) &&
+               MatchesLeaseOwner(state, ownerId) &&
+               MatchesLeaseExpiry(state, leaseExpiresAt) &&
+               MatchesLeaseEpoch(state, leaseEpoch);
+    }
+
+    private bool IsAcceptedProviderCallbackSignal(
+        VoicePresenceRuntimeState state,
+        string sessionId,
+        string transportLeaseId,
+        string? ownerId,
+        Timestamp? leaseExpiresAt,
+        long leaseEpoch)
+    {
+        if (!string.IsNullOrWhiteSpace(transportLeaseId))
+        {
+            return IsAcceptedTransportSignal(state, sessionId, transportLeaseId, ownerId, leaseExpiresAt, leaseEpoch);
+        }
+
+        if (string.IsNullOrWhiteSpace(sessionId) ||
+            string.IsNullOrWhiteSpace(state.RemoteSessionId))
+        {
+            return false;
+        }
+
+        return string.Equals(state.RemoteSessionId, sessionId, StringComparison.Ordinal) &&
+               string.Equals(state.ActiveSessionId, sessionId, StringComparison.Ordinal) &&
+               MatchesLeaseEpoch(state, leaseEpoch);
+    }
+
+    private static bool MatchesLeaseEpoch(VoicePresenceRuntimeState state, long leaseEpoch) =>
+        leaseEpoch <= 0 || state.LeaseEpoch == leaseEpoch;
+
+    private static long NextLeaseEpoch(VoicePresenceRuntimeState state) =>
+        state.LeaseEpoch <= 0 ? 1 : state.LeaseEpoch + 1;
+
+    private bool MatchesLeaseOwner(VoicePresenceRuntimeState state, string? ownerId)
+    {
+        if (string.IsNullOrWhiteSpace(state.ActiveLeaseOwnerId))
+            return string.IsNullOrWhiteSpace(ownerId);
+
+        return !string.IsNullOrWhiteSpace(ownerId) &&
+               string.Equals(state.ActiveLeaseOwnerId, ownerId, StringComparison.Ordinal);
+    }
+
+    private bool MatchesLeaseExpiry(VoicePresenceRuntimeState state, Timestamp? leaseExpiresAt)
+    {
+        if (state.LeaseExpiresAt == null)
+            return leaseExpiresAt == null;
+
+        return leaseExpiresAt != null &&
+               state.LeaseExpiresAt.ToDateTimeOffset() == leaseExpiresAt.ToDateTimeOffset();
+    }
+
+    private bool IsLeaseExpired(Timestamp? leaseExpiresAt) =>
+        leaseExpiresAt != null &&
+        leaseExpiresAt.ToDateTimeOffset() <= _options.TimeProvider.GetUtcNow();
+
+    private static void ClearTransportLeaseState(VoicePresenceRuntimeState state)
+    {
+        state.TransportAttached = false;
+        state.ActiveTransportLeaseId = string.Empty;
+    }
+
     private async Task HandleRemoteSessionOpenRequestedAsync(
         VoiceRemoteSessionOpenRequested request,
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        EnsureSelfEventDispatcher(ctx);
+        var state = HydrateRuntimeStateFromActor(ctx);
         if (string.IsNullOrWhiteSpace(request.SessionId))
             return;
 
@@ -448,9 +711,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             return;
         }
 
-        if (_userTransport != null ||
-            (!string.IsNullOrWhiteSpace(_remoteSessionId) &&
-             !string.Equals(_remoteSessionId, request.SessionId, StringComparison.Ordinal)))
+        if (state.TransportAttached ||
+            (!string.IsNullOrWhiteSpace(state.RemoteSessionId) &&
+             !string.Equals(state.RemoteSessionId, request.SessionId, StringComparison.Ordinal)))
         {
             await PublishRemoteOutputAsync(
                 new VoiceRemoteTransportOutput
@@ -467,8 +730,15 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             return;
         }
 
-        _remoteSessionId = request.SessionId;
-        _provider.OnEvent = OnProviderEventAsync;
+        state.RemoteSessionId = request.SessionId;
+        state.ActiveSessionId = request.SessionId;
+        state.ActiveLeaseOwnerId = string.Empty;
+        state.LeaseEpoch = NextLeaseEpoch(state);
+        ClearTransportLeaseState(state);
+        await PersistRuntimeStateAsync(ctx, state, ct);
+        await using (await ConnectProviderSessionAsync(state, ct))
+        {
+        }
     }
 
     private async Task HandleRemoteSessionCloseRequestedAsync(
@@ -476,7 +746,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        var currentSessionId = _remoteSessionId;
+        var state = HydrateRuntimeStateFromActor(ctx);
+        var currentSessionId = state.RemoteSessionId;
         if (string.IsNullOrWhiteSpace(currentSessionId))
             return;
 
@@ -487,50 +758,46 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         }
 
         await CloseRemoteSessionAsync(
+            state,
             string.IsNullOrWhiteSpace(request.Reason) ? "remote_session_closed" : request.Reason,
             ctx,
             ct);
     }
 
-    private async Task HandleRemoteAudioInputReceivedAsync(
-        VoiceRemoteAudioInputReceived request,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(_remoteSessionId) ||
-            !string.Equals(_remoteSessionId, request.SessionId, StringComparison.Ordinal) ||
-            request.Pcm16.IsEmpty)
-        {
-            return;
-        }
-
-        await _provider.SendAudioAsync(request.Pcm16.Memory, ct);
-    }
-
     private async Task HandleRemoteControlInputReceivedAsync(
         VoiceRemoteControlInputReceived request,
+        IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(_remoteSessionId) ||
-            !string.Equals(_remoteSessionId, request.SessionId, StringComparison.Ordinal) ||
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (string.IsNullOrWhiteSpace(state.RemoteSessionId) ||
+            !string.Equals(state.RemoteSessionId, request.SessionId, StringComparison.Ordinal) ||
             request.ControlFrame == null)
         {
             return;
         }
 
-        await HandleControlFrameAsync(request.ControlFrame, ct);
+        await HandleControlFrameAsync(request.ControlFrame, ctx, state, ct);
     }
 
-    private async Task CloseRemoteSessionAsync(
+    private async Task<bool> CloseRemoteSessionAsync(
+        VoicePresenceRuntimeState state,
         string reason,
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        var currentSessionId = _remoteSessionId;
+        var currentSessionId = state.RemoteSessionId;
         if (string.IsNullOrWhiteSpace(currentSessionId))
-            return;
+            return false;
 
-        _remoteSessionId = null;
-        _provider.OnEvent = _userTransport == null ? null : OnProviderEventAsync;
+        state.RemoteSessionId = string.Empty;
+        state.ActiveSessionId = string.Empty;
+        state.ActiveLeaseOwnerId = string.Empty;
+        ClearTransportLeaseState(state);
+        state.ProviderResponseBindings.Clear();
+        state.CancelledProviderResponseIds.Clear();
+        state.ActiveProviderResponseId = string.Empty;
+        await PersistRuntimeStateAsync(ctx, state, ct);
         await PublishRemoteOutputAsync(
             new VoiceRemoteTransportOutput
             {
@@ -543,13 +810,209 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             },
             ctx,
             ct);
+        return true;
     }
 
-    private Task PublishRemoteOutputAsync(
+    internal async Task HandleSessionLeaseRequestedAsync(
+        VoicePresenceSessionLeaseRequested request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (request == null || string.IsNullOrWhiteSpace(request.SessionId))
+            return;
+
+        var currentSessionId = state.ActiveSessionId;
+        if (!string.IsNullOrWhiteSpace(currentSessionId) &&
+            !string.Equals(currentSessionId, request.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.Initialized = IsInitialized;
+        state.PcmSampleRateHz = PcmSampleRateHz;
+        state.ActiveSessionId = request.SessionId;
+        state.ActiveLeaseOwnerId = request.OwnerId;
+        state.LeaseExpiresAt = request.ExpiresAt?.Clone();
+        state.LeaseEpoch = NextLeaseEpoch(state);
+        state.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
+        await PersistRuntimeStateAsync(ctx, state, ct);
+    }
+
+    internal async Task HandleSessionLeaseReleasedAsync(
+        VoicePresenceSessionLeaseReleased request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (request == null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            !string.Equals(state.ActiveSessionId, request.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.ActiveSessionId = string.Empty;
+        state.LeaseExpiresAt = null;
+        state.ActiveLeaseOwnerId = string.Empty;
+        ClearTransportLeaseState(state);
+        await PersistRuntimeStateAsync(ctx, state, ct);
+    }
+
+    private async Task PublishRemoteOutputAsync(
         VoiceRemoteTransportOutput output,
         IEventHandlerContext ctx,
-        CancellationToken ct) =>
-        ctx.PublishAsync(output, TopologyAudience.Self, ct);
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        await PublishRealtimeFrameAsync(output, state, ctx, ct);
+        await ctx.PublishAsync(output, TopologyAudience.Self, ct);
+    }
+
+    private Task PublishRealtimeFrameAsync(
+        VoiceProviderEvent providerEvent,
+        VoicePresenceRuntimeState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var frame = BuildRealtimeFrame(providerEvent, state);
+        return frame == null ? Task.CompletedTask : PublishRealtimeFrameAsync(frame, ctx, ct);
+    }
+
+    private Task PublishRealtimeFrameAsync(
+        VoiceControlFrame controlFrame,
+        VoicePresenceRuntimeState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var frame = BuildRealtimeFrame(controlFrame, state);
+        return frame == null ? Task.CompletedTask : PublishRealtimeFrameAsync(frame, ctx, ct);
+    }
+
+    private Task PublishRealtimeFrameAsync(
+        VoiceRemoteTransportOutput output,
+        VoicePresenceRuntimeState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (output.OutputCase != VoiceRemoteTransportOutput.OutputOneofCase.SessionClosed)
+            return Task.CompletedTask;
+
+        var sessionId = string.IsNullOrWhiteSpace(output.SessionId) ? state.ActiveSessionId : output.SessionId;
+        var frame = CreateRealtimeFrame(sessionId, new VoiceRealtimeFrame
+        {
+            SessionClosed = output.SessionClosed?.Clone(),
+        });
+        return frame == null ? Task.CompletedTask : PublishRealtimeFrameAsync(frame, ctx, ct);
+    }
+
+    private VoiceRealtimeFrame? BuildRealtimeFrame(
+        VoiceProviderEvent providerEvent,
+        VoicePresenceRuntimeState state)
+    {
+        return providerEvent.EventCase switch
+        {
+            VoiceProviderEvent.EventOneofCase.ResponseStarted => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                ResponseStarted = providerEvent.ResponseStarted?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.ResponseDone => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                ResponseDone = providerEvent.ResponseDone?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.ResponseCancelled => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                ResponseCancelled = providerEvent.ResponseCancelled?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.FunctionCall => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                FunctionCall = providerEvent.FunctionCall?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.SpeechStarted => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                SpeechStarted = providerEvent.SpeechStarted?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.SpeechStopped => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                SpeechStopped = providerEvent.SpeechStopped?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.Error => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                Error = providerEvent.Error?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.Disconnected => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                Disconnected = providerEvent.Disconnected?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.AudioReceived => null,
+            _ => null,
+        };
+    }
+
+    private VoiceRealtimeFrame? BuildRealtimeFrame(
+        VoiceControlFrame controlFrame,
+        VoicePresenceRuntimeState state)
+    {
+        if (controlFrame.FrameCase != VoiceControlFrame.FrameOneofCase.DrainAcknowledged)
+            return null;
+
+        return CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+        {
+            TranscriptCompleted = new VoiceTranscriptCompleted
+            {
+                ResponseId = controlFrame.DrainAcknowledged.ResponseId,
+            },
+        });
+    }
+
+    private VoiceRealtimeFrame? CreateRealtimeFrame(string? sessionId, VoiceRealtimeFrame frame)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) ||
+            frame.FrameCase == VoiceRealtimeFrame.FrameOneofCase.None)
+        {
+            return null;
+        }
+
+        frame.ModuleName = Name;
+        frame.SessionId = sessionId;
+        return frame;
+    }
+
+    private Task PublishRealtimeFrameAsync(
+        VoiceRealtimeFrame frame,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var hub = ctx.Services.GetService<IProjectionSessionEventHub<VoiceRealtimeFrame>>();
+        return hub == null
+            ? Task.CompletedTask
+            : hub.PublishAsync(ctx.AgentId, frame.SessionId, frame, ct);
+    }
+
+    private async Task<RealtimeVoiceProviderSession> ConnectProviderSessionAsync(
+        VoicePresenceRuntimeState state,
+        CancellationToken ct)
+    {
+        var key = BuildProviderSessionKey(state);
+        var session = await _provider.ConnectAsync(
+            key,
+            _providerConfig,
+            static (_, _, _) => Task.CompletedTask,
+            ct);
+        var effectiveSessionConfig = await BuildEffectiveSessionConfigAsync(ct);
+        if (effectiveSessionConfig != null)
+            await session.UpdateSessionAsync(effectiveSessionConfig, ct);
+
+        return session;
+    }
+
+    private static VoiceProviderSessionKey BuildProviderSessionKey(VoicePresenceRuntimeState state) =>
+        new(
+            state.ActiveSessionId ?? string.Empty,
+            state.ActiveLeaseOwnerId ?? string.Empty,
+            state.ActiveTransportLeaseId ?? string.Empty,
+            state.LeaseEpoch,
+            state.LeaseExpiresAt?.Clone());
 
     private async Task ExecuteToolCallAsync(
         VoiceFunctionCallRequested request,
@@ -603,7 +1066,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             }
         }
 
-        await _provider.SendToolResultAsync(request.CallId, resultJson, ct);
+        var state = HydrateRuntimeStateFromActor(ctx);
+        await using var providerSession = await ConnectProviderSessionAsync(state, ct);
+        await providerSession.SendToolResultAsync(request.CallId, resultJson, ct);
     }
 
     private async Task<VoiceSessionConfig?> BuildEffectiveSessionConfigAsync(CancellationToken ct)
@@ -659,15 +1124,28 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private static string BuildToolErrorJson(string message) =>
         JsonSerializer.Serialize(new { error = message });
 
-    private async Task HandleControlFrameAsync(VoiceControlFrame frame, CancellationToken ct)
+    private async Task HandleControlFrameAsync(VoiceControlFrame frame, IEventHandlerContext ctx, CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        await HandleControlFrameAsync(frame, ctx, state, ct);
+    }
+
+    private async Task HandleControlFrameAsync(
+        VoiceControlFrame frame,
+        IEventHandlerContext ctx,
+        VoicePresenceRuntimeState state,
+        CancellationToken ct)
     {
         switch (frame.FrameCase)
         {
             case VoiceControlFrame.FrameOneofCase.DrainAcknowledged:
-                StateMachine.OnDrainAcknowledged(
+                ApplyDrainAcknowledged(
+                    state,
                     frame.DrainAcknowledged.ResponseId,
                     frame.DrainAcknowledged.PlayoutSequence);
-                await FlushPendingEventInjectionsAsync(ct);
+                await PublishRealtimeFrameAsync(frame, state, ctx, ct);
+                await FlushPendingEventInjectionsAsync(state, ct);
+                await PersistRuntimeStateAsync(ctx, state, ct);
                 break;
             case VoiceControlFrame.FrameOneofCase.None:
             default:
@@ -677,22 +1155,30 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
     private async Task HandleExternalEventAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
+        var state = HydrateRuntimeStateFromActor(ctx);
+
         if (!ShouldInjectExternalEvent(envelope, ctx.AgentId))
             return;
 
         var now = _options.TimeProvider.GetUtcNow();
-        var decision = EventPolicy.Evaluate(envelope, now);
-        if (decision != VoicePresenceEventPolicyDecision.Admit)
-            return;
-
-        var injection = BuildInjection(envelope, now);
-        if (!IsReadyToInject())
+        var verdict = EventPolicy.Evaluate(envelope, now, state.EventDedupeFence);
+        var fenceChanged = ReplaceEventDedupeFence(state, EventPolicy.BuildFence(state.EventDedupeFence, verdict, now));
+        if (verdict.Decision != VoicePresenceEventPolicyDecision.Admit)
         {
-            EnqueuePendingInjection(injection);
+            await PersistRuntimeStateIfChangedAsync(ctx, state, fenceChanged, ct);
             return;
         }
 
-        await TryInjectEventAsync(injection, ct);
+        var injection = BuildPendingInjection(envelope, now);
+        if (!IsReadyToInject(state))
+        {
+            EnqueuePendingInjection(state, injection);
+            await PersistRuntimeStateAsync(ctx, state, ct);
+            return;
+        }
+
+        await TryInjectEventAsync(state, injection, ct);
+        await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
     private bool ShouldInjectExternalEvent(EventEnvelope envelope, string agentId)
@@ -714,70 +1200,109 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         return !string.Equals(envelope.Route.PublisherActorId, agentId, StringComparison.Ordinal);
     }
 
-    private VoiceConversationEventInjection BuildInjection(EventEnvelope envelope, DateTimeOffset now)
+    private VoicePendingEventInjection BuildPendingInjection(EventEnvelope envelope, DateTimeOffset now)
     {
         var observedAt = envelope.Timestamp?.ToDateTimeOffset() ?? now;
-        return new VoiceConversationEventInjection
+        return new VoicePendingEventInjection
         {
             EnvelopeId = envelope.Id ?? string.Empty,
             PublisherActorId = envelope.Route?.PublisherActorId ?? string.Empty,
             EventType = envelope.Payload?.TypeUrl ?? string.Empty,
-            PayloadJson = envelope.Payload == null ? "{}" : FormatPayloadJson(envelope.Payload),
+            Payload = envelope.Payload?.Clone(),
             ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
         };
     }
 
-    private void EnqueuePendingInjection(VoiceConversationEventInjection injection)
+    private void EnqueuePendingInjection(
+        VoicePresenceRuntimeState state,
+        VoicePendingEventInjection injection)
     {
         if (_options.PendingInjectionCapacity <= 0)
             return;
 
-        while (_pendingInjections.Count >= _options.PendingInjectionCapacity)
-            _pendingInjections.Dequeue();
+        while (state.PendingInjections.Count >= _options.PendingInjectionCapacity)
+            state.PendingInjections.RemoveAt(0);
 
-        _pendingInjections.Enqueue(injection);
+        state.PendingInjections.Add(injection);
     }
 
-    private async Task FlushPendingEventInjectionsAsync(CancellationToken ct)
+    private static bool ReplaceEventDedupeFence(
+        VoicePresenceRuntimeState state,
+        IReadOnlyList<VoicePresenceEventDedupeFenceEntry> fence)
     {
-        while (_pendingInjections.Count > 0 && IsReadyToInject())
+        if (state.EventDedupeFence.Count == fence.Count &&
+            state.EventDedupeFence.Zip(fence).All(static pair => DedupeFenceEntryEquals(pair.First, pair.Second)))
         {
-            var next = _pendingInjections.Dequeue();
+            return false;
+        }
+
+        state.EventDedupeFence.Clear();
+        state.EventDedupeFence.AddRange(fence.Select(static entry => entry.Clone()));
+        return true;
+    }
+
+    private static bool DedupeFenceEntryEquals(
+        VoicePresenceEventDedupeFenceEntry left,
+        VoicePresenceEventDedupeFenceEntry right) =>
+        string.Equals(left.Key, right.Key, StringComparison.Ordinal) &&
+        Equals(left.RecordedAt, right.RecordedAt);
+
+    private async Task FlushPendingEventInjectionsAsync(VoicePresenceRuntimeState state, CancellationToken ct)
+    {
+        while (state.PendingInjections.Count > 0 && IsReadyToInject(state))
+        {
+            var next = state.PendingInjections[0];
+            state.PendingInjections.RemoveAt(0);
             if (IsExpired(next))
                 continue;
 
-            if (await TryInjectEventAsync(next, ct))
+            if (await TryInjectEventAsync(state, next, ct))
                 return;
 
             return;
         }
     }
 
-    private bool IsExpired(VoiceConversationEventInjection injection)
+    private bool IsExpired(VoicePendingEventInjection injection)
     {
         var observedAt = injection.ObservedAt?.ToDateTimeOffset() ?? _options.TimeProvider.GetUtcNow();
         return _options.TimeProvider.GetUtcNow() - observedAt > _options.StaleAfter;
     }
 
-    private bool IsReadyToInject() =>
+    private bool IsReadyToInject(VoicePresenceRuntimeState state) =>
         IsInitialized &&
-        StateMachine.IsSafeToInject &&
-        !_awaitingInjectedResponseStart;
+        IsSafeToInject(state) &&
+        !state.AwaitingInjectedResponseStart;
 
-    private async Task<bool> TryInjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+    private async Task<bool> TryInjectEventAsync(
+        VoicePresenceRuntimeState state,
+        VoicePendingEventInjection injection,
+        CancellationToken ct)
     {
+        var providerInjection = BuildProviderInjection(injection);
         try
         {
-            await _provider.InjectEventAsync(injection, ct);
-            _awaitingInjectedResponseStart = true;
+            await using var providerSession = await ConnectProviderSessionAsync(state, ct);
+            await providerSession.InjectEventAsync(providerInjection, ct);
+            state.AwaitingInjectedResponseStart = true;
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to inject external voice event {EventType}.", injection.EventType);
+            _logger.LogWarning(ex, "Failed to inject external voice event {EventType}.", providerInjection.EventType);
             return false;
         }
     }
+
+    private static VoiceConversationEventInjection BuildProviderInjection(VoicePendingEventInjection injection) =>
+        new()
+        {
+            EnvelopeId = injection.EnvelopeId,
+            PublisherActorId = injection.PublisherActorId,
+            EventType = injection.EventType,
+            PayloadJson = injection.Payload == null ? "{}" : FormatPayloadJson(injection.Payload),
+            ObservedAt = injection.ObservedAt?.Clone(),
+        };
 
     private static string FormatPayloadJson(Any payload)
     {
@@ -837,4 +1362,137 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             typeUrl = payload.TypeUrl,
             valueBase64 = payload.Value.IsEmpty ? string.Empty : Convert.ToBase64String(payload.Value.ToByteArray()),
         });
+
+    private VoicePresenceRuntimeState HydrateRuntimeStateFromActor(IEventHandlerContext ctx)
+    {
+        if (ctx.Agent is not IVoicePresenceRuntimeStateOwner stateOwner ||
+            !stateOwner.TryGetVoicePresenceRuntimeState(Name, out var stored))
+        {
+            return CreateInitialRuntimeState();
+        }
+
+        return NormalizeRuntimeState(stored);
+    }
+
+    private async Task PersistRuntimeStateIfChangedAsync(
+        IEventHandlerContext ctx,
+        VoicePresenceRuntimeState state,
+        bool stateChanged,
+        CancellationToken ct)
+    {
+        if (!stateChanged)
+            return;
+
+        await PersistRuntimeStateAsync(ctx, state, ct);
+    }
+
+    private async Task PersistRuntimeStateAsync(
+        IEventHandlerContext ctx,
+        VoicePresenceRuntimeState state,
+        CancellationToken ct)
+    {
+        var normalized = NormalizeRuntimeState(state);
+        ApplyTransportFacts(normalized);
+
+        if (ctx.Agent is not IVoicePresenceRuntimeStateOwner stateOwner)
+            return;
+
+        await stateOwner.PersistVoicePresenceRuntimeStateAsync(Name, normalized, ct);
+    }
+
+    private void ApplyTransportFacts(VoicePresenceRuntimeState state)
+    {
+        state.Initialized = IsInitialized;
+        state.PcmSampleRateHz = PcmSampleRateHz;
+        if (state.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified)
+            state.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
+    }
+
+    private static VoicePresenceRuntimeState NormalizeRuntimeState(VoicePresenceRuntimeState? state)
+    {
+        var normalized = state?.Clone() ?? CreateInitialRuntimeState();
+        if (normalized.Status == VoicePresenceRuntimeStatus.Unspecified)
+            normalized.Status = VoicePresenceRuntimeStatus.Idle;
+        if (normalized.LastDrainAckResponseId == 0 && normalized.CurrentResponseId == 0)
+            normalized.LastDrainAckResponseId = DefaultLastDrainAckResponseId;
+        if (normalized.LastDrainAckPlayoutSequence == 0 && normalized.CurrentResponseId == 0)
+            normalized.LastDrainAckPlayoutSequence = DefaultLastDrainAckPlayoutSequence;
+        if (normalized.NextResponseId <= normalized.CurrentResponseId)
+            normalized.NextResponseId = normalized.CurrentResponseId + 1;
+        if (normalized.PcmSampleRateHz <= 0)
+            normalized.PcmSampleRateHz = WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz;
+        if (normalized.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified)
+            normalized.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
+
+        return normalized;
+    }
+
+    private static VoicePresenceRuntimeState CreateInitialRuntimeState() =>
+        new()
+        {
+            Status = VoicePresenceRuntimeStatus.Idle,
+            LastDrainAckResponseId = DefaultLastDrainAckResponseId,
+            LastDrainAckPlayoutSequence = DefaultLastDrainAckPlayoutSequence,
+            NextResponseId = 1,
+        };
+
+    private static void ApplySpeechStarted(VoicePresenceRuntimeState state) =>
+        state.Status = VoicePresenceRuntimeStatus.UserSpeaking;
+
+    private static void ApplySpeechStopped(VoicePresenceRuntimeState state)
+    {
+    }
+
+    private static void ApplyResponseStarted(VoicePresenceRuntimeState state, int responseId)
+    {
+        if (responseId < state.CurrentResponseId)
+            return;
+
+        state.CurrentResponseId = responseId;
+        state.NextResponseId = Math.Max(state.NextResponseId, responseId + 1);
+        state.Status = VoicePresenceRuntimeStatus.ResponseInProgress;
+    }
+
+    private static void ApplyResponseDone(VoicePresenceRuntimeState state, int responseId)
+    {
+        if (responseId != state.CurrentResponseId)
+            return;
+
+        if (state.Status is VoicePresenceRuntimeStatus.ResponseInProgress or VoicePresenceRuntimeStatus.UserSpeaking)
+            state.Status = VoicePresenceRuntimeStatus.AudioDraining;
+    }
+
+    private static void ApplyResponseCancelled(VoicePresenceRuntimeState state, int responseId)
+    {
+        if (responseId != state.CurrentResponseId)
+            return;
+
+        state.LastDrainAckResponseId = responseId;
+        state.Status = VoicePresenceRuntimeStatus.Idle;
+    }
+
+    private static void ApplyDrainAcknowledged(
+        VoicePresenceRuntimeState state,
+        int responseId,
+        long playoutSequence)
+    {
+        if (responseId != state.CurrentResponseId)
+            return;
+
+        state.LastDrainAckResponseId = responseId;
+        state.LastDrainAckPlayoutSequence = playoutSequence;
+
+        if (state.Status == VoicePresenceRuntimeStatus.AudioDraining)
+            state.Status = VoicePresenceRuntimeStatus.Idle;
+    }
+
+    private static void ApplyProviderDisconnected(VoicePresenceRuntimeState state)
+    {
+        state.LastDrainAckResponseId = state.CurrentResponseId;
+        state.Status = VoicePresenceRuntimeStatus.Idle;
+    }
+
+    private static bool IsSafeToInject(VoicePresenceRuntimeState state) =>
+        state.Status == VoicePresenceRuntimeStatus.Idle &&
+        (state.CurrentResponseId == 0 || state.LastDrainAckResponseId == state.CurrentResponseId);
 }

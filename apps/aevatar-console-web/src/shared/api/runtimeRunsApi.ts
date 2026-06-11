@@ -11,7 +11,7 @@ import {
   decodeWorkflowSignalResponseBody,
 } from "./runtimeDecoders";
 import { requestJson, withQuery } from "./http/client";
-import { readResponseError } from "./http/error";
+import { readResponseError, readResponseErrorDetails } from "./http/error";
 import {
   encodeAppScriptCommandBase64,
   encodeStringValueBase64,
@@ -25,6 +25,18 @@ const JSON_HEADERS = {
   "Content-Type": "application/json",
   Accept: "application/json",
 };
+
+export class RuntimeRunsApiError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "RuntimeRunsApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
 
 function trimOptional(value?: string): string | undefined {
   const normalized = value?.trim();
@@ -57,15 +69,25 @@ function buildScopedServicePath(scopeId: string, serviceId: string): string {
   )}`;
 }
 
+function buildScopedTeamPath(scopeId: string, teamId: string): string {
+  return `/api/scopes/${encodeSegment(scopeId)}/teams/${encodeSegment(teamId)}`;
+}
+
 type RuntimeRouteTarget = {
   memberId?: string;
   serviceId?: string;
+  teamId?: string;
 };
 
 function buildInvocationBasePath(
   scopeId: string,
   options?: RuntimeRouteTarget
 ): string {
+  const teamId = trimOptional(options?.teamId);
+  if (teamId) {
+    return buildScopedTeamPath(scopeId, teamId);
+  }
+
   const memberId = trimOptional(options?.memberId);
   if (memberId) {
     return buildScopedMemberPath(scopeId, memberId);
@@ -100,6 +122,10 @@ function buildInvokeChatStreamPath(
   options?: RuntimeRouteTarget
 ): string {
   return `${buildInvocationBasePath(scopeId, options)}/invoke/chat:stream`;
+}
+
+function buildTeamInvokeChatStreamPath(scopeId: string, teamId: string): string {
+  return `${buildScopedTeamPath(scopeId, teamId)}/invoke/chat:stream`;
 }
 
 function buildRunControlPath(
@@ -241,6 +267,46 @@ export const runtimeRunsApi = {
 
     if (!response.ok) {
       throw new Error(await readResponseError(response));
+    }
+
+    return response;
+  },
+
+  async streamTeamChat(
+    scopeId: string,
+    teamId: string,
+    request: ChatRunRequest,
+    signal: AbortSignal
+  ): Promise<Response> {
+    const sessionId = trimOptional(
+      (request as ChatRunRequest & { sessionId?: string }).sessionId
+    );
+    const response = await authFetch(
+      buildTeamInvokeChatStreamPath(scopeId, teamId),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(
+          compactObject({
+            prompt: request.prompt.trim(),
+            sessionId,
+            headers: request.metadata,
+          })
+        ),
+        signal,
+      }
+    );
+
+    if (!response.ok) {
+      const details = await readResponseErrorDetails(response);
+      throw new RuntimeRunsApiError(
+        details.message,
+        response.status,
+        details.code,
+      );
     }
 
     return response;

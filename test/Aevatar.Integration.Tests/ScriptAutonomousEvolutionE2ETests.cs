@@ -1,7 +1,9 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,7 +40,7 @@ public sealed class ScriptAutonomousEvolutionE2ETests
             "new_runtime_normalization",
             "1");
 
-        await ScriptEvolutionIntegrationTestKit.UpsertDefinitionAsync(
+        var workerDefinition = await ScriptEvolutionIntegrationTestKit.UpsertDefinitionWithSnapshotAsync(
             provider,
             scriptId: "worker-script",
             revision: "rev-worker-1",
@@ -63,6 +65,7 @@ public sealed class ScriptAutonomousEvolutionE2ETests
         {
             NewScriptSource = newRuntimeSource,
             WorkerV2Source = workerV2Source,
+            WorkerV1DefinitionSnapshot = workerDefinition.Snapshot.ToBindingSpec(),
         };
         await ScriptEvolutionIntegrationTestKit.ActivateAuthorityReadModelsAsync(
             provider,

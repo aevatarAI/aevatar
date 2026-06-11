@@ -19,6 +19,9 @@ public sealed class WorkflowCatalogItem
     public bool IsPrimitiveExample { get; set; }
     public bool RequiresLlmProvider { get; set; }
     public List<string> Primitives { get; set; } = [];
+    public long AuthorityStateVersion { get; set; }
+    public DateTimeOffset ProjectionWatermark { get; set; }
+    public string LastEventId { get; set; } = string.Empty;
 }
 
 public sealed class WorkflowCatalogRole
@@ -32,7 +35,6 @@ public sealed class WorkflowCatalogRole
     public int? MaxTokens { get; set; }
     public int? MaxToolRounds { get; set; }
     public int? MaxHistoryMessages { get; set; }
-    public int? StreamBufferCapacity { get; set; }
     public List<string> EventModules { get; set; } = [];
     public string EventRoutes { get; set; } = string.Empty;
     public List<string> Connectors { get; set; } = [];
@@ -79,21 +81,26 @@ public sealed class WorkflowCatalogItemDetail
     public WorkflowCatalogDefinition Definition { get; set; } = new();
     public List<WorkflowCatalogEdge> Edges { get; set; } = [];
 }
-public enum WorkflowActorGraphDirection
+
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: graph query direction was named as actor current-state graph readmodel control.
+//   New principle: workflow-run graph traversal is an artifact export control, not an actor current-state readmodel contract.
+public enum WorkflowRunGraphExportDirection
 {
     Outbound = 0,
     Inbound = 1,
     Both = 2,
 }
 
-public sealed class WorkflowActorGraphQueryOptions
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: graph query filters were exposed through actor graph readmodel options.
+//   New principle: graph filters belong to workflow-run graph export requests and preserve artifact/export semantics.
+public sealed class WorkflowRunGraphExportQueryOptions
 {
-    public WorkflowActorGraphDirection Direction { get; set; } = WorkflowActorGraphDirection.Both;
+    public WorkflowRunGraphExportDirection Direction { get; set; } = WorkflowRunGraphExportDirection.Both;
 
     public IReadOnlyList<string> EdgeTypes { get; set; } = [];
 }
-
-public sealed record WorkflowTopologyEdge(string Parent, string Child);
 
 public enum WorkflowRunProjectionScope
 {
@@ -104,7 +111,7 @@ public enum WorkflowRunProjectionScope
 
 public enum WorkflowRunTopologySource
 {
-    RuntimeSnapshot = 0,
+    CommittedProjection = 0,
     Unknown = 99,
 }
 

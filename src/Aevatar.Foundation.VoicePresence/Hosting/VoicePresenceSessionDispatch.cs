@@ -63,11 +63,35 @@ internal static class VoicePresenceSessionDispatch
             case VoiceRemoteSessionCloseRequested closeRequested:
                 signal.RemoteSessionCloseRequested = closeRequested.Clone();
                 break;
-            case VoiceRemoteAudioInputReceived audioInput:
-                signal.RemoteAudioInputReceived = audioInput.Clone();
-                break;
             case VoiceRemoteControlInputReceived controlInput:
                 signal.RemoteControlInputReceived = controlInput.Clone();
+                break;
+            case VoicePresenceSessionLeaseRequested leaseRequested:
+                signal.SessionLeaseRequested = leaseRequested.Clone();
+                break;
+            case VoicePresenceSessionLeaseReleased leaseReleased:
+                signal.SessionLeaseReleased = leaseReleased.Clone();
+                break;
+            case VoiceTransportAttachRequested attachRequested:
+                signal.TransportAttachRequested = attachRequested.Clone();
+                break;
+            case VoiceTransportDetachRequested detachRequested:
+                signal.TransportDetachRequested = detachRequested.Clone();
+                break;
+            case VoiceTransportControlFrameReceived controlReceived:
+                signal.TransportControlFrameReceived = controlReceived.Clone();
+                break;
+            case VoiceTransportRelayStopped relayStopped:
+                signal.TransportRelayStopped = relayStopped.Clone();
+                break;
+            case VoiceTransportLifetimeCompleted lifetimeCompleted:
+                signal.TransportLifetimeCompleted = lifetimeCompleted.Clone();
+                break;
+            case VoiceProviderEventReceived providerReceived:
+                signal.ProviderEventReceived = providerReceived.Clone();
+                break;
+            case VoiceTransportAudioFrameReceived audioReceived:
+                signal.TransportAudioFrameReceived = audioReceived.Clone();
                 break;
             default:
                 throw new InvalidOperationException(

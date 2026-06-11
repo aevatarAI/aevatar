@@ -68,7 +68,7 @@ describe("RunsTimelineView", () => {
     expect(
       screen.getByText("CUSTOM · StepRequest -> CUSTOM · StepCompleted")
     ).toBeInTheDocument();
-    expect(screen.getByText("Step type classify")).toBeInTheDocument();
+    expect(screen.getByText("Step request: triage")).toBeInTheDocument();
     expect(screen.getByText('{"stepId":"triage"}')).toBeInTheDocument();
     expect(
       screen.queryByText('{"stepId":"triage","success":true}')

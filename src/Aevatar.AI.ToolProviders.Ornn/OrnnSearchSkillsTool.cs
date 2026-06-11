@@ -14,9 +14,18 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
     public string Name => "ornn_search_skills";
 
     public string Description =>
-        "Search for skills in the user's Ornn skill library. " +
-        "Proactively search when the user's request involves specialized tasks like translation, content generation, or analysis. " +
-        "Returns skill names and descriptions. Then use use_skill with the skill name to load and activate a matching skill.";
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: skill lookup guidance competed with deleted NyxID generic service capability discovery.
+        //   New principle: Ornn skill discovery remains the typed instruction-package lookup; nyxid_proxy is only a live downstream proxy surface.
+        "Search the user's Ornn skill library for matching skill packages. " +
+        "Call this FIRST whenever the user mentions a named skill (in quotes, slug-like, or Title Case), " +
+        "asks for a specialized capability (translation, content generation, analysis, network or device discovery, " +
+        "domain workflows), or says \"挂载/use/load this skill\". " +
+        "Also call this when a loaded skill leaves you blocked by a missing capability, unknown workflow step, " +
+        "unavailable service, unknown API contract, or repeated tool failure. " +
+        "Prefer this over nyxid_proxy path-guessing; proxy discovery lists service APIs, " +
+        "this discovers ready-made instruction packages. " +
+        "Returns matching skill names + descriptions; follow up with use_skill to load and activate one.";
 
     public string ParametersSchema => """
         {
@@ -31,7 +40,7 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return "Error: No NyxID access token available. User must be authenticated.";
 
@@ -64,7 +73,8 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
 
         foreach (var skill in result.Items)
         {
-            var tags = skill.Metadata?.Tags != null ? string.Join(", ", skill.Metadata.Tags) : "";
+            var rawTags = skill.Tags ?? skill.Metadata?.Tags;
+            var tags = rawTags != null ? string.Join(", ", rawTags) : "";
             var visibility = skill.IsPrivate ? "private" : "public";
             lines.Add($"- **{skill.Name}** ({visibility}, {skill.Metadata?.Category ?? "unknown"})");
             lines.Add($"  {skill.Description}");

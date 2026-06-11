@@ -1,17 +1,17 @@
 import {
-  enUSIntl,
   PageLoading,
   ProConfigProvider,
 } from "@ant-design/pro-components";
 import {
   DownOutlined,
+  GlobalOutlined,
   LogoutOutlined,
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Avatar, Badge, ConfigProvider, Dropdown, Typography } from "antd";
-import enUS from "antd/locale/en_US";
+import { Avatar, Badge, Button, ConfigProvider, Dropdown, Typography } from "antd";
+import { getLocale, setLocale, useIntl } from "@umijs/max";
 import React from "react";
 import MainLayout from "@/layouts/MainLayout";
 import { history } from "./shared/navigation/history";
@@ -44,6 +44,11 @@ import { readMissionControlRouteContext } from "@/pages/MissionControl/services/
 import { loadRecentRuns } from "@/shared/runs/recentRuns";
 import { queryClient } from "./shared/query/queryClient";
 import { aevatarThemeConfig } from "@/shared/ui/aevatarWorkbench";
+import {
+  normalizeConsoleLocale,
+  resolveAntdLocale,
+  resolveProIntl,
+} from "@/shared/i18n/localeProvider";
 
 const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
@@ -128,11 +133,37 @@ type AuthSessionBootstrapProps = {
   children: React.ReactNode;
 };
 
+type ConsoleRuntimeProvidersProps = {
+  children: React.ReactNode;
+  isPublicRoute: boolean;
+  isStudioRoute: boolean;
+  pathname: string;
+  search: string;
+};
+
+type ConsoleLocaleOption = {
+  readonly key: "zh-CN" | "en-US";
+  readonly messageId: "common.language.zhCN" | "common.language.english";
+};
+
 const LIVE_OPS_ATTENTION_BADGE_KEY = "live.attention";
 const LIVE_OPS_ATTENTION_MAX_CANDIDATES = 6;
 const LIVE_OPS_ATTENTION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_OPS_ATTENTION_REFRESH_MS = 30_000;
 const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = getNavigationGroupOrder();
+const CONSOLE_LOCALE_OPTIONS: readonly ConsoleLocaleOption[] = [
+  { key: "zh-CN", messageId: "common.language.zhCN" },
+  { key: "en-US", messageId: "common.language.english" },
+];
+const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
+  "/teams": "nav.items.myTeams",
+  "/runtime/runs": "nav.items.eventStream",
+  "/services": "nav.items.services",
+  "/governance": "nav.items.governance",
+  "/deployments": "nav.items.deployments",
+  "/runtime/explorer": "nav.items.topology",
+  "/settings": "nav.items.settings",
+};
 const LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT: LiveOpsAttentionSnapshot = {
   hasPendingAttention: false,
   pendingCount: 0,
@@ -146,6 +177,163 @@ const navigationGroupLabelStyle: React.CSSProperties = {
   fontSize: 14,
   fontWeight: 700,
   lineHeight: "22px",
+};
+
+const LocalizedNavigationText: React.FC<{
+  defaultLabel?: React.ReactNode;
+  messageId: string;
+}> = ({ defaultLabel, messageId }) => {
+  const intl = useIntl();
+  const defaultMessage =
+    typeof defaultLabel === "string" ? defaultLabel : undefined;
+
+  return (
+    <>
+      {intl.formatMessage({
+        defaultMessage,
+        id: messageId,
+      })}
+    </>
+  );
+};
+
+const NavigationGroupLabel: React.FC<{
+  group: NavigationGroup;
+}> = ({ group }) => (
+  <span style={navigationGroupLabelStyle}>
+    <LocalizedNavigationText
+      defaultLabel={group.label}
+      messageId={group.labelMessageId}
+    />
+  </span>
+);
+
+const ConsoleLanguageSwitch: React.FC = () => {
+  const intl = useIntl();
+  const selectedLocale = normalizeConsoleLocale(intl.locale || getLocale());
+  const selectedOption =
+    CONSOLE_LOCALE_OPTIONS.find((option) => option.key === selectedLocale) ||
+    CONSOLE_LOCALE_OPTIONS[0];
+
+  return (
+    <Dropdown
+      menu={{
+        items: CONSOLE_LOCALE_OPTIONS.map((option) => ({
+          key: option.key,
+          label: intl.formatMessage({ id: option.messageId }),
+        })),
+        onClick: ({ key }) => {
+          const nextLocale = key === "en-US" ? "en-US" : "zh-CN";
+          if (nextLocale === selectedLocale) {
+            return;
+          }
+
+          setLocale(nextLocale, false);
+        },
+        selectedKeys: [selectedLocale],
+      }}
+      placement="bottomRight"
+      trigger={["click"]}
+    >
+      <Button
+        aria-label={intl.formatMessage({ id: "common.language.switch" })}
+        icon={<GlobalOutlined />}
+        style={{
+          alignItems: "center",
+          display: "inline-flex",
+          height: 36,
+        }}
+        type="text"
+      >
+        {intl.formatMessage({ id: selectedOption.messageId })}
+      </Button>
+    </Dropdown>
+  );
+};
+
+const ConsoleAuthActions: React.FC = () => {
+  const intl = useIntl();
+  const session = loadRestorableAuthSession();
+  if (!session) {
+    return null;
+  }
+
+  const displayName =
+    session.user.name || session.user.email || session.user.sub;
+
+  return (
+    <Dropdown
+      menu={{
+        items: [
+          {
+            key: "settings",
+            icon: <SettingOutlined />,
+            label: intl.formatMessage({ id: "common.user.settings" }),
+          },
+          {
+            key: "logout",
+            icon: <LogoutOutlined />,
+            label: intl.formatMessage({ id: "common.user.logout" }),
+          },
+        ],
+        onClick: ({ key }) => {
+          if (key === "settings") {
+            history.push("/settings");
+            return;
+          }
+
+          if (key === "logout") {
+            clearStoredAuthSession();
+            window.location.replace("/login");
+          }
+        },
+      }}
+      placement="bottomRight"
+      trigger={["click"]}
+    >
+      <span
+        style={{
+          alignItems: "center",
+          background: "var(--ant-color-fill-tertiary)",
+          border: "1px solid var(--ant-color-border-secondary)",
+          borderRadius: 999,
+          cursor: "pointer",
+          display: "inline-flex",
+          gap: 8,
+          height: 36,
+          maxWidth: 220,
+          padding: "0 10px 0 6px",
+        }}
+        title={displayName}
+      >
+        <Avatar
+          icon={<UserOutlined />}
+          size={24}
+          src={session.user.picture}
+        />
+        <Typography.Text
+          style={{
+            flex: 1,
+            color: "var(--ant-color-text)",
+            lineHeight: "20px",
+            marginBottom: 0,
+            maxWidth: 160,
+            minWidth: 0,
+            whiteSpace: "nowrap",
+          }}
+          ellipsis={{ tooltip: displayName }}
+        >
+          {displayName}
+        </Typography.Text>
+        <DownOutlined
+          style={{
+            color: "var(--ant-color-text-tertiary)",
+            fontSize: 11,
+          }}
+        />
+      </span>
+    </Dropdown>
+  );
 };
 
 function trimOptional(value?: string | null): string | undefined {
@@ -491,13 +679,7 @@ function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuIt
         })),
         key: `menu-group:${group.key}`,
         menuGroupKey: group.key,
-        name: React.createElement(
-          "span",
-          {
-            style: navigationGroupLabelStyle,
-          },
-          group.label,
-        ),
+        name: React.createElement(NavigationGroupLabel, { group }),
       });
       return result;
     },
@@ -519,20 +701,30 @@ function decorateNavigationMenuItems(
       typeof item.menuBadgeKey === "string" ? item.menuBadgeKey : undefined;
     const groupKey =
       typeof item.menuGroupKey === "string" ? item.menuGroupKey : undefined;
+    const nameMessageId =
+      path && typeof item.name === "string"
+        ? NAVIGATION_MENU_MESSAGE_IDS[path]
+        : undefined;
     const children = Array.isArray(item.children)
       ? decorateNavigationMenuItems(item.children, false)
       : undefined;
     const isLiveOpsGroup =
       groupKey === "live" && Array.isArray(children) && children.length > 0;
     const hasRenderableIcon = React.isValidElement(item.icon);
+    const localizedName = nameMessageId
+      ? React.createElement(LocalizedNavigationText, {
+          defaultLabel: item.name,
+          messageId: nameMessageId,
+        })
+      : item.name;
     const name =
       badgeKey || isLiveOpsGroup
         ? React.createElement(NavigationMenuLabel, {
             badgeKey,
-            label: item.name,
+            label: localizedName,
             showLiveOpsDot: isLiveOpsGroup && !hasRenderableIcon,
           })
-        : item.name;
+        : localizedName;
     const icon =
       isLiveOpsGroup && hasRenderableIcon
         ? React.createElement(LiveOpsGroupIcon, {
@@ -650,7 +842,43 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
 
   return <>{children}</>;
 };
-// ProLayout 支持的api https://procomponents.ant.design/components/layout
+
+const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
+  children,
+  isPublicRoute,
+  isStudioRoute,
+  pathname,
+  search,
+}) => {
+  const intl = useIntl();
+  const currentLocale = normalizeConsoleLocale(intl.locale || getLocale());
+  const localizedContent = isPublicRoute ? (
+    children
+  ) : (
+    <MainLayout>{children}</MainLayout>
+  );
+
+  return (
+    <ConfigProvider
+      autoInsertSpaceInButton={false}
+      locale={resolveAntdLocale(currentLocale)}
+      theme={aevatarThemeConfig}
+    >
+      <ProConfigProvider intl={resolveProIntl(currentLocale)}>
+        <QueryClientProvider client={queryClient}>
+          <LiveOpsAttentionBridge
+            enabled={!isPublicRoute && !isStudioRoute}
+            pathname={pathname}
+            search={search}
+          />
+          <React.Fragment key={currentLocale}>{localizedContent}</React.Fragment>
+        </QueryClientProvider>
+      </ProConfigProvider>
+    </ConfigProvider>
+  );
+};
+
+// ProLayout runtime API: https://procomponents.ant.design/components/layout
 export const layout = ({
   initialState,
 }: LayoutRuntimeProps): Record<string, unknown> => {
@@ -688,87 +916,9 @@ export const layout = ({
       );
     },
     actionsRender: () => {
-      const session = loadRestorableAuthSession();
-      if (!session) {
-        return [];
-      }
-
-      const displayName =
-        session.user.name || session.user.email || session.user.sub;
-
       return [
-        <Dropdown
-          key="auth-actions"
-          menu={{
-            items: [
-              {
-                key: "settings",
-                icon: <SettingOutlined />,
-                label: "Settings",
-              },
-              {
-                key: "logout",
-                icon: <LogoutOutlined />,
-                label: "Logout",
-              },
-            ],
-            onClick: ({ key }) => {
-              if (key === "settings") {
-                history.push("/settings");
-                return;
-              }
-
-              if (key === "logout") {
-                clearStoredAuthSession();
-                window.location.replace("/login");
-              }
-            },
-          }}
-          placement="bottomRight"
-          trigger={["click"]}
-        >
-          <span
-            style={{
-              alignItems: "center",
-              background: "var(--ant-color-fill-tertiary)",
-              border: "1px solid var(--ant-color-border-secondary)",
-              borderRadius: 999,
-              cursor: "pointer",
-              display: "inline-flex",
-              gap: 8,
-              height: 36,
-              maxWidth: 220,
-              padding: "0 10px 0 6px",
-            }}
-            title={displayName}
-          >
-            <Avatar
-              icon={<UserOutlined />}
-              size={24}
-              src={session.user.picture}
-            />
-            <Typography.Text
-              style={{
-                flex: 1,
-                color: "var(--ant-color-text)",
-                lineHeight: "20px",
-                marginBottom: 0,
-                maxWidth: 160,
-                minWidth: 0,
-                whiteSpace: "nowrap",
-              }}
-              ellipsis={{ tooltip: displayName }}
-            >
-              {displayName}
-            </Typography.Text>
-            <DownOutlined
-              style={{
-                color: "var(--ant-color-text-tertiary)",
-                fontSize: 11,
-              }}
-            />
-          </span>
-        </Dropdown>,
+        <ConsoleLanguageSwitch key="language-switch" />,
+        <ConsoleAuthActions key="auth-actions" />,
       ];
     },
     childrenRender: (children: React.ReactNode) =>
@@ -794,26 +944,22 @@ export const layout = ({
             ) : (
               children
             );
-
           return (
-            <ConfigProvider locale={enUS} theme={aevatarThemeConfig}>
-              <ProConfigProvider intl={enUSIntl}>
-                <QueryClientProvider client={queryClient}>
-                  <LiveOpsAttentionBridge
-                    enabled={!isPublicRoute && !isStudioRoute}
-                    pathname={pathname}
-                    search={search}
-                  />
-                  {isPublicRoute ? content : <MainLayout>{content}</MainLayout>}
-                </QueryClientProvider>
-              </ProConfigProvider>
-            </ConfigProvider>
+            <ConsoleRuntimeProviders
+              isPublicRoute={isPublicRoute}
+              isStudioRoute={isStudioRoute}
+              pathname={pathname}
+              search={search}
+            >
+              {content}
+            </ConsoleRuntimeProviders>
           );
         })()
       ) : (
         <PageLoading fullscreen />
       ),
     ...initialState?.settings,
+    title: "",
     menu: {
       ...(initialState?.settings.menu as Record<string, unknown> | undefined),
       collapsedWidth: 40,
@@ -837,9 +983,9 @@ export const layout = ({
 };
 
 /**
- * @name request 配置，可以配置错误处理
- * 它基于 axios 和 ahooks 的 useRequest 提供了一套统一的网络请求和错误处理方案。
- * @doc https://umijs.org/docs/max/request#配置
+ * @name request config
+ * Centralizes network request error handling through the Umi request plugin.
+ * @doc https://umijs.org/docs/max/request#config
  */
 export const request: Record<string, unknown> = {
   ...errorConfig,

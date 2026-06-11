@@ -1,6 +1,9 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
@@ -13,14 +16,14 @@ public sealed class WorkflowRunOrchestrationComponentTests
     public async Task WorkflowRunCommandTargetResolver_ShouldFail_WhenProjectionIsDisabled()
     {
         var actorResolver = new FakeWorkflowRunActorResolver(
-            new WorkflowActorResolutionResult(new FakeActor("actor-1"), "auto", WorkflowChatRunStartError.None));
+            new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt("actor-1", string.Empty, []), "auto", WorkflowChatRunStartError.None));
         var resolver = new WorkflowRunCommandTargetResolver(
             actorResolver,
             new FakeProjectionPort { ProjectionEnabled = false },
-            new FakeProjectionPort { ProjectionEnabled = false },
-            new FakeWorkflowRunActorPort());
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
@@ -33,12 +36,12 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var actor = new FakeActor("actor-1");
         var resolver = new WorkflowRunCommandTargetResolver(
             new FakeWorkflowRunActorResolver(
-                new WorkflowActorResolutionResult(actor, "auto", WorkflowChatRunStartError.None, ["definition-1", "actor-1"])),
+                new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt(actor.Id, string.Empty, ["definition-1", "actor-1"]), "auto", WorkflowChatRunStartError.None)),
             new FakeProjectionPort(),
-            new FakeProjectionPort(),
-            new FakeWorkflowRunActorPort());
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")));
 
         result.Succeeded.Should().BeTrue();
         result.Target.Should().NotBeNull();
@@ -48,106 +51,398 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     [Fact]
-    public async Task WorkflowRunCommandTargetBinder_ShouldAttachLeaseAndSink_OnSuccess()
+    public async Task WorkflowRunCommandTargetResolver_ShouldUseTargetSeed_WithoutResolvingActorAgain()
     {
-        var projectionPort = new FakeProjectionPort
-        {
-            EnsureLease = new FakeProjectionLease("actor-1", "cmd-1"),
-        };
+        var actorResolver = new FakeWorkflowRunActorResolver(
+            new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt("unexpected", string.Empty, []), "auto", WorkflowChatRunStartError.None));
+        var resolver = new WorkflowRunCommandTargetResolver(
+            actorResolver,
+            new FakeProjectionPort(),
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var request = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.CatalogWorkflow("direct"),
+            TargetSeed: new WorkflowRunTargetSeed(
+                ActorId: "run-1",
+                WorkflowNameForRun: "direct",
+                CreatedActorIds: ["definition-1", "run-1"],
+                Source: WorkflowChatSource.CatalogWorkflow("direct")));
+
+        var result = await resolver.ResolveAsync(request);
+
+        result.Succeeded.Should().BeTrue();
+        result.Target.Should().NotBeNull();
+        result.Target!.ActorId.Should().Be("run-1");
+        result.Target.WorkflowName.Should().Be("direct");
+        result.Target.CreatedActorIds.Should().Equal("definition-1", "run-1");
+        actorResolver.ResolveCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task WorkflowRunCommandTargetResolver_ShouldKeepProjectionDisabledCheck_WhenTargetSeedIsPresent()
+    {
+        var actorResolver = new FakeWorkflowRunActorResolver(
+            new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt("unexpected", string.Empty, []), "auto", WorkflowChatRunStartError.None));
+        var resolver = new WorkflowRunCommandTargetResolver(
+            actorResolver,
+            new FakeProjectionPort { ProjectionEnabled = false },
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var request = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.CatalogWorkflow("direct"),
+            TargetSeed: new WorkflowRunTargetSeed(
+                ActorId: "run-1",
+                WorkflowNameForRun: "direct",
+                CreatedActorIds: ["definition-1", "run-1"],
+                Source: WorkflowChatSource.CatalogWorkflow("direct")));
+
+        var result = await resolver.ResolveAsync(request);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
+        actorResolver.ResolveCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task WorkflowRunCommandTargetResolver_ShouldRejectSeed_WhenWorkflowNameDiffersFromRequest()
+    {
+        var resolver = new WorkflowRunCommandTargetResolver(
+            new FakeWorkflowRunActorResolver(
+                new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt("unexpected", string.Empty, []), "auto", WorkflowChatRunStartError.None)),
+            new FakeProjectionPort(),
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var request = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.CatalogWorkflow("auto"),
+            TargetSeed: new WorkflowRunTargetSeed(
+                ActorId: "run-1",
+                WorkflowNameForRun: "direct",
+                CreatedActorIds: ["definition-1", "run-1"],
+                Source: WorkflowChatSource.CatalogWorkflow("direct")));
+
+        var result = await resolver.ResolveAsync(request);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNameMismatch);
+    }
+
+    [Fact]
+    public async Task WorkflowRunCommandTargetResolver_ShouldRejectSeed_WhenActorBindingDiffersFromRequest()
+    {
+        var resolver = new WorkflowRunCommandTargetResolver(
+            new FakeWorkflowRunActorResolver(
+                new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt("unexpected", string.Empty, []), "auto", WorkflowChatRunStartError.None)),
+            new FakeProjectionPort(),
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var request = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.DefinitionActor("actor-2", "direct"),
+            TargetSeed: new WorkflowRunTargetSeed(
+                ActorId: "run-1",
+                WorkflowNameForRun: "direct",
+                CreatedActorIds: ["definition-1", "run-1"],
+                Source: WorkflowChatSource.DefinitionActor("actor-1", "direct")));
+
+        var result = await resolver.ResolveAsync(request);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.WorkflowBindingMismatch);
+    }
+
+    [Fact]
+    public async Task WorkflowRunAcceptedCommandTargetResolver_ShouldReturnAcceptedTarget_WithoutLiveObservationDependencies()
+    {
+        var actor = new FakeActor("actor-accepted");
+        var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
-        var target = new WorkflowRunCommandTarget(
-            new FakeActor("actor-1"),
+        var resolver = new WorkflowRunAcceptedCommandTargetResolver(
+            new FakeWorkflowRunActorResolver(
+                new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt(actor.Id, string.Empty, ["definition-1", "actor-accepted"]), "direct", WorkflowChatRunStartError.None)),
+            actorPort);
+
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")), CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Target.Should().NotBeNull();
+        result.Target!.ActorId.Should().Be("actor-accepted");
+        result.Target.WorkflowName.Should().Be("direct");
+        result.Target.CreatedActorIds.Should().Equal("definition-1", "actor-accepted");
+        projectionPort.AttachCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowRunAcceptedCommandTargetResolver_ShouldNotConsultProjectionReadiness()
+    {
+        var actorResolver = new FakeWorkflowRunActorResolver(
+            new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt("actor-1", string.Empty, []), "auto", WorkflowChatRunStartError.None));
+        var resolver = new WorkflowRunAcceptedCommandTargetResolver(
+            actorResolver,
+            new FakeWorkflowRunActorPort());
+
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")));
+
+        result.Succeeded.Should().BeTrue();
+        actorResolver.ResolveCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task WorkflowRunAcceptedCommandTargetResolver_ShouldPropagateActorResolutionError()
+    {
+        var actorResolver = new FakeWorkflowRunActorResolver(
+            new WorkflowActorResolutionResult(null, string.Empty, WorkflowChatRunStartError.WorkflowNotFound));
+        var resolver = new WorkflowRunAcceptedCommandTargetResolver(
+            actorResolver,
+            new FakeWorkflowRunActorPort());
+
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing")));
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
+        result.Target.Should().BeNull();
+        actorResolver.ResolveCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void WorkflowRunAcceptedCommandTarget_ShouldExposeOnlyDispatchCleanupInterface()
+    {
+        var target = new WorkflowRunAcceptedCommandTarget("actor-accepted",
+            "direct",
+            [],
+            new FakeWorkflowRunActorPort());
+
+        target.Should().BeAssignableTo<ICommandDispatchTarget>();
+        target.Should().BeAssignableTo<ICommandDispatchCleanupAware>();
+        target.Should().NotBeAssignableTo<ICommandEventTarget<WorkflowRunEventEnvelope>>();
+        target.Should().NotBeAssignableTo<ICommandDetachedContinuationTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>>();
+        target.Should().NotBeAssignableTo<ICommandInteractionCleanupTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>>();
+    }
+
+    [Fact]
+    public async Task WorkflowRunAcceptedCommandTarget_ShouldDestroyOnlyActorsCreatedDuringResolution_OnDispatchFailureCleanup()
+    {
+        var actorPort = new FakeWorkflowRunActorPort();
+        var target = new WorkflowRunAcceptedCommandTarget("actor-1",
+            "direct",
+            ["definition-1", "actor-1", "definition-1"],
+            actorPort);
+
+        await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+        await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task WorkflowRunAcceptedCommandTarget_ShouldWrapSingleCleanupFailure()
+    {
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            DestroyException = new InvalidOperationException("destroy failed"),
+        };
+        var target = new WorkflowRunAcceptedCommandTarget("actor-1",
+            "direct",
+            ["actor-1"],
+            actorPort);
+
+        var act = () => target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<InvalidOperationException>();
+        exception.WithMessage("Failed to destroy workflow actor 'actor-1'.");
+        exception.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("destroy failed");
+        actorPort.DestroyCalls.Should().Equal("actor-1");
+    }
+
+    [Fact]
+    public async Task WorkflowRunAcceptedCommandTarget_ShouldAggregateCleanupFailures()
+    {
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            DestroyException = new InvalidOperationException("destroy failed"),
+        };
+        var target = new WorkflowRunAcceptedCommandTarget("actor-1",
+            "direct",
+            ["definition-1", "actor-1"],
+            actorPort);
+
+        var act = () => target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<AggregateException>();
+        exception.WithMessage("Workflow actor cleanup failed.*");
+        exception.Which.InnerExceptions.Should().HaveCount(2);
+        exception.Which.InnerExceptions.Should().AllSatisfy(ex =>
+        {
+            ex.Should().BeOfType<InvalidOperationException>();
+            ex.InnerException.Should().BeOfType<InvalidOperationException>()
+                .Which.Message.Should().Be("destroy failed");
+        });
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public void WorkflowRunCommandTargetResolver_ShouldRejectMissingDurableCompletionResolver()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var act = () => new WorkflowRunCommandTargetResolver(
+            new FakeWorkflowRunActorResolver(
+                new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt("actor-1", string.Empty, []), "direct", WorkflowChatRunStartError.None)),
+            projectionPort,
+            new FakeWorkflowRunActorPort(),
+            durableCompletionResolver: null!);
+
+        act.Should().Throw<ArgumentNullException>()
+            .WithParameterName("durableCompletionResolver");
+    }
+
+    [Fact]
+    public async Task WorkflowRunCommandTargetResolver_ShouldWireDurableCompletionResolverIntoResolvedTarget()
+    {
+        var actor = new FakeActor("actor-1");
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var queryPort = new CompletingCurrentStateQueryPort();
+        var resolver = new WorkflowRunCommandTargetResolver(
+            new FakeWorkflowRunActorResolver(
+                new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt(actor.Id, string.Empty, ["definition-1", "actor-1"]), "direct", WorkflowChatRunStartError.None)),
+            projectionPort,
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(queryPort));
+
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")), CancellationToken.None);
+        result.Target.Should().NotBeNull();
+        result.Target!.BindLiveObservation(
+            new FakeProjectionLease("actor-1", "cmd-1"),
+            null,
+            new EventChannel<WorkflowRunEventEnvelope>());
+
+        await result.Target.PublishDetachedCommandSignalAsync(
+            new DetachedCommandTimeout<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>(
+                new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"),
+                WorkflowProjectionCompletionStatus.Unknown),
+            CancellationToken.None);
+
+        queryPort.ActorIds.Should().Equal("actor-1");
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task WorkflowRunObservationLifecycle_ShouldAttachLeaseAndSink_OnSuccess()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var lifecycle = new WorkflowRunObservationLifecycle(projectionPort);
+        var target = new WorkflowRunCommandTarget("actor-1",
             "direct",
             [],
             projectionPort,
-            projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
             "corr-1",
             new Dictionary<string, string>());
 
-        var result = await binder.BindAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
-            target,
-            context,
+        var result = await lifecycle.BindAsync(
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            CreateExecution(target, context),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        target.ProjectionLease.Should().BeSameAs(projectionPort.EnsureLease);
+        target.ProjectionLease.Should().BeSameAs(projectionPort.ExistingLease);
         target.LiveSink.Should().NotBeNull();
-        projectionPort.AttachCalls.Should().ContainSingle();
+        projectionPort.AttachCalls.Should().ContainSingle()
+            .Which.Lease.Should().BeSameAs(projectionPort.ExistingLease);
+        projectionPort.AttachExistingCalls.Should().ContainSingle()
+            .Which.Should().Be(("actor-1", "cmd-1"));
         actorPort.DestroyCalls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task WorkflowRunCommandTargetBinder_ShouldRollbackCreatedActors_WhenProjectionLeaseIsUnavailable()
+    public async Task WorkflowRunObservationLifecycle_ShouldLeaveCreatedActorRollbackToInteractionOwner_WhenExistingProjectionIsUnavailable()
     {
         var projectionPort = new FakeProjectionPort
         {
-            EnsureLease = null,
+            AttachExistingReturnsNull = true,
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
-        var target = new WorkflowRunCommandTarget(
-            new FakeActor("actor-1"),
+        var lifecycle = new WorkflowRunObservationLifecycle(projectionPort);
+        var target = new WorkflowRunCommandTarget("actor-1",
             "direct",
             ["definition-1", "actor-1", "definition-1"],
             projectionPort,
-            projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
             "corr-1",
             new Dictionary<string, string>());
 
-        var result = await binder.BindAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
-            target,
-            context,
+        var result = await lifecycle.BindAsync(
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            CreateExecution(target, context),
             CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
-        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+        result.Error.Should().Be(WorkflowChatRunStartError.ProjectionUnavailable);
+        projectionPort.AttachCalls.Should().BeEmpty();
+        projectionPort.AttachExistingCalls.Should().ContainSingle()
+            .Which.Should().Be(("actor-1", "cmd-1"));
+        actorPort.DestroyCalls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task WorkflowRunCommandTargetBinder_ShouldRollbackCreatedActors_WhenAttachFails()
+    public async Task WorkflowRunObservationLifecycle_ShouldLeaveCreatedActorRollbackToInteractionOwner_WhenAttachFails()
     {
         var projectionPort = new FakeProjectionPort
         {
-            EnsureLease = new FakeProjectionLease("actor-1", "cmd-1"),
             AttachException = new InvalidOperationException("attach failed"),
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
-        var target = new WorkflowRunCommandTarget(
-            new FakeActor("actor-1"),
+        var lifecycle = new WorkflowRunObservationLifecycle(projectionPort);
+        var target = new WorkflowRunCommandTarget("actor-1",
             "direct",
             ["definition-1", "actor-1"],
             projectionPort,
-            projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
             "corr-1",
             new Dictionary<string, string>());
 
-        var act = () => binder.BindAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
-            target,
-            context,
+        var act = () => lifecycle.BindAsync(
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            CreateExecution(target, context),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("attach failed");
-        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+        projectionPort.AttachExistingCalls.Should().ContainSingle()
+            .Which.Should().Be(("actor-1", "cmd-1"));
+        actorPort.DestroyCalls.Should().BeEmpty();
     }
+
+    private static CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> CreateExecution(
+        WorkflowRunCommandTarget target,
+        CommandContext context) =>
+        new()
+        {
+            Target = target,
+            Context = context,
+            Envelope = new EventEnvelope { Id = "evt-1" },
+            Receipt = new WorkflowChatRunAcceptedReceipt(
+                target.ActorId,
+                target.WorkflowName,
+                context.CommandId,
+                context.CorrelationId),
+        };
 
     private sealed class FakeWorkflowRunActorResolver : IWorkflowRunActorResolver
     {
@@ -171,33 +466,16 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     private sealed class FakeProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled { get; set; } = true;
-        public FakeProjectionLease? EnsureLease { get; set; }
+        public bool AttachExistingReturnsNull { get; set; }
         public Exception? AttachException { get; set; }
+        public FakeProjectionLease ExistingLease { get; set; } = new("actor-1", "cmd-1");
+        public List<(string RootActorId, string CommandId)> AttachExistingCalls { get; } = [];
         public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEventEnvelope> Sink)> AttachCalls { get; } = [];
 
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
-
-        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
-            string rootActorId,
-            string commandId,
-            CancellationToken ct = default)
-        {
-            _ = rootActorId;
-            _ = commandId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IWorkflowExecutionProjectionLease?>(EnsureLease);
-        }
-
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
@@ -207,12 +485,28 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 throw AttachException;
 
             AttachCalls.Add((lease, sink));
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(new FakeLiveSinkLease());
+        }
+
+        public async Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AttachExistingCalls.Add((rootActorId, commandId));
+            if (AttachExistingReturnsNull)
+                return null;
+
+            var liveSinkLease = await AttachLiveSinkAsync(ExistingLease, sink, ct);
+            return liveSinkLease == null
+                ? null
+                : new EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>(ExistingLease, liveSinkLease);
         }
 
         public Task DetachLiveSinkAsync(
-            IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEventEnvelope> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
@@ -222,20 +516,25 @@ public sealed class WorkflowRunOrchestrationComponentTests
             Task.CompletedTask;
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class FakeLiveSinkLease : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public List<string> DestroyCalls { get; } = [];
-
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Exception? DestroyException { get; set; }
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             DestroyCalls.Add(actorId);
+            if (DestroyException != null)
+                throw DestroyException;
+
             return Task.CompletedTask;
         }
 
@@ -269,6 +568,26 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         public string ActorId { get; }
         public string CommandId { get; }
+    }
+
+    private sealed class CompletingCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
+    {
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
+        public List<string> ActorIds { get; } = [];
+
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ActorIds.Add(actorId);
+            return Task.FromResult<WorkflowActorSnapshot?>(
+                new WorkflowActorSnapshot { CompletionStatus = WorkflowRunCompletionStatus.Completed });
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeActor : IActor

@@ -7,7 +7,7 @@ import {
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, Space, Tabs, Tag, Typography, theme } from "antd";
+import { Button, Empty, Space, Tabs, Tag, Typography, theme } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import ServiceQueryCard from "@/pages/services/components/ServiceQueryCard";
 import {
@@ -25,6 +25,7 @@ import {
   buildPlatformDeploymentsHref,
   buildPlatformGovernanceHref,
 } from "@/shared/navigation/platformRoutes";
+import { serviceResourceQueryKeys } from "@/shared/query/serviceResourceQueryKeys";
 import { buildRuntimeExplorerHref } from "@/shared/navigation/runtimeRoutes";
 import { resolveStudioScopeContext } from "@/shared/scope/context";
 import { studioApi } from "@/shared/studio/api";
@@ -44,6 +45,7 @@ import {
 } from "@/shared/ui/aevatarPageShells";
 import { AevatarCompactText, aevatarMonoFontFamily } from "@/shared/ui/compactText";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
+import InventoryReadinessState from "@/shared/ui/InventoryReadinessState";
 import {
   codeBlockStyle,
   embeddedPanelStyle,
@@ -52,6 +54,7 @@ import {
   summaryMetricStyle,
   summaryMetricValueStyle,
 } from "@/shared/ui/proComponents";
+import { t } from "@/shared/i18n/messages";
 
 const initialDraft = readServiceQueryDraft();
 const defaultScopeServiceAppId = "default";
@@ -76,15 +79,15 @@ function buildServiceSubtitle(service: ServiceCatalogSnapshot): string {
 }
 
 function buildServingTagLabel(deploymentId: string): string {
-  return deploymentId.trim() ? "已挂 Serving" : "待挂 Serving";
+  return deploymentId.trim() ? t("pages.services.index.serving", "Serving attached") : t("pages.services.index.serving.2", "Serving pending");
 }
 
 function buildOwnerTagLabel(primaryActorId: string): string {
-  return primaryActorId.trim() ? "已关联主 Actor" : "缺少主 Actor";
+  return primaryActorId.trim() ? t("pages.services.index.actor", "Primary Actor linked") : t("pages.services.index.actor.2", "Missing primary Actor");
 }
 
 function buildEndpointTagLabel(endpoints: readonly ServiceEndpointSnapshot[]): string {
-  return endpoints.length > 0 ? `${endpoints.length} 个入口` : "无公开入口";
+  return endpoints.length > 0 ? t("pages.services.index.copy", "{value1} endpoints", { value1: endpoints.length }) : t("pages.services.index.copy.2", "No public endpoints");
 }
 
 type SummaryFieldProps = {
@@ -323,8 +326,7 @@ const EndpointRow: React.FC<{
     <div style={drawerCardMetaRowStyle}>
       <Space size={[8, 8]} wrap>
         <Tag color="cyan" style={compactHintTagStyle} variant="filled">
-          入口
-        </Tag>
+          {t("pages.services.index.copy.3", "Endpoint")}</Tag>
         <Typography.Text strong>
           {endpoint.displayName || endpoint.endpointId}
         </Typography.Text>
@@ -335,7 +337,7 @@ const EndpointRow: React.FC<{
         status="live"
       />
     </div>
-    <Typography.Text style={summaryFieldLabelStyle}>请求类型</Typography.Text>
+    <Typography.Text style={summaryFieldLabelStyle}>{t("pages.services.index.copy.4", "Request type")}</Typography.Text>
     <div
       style={{
         ...drawerCodeBlockStyle,
@@ -358,8 +360,7 @@ const RevisionDigestCard: React.FC<{
     <div style={drawerCardMetaRowStyle}>
       <Space wrap size={[8, 8]}>
         <Tag color="purple" style={compactHintTagStyle} variant="filled">
-          版本
-        </Tag>
+          {t("pages.services.index.copy.5", "Version")}</Tag>
         <Typography.Text strong>{revision.revisionId}</Typography.Text>
       </Space>
       <AevatarStatusTag domain="governance" status={revision.status || "draft"} />
@@ -379,7 +380,7 @@ const RevisionDigestCard: React.FC<{
       {revision.artifactHash || "n/a"}
     </div>
     <Typography.Text type="secondary">
-      已发布 {formatDateTime(revision.publishedAt)}
+      {t("pages.services.index.copy.6", "Published")}{formatDateTime(revision.publishedAt)}
     </Typography.Text>
   </div>
 );
@@ -391,21 +392,20 @@ const DeploymentDigestCard: React.FC<{
     <div style={drawerCardMetaRowStyle}>
       <Space wrap size={[8, 8]}>
         <Tag color="blue" style={compactHintTagStyle} variant="filled">
-          部署
-        </Tag>
+          {t("pages.services.index.copy.7", "Deployment")}</Tag>
         <DeploymentUnitOutlined />
         <Typography.Text strong>{deployment.deploymentId}</Typography.Text>
       </Space>
       <AevatarStatusTag domain="governance" status={deployment.status || "pending"} />
     </div>
     <Typography.Text style={summaryFieldLabelStyle}>
-      版本 {deployment.revisionId || "未发布"}
+      {t("pages.services.index.copy.8", "Version")}{deployment.revisionId || t("pages.services.index.copy.9", "Unpublished")}
     </Typography.Text>
     <Typography.Text type="secondary">
-      主 Actor {deployment.primaryActorId || "未声明"}
+      {t("pages.services.index.actor.3", "Primary Actor")}{deployment.primaryActorId || t("pages.services.index.copy.10", "Not declared")}
     </Typography.Text>
     <Typography.Text type="secondary">
-      激活于 {formatDateTime(deployment.activatedAt)}
+      {t("pages.services.index.copy.11", "Activated at")}{formatDateTime(deployment.activatedAt)}
     </Typography.Text>
   </div>
 );
@@ -432,15 +432,15 @@ const RolloutDigestSection: React.FC<{
       }}
     >
       <DrawerMetric
-        label="当前部署"
-        value={activeDeployment?.deploymentId || "未挂 Serving"}
+        label={t("pages.services.index.copy.12", "Current deployment")}
+        value={activeDeployment?.deploymentId || t("pages.services.index.serving.3", "Serving missing")}
       />
       <DrawerMetric
-        label="最新版本"
-        value={latestRevision?.revisionId || "未发布"}
+        label={t("pages.services.index.copy.13", "Latest version")}
+        value={latestRevision?.revisionId || t("pages.services.index.copy.14", "Unpublished")}
       />
-      <DrawerMetric label="流量入口" value={traffic.length} />
-      <DrawerMetric label="最高权重" value={`${dominantTrafficWeight}%`} />
+      <DrawerMetric label={t("pages.services.index.copy.15", "Traffic endpoint")} value={traffic.length} />
+      <DrawerMetric label={t("pages.services.index.copy.16", "Highest weight")} value={`${dominantTrafficWeight}%`} />
     </div>
   );
 };
@@ -488,27 +488,27 @@ const ServicesPage: React.FC = () => {
   }, [draft, resolvedScope?.scopeId]);
 
   const servicesQuery = useQuery({
-    queryKey: ["services", query],
+    queryKey: serviceResourceQueryKeys.list(query),
     queryFn: () => servicesApi.listServices(query),
   });
   const selectedServiceQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
-    queryKey: ["services", "detail", selectedServiceId, query],
+    queryKey: serviceResourceQueryKeys.detail(query, selectedServiceId),
     queryFn: () => servicesApi.getService(selectedServiceId, query),
   });
   const revisionsQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
-    queryKey: ["services", "revisions", selectedServiceId, query],
+    queryKey: serviceResourceQueryKeys.revisions(query, selectedServiceId),
     queryFn: () => servicesApi.getRevisions(selectedServiceId, query),
   });
   const deploymentsQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
-    queryKey: ["services", "deployments", selectedServiceId, query],
+    queryKey: serviceResourceQueryKeys.deployments(query, selectedServiceId),
     queryFn: () => servicesApi.getDeployments(selectedServiceId, query),
   });
   const trafficQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
-    queryKey: ["services", "traffic", selectedServiceId, query],
+    queryKey: serviceResourceQueryKeys.traffic(query, selectedServiceId),
     queryFn: () => servicesApi.getTraffic(selectedServiceId, query),
   });
 
@@ -539,6 +539,7 @@ const ServicesPage: React.FC = () => {
     () => buildServiceDigestMetrics(servicesQuery.data ?? []),
     [servicesQuery.data],
   );
+  const serviceInventoryReady = servicesQuery.data !== undefined && !servicesQuery.error;
 
   const selectedService = selectedServiceQuery.data;
   const selectedRevisions = revisionsQuery.data?.revisions ?? [];
@@ -583,14 +584,14 @@ const ServicesPage: React.FC = () => {
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
-      description="Services 是 Platform 的权威服务目录，回答当前范围内有什么服务、它当前挂到哪、由谁承载，并指引你继续进入 Governance、Deployments 或 Topology。"
+      description={t("pages.services.index.services.platform.governance.deployments", "Services is the authoritative service directory of Platform. It answers what services are in the current scope, where it is currently hung, and who hosts it, and guides you to continue to Governance, Deployments or Topology.")}
       title="Services"
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         <AevatarPanel
-          description="先锁定 Team、App 和 Namespace，再从表格选择服务对象。"
+          description={t("pages.services.index.team.app.namespace", "Lock Team, App and Namespace first, then select service objects from the table.")}
           layoutMode="document"
-          title="查找服务"
+          title={t("pages.services.index.copy.17", "Find services")}
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <ServiceQueryCard
@@ -608,56 +609,66 @@ const ServicesPage: React.FC = () => {
               }}
             >
               <ServiceSignalCard
-                caption={`当前范围：${scopeSignals[0]?.value || "All visible"}`}
+                caption={t("pages.services.index.copy.18", "Current scope: {value1}", { value1: scopeSignals[0]?.value || "All visible" })}
                 icon={<AppstoreOutlined />}
-                label="可见服务"
+                label={t("pages.services.index.copy.19", "Visible services")}
                 tone="info"
-                value={digest.services}
+                value={serviceInventoryReady ? digest.services : "—"}
               />
               <ServiceSignalCard
-                caption="已经挂到 serving 的服务"
+                caption={t("pages.services.index.serving.8", "Services attached to serving")}
                 icon={<DeploymentUnitOutlined />}
-                label="已挂 Serving"
+                label={t("pages.services.index.serving.4", "Serving attached")}
                 tone="success"
-                value={digest.servingServices}
+                value={serviceInventoryReady ? digest.servingServices : "—"}
               />
               <ServiceSignalCard
-                caption="需要补主 Actor 的服务"
+                caption={t("pages.services.index.actor.7", "Services missing a primary Actor")}
                 icon={<NodeIndexOutlined />}
-                label="缺主 Actor"
+                label={t("pages.services.index.actor.4", "Primary Actor missing")}
                 tone="warning"
-                value={digest.servicesWithoutOwner}
+                value={serviceInventoryReady ? digest.servicesWithoutOwner : "—"}
               />
               <ServiceSignalCard
-                caption="当前没有公开入口"
+                caption={t("pages.services.index.no.public.endpoints", "No public endpoints yet")}
                 icon={<ApiOutlined />}
-                label="无公开入口"
+                label={t("pages.services.index.copy.20", "No public endpoints")}
                 tone="default"
-                value={digest.servicesWithoutEndpoints}
+                value={serviceInventoryReady ? digest.servicesWithoutEndpoints : "—"}
               />
             </div>
           </div>
         </AevatarPanel>
 
         <AevatarPanel
-          description="按行扫描状态、部署和入口，点击行或按钮在抽屉里查看详情。"
+          description={t("pages.services.index.copy.21", "Scan statuses, deployments, and portals by row, and click a row or button to see details in the drawer.")}
           layoutMode="document"
           padding={0}
-          title="服务目录"
+          title={t("pages.services.index.copy.22", "Service catalog")}
         >
-          {servicesQuery.error ? (
-            <Alert
-              title={
+          {servicesQuery.isLoading ? (
+            <InventoryReadinessState
+              description={t("pages.services.index.copy.23", "The service catalog request is still running. Metrics will update after it returns.")}
+              kind="loading"
+              title={t("pages.services.index.copy.24", "Loading service catalog")}
+            />
+          ) : servicesQuery.error ? (
+            <InventoryReadinessState
+              action={{
+                label: t("pages.services.index.copy.25", "Retry service catalog"),
+                onClick: () => {
+                  void servicesQuery.refetch();
+                },
+              }}
+              description={
                 servicesQuery.error instanceof Error
                   ? servicesQuery.error.message
-                  : "Failed to load services."
+                  : t("pages.services.index.copy.26", "The service catalog request failed. Please retry.")
               }
-              showIcon
-              type="error"
+              kind="error"
+              title={t("pages.services.index.copy.27", "Service catalog unavailable")}
             />
-          ) : null}
-
-          {servicesQuery.data?.length ? (
+          ) : servicesQuery.data?.length ? (
             <div style={{ overflowX: "auto" }}>
               <table
                 style={{
@@ -669,7 +680,7 @@ const ServicesPage: React.FC = () => {
               >
                 <thead>
                   <tr>
-                    {["状态", "服务", "身份", "主 Actor", "Serving", "入口", "更新时间", "动作"].map(
+                    {[t("pages.services.index.copy.28", "Status"), t("pages.services.index.copy.29", "Service"), t("pages.services.index.copy.30", "Identity"), t("pages.services.index.actor.5", "Primary Actor"), "Serving", t("pages.services.index.copy.31", "Endpoint"), t("pages.services.index.copy.32", "Updated at"), t("pages.services.index.copy.33", "Actions")].map(
                       (label) => (
                         <th key={label} style={tableHeaderCellStyle}>
                           {label}
@@ -746,7 +757,7 @@ const ServicesPage: React.FC = () => {
                               value={service.primaryActorId}
                             />
                           ) : (
-                            <Typography.Text>未声明</Typography.Text>
+                            <Typography.Text>{t("pages.services.index.copy.34", "Not declared")}</Typography.Text>
                           )}
                         </td>
                         <td style={tableCellStyle}>
@@ -780,8 +791,7 @@ const ServicesPage: React.FC = () => {
                               size="small"
                               type={selected ? "primary" : "default"}
                             >
-                              查看详情
-                            </Button>
+                              {t("pages.services.index.copy.35", "View details")}</Button>
                             <Button
                               onClick={(event) => {
                                 event.stopPropagation();
@@ -797,8 +807,7 @@ const ServicesPage: React.FC = () => {
                               }}
                               size="small"
                             >
-                              打开治理
-                            </Button>
+                              {t("pages.services.index.copy.36", "Open Governance")}</Button>
                           </Space>
                         </td>
                       </tr>
@@ -808,10 +817,11 @@ const ServicesPage: React.FC = () => {
               </table>
             </div>
           ) : (
-            <Empty
-              description="当前范围没有服务"
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              style={{ padding: 24 }}
+            <InventoryReadinessState
+              action={{ label: t("pages.services.index.copy.37", "Adjust service scope"), onClick: handleReset }}
+              description={t("pages.services.index.team.app.namespace.2", "There are currently no visible services under Team, App and Namespace. You can reload after adjusting the range.")}
+              kind="empty"
+              title={t("pages.services.index.copy.38", "No services in the current scope")}
             />
           )}
         </AevatarPanel>
@@ -835,8 +845,7 @@ const ServicesPage: React.FC = () => {
                 }
                 type="primary"
               >
-                打开 Governance
-              </Button>
+                {t("pages.services.index.governance", "Open Governance")}</Button>
               <Button
                 onClick={() =>
                   history.push(
@@ -849,8 +858,7 @@ const ServicesPage: React.FC = () => {
                   )
                 }
               >
-                打开 Deployments
-              </Button>
+                {t("pages.services.index.deployments", "Open Deployments")}</Button>
               {selectedService.primaryActorId ? (
                 <Button
                   onClick={() =>
@@ -861,8 +869,7 @@ const ServicesPage: React.FC = () => {
                     )
                   }
                 >
-                  打开 Topology
-                </Button>
+                  {t("pages.services.index.topology", "Open Topology")}</Button>
               ) : null}
             </Space>
           ) : null
@@ -874,17 +881,16 @@ const ServicesPage: React.FC = () => {
         width={820}
       >
         {selectedServiceQuery.isLoading && !selectedService ? (
-          <AevatarInspectorEmpty description="正在加载服务详情" title="Loading service" />
+          <AevatarInspectorEmpty description={t("pages.services.index.copy.39", "Loading service details")} title={t("pages.services.index.loading.service.2", "Loading service")} />
         ) : !selectedService ? (
-          <AevatarInspectorEmpty description="选择一个服务" />
+          <AevatarInspectorEmpty description={t("pages.services.index.copy.40", "Select a service")} />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <AevatarPanel title="对象摘要">
+            <AevatarPanel title={t("pages.services.index.copy.41", "Object summary")}>
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div style={{ alignItems: "center", display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <Tag color="blue" style={compactHintTagStyle} variant="filled">
-                    权威对象
-                  </Tag>
+                    {t("pages.services.index.copy.42", "Authoritative object")}</Tag>
                   <AevatarStatusTag
                     domain="governance"
                     status={selectedService.deploymentStatus || "draft"}
@@ -913,7 +919,7 @@ const ServicesPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <Typography.Text style={summaryFieldLabelStyle}>服务标识</Typography.Text>
+                  <Typography.Text style={summaryFieldLabelStyle}>{t("pages.services.index.copy.43", "Service identity")}</Typography.Text>
                   <div
                     style={{
                       ...codeBlockStyle,
@@ -928,7 +934,7 @@ const ServicesPage: React.FC = () => {
 
                 <div style={summaryFieldGridStyle}>
                   <SummaryField
-                    label="当前 serving 版本"
+                    label={t("pages.services.index.serving.5", "Current serving version")}
                     value={(() => {
                       const revisionId =
                         selectedService.activeServingRevisionId ||
@@ -943,12 +949,12 @@ const ServicesPage: React.FC = () => {
                           value={revisionId}
                         />
                       ) : (
-                        "未发布"
+                        t("pages.services.index.copy.44", "Unpublished")
                       );
                     })()}
                   />
                   <SummaryField
-                    label="当前部署"
+                    label={t("pages.services.index.copy.45", "Current deployment")}
                     value={
                       selectedService.deploymentId ? (
                         <AevatarCompactText
@@ -959,12 +965,12 @@ const ServicesPage: React.FC = () => {
                           value={selectedService.deploymentId}
                         />
                       ) : (
-                        "未挂 Serving"
+                        t("pages.services.index.serving.6", "Serving missing")
                       )
                     }
                   />
                   <SummaryField
-                    label="主 Actor"
+                    label={t("pages.services.index.actor.6", "Primary Actor")}
                     value={
                       selectedService.primaryActorId ? (
                         <AevatarCompactText
@@ -975,25 +981,25 @@ const ServicesPage: React.FC = () => {
                           value={selectedService.primaryActorId}
                         />
                       ) : (
-                        "未声明"
+                        t("pages.services.index.copy.46", "Not declared")
                       )
                     }
                   />
                   <SummaryField
-                    label="最近更新"
+                    label={t("pages.services.index.copy.47", "Latest update")}
                     value={formatDateTime(selectedService.updatedAt)}
                   />
                 </div>
               </div>
             </AevatarPanel>
 
-            <AevatarPanel title="服务工作区">
+            <AevatarPanel title={t("pages.services.index.copy.48", "Service workspace")}>
               <Tabs
                 activeKey={detailTabKey}
                 items={[
                   {
                     key: "endpoints",
-                    label: "入口",
+                    label: t("pages.services.index.copy.49", "Endpoint"),
                     children: (
                       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         {selectedService.endpoints.length > 0 ? (
@@ -1002,7 +1008,7 @@ const ServicesPage: React.FC = () => {
                           ))
                         ) : (
                           <Empty
-                            description="当前服务没有公开入口"
+                            description={t("pages.services.index.copy.50", "This service has no public endpoints")}
                             image={Empty.PRESENTED_IMAGE_SIMPLE}
                           />
                         )}
@@ -1011,22 +1017,18 @@ const ServicesPage: React.FC = () => {
                   },
                   {
                     key: "serving",
-                    label: "版本与部署",
+                    label: t("pages.services.index.copy.51", "Versions and deployments"),
                     children: (
                       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         <Space size={[8, 8]} wrap>
                           <Tag color="blue" style={compactHintTagStyle} variant="filled">
-                            <DeploymentUnitOutlined /> 当前 Serving
-                          </Tag>
+                            <DeploymentUnitOutlined /> {t("pages.services.index.serving.7", "Current serving")}</Tag>
                           <Tag color="cyan" style={compactHintTagStyle} variant="filled">
-                            <ApiOutlined /> 流量
-                          </Tag>
+                            <ApiOutlined /> {t("pages.services.index.copy.52", "Traffic")}</Tag>
                           <Tag color="purple" style={compactHintTagStyle} variant="filled">
-                            <BranchesOutlined /> 版本
-                          </Tag>
+                            <BranchesOutlined /> {t("pages.services.index.copy.53", "Version")}</Tag>
                           <Tag color="gold" style={compactHintTagStyle} variant="filled">
-                            <SafetyCertificateOutlined /> 部署
-                          </Tag>
+                            <SafetyCertificateOutlined /> {t("pages.services.index.copy.54", "Deployment")}</Tag>
                         </Space>
                         <RolloutDigestSection
                           activeDeployment={activeDeployment}

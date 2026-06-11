@@ -253,13 +253,18 @@ public static class ContextCompressor
             MaxTokens = 1024,
         };
 
-        var response = await provider.ChatAsync(request, ct);
-        if (string.IsNullOrWhiteSpace(response.Content))
+        // Refactor (iter15/cluster-024):
+        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
+        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
+        var summaryText = await ChatStreamContentAggregator.AggregateContentAsync(
+            provider.ChatStreamAsync(request, ct),
+            ct: ct);
+        if (string.IsNullOrWhiteSpace(summaryText))
             return false;
 
         // Remove the block and insert summary
         messages.RemoveRange(startIndex, blockSize);
-        messages.Insert(startIndex, ChatMessage.System($"[Previous conversation summary]: {response.Content}"));
+        messages.Insert(startIndex, ChatMessage.System($"[Previous conversation summary]: {summaryText}"));
         return true;
     }
 

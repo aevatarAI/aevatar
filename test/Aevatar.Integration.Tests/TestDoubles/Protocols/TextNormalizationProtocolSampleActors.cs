@@ -1,14 +1,18 @@
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Integration.Tests;
 using Aevatar.Scripting.Application.Queries;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Workflow.Core;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -170,7 +174,7 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
                 return Task.CompletedTask;
             });
 
-        await runAgent.HandleChatRequest(new ChatRequestEvent
+        await runAgent.HandleChatRequest(new WorkflowChatRequestEvent
         {
             Prompt = evt.InputText,
             SessionId = evt.CommandId,
@@ -240,15 +244,18 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
     private readonly IScriptRuntimeCommandPort _commandPort;
     private readonly IScriptReadModelQueryApplicationService _queryService;
     private readonly IScriptExecutionProjectionPort _projectionPort;
+    private readonly IProjectionScopeActivationService<ScriptExecutionRuntimeLease> _projectionActivation;
 
     public TextNormalizationScriptingProtocolGAgent(
         IScriptRuntimeCommandPort commandPort,
         IScriptReadModelQueryApplicationService queryService,
-        IScriptExecutionProjectionPort projectionPort)
+        IScriptExecutionProjectionPort projectionPort,
+        IProjectionScopeActivationService<ScriptExecutionRuntimeLease> projectionActivation)
     {
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _queryService = queryService ?? throw new ArgumentNullException(nameof(queryService));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _projectionActivation = projectionActivation ?? throw new ArgumentNullException(nameof(projectionActivation));
     }
 
     [EventHandler]
@@ -258,10 +265,18 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
         var runtimeActorId = $"{Id}:script-runtime";
         var runId = evt.CommandId ?? string.Empty;
 
-        var lease = await _projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None)
+        var lease = await _projectionActivation.EnsureAsync(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = runtimeActorId,
+                ProjectionKind = ScriptProjectionKinds.ExecutionSession,
+                Mode = ProjectionRuntimeMode.SessionObservation,
+                SessionId = runtimeActorId,
+            },
+            CancellationToken.None)
             ?? throw new InvalidOperationException("Script projection lease is required for text normalization sample.");
         await using var sink = new EventChannel<EventEnvelope>(capacity: 16);
-        await _projectionPort.AttachLiveSinkAsync(lease, sink, CancellationToken.None);
+        var liveSinkLease = await _projectionPort.AttachLiveSinkAsync(lease, sink, CancellationToken.None);
 
         try
         {
@@ -291,7 +306,7 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
         }
         finally
         {
-            await _projectionPort.DetachLiveSinkAsync(lease, sink, CancellationToken.None);
+            await _projectionPort.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
             await _projectionPort.ReleaseActorProjectionAsync(lease, CancellationToken.None);
         }
     }

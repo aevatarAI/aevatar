@@ -4,9 +4,11 @@ export type StudioObserveSessionSeed = {
   readonly actorId: string;
   readonly assistantText: string;
   readonly commandId: string;
+  readonly correlationId: string;
   readonly completedAtUtc: string | null;
   readonly endpointId: string;
   readonly error: string;
+  readonly errorCode: string;
   readonly events: RuntimeEvent[];
   readonly finalOutput: string;
   readonly mode: 'stream' | 'invoke';
@@ -88,9 +90,11 @@ export function loadStudioObserveSessionSeed(input: {
       actorId: trimOptional(parsed.actorId),
       assistantText: trimOptional(parsed.assistantText),
       commandId: trimOptional(parsed.commandId),
+      correlationId: trimOptional(parsed.correlationId),
       completedAtUtc: trimOptional(parsed.completedAtUtc) || null,
       endpointId: trimOptional(parsed.endpointId),
       error: trimOptional(parsed.error),
+      errorCode: trimOptional(parsed.errorCode),
       events: Array.isArray(parsed.events) ? (parsed.events as RuntimeEvent[]) : [],
       finalOutput: trimOptional(parsed.finalOutput),
       mode: parsed.mode === 'invoke' ? 'invoke' : 'stream',

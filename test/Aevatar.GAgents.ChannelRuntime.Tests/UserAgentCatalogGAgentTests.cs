@@ -62,6 +62,77 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleUpsertAsync_CopiesOwnerScopeFromCommand()
+    {
+        // Issue #466 regression: HandleUpsertAsync must copy command.OwnerScope onto the
+        // committed entry. Earlier the entry was built without it, every catalog row
+        // landed with OwnerScope=null, and the caller-scoped query port returned an
+        // empty list for the lark surface (which can't lazy-backfill from legacy fields
+        // because legacy data lacked sender_id).
+        var scope = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "alice-agent",
+            ConversationId = "oc_chat_alice",
+            OwnerScope = scope,
+        });
+
+        _agent.State.Entries.Should().ContainSingle();
+        _agent.State.Entries[0].OwnerScope.Should().NotBeNull();
+        _agent.State.Entries[0].OwnerScope!.MatchesStrictly(scope).Should().BeTrue();
+#pragma warning disable CS0612 // deprecated ownership fields should not be re-emitted with owner_scope
+        _agent.State.Entries[0].Platform.Should().BeEmpty();
+        _agent.State.Entries[0].OwnerNyxUserId.Should().BeEmpty();
+#pragma warning restore CS0612
+    }
+
+    [Fact]
+    public async Task HandleUpsertAsync_WithoutOwnerScope_PersistsLegacyOwnershipFields()
+    {
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "legacy-agent",
+            ConversationId = "oc_chat_legacy",
+#pragma warning disable CS0612 // legacy command shape remains readable/writable when owner_scope is absent
+            Platform = "nyxid",
+            OwnerNyxUserId = "legacy-user",
+#pragma warning restore CS0612
+        });
+
+        _agent.State.Entries.Should().ContainSingle();
+        _agent.State.Entries[0].OwnerScope.Should().BeNull();
+#pragma warning disable CS0612
+        _agent.State.Entries[0].Platform.Should().Be("nyxid");
+        _agent.State.Entries[0].OwnerNyxUserId.Should().Be("legacy-user");
+#pragma warning restore CS0612
+    }
+
+    [Fact]
+    public async Task HandleUpsertAsync_PartialUpsertWithoutOwnerScope_PreservesExisting()
+    {
+        // Partial membership updates can arrive without recomputing OwnerScope. The actor
+        // must inherit the existing scope rather than dropping it.
+        var scope = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "alice-agent",
+            ConversationId = "oc_chat_alice",
+            OwnerScope = scope,
+        });
+
+        // Second membership upsert without OwnerScope.
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "alice-agent",
+            ScheduleCron = "0 9 * * *",
+        });
+
+        _agent.State.Entries.Should().ContainSingle();
+        _agent.State.Entries[0].OwnerScope!.MatchesStrictly(scope).Should().BeTrue(
+            "an upsert without OwnerScope on an existing entry inherits the existing scope");
+    }
+
+    [Fact]
     public async Task HandleCompactTombstonesAsync_RemovesOnlyWatermarkSafeEntries()
     {
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand

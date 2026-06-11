@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;

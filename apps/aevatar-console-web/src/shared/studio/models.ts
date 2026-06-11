@@ -63,6 +63,26 @@ export interface StudioAuthSession {
   readonly errorMessage?: string;
   readonly scopeId?: string | null;
   readonly scopeSource?: string | null;
+  readonly profile?: StudioAuthProfile | null;
+  readonly session?: StudioAuthSessionDetails | null;
+}
+
+export interface StudioAuthProfile {
+  readonly subject?: string | null;
+  readonly name?: string | null;
+  readonly email?: string | null;
+  readonly emailVerified?: boolean | null;
+  readonly picture?: string | null;
+  readonly roles: readonly string[];
+  readonly groups: readonly string[];
+}
+
+export interface StudioAuthSessionDetails {
+  readonly authenticated: boolean;
+  readonly providerDisplayName?: string | null;
+  readonly scopeId?: string | null;
+  readonly scopeSource?: string | null;
+  readonly expiresAtUtc?: string | null;
 }
 
 export interface StudioWorkflowDirectory {
@@ -440,6 +460,7 @@ export interface StudioMemberSummary {
   readonly lifecycleStage: StudioMemberLifecycleStage;
   readonly publishedServiceId: string;
   readonly lastBoundRevisionId: string | null;
+  readonly teamId?: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -460,10 +481,51 @@ export interface StudioMemberBindingContract {
   readonly boundAt: string;
 }
 
+export type StudioMemberBindingRunStatus =
+  | 'accepted'
+  | 'admission_pending'
+  | 'admitted'
+  | 'platform_binding_pending'
+  | 'member_notification_pending'
+  | 'succeeded'
+  | 'failed'
+  | 'rejected'
+  | 'unknown';
+
+export interface StudioMemberBindingFailure {
+  readonly code: string;
+  readonly message?: string | null;
+  readonly failedAt?: string | null;
+}
+
+export interface StudioMemberBindingRunStatusResponse {
+  readonly status: StudioMemberBindingRunStatus;
+  readonly bindingRunId: string;
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly stateVersion?: number | null;
+  readonly platformBindingCommandId?: string | null;
+  readonly failure?: StudioMemberBindingFailure | null;
+  readonly updatedAt?: string | null;
+}
+
+export interface StudioMemberBindingAcceptedResponse {
+  readonly status: StudioMemberBindingRunStatus;
+  readonly bindingRunId: string;
+  readonly scopeId: string;
+  readonly memberId: string;
+}
+
 export interface StudioMemberDetail {
   readonly summary: StudioMemberSummary;
   readonly implementationRef?: StudioMemberImplementationRef | null;
   readonly lastBinding?: StudioMemberBindingContract | null;
+  readonly currentBindingRun?: StudioMemberBindingRunStatusResponse | null;
+}
+
+export interface StudioMemberBindingViewResponse {
+  readonly lastBinding?: StudioMemberBindingContract | null;
+  readonly currentBindingRun?: StudioMemberBindingRunStatusResponse | null;
 }
 
 export interface StudioMemberRoster {
@@ -472,10 +534,70 @@ export interface StudioMemberRoster {
   readonly nextPageToken?: string | null;
 }
 
+export type StudioTeamLifecycleStage = 'active' | 'archived' | 'unknown';
+
+export function normalizeStudioTeamLifecycleStage(
+  value: string | null | undefined,
+): StudioTeamLifecycleStage {
+  switch (String(value || '').trim().toLowerCase()) {
+    case 'active':
+      return 'active';
+    case 'archived':
+      return 'archived';
+    default:
+      return 'unknown';
+  }
+}
+
+export function formatStudioTeamLifecycleStage(
+  value: StudioTeamLifecycleStage | string | null | undefined,
+): string {
+  switch (normalizeStudioTeamLifecycleStage(value)) {
+    case 'active':
+      return 'Active';
+    case 'archived':
+      return 'Archived';
+    default:
+      return 'Unknown';
+  }
+}
+
+export interface StudioTeamSummary {
+  readonly teamId: string;
+  readonly scopeId: string;
+  readonly displayName: string;
+  readonly description: string;
+  readonly entryMemberId?: string | null;
+  readonly lifecycleStage: StudioTeamLifecycleStage;
+  readonly memberCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface StudioTeamRoster {
+  readonly scopeId: string;
+  readonly teams: readonly StudioTeamSummary[];
+  readonly nextPageToken?: string | null;
+}
+
+export interface StudioTeamCreateInput {
+  readonly scopeId: string;
+  readonly displayName: string;
+  readonly description?: string | null;
+  readonly teamId?: string | null;
+}
+
+export interface StudioTeamUpdateInput {
+  readonly scopeId: string;
+  readonly teamId: string;
+  readonly displayName?: string | null;
+  readonly description?: string | null;
+}
+
 export type StudioMemberBindingTargetKind = StudioScopeBindingTargetKind;
 export type StudioMemberBindingResult = StudioScopeBindingResult;
 export type StudioMemberBindingRevision = StudioScopeBindingRevision;
-export type StudioMemberBindingStatus = StudioScopeBindingStatus;
+export type StudioMemberBindingStatus = StudioMemberBindingViewResponse;
 export type StudioMemberBindingActivationResult =
   StudioScopeBindingActivationResult;
 export type StudioMemberBindingRetirementResult =
@@ -503,9 +625,9 @@ export const getStudioDefaultRouteTargetCurrentRevision =
 export interface StudioScopeScriptBindingInput {
   readonly scopeId: string;
   readonly displayName?: string | null;
+  readonly serviceId?: string | null;
   readonly scriptId: string;
   readonly scriptRevision: string;
-  readonly revisionId?: string | null;
 }
 
 export type StudioScopeScriptBindingResult = StudioScopeBindingResult;
@@ -683,19 +805,69 @@ export interface StudioUserConfig {
   readonly maxToolRounds?: number | null;
 }
 
-export interface StudioUserConfigProviderStatus {
-  readonly providerSlug: string;
-  readonly providerName: string;
+export interface StudioUserLlmRouteOption {
+  readonly routeValue: string;
+  readonly label: string;
+  readonly source: string;
   readonly status: string;
-  readonly proxyUrl: string;
-  readonly source?: string;
+  readonly allowed: boolean;
+  readonly ready: boolean;
+  readonly serviceId?: string | null;
+  readonly serviceSlug?: string | null;
+  readonly description?: string | null;
 }
 
-export interface StudioUserConfigModelsResponse {
-  readonly providers: StudioUserConfigProviderStatus[];
-  readonly gatewayUrl: string;
-  readonly modelsByProvider?: Record<string, string[]>;
-  readonly supportedModels: string[];
+export interface StudioUserLlmModelGroup {
+  readonly routeValue: string;
+  readonly groupId: string;
+  readonly label: string;
+  readonly models: readonly string[];
+}
+
+export interface StudioUserLlmSettingsCapabilities {
+  readonly canEditRoute: boolean;
+  readonly canEditModel: boolean;
+  readonly canSave: boolean;
+  readonly canRetryCatalog: boolean;
+}
+
+export interface StudioUserLlmSettings {
+  readonly savedRoute: string;
+  readonly savedRouteLabel: string;
+  readonly effectiveRoute: string;
+  readonly effectiveRouteLabel: string;
+  readonly routeFallbackActive: boolean;
+  readonly fallbackReason?: string | null;
+  readonly routeOptions: readonly StudioUserLlmRouteOption[];
+  readonly modelGroupsByRoute: readonly StudioUserLlmModelGroup[];
+  readonly catalogStatus: 'ready' | 'empty' | 'unavailable' | string;
+  readonly capabilities: StudioUserLlmSettingsCapabilities;
+  readonly defaultModel: string;
+  readonly setupHint?: unknown;
+}
+
+export interface StudioUserConfigSaveReceipt {
+  readonly accepted: boolean;
+  readonly commandId: string;
+  readonly ackStage: string;
+  readonly actorId: string;
+  readonly correlationId: string;
+  readonly ackedAtUtc: string;
+}
+
+export interface StudioUserConfigRuntimeDefaults {
+  readonly localRuntimeBaseUrl: string;
+  readonly remoteRuntimeBaseUrl: string;
+  readonly localMode: string;
+  readonly remoteMode: string;
+}
+
+export interface StudioUserConfigRuntime {
+  readonly runtimeMode: string;
+  readonly activeRuntimeBaseUrl: string;
+  readonly localRuntimeBaseUrl: string;
+  readonly remoteRuntimeBaseUrl: string;
+  readonly runtimeDefaults: StudioUserConfigRuntimeDefaults;
 }
 
 export interface StudioOrnnSkillSummary {

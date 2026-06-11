@@ -143,6 +143,22 @@ describe("WorkflowsPage", () => {
     expect(await screen.findByText("Definition summary")).toBeTruthy();
   });
 
+  it("hands catalog run actions to Run Console with workflow return context", async () => {
+    renderWithQueryClient(React.createElement(WorkflowsPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/runtime/runs");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("route")).toBe("demo_flow");
+    expect(params.get("returnTo")).toBe(
+      "/runtime/workflows?workflow=demo_flow",
+    );
+  });
+
   it("opens the Studio workflow editor from the definition inspector", async () => {
     window.history.replaceState({}, "", "/runtime/workflows?workflow=demo_flow");
 
@@ -158,5 +174,25 @@ describe("WorkflowsPage", () => {
       expect(window.location.pathname).toBe("/studio");
       expect(window.location.search).toBe("?focus=workflow%3Ademo_flow&tab=studio");
     });
+  });
+
+  it("hands inspector run actions to Run Console with workflow return context", async () => {
+    window.history.replaceState({}, "", "/runtime/workflows?workflow=demo_flow");
+
+    renderWithQueryClient(React.createElement(WorkflowsPage));
+
+    expect(await screen.findByText("Definition summary")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run workflow" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/runtime/runs");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("route")).toBe("demo_flow");
+    expect(params.get("returnTo")).toBe(
+      "/runtime/workflows?workflow=demo_flow",
+    );
   });
 });

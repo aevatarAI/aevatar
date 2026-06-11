@@ -2,12 +2,14 @@ import {
   LogoutOutlined,
   UserOutlined,
 } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
 import { Avatar, Button, Empty, Space, Typography, theme } from "antd";
 import React, { useMemo } from "react";
 import {
   clearStoredAuthSession,
   loadRestorableAuthSession,
 } from "@/shared/auth/session";
+import { studioApi } from "@/shared/studio/api";
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import { AevatarPanel } from "@/shared/ui/aevatarPageShells";
 import {
@@ -15,6 +17,7 @@ import {
   summaryMetricGridStyle,
 } from "@/shared/ui/proComponents";
 import { buildSettingsPanelStyle, SummaryField, SummaryMetric } from "./shared";
+import { t } from "@/shared/i18n/messages";
 
 function formatSessionExpiry(value?: number): string {
   if (!value) {
@@ -27,6 +30,19 @@ function formatSessionExpiry(value?: number): string {
   }).format(value);
 }
 
+function formatIsoSessionExpiry(value?: string | null): string {
+  if (!value) {
+    return "Unavailable";
+  }
+
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return "Unavailable";
+  }
+
+  return formatSessionExpiry(parsed);
+}
+
 type AccountSettingsContentProps = {
   readonly showInlineSignOut?: boolean;
 };
@@ -37,24 +53,48 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
   const { token } = theme.useToken();
   const settingsPanelStyle = buildSettingsPanelStyle(token);
   const authSession = useMemo(() => loadRestorableAuthSession(), []);
+  const authMeQuery = useQuery({
+    queryKey: ["settings", "auth-me"],
+    queryFn: () => studioApi.getAuthSession(),
+  });
+  const backendProfile = authMeQuery.data?.profile;
+  const backendSession = authMeQuery.data?.session;
+  const authenticated = Boolean(authMeQuery.data?.authenticated || authSession);
 
   const accountDisplayName = useMemo(
     () =>
+      backendProfile?.name ||
+      backendProfile?.email ||
+      backendProfile?.subject ||
       authSession?.user.name ||
       authSession?.user.email ||
       authSession?.user.sub ||
       "No active session",
-    [authSession],
+    [authSession, backendProfile],
   );
   const accountSecondaryText = useMemo(() => {
-    if (!authSession) {
+    if (!authenticated) {
       return "This browser does not have a restorable sign-in session.";
     }
 
-    return authSession.user.email || authSession.user.sub;
-  }, [authSession]);
-  const rolesLabel = authSession?.user.roles?.join(", ") || "No roles";
-  const groupsLabel = authSession?.user.groups?.join(", ") || "No groups";
+    if (backendProfile?.email || backendProfile?.subject) {
+      return backendProfile.email || backendProfile.subject;
+    }
+
+    return authSession?.user.email || authSession?.user.sub || "Unavailable";
+  }, [authSession, authenticated, backendProfile]);
+  const rolesLabel =
+    (backendProfile?.roles && backendProfile.roles.length > 0
+      ? backendProfile.roles.join(", ")
+      : authSession?.user.roles?.join(", ")) || "No roles";
+  const groupsLabel =
+    (backendProfile?.groups && backendProfile.groups.length > 0
+      ? backendProfile.groups.join(", ")
+      : authSession?.user.groups?.join(", ")) || "No groups";
+  const userId = backendProfile?.subject || authSession?.user.sub || "";
+  const picture = backendProfile?.picture || authSession?.user.picture;
+  const emailVerified =
+    backendProfile?.emailVerified ?? authSession?.user.email_verified ?? null;
 
   const handleSignOut = () => {
     clearStoredAuthSession();
@@ -65,22 +105,21 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
     <>
       <AevatarPanel
         extra={
-          authSession && showInlineSignOut ? (
+          authenticated && showInlineSignOut ? (
             <Button danger icon={<LogoutOutlined />} onClick={handleSignOut}>
-              Sign out
-            </Button>
+              {t("pages.settings.accountcontent.sign.out", "Sign out")}</Button>
           ) : null
         }
         style={settingsPanelStyle}
         title="Profile"
       >
-        {authSession ? (
+        {authenticated ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <Space align="start" size={14}>
               <Avatar
                 icon={<UserOutlined />}
                 size={52}
-                src={authSession.user.picture}
+                src={picture}
               />
               <div style={{ minWidth: 0 }}>
                 <Typography.Text
@@ -96,19 +135,23 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
             </Space>
 
             <div style={summaryMetricGridStyle}>
-              <SummaryMetric label="Session" tone="success" value="Active" />
+              <SummaryMetric
+                label="Session"
+                tone={backendSession?.authenticated || authSession ? "success" : "warning"}
+                value={backendSession?.authenticated || authSession ? "Active" : "Browser only"}
+              />
               <SummaryMetric
                 label="Email"
-                tone={authSession.user.email_verified ? "success" : "warning"}
+                tone={emailVerified ? "success" : "warning"}
                 value={
-                  authSession.user.email_verified ? "Verified" : "Needs review"
+                  emailVerified ? "Verified" : "Needs review"
                 }
               />
             </div>
 
             <div style={summaryFieldGridStyle}>
               <SummaryField
-                label="User ID"
+                label={t("pages.settings.accountcontent.user.id", "User ID")}
                 value={
                   <AevatarCompactText
                     copyable
@@ -116,7 +159,7 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
                     maxWidth="100%"
                     monospace
                     tail={6}
-                    value={authSession.user.sub}
+                    value={userId}
                   />
                 }
               />
@@ -126,15 +169,14 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
           </div>
         ) : (
           <Empty
-            description="This browser does not have a restorable sign-in session."
+            description={t("pages.settings.accountcontent.this.browser.does.not.have", "This browser does not have a restorable sign-in session.")}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           >
             <Button
               type="primary"
               onClick={() => window.location.replace("/login")}
             >
-              Sign in
-            </Button>
+              {t("pages.settings.accountcontent.sign.in", "Sign in")}</Button>
           </Empty>
         )}
       </AevatarPanel>
@@ -142,22 +184,24 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
       <AevatarPanel style={settingsPanelStyle} title="Authentication">
         <div style={summaryFieldGridStyle}>
           <SummaryField
-            label="Access token expires"
-            value={formatSessionExpiry(authSession?.tokens.expiresAt)}
-          />
-          <SummaryField
-            label="Token type"
-            value={authSession?.tokens.tokenType || "Unavailable"}
-          />
-          <SummaryField
-            label="OAuth scope"
-            value={authSession?.tokens.scope || "Unavailable"}
-          />
-          <SummaryField
-            label="Refresh token"
+            label={t("pages.settings.accountcontent.session.expires", "Session expires")}
             value={
-              authSession?.tokens.refreshToken ? "Available" : "Unavailable"
+              backendSession?.expiresAtUtc
+                ? formatIsoSessionExpiry(backendSession.expiresAtUtc)
+                : formatSessionExpiry(authSession?.tokens.expiresAt)
             }
+          />
+          <SummaryField
+            label="Provider"
+            value={authMeQuery.data?.providerDisplayName || "Unavailable"}
+          />
+          <SummaryField
+            label="Scope"
+            value={authMeQuery.data?.scopeId || authSession?.tokens.scope || "Unavailable"}
+          />
+          <SummaryField
+            label={t("pages.settings.accountcontent.local.refresh.token", "Local refresh token")}
+            value={authSession?.tokens.refreshToken ? "Available" : "Unavailable"}
           />
         </div>
       </AevatarPanel>

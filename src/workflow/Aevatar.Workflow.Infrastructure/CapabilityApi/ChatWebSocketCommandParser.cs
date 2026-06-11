@@ -86,7 +86,7 @@ internal static class ChatWebSocketCommandParser
         {
             parseError = new ChatWebSocketCommandParseError(
                 "INVALID_COMMAND",
-                "Expected { type: 'chat.command', payload: { prompt?, inputParts?, workflow?, workflowYaml?, workflowYamls?, agentId? } }.",
+                "Expected { type: 'chat.command', payload: { prompt?, inputParts?, workflow?, workflowYaml?, workflowYamls?, source? } }.",
                 ResponseMessageType: responseMessageType);
             return false;
         }

@@ -11,6 +11,9 @@ public sealed class LLMResponse
     /// <summary>LLM 生成的文本内容。</summary>
     public string? Content { get; init; }
 
+    /// <summary>LLM 生成的思考内容（如果适用）。</summary>
+    public string? ReasoningContent { get; init; }
+
     /// <summary>LLM 生成的多模态内容分片。</summary>
     public IReadOnlyList<ContentPart>? ContentParts { get; init; }
 

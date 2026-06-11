@@ -9,6 +9,29 @@ namespace Aevatar.GAgents.Channel.Protocol.Tests;
 public sealed class ChannelAbstractionsProtoTests
 {
     [Fact]
+    public void EmitResult_ShouldRoundtripTypedFailureDiagnostics()
+    {
+        var result = EmitResult.Failed(
+            "relay_reply_update_rejected",
+            "rate limited",
+            TimeSpan.FromSeconds(4),
+            ComposeCapability.Unsupported,
+            FailureKind.TransientAdapterError,
+            httpStatus: 429,
+            rawErrorKey: "rate_limited",
+            rawErrorCode: 1005);
+
+        var parsed = EmitResult.Parser.ParseFrom(result.ToByteArray());
+
+        parsed.ShouldBe(result);
+        parsed.FailureKind.ShouldBe(FailureKind.TransientAdapterError);
+        parsed.RetryAfter.ToTimeSpan().ShouldBe(TimeSpan.FromSeconds(4));
+        parsed.HttpStatus.ShouldBe(429);
+        parsed.RawErrorKey.ShouldBe("rate_limited");
+        parsed.RawErrorCode.ShouldBe(1005);
+    }
+
+    [Fact]
     public void ChatActivity_ShouldRoundtripWithNestedContracts()
     {
         var activity = new ChatActivity

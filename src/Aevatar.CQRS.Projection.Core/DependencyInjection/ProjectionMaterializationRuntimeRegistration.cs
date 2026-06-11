@@ -1,7 +1,9 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Core.DependencyInjection;
 
@@ -25,19 +27,36 @@ public static class ProjectionMaterializationRuntimeRegistration
         services.TryAddSingleton<IProjectionFailureReplayService, ProjectionFailureReplayService>();
         services.TryAddSingleton<IProjectionFailureAlertSink, LoggingProjectionFailureAlertSink>();
         services.TryAddSingleton<Func<ProjectionRuntimeScopeKey, TContext>>(_ => contextFactory);
-        services.TryAddSingleton<IProjectionScopeActivationService<TRuntimeLease>>(sp =>
-            new ProjectionScopeActivationService<
+        services.TryAddSingleton<IProjectionScopeAttachExistingLeaseLookup<TRuntimeLease>>(sp =>
+            new ProjectionScopeAttachExistingLeaseLookup<
                 TRuntimeLease,
-                TContext,
-                TScopeAgent>(
+                TContext>(
+                sp.GetRequiredService<IActorRuntime>(),
+                request => contextFactory(new ProjectionRuntimeScopeKey(
+                    request.RootActorId,
+                    request.ProjectionKind,
+                    ProjectionRuntimeMode.DurableMaterialization,
+                    request.SessionId)),
+                (_, context) => leaseFactory(context)));
+        services.TryAddSingleton<IProjectionScopeActivationService<TRuntimeLease>>(sp =>
+            new ProjectionScopeStatusActivationService<TRuntimeLease>(
+                new ProjectionScopeActivationService<
+                    TRuntimeLease,
+                    TContext,
+                    TScopeAgent>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 request => contextFactory(new ProjectionRuntimeScopeKey(
                     request.RootActorId,
                     request.ProjectionKind,
-                    ProjectionRuntimeMode.DurableMaterialization)),
+                    ProjectionRuntimeMode.DurableMaterialization,
+                    request.SessionId)),
                 (_, context) => leaseFactory(context),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>(),
+                sp.GetService<IStreamPubSubMaintenance>(),
+                sp.GetService<ILoggerFactory>(),
+                sp.GetService<IStreamForwardingRegistry>()),
+                sp.GetService<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<TRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<
                 TRuntimeLease,
@@ -47,8 +66,49 @@ public static class ProjectionMaterializationRuntimeRegistration
                 lease => new ProjectionRuntimeScopeKey(
                     lease.Context.RootActorId,
                     lease.Context.ProjectionKind,
-                    ProjectionRuntimeMode.DurableMaterialization),
+                    ProjectionRuntimeMode.DurableMaterialization,
+                    lease.Context is IProjectionSessionScopedMaterializationContext scopedContext
+                        ? scopedContext.SessionId
+                        : string.Empty),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
         return services;
+    }
+
+    // Refactor (iter17/cluster-034):
+    //   Old pattern: Replay-based projection scope watermark query via IEventStore (EventStoreProjectionScopeWatermarkQueryPort).
+    //   New principle: Materialized ProjectionScopeStatusDocument readmodel; ProjectionScopeStatusQueryPort reads document only; never replays IEventStore.
+    //   refactor helper, no behavior change beyond ensuring the existing status materialization scope.
+    private sealed class ProjectionScopeStatusActivationService<TRuntimeLease>
+        : IProjectionScopeActivationService<TRuntimeLease>
+        where TRuntimeLease : class, IProjectionRuntimeLease
+    {
+        private readonly IProjectionScopeActivationService<TRuntimeLease> _inner;
+        private readonly IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>? _statusActivationService;
+
+        public ProjectionScopeStatusActivationService(
+            IProjectionScopeActivationService<TRuntimeLease> inner,
+            IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>? statusActivationService)
+        {
+            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            _statusActivationService = statusActivationService;
+        }
+
+        public async Task<TRuntimeLease> EnsureAsync(
+            ProjectionScopeStartRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            var lease = await _inner.EnsureAsync(request, ct);
+            if (_statusActivationService != null &&
+                !ProjectionScopeStatusRuntimeRegistration.IsProjectionScopeStatusKind(request.ProjectionKind))
+            {
+                await _statusActivationService.EnsureAsync(
+                    ProjectionScopeStatusRuntimeRegistration.BuildStatusScopeStartRequest(request),
+                    ct);
+            }
+
+            return lease;
+        }
     }
 }

@@ -40,5 +40,6 @@ public sealed class DeviceRegistrationQueryPort : IDeviceRegistrationQueryPort
             HmacKey = document.HmacKey ?? string.Empty,
             NyxConversationId = document.NyxConversationId ?? string.Empty,
             Description = document.Description ?? string.Empty,
+            DeviceEventTargetActorId = document.DeviceEventTargetActorId ?? string.Empty,
         };
 }

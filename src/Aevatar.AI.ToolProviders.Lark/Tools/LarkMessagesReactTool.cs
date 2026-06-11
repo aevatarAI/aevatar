@@ -16,24 +16,29 @@ public sealed class LarkMessagesReactTool : AgentToolBase<LarkMessagesReactTool.
 
     public override string Description =>
         "Add an emoji reaction to a Lark message. " +
-        "On a channel relay turn you can omit message_id to react to the current inbound message. " +
+        "Requires an explicit external message_id; current relay replies must be sent as the final answer. " +
         "Defaults to emoji_type=OK (an acknowledgement like '了解').";
 
     public override ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
+    // Refactor (issue1378/first-slice):
+    //   Old pattern: ResolveOrCurrent used current message when reaction message_id was missing.
+    //   New principle: missing reaction message_id returns structured error; external tools path remains.
     protected override async Task<string> ExecuteAsync(Parameters parameters, CancellationToken ct)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return LarkProxyResponseParser.Serialize(new { success = false, error = "No NyxID access token available. User must be authenticated." });
 
-        var messageId = LarkMessageIdResolver.ResolveOrCurrent(parameters.MessageId, out var usedCurrentMessage, out var messageError);
+        var messageId = LarkMessageIdResolver.ResolveExplicit(parameters.MessageId, out var messageError);
         if (!string.IsNullOrWhiteSpace(messageError))
         {
             return LarkProxyResponseParser.Serialize(new
             {
                 success = false,
+                code = "missing_message_id",
                 error = messageError,
+                recommended_action = "final_answer",
             });
         }
 
@@ -64,7 +69,6 @@ public sealed class LarkMessagesReactTool : AgentToolBase<LarkMessagesReactTool.
             operator_id = result.OperatorId,
             operator_type = result.OperatorType,
             action_time = result.ActionTime,
-            used_current_message = usedCurrentMessage ? (bool?)true : null,
         });
     }
 

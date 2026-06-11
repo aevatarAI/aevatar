@@ -1,39 +1,27 @@
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 /// <summary>
-/// Durable materialization port base with activation and optional release only.
+/// Durable materialization port base for existing read-model leases and optional release only.
 /// </summary>
 public abstract class MaterializationProjectionPortBase<TRuntimeLease>
     where TRuntimeLease : class, IProjectionRuntimeLease
 {
     private readonly Func<bool> _projectionEnabledAccessor;
-    private readonly IProjectionScopeActivationService<TRuntimeLease> _activationService;
     private readonly IProjectionScopeReleaseService<TRuntimeLease>? _releaseService;
 
     protected MaterializationProjectionPortBase(
         Func<bool> projectionEnabledAccessor,
-        IProjectionScopeActivationService<TRuntimeLease> activationService,
         IProjectionScopeReleaseService<TRuntimeLease>? releaseService = null)
     {
         _projectionEnabledAccessor = projectionEnabledAccessor ?? throw new ArgumentNullException(nameof(projectionEnabledAccessor));
-        _activationService = activationService ?? throw new ArgumentNullException(nameof(activationService));
         _releaseService = releaseService;
     }
 
     public bool ProjectionEnabled => _projectionEnabledAccessor();
 
-    protected async Task<TRuntimeLease?> EnsureProjectionAsync(
-        ProjectionScopeStartRequest request,
-        CancellationToken ct = default)
-    {
-        if (!ProjectionEnabled || request == null || string.IsNullOrWhiteSpace(request.RootActorId))
-            return null;
-
-        return await _activationService.EnsureAsync(request, ct);
-    }
-
     protected Task ReleaseProjectionAsync(TRuntimeLease runtimeLease, CancellationToken ct = default)
     {
+        // Refactor (iter101/cluster-104): Old projection port base exposed protected EnsureProjectionAsync backed by activation service; new request/query-facing ports attach to existing readmodels only, while committed-state/startup/background binders own activation.
         ArgumentNullException.ThrowIfNull(runtimeLease);
         ct.ThrowIfCancellationRequested();
 

@@ -1,14 +1,14 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
-using Aevatar.AI.Core.Agents;
-using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Extensions.Maker;
+using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -79,7 +79,7 @@ public class MakerRecursiveRegressionTests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.AddAevatarAgentKindRegistry(RegisterAssistantRoleKind);
         services.AddWorkflowMakerExtensions();
         services.AddSingleton<ILLMProvider>(provider);
         services.AddSingleton<ILLMProviderFactory>(provider);
@@ -88,6 +88,14 @@ public class MakerRecursiveRegressionTests
         var runtime = sp.GetRequiredService<IActorRuntime>();
         return new TestEnvironment(sp, runtime);
     }
+
+    private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
+        builder.Register(new AgentRegistration(
+            "workflow.assistant-role",
+            typeof(WorkflowRoleGAgent),
+            typeof(RoleGAgentState),
+            [],
+            []));
 
     private static async Task<WorkflowRunResult> RunWorkflowAsync(
         ServiceProvider provider,
@@ -153,7 +161,7 @@ public class MakerRecursiveRegressionTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "maker-regression" }),
+            Payload = Any.Pack(new WorkflowChatRequestEvent { Prompt = input, SessionId = "maker-regression" }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         });
 
@@ -169,18 +177,22 @@ public class MakerRecursiveRegressionTests
         roles:
           - id: coordinator
             name: Coordinator
+            agent_kind: workflow.assistant-role
             system_prompt: "coordinator"
             provider: mock-maker
           - id: worker_a
             name: WorkerA
+            agent_kind: workflow.assistant-role
             system_prompt: "worker"
             provider: mock-maker
           - id: worker_b
             name: WorkerB
+            agent_kind: workflow.assistant-role
             system_prompt: "worker"
             provider: mock-maker
           - id: worker_c
             name: WorkerC
+            agent_kind: workflow.assistant-role
             system_prompt: "worker"
             provider: mock-maker
         steps:
@@ -217,23 +229,24 @@ public class MakerRecursiveRegressionTests
 
         public string Name => "mock-maker";
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
+        private LLMResponse BuildResponse(LLMRequest request)
         {
             var userMessage = request.Messages.LastOrDefault(x => x.Role == "user")?.Content ?? "";
             var response = Resolve(userMessage);
-            return Task.FromResult(new LLMResponse
+            return new LLMResponse
             {
                 Content = response,
                 FinishReason = "stop",
                 Usage = new TokenUsage(50, 20, 70),
-            });
+            };
         }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
-            var full = await ChatAsync(request, ct);
+            ct.ThrowIfCancellationRequested();
+            var full = BuildResponse(request);
             foreach (var ch in full.Content ?? "")
                 yield return new LLMStreamChunk { DeltaContent = ch.ToString() };
             yield return new LLMStreamChunk { IsLast = true, Usage = full.Usage };

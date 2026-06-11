@@ -31,18 +31,27 @@ internal sealed class RecordingDocumentStore<TReadModel> :
         _keySelector = keySelector;
     }
 
+    public bool EnforceMonotonicWrites { get; set; }
+
     public int LastQueryTake { get; private set; }
 
     public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
         var key = _keySelector(readModel);
         var existingIndex = _items.FindIndex(x => string.Equals(_keySelector(x), key, StringComparison.Ordinal));
-        if (existingIndex >= 0)
-            _items[existingIndex] = readModel;
-        else
-            _items.Add(readModel);
+        var existing = existingIndex >= 0 ? _items[existingIndex] : null;
+        var result = EnforceMonotonicWrites
+            ? ProjectionWriteResultEvaluator.Evaluate(existing, readModel)
+            : ProjectionWriteResult.Applied();
+        if (result.IsApplied)
+        {
+            if (existingIndex >= 0)
+                _items[existingIndex] = readModel;
+            else
+                _items.Add(readModel);
+        }
 
-        return Task.FromResult(ProjectionWriteResult.Applied());
+        return Task.FromResult(result);
     }
 
     public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
@@ -114,12 +123,14 @@ internal sealed class RecordingProjectionActivationService<TContext>
     }
 
     public List<(string rootEntityId, string projectionName)> Calls { get; } = [];
+    public List<ProjectionScopeStartRequest> Requests { get; } = [];
 
     public Task<ServiceProjectionRuntimeLease<TContext>> EnsureAsync(
         ProjectionScopeStartRequest request,
         CancellationToken ct = default)
     {
         Calls.Add((request.RootActorId, request.ProjectionKind));
+        Requests.Add(request);
         return Task.FromResult(new ServiceProjectionRuntimeLease<TContext>(
             request.RootActorId,
             _contextFactory(request.RootActorId, request.ProjectionKind)));
@@ -159,4 +170,27 @@ internal sealed class NoOpServiceConfigurationReleaseService
         ArgumentNullException.ThrowIfNull(lease);
         return Task.CompletedTask;
     }
+}
+
+internal sealed class RecordingActorRuntime : IActorRuntime
+{
+    public HashSet<string> KnownActorIds { get; } = [];
+
+    public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+        where TAgent : IAgent =>
+        throw new NotSupportedException();
+
+    public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
+
+    public Task<bool> ExistsAsync(string id) =>
+        Task.FromResult(KnownActorIds.Contains(id));
+
+    public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
 }

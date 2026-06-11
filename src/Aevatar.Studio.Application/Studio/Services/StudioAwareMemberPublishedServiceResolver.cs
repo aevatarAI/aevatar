@@ -23,9 +23,8 @@ namespace Aevatar.Studio.Application.Studio.Services;
 ///      (<c>publishedServiceId == memberId</c>) so direct platform binds
 ///      keep working unchanged.
 ///
-/// Registered with <c>AddSingleton</c> in Studio's capability so it wins over
-/// the platform's <c>TryAddSingleton</c> default; only Studio-enabled hosts
-/// take this branch — pure platform integration tests still see the legacy
+/// Registered with <c>Replace</c> in Studio's capability so Studio-enabled
+/// hosts use the member authority instead of the platform's deterministic
 /// resolver.
 /// </summary>
 public sealed class StudioAwareMemberPublishedServiceResolver : IMemberPublishedServiceResolver

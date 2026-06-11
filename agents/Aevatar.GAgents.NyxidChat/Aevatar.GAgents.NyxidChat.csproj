@@ -13,28 +13,49 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.GAgents.Channel.Identity\Aevatar.GAgents.Channel.Identity.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
     <ProjectReference Include="..\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
     <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
+    <ProjectReference Include="..\Aevatar.GAgents.ChatRouting\Aevatar.GAgents.ChatRouting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.ToolSetRegistry\Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Lark\Aevatar.AI.ToolProviders.Lark.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.LLMProviders.NyxId\Aevatar.AI.LLMProviders.NyxId.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Runtime\Aevatar.CQRS.Projection.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Studio.Infrastructure\Aevatar.Studio.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="protos\*.proto"
+              GrpcServices="None"
+              ProtoRoot="protos"
+              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Runtime\protos;..\Aevatar.GAgents.Channel.Abstractions\protos;..\..\src\Aevatar.ChatRouting.Abstractions;..\..\src\Aevatar.Foundation.Abstractions;..\..\src\Aevatar.AI.Abstractions;..\..\src\Aevatar.Foundation.VoicePresence.Abstractions" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

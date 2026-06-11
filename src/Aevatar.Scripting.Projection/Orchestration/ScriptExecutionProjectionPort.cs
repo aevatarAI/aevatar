@@ -13,33 +13,13 @@ public sealed class ScriptExecutionProjectionPort
 {
     public ScriptExecutionProjectionPort(
         ScriptExecutionProjectionOptions options,
-        IProjectionScopeActivationService<ScriptExecutionRuntimeLease> activationService,
         IProjectionScopeReleaseService<ScriptExecutionRuntimeLease> releaseService,
         IProjectionSessionEventHub<EventEnvelope> sessionEventHub)
         : base(
             () => options?.Enabled ?? false,
-            activationService,
             releaseService,
             sessionEventHub)
     {
     }
 
-    public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
-        string actorId,
-        CancellationToken ct = default) =>
-        EnsureRunProjectionAsync(actorId, actorId, ct);
-
-    public Task<IScriptExecutionProjectionLease?> EnsureRunProjectionAsync(
-        string actorId,
-        string runId,
-        CancellationToken ct = default) =>
-        EnsureProjectionAsync(
-            new ProjectionScopeStartRequest
-            {
-                RootActorId = actorId,
-                ProjectionKind = ScriptProjectionKinds.ExecutionSession,
-                Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = runId,
-            },
-            ct);
 }

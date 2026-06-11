@@ -10,7 +10,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 namespace Aevatar.Foundation.Runtime.Persistence;
 
 /// <summary>In-memory event store with append and version-based query support.</summary>
-public sealed class InMemoryEventStore : IEventStore
+public sealed class InMemoryEventStore : IEventStore, IEventStoreMaintenance
 {
     private sealed class EventStreamState
     {
@@ -97,5 +97,14 @@ public sealed class InMemoryEventStore : IEventStore
             var removed = before - stream.Events.Count;
             return Task.FromResult((long)removed);
         }
+    }
+
+    public Task<bool> ResetStreamAsync(string agentId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        ct.ThrowIfCancellationRequested();
+
+        lock (_lock)
+            return Task.FromResult(_store.TryRemove(agentId, out _));
     }
 }

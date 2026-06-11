@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import React from 'react';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import TopologyDetailPage from './detail';
@@ -29,7 +30,12 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
 
 describe('TopologyDetailPage', () => {
   beforeEach(() => {
+    setLocale('zh-CN', false);
     window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    setLocale('en-US', false);
   });
 
   it('loads live actor topology in the dedicated detail page', async () => {
@@ -215,10 +221,10 @@ describe('TopologyDetailPage', () => {
 
     renderWithQueryClient(React.createElement(TopologyDetailPage));
 
-    expect(await screen.findByText('当前 actor 不可查询')).toBeTruthy();
+    expect(await screen.findByText('当前 Actor 不可查询')).toBeTruthy();
     expect(
       screen.getByText(
-        '当前后端还能引用这个 actor，但已经查不到它的 snapshot。常见原因是后端重启、运行态已清理，或这是历史绑定残留。',
+        '当前后端还能引用这个 Actor，但已经查不到它的 Snapshot。常见原因是后端重启、运行态已清理，或这是历史绑定残留。',
       ),
     ).toBeTruthy();
     expect(screen.getAllByRole('button', { name: '返回对象列表' }).length).toBeGreaterThan(0);

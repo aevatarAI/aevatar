@@ -27,11 +27,11 @@ public interface IConnector
 /// </summary>
 public sealed class ConnectorRequest
 {
-    /// <summary>Generic HTTP authorization metadata key consumed by HTTP connectors.</summary>
-    public const string HttpAuthorizationMetadataKey = "connector.http.authorization";
-
-    /// <summary>Execution metadata propagated from workflow/runtime context.</summary>
+    /// <summary>Execution metadata propagated from workflow/runtime context, excluding connector authorization.</summary>
     public IReadOnlyDictionary<string, string> Metadata { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>Typed HTTP Authorization header value for connector execution, e.g. "Bearer token".</summary>
+    public string HttpAuthorization { get; init; } = "";
 
     /// <summary>Workflow run id.</summary>
     public string RunId { get; init; } = "";
@@ -73,14 +73,52 @@ public sealed class ConnectorResponse
 /// <summary>
 /// Registry for named connectors.
 /// </summary>
-public interface IConnectorRegistry
+public interface IConnectorRegistry : IAsyncDisposable
 {
     /// <summary>Registers or replaces a connector by name.</summary>
-    void Register(IConnector connector);
+    ValueTask RegisterAsync(ConnectorRegistration registration, CancellationToken ct = default);
 
     /// <summary>Resolves a connector by name.</summary>
     bool TryGet(string name, out IConnector? connector);
 
     /// <summary>Returns all registered connector names.</summary>
     IReadOnlyList<string> ListNames();
+}
+
+/// <summary>
+/// Connector registration ownership.
+/// </summary>
+public enum ConnectorOwnership
+{
+    /// <summary>The registry owns the connector and disposes it on replacement or registry shutdown.</summary>
+    RegistryOwned,
+
+    /// <summary>The caller or DI owns the connector lifetime.</summary>
+    ExternallyOwned,
+}
+
+/// <summary>
+/// Connector registration entry with explicit lifecycle ownership.
+/// </summary>
+public sealed class ConnectorRegistration
+{
+    private ConnectorRegistration(IConnector connector, ConnectorOwnership ownership)
+    {
+        Connector = connector ?? throw new ArgumentNullException(nameof(connector));
+        Ownership = ownership;
+    }
+
+    /// <summary>Connector instance to register by <see cref="IConnector.Name"/>.</summary>
+    public IConnector Connector { get; }
+
+    /// <summary>Lifecycle owner for the connector instance.</summary>
+    public ConnectorOwnership Ownership { get; }
+
+    /// <summary>Creates a registry-owned connector registration.</summary>
+    public static ConnectorRegistration Owned(IConnector connector) =>
+        new(connector, ConnectorOwnership.RegistryOwned);
+
+    /// <summary>Creates an externally owned connector registration.</summary>
+    public static ConnectorRegistration External(IConnector connector) =>
+        new(connector, ConnectorOwnership.ExternallyOwned);
 }

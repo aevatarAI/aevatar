@@ -12,6 +12,21 @@ describe("scopeRoutes", () => {
     });
   });
 
+  it("does not treat the create route segment as a real scope", () => {
+    expect(readScopeQueryDraft("", "/teams/new")).toEqual({
+      scopeId: "",
+    });
+    expect(readScopeQueryDraft("?scopeId=new", "/teams/new")).toEqual({
+      scopeId: "",
+    });
+  });
+
+  it("keeps an explicit real scope on the team create route", () => {
+    expect(readScopeQueryDraft("?scopeId=scope-alpha", "/teams/new")).toEqual({
+      scopeId: "scope-alpha",
+    });
+  });
+
   it("keeps the team pathname when building the overview href from a team detail route", () => {
     expect(
       buildScopeOverviewHref(

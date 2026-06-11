@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Abstractions.Evolution;
@@ -24,6 +25,9 @@ namespace Aevatar.Scripting.Projection.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
+    // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
+    //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
+    //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root
     public static IServiceCollection AddScriptingProjectionComponents(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -68,10 +72,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScriptExecutionProjectionPort>();
         services.TryAddSingleton<IScriptExecutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptExecutionProjectionPort>());
-        services.TryAddSingleton<ScriptExecutionReadModelPort>();
-        services.TryAddSingleton<IScriptExecutionReadModelActivationPort>(sp =>
-            sp.GetRequiredService<ScriptExecutionReadModelPort>());
-        services.TryAddSingleton<ScriptAuthorityProjectionPort>();
         services.TryAddSingleton<IProjectionSessionEventCodec<ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>, ProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>>();
         services.AddProjectionMaterializationRuntimeCore<
@@ -99,17 +99,20 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScriptEvolutionProjectionPort>();
         services.TryAddSingleton<IScriptEvolutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptEvolutionProjectionPort>());
-        services.TryAddSingleton<ScriptEvolutionReadModelPort>();
-        services.TryAddSingleton<IScriptEvolutionReadModelActivationPort>(sp =>
-            sp.GetRequiredService<ScriptEvolutionReadModelPort>());
         services.TryAddSingleton<IScriptEvolutionDecisionReadPort, ProjectionScriptEvolutionDecisionReadPort>();
         services.TryAddSingleton<ScriptReadModelQueryReader>();
         services.TryAddSingleton<IScriptReadModelQueryPort>(sp =>
             sp.GetRequiredService<ScriptReadModelQueryReader>());
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, ProjectionScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptCatalogQueryPort, ProjectionScriptCatalogQueryPort>();
-        services.TryAddSingleton<IScriptAuthorityReadModelActivationPort>(sp =>
-            sp.GetRequiredService<ScriptAuthorityProjectionPort>());
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            ScriptingCommittedStateProjectionActivationPlanProvider>());
+        services.TryAddSingleton<IScriptProjectionPayloadMaterializer, ScriptProjectionPayloadMaterializer>();
         services.TryAddSingleton<IScriptNativeDocumentMaterializer, ScriptNativeDocumentMaterializer>();
         services.TryAddSingleton<ScriptNativeGraphMaterializer>();
         services.TryAddSingleton<IScriptNativeGraphMaterializer>(sp =>

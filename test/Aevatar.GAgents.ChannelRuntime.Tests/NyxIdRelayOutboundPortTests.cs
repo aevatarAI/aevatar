@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -54,6 +55,54 @@ public sealed class NyxIdRelayOutboundPortTests
         handler.Requests[0].Authorization.Should().Be("Bearer relay-token");
         handler.Requests[0].Body.Should().Contain("\"message_id\":\"msg-1\"");
         handler.Requests[0].Body.Should().Contain("\"text\":\"rendered:hello relay\"");
+    }
+
+    [Fact]
+    public async Task SendAsync_LarkInteractiveContent_ShouldPostTextFallbackWithCardsAndOptions()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("lark", text: "composer only kept top text"));
+        var content = new MessageContent { Text = "Choose route" };
+        var card = new CardBlock
+        {
+            Title = "Model settings",
+            Text = "Current: no service selected",
+        };
+        card.Fields.Add(new CardField { Title = "Service", Text = "openai" });
+        content.Cards.Add(card);
+        var select = new ActionElement
+        {
+            Kind = ActionElementKind.Select,
+            ActionId = "service",
+            Label = "Select service",
+        };
+        select.Options.Add(new ActionOption { Label = "OpenAI", Value = "openai" });
+        select.Options.Add(new ActionOption { Label = "Azure OpenAI", Value = "azure-openai" });
+        content.Actions.Add(select);
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            content,
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-options-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Body.Should().Contain("\"message_id\":\"msg-lark-options-1\"");
+        using var document = JsonDocument.Parse(handler.Requests[0].Body);
+        var text = document.RootElement.GetProperty("reply").GetProperty("text").GetString();
+        text.Should().Contain("Choose route");
+        text.Should().Contain("Model settings");
+        text.Should().Contain("Service: openai");
+        text.Should().Contain("Select service");
+        text.Should().Contain("OpenAI");
+        text.Should().Contain("Azure OpenAI");
+        handler.Requests[0].Body.Should().NotContain("composer only kept top text");
     }
 
     [Fact]
@@ -290,14 +339,17 @@ public sealed class NyxIdRelayOutboundPortTests
 
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("relay_reply_edit_unsupported");
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.HttpStatus.Should().Be(501);
+        result.RawErrorKey.Should().Be("edit_unsupported");
     }
 
     [Fact]
-    public async Task UpdateAsync_ShouldMapGenericFailuresToUpdateRejected()
+    public async Task UpdateAsync_ShouldMapGenericFailuresToUpdateRejectedWithTypedDiagnostics()
     {
         var handler = new RecordingJsonHandler(
             HttpStatusCode.BadRequest,
-            """{"error":"invalid_request"}""");
+            """{"error":"validation_error","error_code":1008}""");
         var port = CreatePort(handler, new StubComposer("slack"));
 
         var result = await port.UpdateAsync(
@@ -311,6 +363,37 @@ public sealed class NyxIdRelayOutboundPortTests
 
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("relay_reply_update_rejected");
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.HttpStatus.Should().Be(400);
+        result.RawErrorKey.Should().Be("validation_error");
+        result.RawErrorCode.Should().Be(1008);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldPreserveTransientDiagnostics()
+    {
+        var handler = new RecordingJsonHandler(
+            HttpStatusCode.TooManyRequests,
+            """{"error":"rate_limited","error_code":1005}""",
+            retryAfter: TimeSpan.FromSeconds(3));
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.UpdateAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext { ReplyMessageId = "msg-1" },
+            platformMessageId: "om_abc",
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_update_rejected");
+        result.FailureKind.Should().Be(FailureKind.TransientAdapterError);
+        result.RetryAfterTimeSpan.Should().Be(TimeSpan.FromSeconds(3));
+        result.HttpStatus.Should().Be(429);
+        result.RawErrorKey.Should().Be("rate_limited");
+        result.RawErrorCode.Should().Be(1005);
     }
 
     private static NyxIdRelayOutboundPort CreatePort(HttpMessageHandler handler, params IMessageComposer[] composers)
@@ -337,7 +420,8 @@ public sealed class NyxIdRelayOutboundPortTests
 
     private sealed class RecordingJsonHandler(
         HttpStatusCode status = HttpStatusCode.OK,
-        string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""") : HttpMessageHandler
+        string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""",
+        TimeSpan? retryAfter = null) : HttpMessageHandler
     {
         public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
 
@@ -348,10 +432,14 @@ public sealed class NyxIdRelayOutboundPortTests
                 request.Headers.Authorization?.ToString(),
                 request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
 
-            return new HttpResponseMessage(status)
+            var response = new HttpResponseMessage(status)
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
             };
+            if (retryAfter.HasValue)
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(retryAfter.Value);
+
+            return response;
         }
     }
 

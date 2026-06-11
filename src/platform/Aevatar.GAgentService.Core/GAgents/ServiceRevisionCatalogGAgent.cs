@@ -2,7 +2,6 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.GAgentService.Core.Ports;
@@ -14,15 +13,12 @@ namespace Aevatar.GAgentService.Core.GAgents;
 public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCatalogState>
 {
     private readonly IReadOnlyDictionary<ServiceImplementationKind, IServiceImplementationAdapter> _adapters;
-    private readonly IServiceRevisionArtifactStore _artifactStore;
     private readonly PreparedServiceRevisionArtifactAssembler _artifactAssembler;
 
     public ServiceRevisionCatalogGAgent(
         IEnumerable<IServiceImplementationAdapter> adapters,
-        IServiceRevisionArtifactStore artifactStore,
         PreparedServiceRevisionArtifactAssembler artifactAssembler)
     {
-        _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
         _artifactAssembler = artifactAssembler ?? throw new ArgumentNullException(nameof(artifactAssembler));
         _adapters = (adapters ?? throw new ArgumentNullException(nameof(adapters)))
             .ToDictionary(x => x.ImplementationKind, x => x);
@@ -67,7 +63,6 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
                 },
                 CancellationToken.None);
             var assembled = _artifactAssembler.Assemble(prepared);
-            await _artifactStore.SaveAsync(serviceKey, command.RevisionId, assembled, CancellationToken.None);
 
             await PersistDomainEventAsync(new ServiceRevisionPreparedEvent
             {
@@ -77,6 +72,8 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
                 ArtifactHash = assembled.ArtifactHash ?? string.Empty,
                 Endpoints = { assembled.Endpoints.Select(x => x.Clone()) },
                 PreparedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                // Refactor (iter100/cluster-100): Old callers rehydrated this from a process-local artifact store. / New the committed prepared event is the artifact authority.
+                PreparedArtifact = assembled.Clone(),
             });
         }
         catch (Exception ex)
@@ -159,6 +156,8 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         record.ArtifactHash = evt.ArtifactHash ?? string.Empty;
         record.Endpoints.Clear();
         record.Endpoints.Add(evt.Endpoints.Select(x => x.Clone()));
+        // Refactor (iter100/cluster-100): Old prepared artifacts lived beside the actor in a singleton. / New replay restores them from committed catalog state.
+        record.PreparedArtifact = evt.PreparedArtifact?.Clone() ?? new PreparedServiceRevisionArtifact();
         record.PreparedAt = evt.PreparedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
         record.FailureReason = string.Empty;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;

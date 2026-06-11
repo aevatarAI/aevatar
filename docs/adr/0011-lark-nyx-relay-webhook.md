@@ -78,7 +78,7 @@ The required order is:
 2. Build and validate `channel-relay/reply`
 3. Switch the Lark console callback URL to Nyx
 4. Remove the direct Aevatar Lark callback path from the supported runtime contract
-5. Return `410 Gone` for `POST /api/channels/lark/callback/{registrationId}` or delete that endpoint entirely
+5. Historical transition note: the retired direct endpoint could temporarily return `410 Gone`; the current runtime deletes the direct endpoint entirely.
 
 ## Consequences
 

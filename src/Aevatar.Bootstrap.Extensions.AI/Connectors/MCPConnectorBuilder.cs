@@ -63,6 +63,7 @@ public sealed class MCPConnectorBuilder : IConnectorBuilder
             Environment = entry.MCP.Environment,
             AdditionalHeaders = entry.MCP.AdditionalHeaders,
             HttpClient = transportHttpClient,
+            OwnsHttpClient = transportHttpClient != null,
         };
 
         connector = new MCPConnector(

@@ -11,13 +11,16 @@ public sealed class LocalActorDispatchPort : IActorDispatchPort
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
     }
 
-    public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+    public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(envelope);
+        ct.ThrowIfCancellationRequested();
 
-        var actor = await _runtime.GetAsync(actorId)
-                    ?? throw new InvalidOperationException($"Actor {actorId} not found.");
-        await actor.HandleEventAsync(envelope, ct);
+        if (await _runtime.GetAsync(actorId) is not LocalActor target)
+            throw new InvalidOperationException($"Actor {actorId} not found.");
+
+        target.AcceptDispatchedEnvelope(envelope.Clone());
+        return DispatchAdmissionFactory.Create(actorId, envelope);
     }
 }

@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.LLMProviders.NyxId;
 using FluentAssertions;
 using OpenAI;
@@ -106,7 +107,7 @@ public class NyxIdGateway403DiagnosticTests
         Console.Error.WriteLine("=== NyxIdLLMProvider request ===");
         try
         {
-            var response = await provider.ChatAsync(request);
+            var response = await ChatStreamContentAggregator.AggregateResponseAsync(provider, request);
             Console.Error.WriteLine($"Success! Response: {response.Content?[..Math.Min(response.Content.Length, 200)]}");
         }
         catch (Exception ex)

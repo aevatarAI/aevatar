@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
@@ -166,13 +167,16 @@ public sealed class StudioMemberEndpointsTests
                 ImplementationKind: MemberImplementationKindNames.Workflow,
                 WorkflowId: "wf-alpha"),
             LastBinding: null);
-        var request = new PatchStudioMemberRequest(
-            ImplementationRef: new StudioMemberImplementationRefResponse(
-                ImplementationKind: MemberImplementationKindNames.Workflow,
-                WorkflowId: "wf-alpha"));
+        var implementationRef = new StudioMemberImplementationRefResponse(
+            ImplementationKind: MemberImplementationKindNames.Workflow,
+            WorkflowId: "wf-alpha");
+        var request = new StudioMemberEndpoints.StudioMemberPatchBody
+        {
+            ImplementationRef = JsonSerializer.SerializeToElement(implementationRef),
+        };
         var service = new RecordingMemberService
         {
-            PatchResponse = patched,
+            UpdateResponse = patched,
         };
 
         var result = await InvokeHandle<IResult>(
@@ -186,8 +190,9 @@ public sealed class StudioMemberEndpointsTests
 
         result.Should().BeOfType<Ok<StudioMemberDetailResponse>>()
             .Which.Value.Should().BeSameAs(patched);
-        service.PatchInvoked.Should().BeTrue();
-        service.LastPatchRequest.Should().BeSameAs(request);
+        service.UpdateInvoked.Should().BeTrue();
+        service.UpdateRequest!.ImplementationRef.HasValue.Should().BeTrue();
+        service.UpdateRequest.ImplementationRef.Value.Should().Be(implementationRef);
     }
 
     [Fact]
@@ -195,7 +200,7 @@ public sealed class StudioMemberEndpointsTests
     {
         var service = new RecordingMemberService
         {
-            PatchException = new InvalidOperationException("implementationRef.workflowId is required."),
+            UpdateException = new InvalidOperationException("implementationRef.workflowId is required."),
         };
 
         var result = await InvokeHandle<IResult>(
@@ -203,14 +208,17 @@ public sealed class StudioMemberEndpointsTests
             CreateAuthenticatedContext(ScopeId),
             ScopeId,
             "m-alpha",
-            new PatchStudioMemberRequest(
-                ImplementationRef: new StudioMemberImplementationRefResponse(
-                    ImplementationKind: MemberImplementationKindNames.Workflow,
-                    WorkflowId: string.Empty)),
+            new StudioMemberEndpoints.StudioMemberPatchBody
+            {
+                ImplementationRef = JsonSerializer.SerializeToElement(
+                    new StudioMemberImplementationRefResponse(
+                        ImplementationKind: MemberImplementationKindNames.Workflow,
+                        WorkflowId: string.Empty)),
+            },
             service,
             CancellationToken.None);
 
-        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_PATCH");
+        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_REQUEST");
     }
 
     [Fact]
@@ -218,7 +226,7 @@ public sealed class StudioMemberEndpointsTests
     {
         var service = new RecordingMemberService
         {
-            PatchException = new StudioMemberNotFoundException(ScopeId, "m-missing"),
+            UpdateException = new StudioMemberNotFoundException(ScopeId, "m-missing"),
         };
 
         var result = await InvokeHandle<IResult>(
@@ -226,10 +234,13 @@ public sealed class StudioMemberEndpointsTests
             CreateAuthenticatedContext(ScopeId),
             ScopeId,
             "m-missing",
-            new PatchStudioMemberRequest(
-                ImplementationRef: new StudioMemberImplementationRefResponse(
-                    ImplementationKind: MemberImplementationKindNames.Workflow,
-                    WorkflowId: "wf-alpha")),
+            new StudioMemberEndpoints.StudioMemberPatchBody
+            {
+                ImplementationRef = JsonSerializer.SerializeToElement(
+                    new StudioMemberImplementationRefResponse(
+                        ImplementationKind: MemberImplementationKindNames.Workflow,
+                        WorkflowId: "wf-alpha")),
+            },
             service,
             CancellationToken.None);
 
@@ -238,15 +249,13 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
-    public async Task HandleBindAsync_ShouldReturnOk_OnSuccess()
+    public async Task HandleBindAsync_ShouldReturnAccepted_OnSuccess()
     {
-        var binding = new StudioMemberBindingResponse(
-            MemberId: "m-1",
-            PublishedServiceId: "member-m-1",
-            RevisionId: "rev-1",
-            ImplementationKind: MemberImplementationKindNames.Workflow,
+        var binding = new StudioMemberBindingAcceptedResponse(
+            Status: StudioMemberBindingRunStatusNames.Accepted,
+            BindingRunId: "bind-1",
             ScopeId: ScopeId,
-            ExpectedActorId: "actor");
+            MemberId: "m-1");
         var service = new RecordingMemberService
         {
             BindResponse = binding,
@@ -258,11 +267,11 @@ public sealed class StudioMemberEndpointsTests
             ScopeId,
             "m-1",
             new UpdateStudioMemberBindingRequest(
-                Workflow: new StudioMemberWorkflowBindingSpec(["w:"])),
+                Workflow: new StudioMemberWorkflowBindingSpec("workflow-stable-id", ["w:"])),
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Ok<StudioMemberBindingResponse>>()
+        result.Should().BeOfType<Accepted<StudioMemberBindingAcceptedResponse>>()
             .Which.Value.Should().BeSameAs(binding);
     }
 
@@ -332,6 +341,94 @@ public sealed class StudioMemberEndpointsTests
 
         result.Should().BeOfType<Ok<StudioMemberBindingViewResponse>>()
             .Which.Value!.LastBinding.Should().BeSameAs(contract);
+    }
+
+    [Fact]
+    public async Task HandleGetBindingRunAsync_ShouldReturnOk_WhenServiceReturnsRunStatus()
+    {
+        var run = new StudioMemberBindingRunStatusResponse(
+            BindingRunId: "bind-1",
+            ScopeId: ScopeId,
+            MemberId: "member-1",
+            Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+            StateVersion: 7,
+            UpdatedAt: DateTimeOffset.UtcNow);
+        var service = new RecordingMemberService
+        {
+            GetBindingRunResponse = run,
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetBindingRunAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            "bind-1",
+            service,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<StudioMemberBindingRunStatusResponse>>()
+            .Which.Value.Should().BeSameAs(run);
+    }
+
+    [Fact]
+    public async Task HandleGetBindingRunAsync_ShouldReturnTyped404_WhenBindingRunMissing()
+    {
+        var service = new RecordingMemberService
+        {
+            GetBindingRunException = new StudioMemberBindingRunNotFoundException(
+                ScopeId,
+                "m-1",
+                "bind-missing"),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetBindingRunAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            "bind-missing",
+            service,
+            CancellationToken.None);
+
+        AssertNotFoundResult(result, "STUDIO_MEMBER_BINDING_RUN_NOT_FOUND");
+    }
+
+    [Fact]
+    public async Task HandleGetBindingRunAsync_ShouldReturnBadRequest_OnDomainError()
+    {
+        var service = new RecordingMemberService
+        {
+            GetBindingRunException = new InvalidOperationException("bindingRunId is required."),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetBindingRunAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            "",
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_REQUEST");
+    }
+
+    [Fact]
+    public async Task HandleGetBindingRunAsync_ShouldReturnForbidden_WhenScopeAccessDenied()
+    {
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetBindingRunAsync",
+            CreateAuthenticatedContext("other-scope"),
+            ScopeId,
+            "m-1",
+            "bind-1",
+            service,
+            CancellationToken.None);
+
+        AssertIsJsonStatus(result, expectedStatus: StatusCodes.Status403Forbidden);
     }
 
     [Fact]
@@ -615,7 +712,13 @@ public sealed class StudioMemberEndpointsTests
         DefaultSmokePrompt: "Hello from Studio Bind.",
         SampleRequestJson: null,
         DeploymentStatus: "Active",
-        RevisionId: "rev-1");
+        RevisionId: "rev-1",
+        InvocationReadiness: new StudioMemberInvocationReadinessResponse(
+            CanInvoke: true,
+            Status: StudioMemberInvocationReadinessStatusNames.Ready,
+            ReasonCode: StudioMemberInvocationReadinessStatusNames.Ready,
+            Message: "Member endpoint is ready for invocation.",
+            RevisionId: "rev-1"));
 
     private static StudioMemberSummaryResponse NewSummary() => new(
         MemberId: "m-1",
@@ -711,13 +814,11 @@ public sealed class StudioMemberEndpointsTests
         public StudioMemberRosterResponse? ListResponse { get; set; }
         public StudioMemberDetailResponse? GetResponse { get; set; }
         public Exception? GetException { get; set; }
-        public StudioMemberDetailResponse? PatchResponse { get; set; }
-        public PatchStudioMemberRequest? LastPatchRequest { get; private set; }
-        public Exception? PatchException { get; set; }
-        public bool PatchInvoked { get; private set; }
-        public StudioMemberBindingResponse? BindResponse { get; set; }
+        public StudioMemberBindingAcceptedResponse? BindResponse { get; set; }
         public Exception? BindException { get; set; }
         public StudioMemberBindingContractResponse? GetBindingResponse { get; set; }
+        public StudioMemberBindingRunStatusResponse? GetBindingRunResponse { get; set; }
+        public Exception? GetBindingRunException { get; set; }
         public StudioMemberEndpointContractResponse? EndpointContractResponse { get; set; }
         public Exception? EndpointContractException { get; set; }
         public StudioMemberBindingActivationResponse? ActivateResponse { get; set; }
@@ -747,28 +848,23 @@ public sealed class StudioMemberEndpointsTests
                 GetResponse ?? throw new StudioMemberNotFoundException(scopeId, memberId));
         }
 
-        public Task<StudioMemberDetailResponse> PatchAsync(
-            string scopeId,
-            string memberId,
-            PatchStudioMemberRequest request,
-            CancellationToken ct = default)
-        {
-            PatchInvoked = true;
-            LastPatchRequest = request;
-            if (PatchException != null) throw PatchException;
-            return Task.FromResult(PatchResponse!);
-        }
-
-        public Task<StudioMemberBindingResponse> BindAsync(
+        public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default)
         {
             if (BindException != null) throw BindException;
             return Task.FromResult(BindResponse!);
         }
 
-        public Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+        public Task<StudioMemberBindingViewResponse> GetBindingAsync(
             string scopeId, string memberId, CancellationToken ct = default)
-            => Task.FromResult(GetBindingResponse);
+            => Task.FromResult(new StudioMemberBindingViewResponse(GetBindingResponse));
+
+        public Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
+            string scopeId, string memberId, string bindingRunId, CancellationToken ct = default)
+        {
+            if (GetBindingRunException != null) throw GetBindingRunException;
+            return Task.FromResult(GetBindingRunResponse!);
+        }
 
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
             string scopeId, string memberId, string endpointId, CancellationToken ct = default)
@@ -790,6 +886,24 @@ public sealed class StudioMemberEndpointsTests
             if (RetireException != null) throw RetireException;
             return Task.FromResult(RetireResponse!);
         }
+
+        public Task<StudioMemberDetailResponse> UpdateAsync(
+            string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default)
+        {
+            UpdateInvoked = true;
+            UpdateScopeId = scopeId;
+            UpdateMemberId = memberId;
+            UpdateRequest = request;
+            if (UpdateException != null) throw UpdateException;
+            return Task.FromResult(UpdateResponse!);
+        }
+
+        public bool UpdateInvoked { get; set; }
+        public string? UpdateScopeId { get; set; }
+        public string? UpdateMemberId { get; set; }
+        public UpdateStudioMemberRequest? UpdateRequest { get; set; }
+        public StudioMemberDetailResponse? UpdateResponse { get; set; }
+        public Exception? UpdateException { get; set; }
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

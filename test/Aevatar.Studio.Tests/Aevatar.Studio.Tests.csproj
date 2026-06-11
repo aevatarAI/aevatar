@@ -11,6 +11,7 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
@@ -25,10 +26,16 @@
     <ProjectReference Include="../../src/Aevatar.Studio.Projection/Aevatar.Studio.Projection.csproj" />
     <ProjectReference Include="../../src/Aevatar.Studio.Hosting/Aevatar.Studio.Hosting.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
+    <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Studio/Aevatar.Workflow.Studio.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\RecordingStudioWorkspacePorts.cs" Link="Shared\RecordingStudioWorkspacePorts.cs" />
   </ItemGroup>
 
 </Project>

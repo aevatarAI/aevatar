@@ -2,6 +2,8 @@ syntax = "proto3";
 package aevatar.ai;
 option csharp_namespace = "Aevatar.AI.Abstractions";
 
+import "Protos/voice_presence.proto";
+
 enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_UNSPECIFIED = 0;
   CHAT_CONTENT_PART_KIND_TEXT = 1;
@@ -27,8 +29,126 @@ message ChatRequestEvent  {
   string scope_id = 5;
   repeated ChatContentPart input_parts = 6;
   map<string, string> metadata = 7;
+  AgentToolExecutionContextPayload tool_context = 8;
+  // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+  TelegramBridgeRequest telegram = 9;
+  // Narrow LLM-control carrier. Model routing, NyxID credentials and tool-round limits
+  // belong here, not in metadata or tool_context.
+  LLMControlContextPayload llm_control = 10;
+  // Refactor (iter169/cluster-issue1551): Old pattern: connector HTTP authorization used Metadata["connector.http.authorization"] as an authority carrier. New principle: connector authorization is a typed command payload field owned by workflow execution.
+  string connector_http_authorization = 11;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
+
+message LLMControlContextPayload {
+  string nyx_id_access_token = 1;
+  string nyx_id_org_token = 2;
+  string sender_nyx_id_access_token = 3;
+  string model_override = 4;
+  string nyx_id_route_preference = 5;
+  optional int32 max_tool_rounds_override = 6;
+  string user_memory_prompt = 7;
+}
+
+enum TelegramBridgeOperation {
+  TELEGRAM_BRIDGE_OPERATION_UNSPECIFIED = 0;
+  TELEGRAM_BRIDGE_OPERATION_SEND_MESSAGE = 1;
+  TELEGRAM_BRIDGE_OPERATION_WAIT_REPLY = 2;
+  TELEGRAM_BRIDGE_OPERATION_ENSURE_LOGIN = 3;
+}
+
+message TelegramBridgeRequest {
+  string connector_name = 1;
+  TelegramBridgeOperation operation = 2;
+  string chat_id = 3;
+  int64 message_thread_id = 4;
+  string text = 5;
+  string parse_mode = 6;
+  optional bool disable_web_page_preview = 7;
+  int64 reply_to_message_id = 8;
+  string expected_from_user_id = 9;
+  string expected_from_username = 10;
+  string correlation_contains = 11;
+  optional int32 wait_timeout_ms = 12;
+  optional int32 poll_timeout_seconds = 13;
+  optional int32 settle_polls_after_match = 14;
+  bool collect_all_replies = 15;
+  optional bool start_from_latest = 16;
+  int64 offset = 17;
+  string http_method = 18;
+  string content_type = 19;
+  optional int32 timeout_ms = 20;
+  string phone_number = 21;
+  string verification_code = 22;
+  string password = 23;
+  bool emit_chat_response = 24;
+  string run_id = 25;
+  string step_id = 26;
+}
+
+// Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+//   Old pattern: tool credentials, caller, routing and channel facts lived in Metadata.
+//   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
+message AgentToolExecutionContextPayload {
+  AgentToolRequestIdentityPayload request = 1;
+  AgentToolCredentialsPayload credentials = 2;
+  AgentToolCallerContextPayload caller = 3;
+  AgentToolChannelContextPayload channel = 4;
+  AgentToolSenderBindingContextPayload sender_binding = 5;
+  LLMRequestRoutingContextPayload routing = 6;
+  AgentToolConnectedServicesContextPayload connected_services = 7;
+  map<string, string> external_metadata = 8;
+  AgentSkillRecoveryContextPayload skill_recovery = 9;
+}
+
+message AgentSkillRecoveryContextPayload {
+  bool require_initial_ornn_search = 1;
+  bool require_ornn_search_on_blocker = 2;
+  string command_name = 3;
+  string original_command = 4;
+  string primary_skill_name = 5;
+  int32 max_ornn_search_attempts = 6;
+}
+
+message AgentToolRequestIdentityPayload {
+  string request_id = 1;
+  string call_id = 2;
+}
+
+message AgentToolCredentialsPayload {
+  string nyx_id_access_token = 1;
+  string nyx_id_org_token = 2;
+  string sender_nyx_id_access_token = 3;
+}
+
+message AgentToolCallerContextPayload {
+  string scope_id = 1;
+  string owner_subject = 2;
+  string response_id = 3;
+}
+
+message AgentToolChannelContextPayload {
+  string platform = 1;
+  string sender_id = 2;
+  string registration_scope_id = 3;
+  string message_id = 4;
+  string platform_message_id = 5;
+}
+
+message AgentToolSenderBindingContextPayload {
+  string binding_id = 1;
+}
+
+message LLMRequestRoutingContextPayload {
+  string model_override = 1;
+  string nyx_id_route_preference = 2;
+  optional int32 max_tool_rounds_override = 3;
+  string user_memory_prompt = 4;
+}
+
+message AgentToolConnectedServicesContextPayload {
+  string context_json = 1;
+}
 
 message TextMessageStartEvent   { string session_id = 1; string agent_id = 2; }
 message TextMessageContentEvent { string delta = 1; string session_id = 2; }
@@ -51,9 +171,13 @@ message RoleChatSessionCompletedEvent {
   string prompt = 5;
   bool content_emitted = 6;
   repeated ChatContentPart output_parts = 7;
+  string role_id = 8;
 }
 
 message InitializeRoleAgentEvent {
+  // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+  //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+  //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
   string role_name = 1;
   string provider_name = 2;
   string model = 3;
@@ -62,15 +186,20 @@ message InitializeRoleAgentEvent {
   int32 max_tokens = 6;
   int32 max_tool_rounds = 7;
   int32 max_history_messages = 8;
-  int32 stream_buffer_capacity = 9;
   string event_modules = 10;
   string event_routes = 11;
   int32 max_prompt_token_budget = 12;
   double compression_threshold = 13;
   bool enable_summarization = 14;
+  string role_id = 15;
+  reserved 9;
+  reserved "stream_buffer_capacity";
 }
 
 message AIAgentConfigOverrides {
+  // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+  //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+  //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
   optional string provider_name = 1;
   optional string model = 2;
   optional string system_prompt = 3;
@@ -78,10 +207,11 @@ message AIAgentConfigOverrides {
   optional int32 max_tokens = 5;
   optional int32 max_tool_rounds = 6;
   optional int32 max_history_messages = 7;
-  optional int32 stream_buffer_capacity = 8;
   optional int32 max_prompt_token_budget = 9;
   optional double compression_threshold = 10;
   optional bool enable_summarization = 11;
+  reserved 8;
+  reserved "stream_buffer_capacity";
 }
 
 // Agent → 前端：请求工具执行审批
@@ -124,6 +254,8 @@ message RoleGAgentState {
   string event_modules = 5;
   string event_routes = 6;
   PendingToolApprovalState pending_approval = 7;
+  string role_id = 8;
+  map<string, aevatar.voice.VoicePresenceRuntimeState> voice_presence = 9;
 }
 
 // ─── Multi-turn tool approval continuation ───
@@ -138,7 +270,17 @@ message PendingToolApprovalState {
   bool is_destructive = 6;
   string timeout_callback_id = 7;
   // field 8 reserved (was timeout_lease bytes, removed — lease kept in-memory only)
-  map<string, string> metadata = 9;
+  // Refactor (issue1253-first):
+  //   Old pattern: Durable approval continuation restored typed context from metadata.
+  //   New principle: Typed pending approval context is the durable control surface.
+  AgentToolExecutionContextPayload tool_context = 14;
+  reserved 9;
+  reserved "metadata";
+  string remote_approval_id = 10;
+  reserved 11;
+  reserved "remote_status_check_callback_id";
+  int32 remote_status_check_attempt = 12;
+  int64 remote_approval_expires_at_unix_ms = 13;
 }
 
 // Domain event: approval pending persisted.
@@ -155,4 +297,20 @@ message ClearPendingApprovalEvent {
 message ToolApprovalTimeoutFiredEvent {
   string request_id = 1;
   string session_id = 2;
+}
+
+message RemoteToolApprovalSubmittedEvent {
+  string request_id = 1;
+  string remote_approval_id = 2;
+  reserved 3;
+  reserved "status_check_callback_id";
+  int32 status_check_attempt = 4;
+  int64 expires_at_unix_ms = 5;
+}
+
+message ToolApprovalRemoteStatusCheckFiredEvent {
+  string request_id = 1;
+  string session_id = 2;
+  string remote_approval_id = 3;
+  int32 attempt = 4;
 }

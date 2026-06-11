@@ -1,0 +1,9 @@
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Abstractions/Ports/IScriptServiceAguiProjectionPort.cs add capability-specific attach-existing method required by audit fix boundary; no new core abstraction
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Abstractions/ScopeGAgents/GAgentDraftRunProjectionContracts.cs add capability-specific attach-existing method required by audit fix boundary; no new core abstraction
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Abstractions/ScopeGAgents/GAgentRunTerminalModels.cs add capability-specific attach-existing materialization lease method required by audit fix boundary; no new core abstraction
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Projection/Orchestration/ScriptServiceAguiProjectionPort.cs implement existing-session attach by actor runtime existence check; no request-path activation
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Projection/Orchestration/GAgentDraftRunProjectionPort.cs implement existing-session attach by actor runtime existence check; no request-path activation
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Projection/Orchestration/GAgentRunTerminalProjectionPort.cs implement existing-materialization lease by actor runtime existence check; no request-path activation
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Abstractions/ScopeGAgents/GAgentDraftRunModels.cs add ProjectionUnavailable enum values so cold attach-existing sessions return typed start errors before dispatch
+SCOPE_EXTEND: test/Aevatar.GAgentService.Tests/Projection/* update projection port constructor tests for attach-existing runtime dependency and assertions
+SCOPE_EXTEND: test/Aevatar.GAgentService.Integration.Tests/ScopeServiceEndpointsStreamTests.cs update integration stubs for attach-existing ports

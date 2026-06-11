@@ -23,11 +23,10 @@ public sealed class StudioMemberServicePatchTests
             commandPort,
             NewQueryPort(MemberImplementationKindNames.Workflow));
 
-        var response = await service.PatchAsync(
+        var response = await service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(
-                ImplementationRef: new StudioMemberImplementationRefResponse(
+            ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.Workflow,
                     WorkflowId: "wf-alpha")),
             CancellationToken.None);
@@ -40,8 +39,7 @@ public sealed class StudioMemberServicePatchTests
             ImplementationKind: MemberImplementationKindNames.Workflow,
             WorkflowId: "wf-alpha"));
         commandPort.RecordedBindings.Should().BeEmpty();
-        response.ImplementationRef.Should().Be(update.Implementation);
-        response.Summary.LifecycleStage.Should().Be(MemberLifecycleStageNames.BuildReady);
+        response.Summary.MemberId.Should().Be(MemberId);
     }
 
     [Fact]
@@ -52,11 +50,10 @@ public sealed class StudioMemberServicePatchTests
             commandPort,
             NewQueryPort(MemberImplementationKindNames.Script));
 
-        await service.PatchAsync(
+        await service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(
-                ImplementationRef: new StudioMemberImplementationRefResponse(
+            ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.Script,
                     ScriptId: "script-alpha",
                     ScriptRevision: "rev-script-1")),
@@ -78,11 +75,10 @@ public sealed class StudioMemberServicePatchTests
             commandPort,
             NewQueryPort(MemberImplementationKindNames.GAgent));
 
-        await service.PatchAsync(
+        await service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(
-                ImplementationRef: new StudioMemberImplementationRefResponse(
+            ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.GAgent,
                     ActorTypeName: "Aevatar.SomeAgent")),
             CancellationToken.None);
@@ -103,11 +99,10 @@ public sealed class StudioMemberServicePatchTests
             new RecordingMemberCommandPort(),
             NewQueryPort(MemberImplementationKindNames.Workflow));
 
-        var act = () => service.PatchAsync(
+        var act = () => service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(
-                ImplementationRef: new StudioMemberImplementationRefResponse(
+            ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.Workflow,
                     WorkflowId: workflowId)),
             CancellationToken.None);
@@ -125,11 +120,10 @@ public sealed class StudioMemberServicePatchTests
             new RecordingMemberCommandPort(),
             NewQueryPort(MemberImplementationKindNames.Script));
 
-        var act = () => service.PatchAsync(
+        var act = () => service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(
-                ImplementationRef: new StudioMemberImplementationRefResponse(
+            ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.Script,
                     ScriptId: scriptId)),
             CancellationToken.None);
@@ -147,11 +141,10 @@ public sealed class StudioMemberServicePatchTests
             new RecordingMemberCommandPort(),
             NewQueryPort(MemberImplementationKindNames.GAgent));
 
-        var act = () => service.PatchAsync(
+        var act = () => service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(
-                ImplementationRef: new StudioMemberImplementationRefResponse(
+            ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.GAgent,
                     ActorTypeName: actorTypeName)),
             CancellationToken.None);
@@ -187,10 +180,10 @@ public sealed class StudioMemberServicePatchTests
             _ => throw new ArgumentOutOfRangeException(nameof(disallowedField)),
         };
 
-        var act = () => service.PatchAsync(
+        var act = () => service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(implementation),
+            ImplementationPatch(implementation),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -224,10 +217,10 @@ public sealed class StudioMemberServicePatchTests
             _ => throw new ArgumentOutOfRangeException(nameof(disallowedField)),
         };
 
-        var act = () => service.PatchAsync(
+        var act = () => service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(implementation),
+            ImplementationPatch(implementation),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -266,10 +259,10 @@ public sealed class StudioMemberServicePatchTests
             _ => throw new ArgumentOutOfRangeException(nameof(disallowedField)),
         };
 
-        var act = () => service.PatchAsync(
+        var act = () => service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(implementation),
+            ImplementationPatch(implementation),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -283,11 +276,10 @@ public sealed class StudioMemberServicePatchTests
             new RecordingMemberCommandPort(),
             NewQueryPort(MemberImplementationKindNames.Workflow));
 
-        var act = () => service.PatchAsync(
+        var act = () => service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(
-                ImplementationRef: new StudioMemberImplementationRefResponse(
+            ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: string.Empty,
                     WorkflowId: "wf-alpha")),
             CancellationToken.None);
@@ -303,11 +295,10 @@ public sealed class StudioMemberServicePatchTests
             new RecordingMemberCommandPort(),
             NewQueryPort(MemberImplementationKindNames.Workflow));
 
-        var act = () => service.PatchAsync(
+        var act = () => service.UpdateAsync(
             ScopeId,
             MemberId,
-            new PatchStudioMemberRequest(
-                ImplementationRef: new StudioMemberImplementationRefResponse(
+            ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.Script,
                     ScriptId: "script-alpha")),
             CancellationToken.None);
@@ -316,14 +307,20 @@ public sealed class StudioMemberServicePatchTests
             .WithMessage("*implementationKind is locked at create*");
     }
 
+    private static UpdateStudioMemberRequest ImplementationPatch(
+        StudioMemberImplementationRefResponse implementation) =>
+        new(ImplementationRef: PatchValue<StudioMemberImplementationRefResponse>.Of(implementation));
+
     private static StudioMemberService NewService(
         IStudioMemberCommandPort memberCommandPort,
         IStudioMemberQueryPort memberQueryPort) =>
         new(
             memberCommandPort,
             memberQueryPort,
-            new ThrowingScopeBindingCommandPort(),
+            new ThrowingBindingRunQueryPort(),
+            new ThrowingTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
+            new ThrowingScopeBindingReadinessQueryPort(),
             new ThrowingServiceCommandPort());
 
     private static InMemoryQueryPort NewQueryPort(string implementationKind) =>
@@ -396,17 +393,17 @@ public sealed class StudioMemberServicePatchTests
             return Task.CompletedTask;
         }
 
-        public Task RecordBindingAsync(
+        public Task StartBindingRunAsync(
+            StudioMemberBindingRunStartRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("member patch must not start binding runs.");
+
+        public Task PatchTeamAssignmentAsync(
             string scopeId,
             string memberId,
-            string publishedServiceId,
-            string revisionId,
-            string implementationKindName,
-            CancellationToken ct = default)
-        {
-            RecordedBindings.Add(revisionId);
-            return Task.CompletedTask;
-        }
+            string? targetTeamId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("implementationRef patch must not patch team assignment.");
     }
 
     private sealed record ImplementationUpdate(
@@ -414,12 +411,37 @@ public sealed class StudioMemberServicePatchTests
         string MemberId,
         StudioMemberImplementationRefResponse Implementation);
 
-    private sealed class ThrowingScopeBindingCommandPort : IScopeBindingCommandPort
+    private sealed class ThrowingBindingRunQueryPort : IStudioMemberBindingRunQueryPort
     {
-        public Task<ScopeBindingUpsertResult> UpsertAsync(
-            ScopeBindingUpsertRequest request,
+        public Task<StudioMemberBindingRunStatusResponse?> GetAsync(
+            string scopeId,
+            string memberId,
+            string bindingRunId,
             CancellationToken ct = default) =>
-            throw new InvalidOperationException("member patch must not invoke scope binding.");
+            throw new InvalidOperationException("member patch must not query binding runs.");
+    }
+
+    private sealed class ThrowingTeamQueryPort : IStudioTeamQueryPort
+    {
+        public Task<StudioTeamRosterResponse> ListAsync(
+            string scopeId,
+            StudioTeamRosterPageRequest? page = null,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("implementationRef patch must not list teams.");
+
+        public Task<StudioTeamSummaryResponse?> GetAsync(
+            string scopeId,
+            string teamId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("implementationRef patch must not query teams.");
+    }
+
+    private sealed class ThrowingScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    {
+        public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
+            ScopeBindingReadinessRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("member patch must not query scope binding readiness.");
     }
 
     private sealed class ThrowingServiceLifecycleQueryPort : IServiceLifecycleQueryPort

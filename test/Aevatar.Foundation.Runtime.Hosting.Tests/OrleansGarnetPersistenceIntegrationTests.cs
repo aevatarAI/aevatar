@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
@@ -7,6 +5,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Tests.Shared;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -29,14 +28,10 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
         var serviceId = $"aevatar-orleans-garnet-service-{Guid.NewGuid():N}";
         var clusterId = $"aevatar-orleans-garnet-cluster-{Guid.NewGuid():N}";
 
-        var firstSiloPort = ReserveTcpPort();
-        var firstGatewayPort = ReserveTcpPort();
         var firstHost = await StartSiloHostAsync(
             garnetConnectionString,
             clusterId,
-            serviceId,
-            firstSiloPort,
-            firstGatewayPort);
+            serviceId);
 
         try
         {
@@ -59,14 +54,10 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
             firstHost.Dispose();
         }
 
-        var secondSiloPort = ReserveTcpPort();
-        var secondGatewayPort = ReserveTcpPort();
         var secondHost = await StartSiloHostAsync(
             garnetConnectionString,
             clusterId,
-            serviceId,
-            secondSiloPort,
-            secondGatewayPort);
+            serviceId);
 
         try
         {
@@ -96,14 +87,10 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
         var clusterId = $"aevatar-orleans-garnet-stateful-cluster-{Guid.NewGuid():N}";
         var agentTypeName = typeof(RecordingGarnetStatefulAgent).AssemblyQualifiedName!;
 
-        var firstSiloPort = ReserveTcpPort();
-        var firstGatewayPort = ReserveTcpPort();
         var firstHost = await StartSiloHostAsync(
             garnetConnectionString,
             clusterId,
-            serviceId,
-            firstSiloPort,
-            firstGatewayPort);
+            serviceId);
 
         try
         {
@@ -123,14 +110,10 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
             firstHost.Dispose();
         }
 
-        var secondSiloPort = ReserveTcpPort();
-        var secondGatewayPort = ReserveTcpPort();
         var secondHost = await StartSiloHostAsync(
             garnetConnectionString,
             clusterId,
-            serviceId,
-            secondSiloPort,
-            secondGatewayPort);
+            serviceId);
 
         try
         {
@@ -155,16 +138,13 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
     private static async Task<IHost> StartSiloHostAsync(
         string garnetConnectionString,
         string clusterId,
-        string serviceId,
-        int siloPort,
-        int gatewayPort)
-    {
-        var host = Host.CreateDefaultBuilder()
+        string serviceId) =>
+        await SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering(
-                    siloPort: siloPort,
-                    gatewayPort: gatewayPort,
+                    siloPort: ports.SiloPort,
+                    gatewayPort: ports.GatewayPort,
                     serviceId: serviceId,
                     clusterId: clusterId);
                 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
@@ -174,18 +154,7 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
                     options.GarnetConnectionString = garnetConnectionString;
                 });
             })
-            .Build();
-
-        await host.StartAsync().WaitAsync(HostLifecycleTimeout);
-        return host;
-    }
-
-    private static int ReserveTcpPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
-    }
+            .Build(), HostLifecycleTimeout);
 
     private static byte[] CreateDirectEnvelope(string actorId, string payload) =>
         new EventEnvelope

@@ -1,10 +1,14 @@
 namespace Aevatar.Workflow.Application.Abstractions.Queries;
 
+// Refactor (iter72/cluster-072-workflow-closed-world-false-capability):
+//   Old pattern: ClosedWorldBlocked flag retained as always-false compatibility field
+//   New principle: Removed dead capability flag; output describes available primitives only
 public sealed class WorkflowCapabilitiesDocument
 {
     public string SchemaVersion { get; set; } = "capabilities.v1";
 
     public DateTimeOffset GeneratedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ProjectionWatermark { get; set; }
 
     public List<WorkflowPrimitiveCapability> Primitives { get; set; } = [];
 
@@ -13,6 +17,9 @@ public sealed class WorkflowCapabilitiesDocument
     public List<WorkflowCapabilityWorkflow> Workflows { get; set; } = [];
 }
 
+// Refactor (iter72/cluster-072-workflow-closed-world-false-capability):
+//   Old pattern: ClosedWorldBlocked flag retained as always-false compatibility field
+//   New principle: Removed dead capability flag; output describes available primitives only
 public sealed class WorkflowPrimitiveCapability
 {
     public string Name { get; set; } = string.Empty;
@@ -22,8 +29,6 @@ public sealed class WorkflowPrimitiveCapability
     public string Category { get; set; } = string.Empty;
 
     public string Description { get; set; } = string.Empty;
-
-    public bool ClosedWorldBlocked { get; set; }
 
     public string RuntimeModule { get; set; } = string.Empty;
 
@@ -83,6 +88,8 @@ public sealed class WorkflowCapabilityWorkflow
     public List<string> WorkflowCalls { get; set; } = [];
 
     public List<WorkflowCapabilityWorkflowStep> Steps { get; set; } = [];
+    public long AuthorityStateVersion { get; set; }
+    public DateTimeOffset ProjectionWatermark { get; set; }
 }
 
 public sealed class WorkflowCapabilityWorkflowStep

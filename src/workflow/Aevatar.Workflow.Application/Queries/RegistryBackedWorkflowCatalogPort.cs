@@ -12,9 +12,10 @@ internal sealed class RegistryBackedWorkflowCatalogPort : IWorkflowCatalogPort, 
         _workflowRegistry = workflowRegistry;
     }
 
-    public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog()
+    public Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default)
     {
-        return _workflowRegistry.GetNames()
+        ct.ThrowIfCancellationRequested();
+        IReadOnlyList<WorkflowCatalogItem> catalog = _workflowRegistry.GetNames()
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .Select(name => new WorkflowCatalogItem
             {
@@ -26,19 +27,23 @@ internal sealed class RegistryBackedWorkflowCatalogPort : IWorkflowCatalogPort, 
                 ShowInLibrary = true,
             })
             .ToList();
+        return Task.FromResult(catalog);
     }
 
-    public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName)
+    public Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(
+        string workflowName,
+        CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(workflowName))
-            return null;
+            return Task.FromResult<WorkflowCatalogItemDetail?>(null);
 
         var normalizedName = workflowName.Trim();
         var yaml = _workflowRegistry.GetYaml(normalizedName);
         if (string.IsNullOrWhiteSpace(yaml))
-            return null;
+            return Task.FromResult<WorkflowCatalogItemDetail?>(null);
 
-        return new WorkflowCatalogItemDetail
+        return Task.FromResult<WorkflowCatalogItemDetail?>(new WorkflowCatalogItemDetail
         {
             Catalog = new WorkflowCatalogItem
             {
@@ -50,12 +55,13 @@ internal sealed class RegistryBackedWorkflowCatalogPort : IWorkflowCatalogPort, 
                 ShowInLibrary = true,
             },
             Yaml = yaml,
-        };
+        });
     }
 
-    public WorkflowCapabilitiesDocument GetCapabilities()
+    public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default)
     {
-        return new WorkflowCapabilitiesDocument
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new WorkflowCapabilitiesDocument
         {
             SchemaVersion = "capabilities.v1",
             Workflows = _workflowRegistry.GetNames()
@@ -66,6 +72,6 @@ internal sealed class RegistryBackedWorkflowCatalogPort : IWorkflowCatalogPort, 
                     Source = "builtin",
                 })
                 .ToList(),
-        };
+        });
     }
 }

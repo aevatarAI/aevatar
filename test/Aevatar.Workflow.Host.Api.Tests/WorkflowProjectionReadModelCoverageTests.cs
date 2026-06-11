@@ -27,7 +27,7 @@ public sealed class WorkflowProjectionReadModelCoverageTests
 
         lease.RootEntityId.Should().Be("actor-1");
         lease.ActorId.Should().Be("actor-1");
-        lease.ScopeId.Should().Be("actor-1");
+        lease.Context.RootActorId.Should().Be("actor-1");
         lease.CommandId.Should().Be("session-1");
         lease.SessionId.Should().Be("session-1");
         lease.Context.ProjectionKind.Should().Be("workflow-execution");
@@ -79,7 +79,7 @@ public sealed class WorkflowProjectionReadModelCoverageTests
         report.CreatedAt.Should().Be(default);
         report.UpdatedAt.Should().Be(default);
         report.ProjectionScope.Should().Be(WorkflowExecutionProjectionScope.ActorShared);
-        report.TopologySource.Should().Be(WorkflowExecutionTopologySource.RuntimeSnapshot);
+        report.TopologySource.Should().Be(WorkflowExecutionTopologySource.CommittedProjection);
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Running);
 
         report.CreatedAt = localTime;
@@ -188,52 +188,42 @@ public sealed class WorkflowProjectionReadModelCoverageTests
         currentState.Success = false;
         currentState.Clone().Success.Should().BeFalse();
 
-        var timeline = new WorkflowRunTimelineDocument
+        var artifactReport = new WorkflowRunInsightReportDocument
         {
             RootActorId = "actor-2",
-        };
-        timeline.ActorId.Should().Be("actor-2");
-        timeline.UpdatedAt.Should().Be(default);
-        timeline.Timeline =
-        [
-            new WorkflowExecutionTimelineEvent
-            {
-                Timestamp = utcTime,
-                Stage = "middle",
-                Data = new Dictionary<string, string>(StringComparer.Ordinal)
+            UpdatedAt = utcTime,
+            Timeline =
+            [
+                new WorkflowExecutionTimelineEvent
                 {
-                    ["k"] = "v",
+                    Timestamp = utcTime,
+                    Stage = "middle",
+                    Data = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["k"] = "v",
+                    },
                 },
-            },
-        ];
-        timeline.UpdatedAt = utcTime;
-        timeline.Clone().Timeline.Should().ContainSingle();
-        timeline.Timeline = null!;
-        timeline.Timeline.Should().BeEmpty();
-
-        var graph = new WorkflowRunGraphArtifactDocument
-        {
-            RootActorId = "actor-2",
+            ],
+            Topology =
+            [
+                new WorkflowExecutionTopologyEdge("a", "b"),
+            ],
+            Steps =
+            [
+                new WorkflowExecutionStepTrace
+                {
+                    StepId = "step-1",
+                },
+            ],
         };
-        graph.ActorId.Should().Be("actor-2");
-        graph.UpdatedAt.Should().Be(default);
-        graph.Topology =
-        [
-            new WorkflowExecutionTopologyEdge("a", "b"),
-        ];
-        graph.Steps =
-        [
-            new WorkflowExecutionStepTrace
-            {
-                StepId = "step-1",
-            },
-        ];
-        graph.UpdatedAt = utcTime;
-        graph.Clone().Topology.Should().ContainSingle();
-        graph.Topology = null!;
-        graph.Steps = null!;
-        graph.Topology.Should().BeEmpty();
-        graph.Steps.Should().BeEmpty();
+        artifactReport.Clone().Timeline.Should().ContainSingle();
+        artifactReport.Clone().Topology.Should().ContainSingle();
+        artifactReport.Timeline = null!;
+        artifactReport.Topology = null!;
+        artifactReport.Steps = null!;
+        artifactReport.Timeline.Should().BeEmpty();
+        artifactReport.Topology.Should().BeEmpty();
+        artifactReport.Steps.Should().BeEmpty();
     }
 
     [Fact]

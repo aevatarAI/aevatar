@@ -354,6 +354,23 @@ public sealed class ChannelArchitectureTests
             + string.Join("\n", violators));
     }
 
+    [Fact]
+    public void ConversationGAgent_SourceTextGuard_ShouldReference_RunDispatcherSeam_AndAvoid_Concrete_RunOrInbox_Runtime_Types()
+    {
+        var conversationPath = ChannelSourceIndex.EnumerateProductionSourceFiles()
+            .Single(path => path.EndsWith(
+                "/agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs",
+                System.StringComparison.Ordinal));
+        var text = File.ReadAllText(conversationPath);
+
+        // Minimal source-text guard only: keeps the intended seam visible in review/CI,
+        // but is not a Roslyn/compile-level dependency rule.
+        Assert.Matches(@"\bIChannelLlmReplyRunDispatcher\b", text);
+        Assert.DoesNotMatch(@"\bAgentRunDispatcher\b", text);
+        Assert.DoesNotMatch(@"\bDurableInboxSubscriber\b", text);
+        Assert.DoesNotMatch(@"\bIChannelDurableInbox\b", text);
+    }
+
     private static bool IsAllowedOutboundSendCaller(string normalizedPath)
     {
         if (normalizedPath.Contains("/agents/channels/", System.StringComparison.Ordinal))

@@ -21,6 +21,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         string? workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         string? scopeId = null,
+        string? sourceKind = null,
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
@@ -29,6 +30,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             WorkflowName = workflowName ?? string.Empty,
             WorkflowYaml = workflowYaml ?? string.Empty,
             ScopeId = scopeId?.Trim() ?? string.Empty,
+            SourceKind = sourceKind?.Trim() ?? string.Empty,
         };
         if (inlineWorkflowYamls != null)
         {
@@ -41,7 +43,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
 
     [EventHandler]
     public Task HandleBindWorkflowDefinition(BindWorkflowDefinitionEvent request) =>
-        BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls, request.ScopeId);
+        BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls, request.ScopeId, request.SourceKind);
 
     [EventHandler]
     public Task HandleSubWorkflowDefinitionResolveRequested(SubWorkflowDefinitionResolveRequestedEvent request) =>
@@ -83,6 +85,9 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             next.WorkflowName = incomingWorkflowName;
         if (!string.IsNullOrWhiteSpace(evt.ScopeId))
             next.ScopeId = evt.ScopeId.Trim();
+        next.SourceKind = string.IsNullOrWhiteSpace(evt.SourceKind)
+            ? "builtin"
+            : evt.SourceKind.Trim();
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;

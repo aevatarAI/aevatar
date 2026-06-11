@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { Grid } from "antd";
 import React from "react";
 import {
   loadDraftRunPayload,
@@ -141,50 +142,50 @@ jest.mock("./components/RunsLaunchRail", () => {
   const normalizePatch = (
     value: Record<string, unknown> = {}
   ): Partial<MockRunFormValues> => ({
-    ...(Object.prototype.hasOwnProperty.call(value, "actorId")
+    ...(Object.hasOwn(value, "actorId")
       ? { actorId: normalizeValues({ actorId: value.actorId }).actorId }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "endpointId")
+    ...(Object.hasOwn(value, "endpointId")
       ? { endpointId: normalizeValues({ endpointId: value.endpointId }).endpointId }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "endpointKind")
+    ...(Object.hasOwn(value, "endpointKind")
       ? {
           endpointKind: normalizeValues({
             endpointKind: value.endpointKind,
           }).endpointKind,
         }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "payloadBase64")
+    ...(Object.hasOwn(value, "payloadBase64")
       ? {
           payloadBase64: normalizeValues({
             payloadBase64: value.payloadBase64,
           }).payloadBase64,
         }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "payloadTypeUrl")
+    ...(Object.hasOwn(value, "payloadTypeUrl")
       ? {
           payloadTypeUrl: normalizeValues({
             payloadTypeUrl: value.payloadTypeUrl,
           }).payloadTypeUrl,
         }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "prompt")
+    ...(Object.hasOwn(value, "prompt")
       ? { prompt: normalizeValues({ prompt: value.prompt }).prompt }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "routeName")
+    ...(Object.hasOwn(value, "routeName")
       ? { routeName: normalizeValues({ routeName: value.routeName }).routeName }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "scopeId")
+    ...(Object.hasOwn(value, "scopeId")
       ? { scopeId: normalizeValues({ scopeId: value.scopeId }).scopeId }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "serviceOverrideId")
+    ...(Object.hasOwn(value, "serviceOverrideId")
       ? {
           serviceOverrideId: normalizeValues({
             serviceOverrideId: value.serviceOverrideId,
           }).serviceOverrideId,
         }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "transport")
+    ...(Object.hasOwn(value, "transport")
       ? { transport: normalizeValues({ transport: value.transport }).transport }
       : {}),
   });
@@ -232,7 +233,26 @@ jest.mock("./components/RunsLaunchRail", () => {
     return React.createElement(
       "section",
       null,
-      React.createElement("div", null, "Run setup"),
+      React.createElement(
+        "div",
+        null,
+        props.variant === "chat" ? "Run context" : "Run setup"
+      ),
+      props.runReadiness
+        ? React.createElement(
+            "div",
+            {
+              "data-testid": "mock-run-readiness",
+            },
+            [
+              props.runReadiness.ready ? "Ready to send" : "Send readiness",
+              props.runReadiness.blockingReason ?? "",
+              ...props.runReadiness.items.map(
+                (item: any) => `${item.label}: ${item.value}`
+              ),
+            ].join(" | ")
+          )
+        : null,
       props.showPromptField !== false
         ? React.createElement("textarea", {
             "aria-label": "Prompt",
@@ -246,12 +266,14 @@ jest.mock("./components/RunsLaunchRail", () => {
           })
         : null,
       React.createElement("input", {
-        "aria-label": "Scope ID",
-        onChange: (event: any) =>
+        "aria-label": "Workspace ID",
+        onChange: (event: any) => {
+          props.onScopeIdChange?.(event.target.value);
           setValues((current: Record<string, unknown>) => ({
             ...current,
             scopeId: event.target.value,
-          })),
+          }));
+        },
         value: values.scopeId ?? "",
       }),
       props.showSubmitActions !== false
@@ -299,6 +321,7 @@ describe("RunsPage", () => {
   const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
+    jest.restoreAllMocks();
     window.history.replaceState({}, "", "/runtime/runs");
     window.sessionStorage.clear();
     window.localStorage.clear();
@@ -340,23 +363,104 @@ describe("RunsPage", () => {
       screen.getByRole("button", { name: "Workflow catalog" })
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "返回团队高级编辑" })
+      screen.queryByRole("button", { name: "Back to advanced team editing" })
     ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Actor explorer" })
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: "Actor explorer" })
+    ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Mission Control" })
-    ).toBeDisabled();
+      screen.queryByRole("button", { name: "Mission Control" })
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Open observability hub" })
     ).toBeNull();
     expect(
       screen.getByPlaceholderText("Describe the task to run.")
     ).toBeTruthy();
-    expect(container.textContent).toContain("Run setup");
+    expect(container.textContent).toContain("Run context");
     expect(container.textContent).toContain("Conversation");
+    expect(container.textContent).toContain("Workspace: required");
+    expect(container.textContent).toContain("Route: direct");
+    expect(container.textContent).toContain("Endpoint: chat");
+    expect(container.textContent).toContain(
+      "Workspace is required before the prompt can be sent."
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Send readiness"
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Workspace: Required"
+    );
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
+
+  it("enables the conversation composer only after a workspace is set", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?prompt=Run%20it"
+    );
+
+    const { container } = renderWithQueryClient(React.createElement(RunsPage));
+
+    await screen.findByDisplayValue("Run it");
+    expect(container.textContent).toContain("Workspace: required");
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    expect(sendButton).toBeDisabled();
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Send readiness"
+    );
+
+    fireEvent.change(screen.getByLabelText("Workspace ID"), {
+      target: { value: "scope-1" },
+    });
+
+    expect(container.textContent).toContain("Workspace: scope-1");
+    expect(container.textContent).not.toContain(
+      "Workspace is required before the prompt can be sent."
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Ready to send"
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Workspace: scope-1"
+    );
+    expect(sendButton).toBeEnabled();
+
+    fireEvent.click(sendButton);
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
+        "scope-1",
+        expect.objectContaining({
+          prompt: "Run it",
+        }),
+        expect.any(AbortSignal),
+        {
+          serviceId: "direct",
+        }
+      );
+    });
+  });
+
+  it("stacks the chat setup and conversation panes on compact screens", async () => {
+    jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
+      xs: true,
+      sm: true,
+      md: false,
+      lg: false,
+      xl: false,
+      xxl: false,
+    });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    expect(await screen.findByTestId("runs-chat-layout")).toHaveStyle({
+      gridTemplateColumns: "minmax(0, 1fr)",
+      overflowY: "auto",
+    });
+    expect(screen.getByPlaceholderText("Describe the task to run.")).toBeTruthy();
   });
 
   it("navigates back to the team advanced tab from the runs console", async () => {
@@ -369,13 +473,13 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "返回团队高级编辑" })
+      await screen.findByRole("button", { name: "Back to advanced team editing" })
     );
 
-    expect(window.location.pathname).toBe("/teams/scope-1");
-    expect(new URLSearchParams(window.location.search).get("tab")).toBe(
-      "advanced"
-    );
+    expect(window.location.pathname).toBe("/teams");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("tab")).toBeNull();
   });
 
   it("returns to the originating studio route when a return target is provided", async () => {
@@ -388,7 +492,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "返回团队高级编辑" })
+      await screen.findByRole("button", { name: "Back to Studio" })
     );
 
     expect(window.location.pathname).toBe("/studio");
@@ -400,6 +504,25 @@ describe("RunsPage", () => {
     );
     expect(new URLSearchParams(window.location.search).get("template")).toBe(
       "hello-chat"
+    );
+  });
+
+  it("returns to the originating workflow inspector when a workflow handoff provides return context", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?route=demo_flow&returnTo=%2Fruntime%2Fworkflows%3Fworkflow%3Ddemo_flow"
+    );
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Back to Workflow Library" })
+    );
+
+    expect(window.location.pathname).toBe("/runtime/workflows");
+    expect(new URLSearchParams(window.location.search).get("workflow")).toBe(
+      "demo_flow"
     );
   });
 
@@ -468,7 +591,7 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(screen.getByText("Action required")).toBeInTheDocument();
+    expect(screen.getAllByText("Action required").length).toBeGreaterThan(0);
     expect(screen.getByText("Review and continue the run")).toBeInTheDocument();
     expect(
       screen.getByRole("switch", { name: "Approved" })

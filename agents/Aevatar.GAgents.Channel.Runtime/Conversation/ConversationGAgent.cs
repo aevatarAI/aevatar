@@ -1,8 +1,13 @@
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -26,18 +31,28 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// <see cref="GAgentBase{TState}.PersistDomainEventAsync{TEvent}"/>. No inline projection writes.
 /// </para>
 /// </remarks>
+// Refactor (iter20/cluster-004):
+//   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
+//   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+// Refactor (iter107/cluster-1-channel-business-io-process-queue):
+//   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
+//   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
 public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentState>
 {
+    // Refactor (iter17/cluster-038):
+    //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。
+    //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
     // Orleans Reminders (the durable scheduler backing ScheduleSelfDurableTimeoutAsync)
     // round dueTime up to the local reminder service tick (typically ~1 minute), so
-    // sub-minute schedules are unreliable. The inbox dispatch happens inline via
-    // IChannelLlmReplyInbox; the durable timer is reserved for retry/rehydration.
+    // sub-minute schedules are unreliable. The run dispatch happens inline via
+    // IChannelLlmReplyRunDispatcher; the durable timer is reserved for retry/rehydration.
     private static readonly TimeSpan DeferredLlmDispatchRetryDelay = TimeSpan.FromSeconds(60);
     // Pending LLM reply requests older than this are considered stale on rehydration:
     // the user gave up, the relay reply_token (~30 min TTL) is likely already expired,
     // and the user access token (~15 min TTL) used for the LLM call is definitely gone.
     // Drop them rather than burn an LLM round and reply hours late.
     private static readonly TimeSpan PendingLlmReplyRequestMaxAge = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan StreamingFailureUpdateTimeout = TimeSpan.FromSeconds(10);
 
     // Mirror of DeferredLlmDispatchRetryDelay for the inbound-turn retry pipeline.
     // The same reminder-granularity floor applies: any requested retry shorter than this
@@ -47,43 +62,10 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     // persists a terminal ConversationContinueFailedEvent (NotRetryable) so the pending
     // set does not grow unboundedly.
     public const int MaxInboundTurnRetryCount = 5;
-    private readonly Dictionary<string, NyxRelayReplyTokenContext> _nyxRelayReplyTokens = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, NyxRelayStreamingState> _nyxRelayStreamingStates = new(StringComparer.Ordinal);
-
-    /// <summary>
-    /// Actor-scoped, in-memory streaming state for one conversation turn. Never persisted: tracks
-    /// the upstream platform message id of the placeholder send and the two distinct failure
-    /// modes that can disable parts of the streaming path. Keyed by <c>correlation_id</c>, same
-    /// lifecycle as <see cref="NyxRelayReplyTokenContext"/>.
-    /// </summary>
-    /// <remarks>
-    /// The two failure flags carry different semantics with respect to the NyxID reply token:
-    /// <list type="bullet">
-    /// <item><c>Disabled</c> means streaming was aborted <em>before</em> any successful send, so
-    /// the reply token is still available and the actor may safely fall back to a single-shot
-    /// <c>/reply</c> via <see cref="IConversationTurnRunner.RunLlmReplyAsync"/>.</item>
-    /// <item><c>SuppressInterim</c> means the first chunk already consumed the reply token (the
-    /// placeholder or first delta landed) but a later interim edit failed. The final edit must
-    /// still be attempted via <c>/reply/update</c>; falling back to <c>/reply</c> would reuse a
-    /// dead token and turn the partial into the user-visible terminal state.</item>
-    /// </list>
-    /// </remarks>
-    private sealed record NyxRelayStreamingState(
-        string? PlatformMessageId,
-        string LastFlushedText,
-        int EditCount,
-        bool Disabled,
-        bool SuppressInterim)
-    {
-        public static NyxRelayStreamingState Initial { get; } = new(null, string.Empty, 0, false, false);
-
-        /// <summary>
-        /// True once the first successful send has landed: the NyxID reply token has been
-        /// consumed and any further outbound must go through <c>/reply/update</c>. Used as the
-        /// "token is dead, don't fall back to <c>/reply</c>" guard.
-        /// </summary>
-        public bool ReplyTokenConsumed => !string.IsNullOrEmpty(PlatformMessageId);
-    }
+    private const int RelayReplayClaimsCap = 10000;
+    private const int PendingRelayAdmissionsCap = 1000;
+    private const int RetainedHistoryMessagesCap = 100;
+    private const int MaxNyxRelayInterimUpdateRetryCount = 2;
 
     /// <summary>
     /// Sliding window cap on retained processed ids. Keeps state size bounded while still
@@ -96,6 +78,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         await base.OnActivateAsync(ct);
         await SchedulePendingLlmReplyDispatchesAsync(ct);
         await SchedulePendingInboundTurnRetriesAsync(ct);
+        await DispatchPendingRelayAdmissionTurnsAsync(ct);
     }
 
     /// <inheritdoc />
@@ -107,6 +90,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             .On<ConversationContinueRejectedEvent>(ApplyContinueRejected)
             .On<ConversationContinueFailedEvent>(ApplyContinueFailed)
             .On<InboundTurnRetryScheduledEvent>(ApplyInboundTurnRetryScheduled)
+            .On<NyxRelayCallbackAdmittedEvent>(ApplyNyxRelayCallbackAdmitted)
+            .On<LlmReplyDeliveredEvent>(ApplyLastReplyDelivered)
+            .On<LlmReplyDeliveryFailedEvent>(ApplyLastReplyDeliveryFailed)
+            .On<ConversationReplyLifecycleChangedEvent>(ApplyReplyLifecycleChanged)
+            .On<ConversationReplyLifecycleClearedEvent>(ApplyReplyLifecycleCleared)
             .OrCurrent();
 
     /// <summary>
@@ -122,10 +110,105 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         ArgumentNullException.ThrowIfNull(relayActivity);
 
         var activity = relayActivity.Activity?.Clone() ?? new ChatActivity();
-        var runtimeContext = CaptureNyxRelayReplyToken(relayActivity, activity);
-        if (runtimeContext.NyxRelayReplyToken is { } tokenContext)
-            await ScheduleNyxRelayReplyTokenCleanupAsync(tokenContext, CancellationToken.None);
+        var relayApiKeyId = NormalizeOptional(relayActivity.RelayApiKeyId);
+        var callbackJti = NormalizeOptional(relayActivity.CallbackJti);
+        if (relayApiKeyId is not null && callbackJti is not null)
+        {
+            if (HasActiveRelayReplayClaim(relayApiKeyId, callbackJti, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+            {
+                Logger.LogInformation(
+                    "Duplicate Nyx relay callback {CallbackJti} for api key {RelayApiKeyId}; skipping turn",
+                    callbackJti,
+                    relayApiKeyId);
+                return;
+            }
+        }
+
+        var runtimeContext = BuildNyxRelayRuntimeContext(
+            relayActivity.CorrelationId,
+            activity,
+            relayActivity.ReplyToken,
+            relayActivity.ReplyTokenExpiresAtUnixMs,
+            activity.TransportExtras?.NyxUserAccessToken);
+
+        if (relayApiKeyId is not null && callbackJti is not null)
+        {
+            var nowMs = relayActivity.CallbackObservedAtUnixMs > 0
+                ? relayActivity.CallbackObservedAtUnixMs
+                : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var admitted = new NyxRelayCallbackAdmittedEvent
+            {
+                ActivityId = activity.Id ?? string.Empty,
+                RelayApiKeyId = relayApiKeyId,
+                CallbackJti = callbackJti,
+                Activity = CloneForDurableState(activity),
+                AdmittedAtUnixMs = nowMs,
+                ClaimExpiresAtUnixMs = relayActivity.CallbackReplayExpiresAtUnixMs > nowMs
+                    ? relayActivity.CallbackReplayExpiresAtUnixMs
+                    : nowMs + (long)TimeSpan.FromMinutes(5).TotalMilliseconds,
+            };
+            await PersistDomainEventAsync(admitted);
+            await SendToAsync(
+                Id,
+                new NyxRelayCallbackTurnRequestedEvent
+                {
+                    ActivityId = admitted.ActivityId,
+                    RelayApiKeyId = relayApiKeyId,
+                    CallbackJti = callbackJti,
+                    RequestedAtUnixMs = nowMs,
+                    ReplyToken = relayActivity.ReplyToken ?? string.Empty,
+                    ReplyTokenExpiresAtUnixMs = relayActivity.ReplyTokenExpiresAtUnixMs,
+                    NyxUserAccessToken = activity.TransportExtras?.NyxUserAccessToken ?? string.Empty,
+                },
+                CancellationToken.None);
+            return;
+        }
+
         await HandleInboundActivityCoreAsync(activity, runtimeContext);
+    }
+
+    // AllowSelfHandling is required: admission persists then self-sends NyxRelayCallbackTurnRequestedEvent
+    // via SendToAsync(Id, ...). EventHandlerAttribute defaults AllowSelfHandling=false, which causes
+    // StaticHandlerAdapter to drop the envelope when PublisherActorId == this.Id, so the handler never
+    // runs and the bot goes silent with zero log signature (2026-05-21 prod Lark outage).
+    // OnlySelfHandling is NOT set here: it gates by envelope TopologyAudience (must be Self), but
+    // SendToAsync produces a Direct route whose audience reads back as Unspecified, so adding
+    // OnlySelfHandling=true would re-filter the same envelope we are trying to admit. Pairs with
+    // RoleGAgent.cs:73 (same SendToAsync + AllowSelfHandling-only pattern).
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleNyxRelayCallbackTurnRequestedAsync(NyxRelayCallbackTurnRequestedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var admission = FindPendingRelayAdmission(evt.RelayApiKeyId, evt.CallbackJti, evt.ActivityId);
+        if (admission is null)
+        {
+            Logger.LogDebug(
+                "Ignoring Nyx relay callback turn without pending admission: activity={ActivityId} callbackJti={CallbackJti}",
+                evt.ActivityId,
+                evt.CallbackJti);
+            return;
+        }
+
+        if (admission.Activity is null)
+        {
+            Logger.LogWarning(
+                "Ignoring Nyx relay callback turn with missing admitted activity: activity={ActivityId} callbackJti={CallbackJti}",
+                evt.ActivityId,
+                evt.CallbackJti);
+            return;
+        }
+
+        var activity = admission.Activity.Clone();
+        RestoreRuntimeTransportCredentials(activity, NormalizeOptional(evt.NyxUserAccessToken));
+        var runtimeContext = BuildNyxRelayRuntimeContext(
+            NormalizeOptional(activity.OutboundDelivery?.CorrelationId) ??
+            NormalizeOptional(admission.ActivityId),
+            activity,
+            evt.ReplyToken,
+            evt.ReplyTokenExpiresAtUnixMs,
+            evt.NyxUserAccessToken);
+        await HandleInboundActivityCoreAsync(activity.Clone(), runtimeContext);
     }
 
     private async Task HandleInboundActivityCoreAsync(
@@ -146,7 +229,31 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             Logger.LogInformation(
                 "Duplicate inbound activity {ActivityId} (conversation={Key}); skipping turn",
                 activity.Id, activity.Conversation?.CanonicalKey);
-            RemoveNyxRelayReplyToken(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity);
+            await ClearReplyLifecyclesAsync(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity, "duplicate_activity");
+            return;
+        }
+
+        // Implement (issue #694):
+        //   Behavior: relay turns consult ChatRouteResolver during admission before runner dispatch.
+        //   Why this shape: routing remains a boundary decision and does not add an actor hop before the existing run handoff.
+        var targetRef = await ResolveInboundTargetRefAsync(activity, CancellationToken.None);
+        if (targetRef.Reject is not null)
+        {
+            var rejected = new ConversationContinueFailedEvent
+            {
+                CommandId = string.Empty,
+                CorrelationId = activity.Id,
+                CausationId = string.Empty,
+                Kind = FailureKind.PermanentAdapterError,
+                ErrorCode = "chat_route_rejected",
+                ErrorSummary = string.IsNullOrWhiteSpace(targetRef.Reject.Reason)
+                    ? "The chat route policy rejected this request."
+                    : targetRef.Reject.Reason,
+                NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
+                FailedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+            await PersistDomainEventAsync(rejected);
+            await ClearReplyLifecyclesAsync(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity, "chat_route_rejected");
             return;
         }
 
@@ -156,16 +263,36 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (result.LlmReplyRequest is not null)
         {
-            // The transient inbox copy keeps reply_token + expiry so the LLM worker can
-            // echo them back inside LlmReplyReadyEvent; the persisted state copy must
-            // not carry the credential into the event store / projection / read model.
-            var inboxCopy = result.LlmReplyRequest.Clone();
-            inboxCopy.TargetActorId = Id;
-            var persistedCopy = inboxCopy.Clone();
+            if (string.IsNullOrWhiteSpace(result.LlmReplyRequest.RunId))
+            {
+                await DropNewLlmReplyWithoutRunIdAsync(result.LlmReplyRequest);
+                return;
+            }
+
+            // The transient run command copy keeps reply_token + expiry + per-call credentials
+            // in Metadata so the run actor can echo them back inside LlmReplyReadyEvent and
+            // forward them to the LLM call; the persisted state copy must not carry any of
+            // those credentials into the event store / projection / read model.
+            var runCopy = result.LlmReplyRequest.Clone();
+            runCopy.TargetActorId = Id;
+            runCopy.TargetRef = targetRef.Clone();
+            // Refactor (iter98/cluster-002): Old=ConversationGAgent filled run_id from correlation_id; New=producer must supply run_id before this handoff.
+            runCopy.RunId = NormalizeOptional(runCopy.RunId)!;
+            ApplyRuntimeReplyToken(runCopy, runtimeContext);
+            RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
+            runCopy.PriorHistory.Clear();
+            runCopy.PriorHistory.AddRange(State.RetainedHistory.Select(entry => entry.Clone()));
+            var persistedCopy = runCopy.Clone();
             persistedCopy.ReplyToken = string.Empty;
             persistedCopy.ReplyTokenExpiresAtUnixMs = 0;
+            persistedCopy.Activity = CloneForDurableState(persistedCopy.Activity);
+            persistedCopy.TargetRef = null;
+            persistedCopy.LlmControl = null;
+            persistedCopy.PriorHistory.Clear();
+            StripRuntimeCredentialsFromToolContext(persistedCopy);
+            LlmReplyCredentialMetadataKeys.StripFrom(persistedCopy.Metadata);
             await PersistDomainEventAsync(persistedCopy);
-            await DispatchPendingLlmReplyAsync(inboxCopy, CancellationToken.None);
+            await DispatchPendingLlmReplyAsync(runCopy, CancellationToken.None);
             Logger.LogInformation(
                 "Accepted inbound activity for deferred LLM reply: activity={ActivityId} conversation={Key}",
                 activity.Id,
@@ -187,7 +314,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
             await PersistDomainEventAsync(completed);
-            RemoveNyxRelayReplyToken(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity);
+            await ClearReplyLifecyclesAsync(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity, "turn_completed");
             Logger.LogInformation(
                 "Completed inbound turn: activity={ActivityId} sent={SentId} conversation={Key}",
                 activity.Id, result.SentActivityId, activity.Conversation?.CanonicalKey);
@@ -212,10 +339,98 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         };
         AssignRetryPolicy(failed, result);
         await PersistDomainEventAsync(failed);
-        RemoveNyxRelayReplyToken(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity);
+        await ClearReplyLifecyclesAsync(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity, "inbound_retries_exhausted");
         Logger.LogWarning(
             "Inbound turn failed: activity={ActivityId} code={Code} kind={Kind}",
             activity.Id, result.ErrorCode, result.FailureKind);
+    }
+
+    private static void StripRuntimeCredentialsFromToolContext(NeedsLlmReplyEvent request)
+    {
+        if (request.ToolContext is null)
+            return;
+
+        var durableContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+        {
+            Credentials = AgentToolCredentials.Empty,
+        };
+        request.ToolContext = HasDurableToolContext(durableContext)
+            ? durableContext.ToPayload()
+            : null;
+    }
+
+    private static bool HasDurableToolContext(AgentToolExecutionContext context) =>
+        !string.IsNullOrWhiteSpace(context.Request.RequestId) ||
+        !string.IsNullOrWhiteSpace(context.Request.CallId) ||
+        !string.IsNullOrWhiteSpace(context.Caller.ScopeId) ||
+        !string.IsNullOrWhiteSpace(context.Caller.OwnerSubject) ||
+        !string.IsNullOrWhiteSpace(context.Caller.ResponseId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.Platform) ||
+        !string.IsNullOrWhiteSpace(context.Channel.SenderId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.RegistrationScopeId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.MessageId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.PlatformMessageId) ||
+        !string.IsNullOrWhiteSpace(context.SenderBinding.BindingId) ||
+        !string.IsNullOrWhiteSpace(context.Routing.ModelOverride) ||
+        !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
+        context.Routing.MaxToolRoundsOverride.HasValue ||
+        !string.IsNullOrWhiteSpace(context.Routing.UserMemoryPrompt) ||
+        !string.IsNullOrWhiteSpace(context.ConnectedServices.ContextJson) ||
+        context.ExternalMetadata.Count > 0 ||
+        context.SkillRecovery.RequireInitialOrnnSearch ||
+        context.SkillRecovery.RequireOrnnSearchOnBlocker ||
+        !string.IsNullOrWhiteSpace(context.SkillRecovery.CommandName) ||
+        !string.IsNullOrWhiteSpace(context.SkillRecovery.OriginalCommand) ||
+        !string.IsNullOrWhiteSpace(context.SkillRecovery.PrimarySkillName) ||
+        context.SkillRecovery.MaxOrnnSearchAttempts > 0;
+
+    private async Task<ChatRouteAction> ResolveInboundTargetRefAsync(
+        ChatActivity activity,
+        CancellationToken ct)
+    {
+        var queryPort = Services.GetService<IChatRoutePolicyQueryPort>();
+        var resolver = Services.GetService<ChatRouteResolver>();
+        var callerScope = TryBuildRelayCallerScope(activity);
+        if (queryPort is null || resolver is null || callerScope is null)
+            return new ChatRouteAction();
+
+        var snapshot = await queryPort.LookupForCallerAsync(callerScope, ct);
+        var input = new ChatRouteInput
+        {
+            SourceKind = ChatSourceKind.NyxRelay,
+            CallerScope = callerScope.Clone(),
+            Channel = callerScope.Platform,
+            CommandName = ExtractCommandName(activity.Content?.Text),
+            ContentHint = string.Empty,
+            ToolMode = ToolMode.None,
+        };
+        var decision = resolver.Resolve(snapshot, input);
+        return decision.Action.Clone();
+    }
+
+    private static OwnerScope? TryBuildRelayCallerScope(ChatActivity activity)
+    {
+        var platform = NormalizeOptional(activity.TransportExtras?.NyxPlatform) ??
+                       NormalizeOptional(activity.ChannelId?.Value);
+        var registrationScopeId = NormalizeOptional(activity.TransportExtras?.NyxRegistrationScopeId) ??
+                                  NormalizeOptional(activity.Bot?.Value);
+        var senderId = NormalizeOptional(activity.From?.CanonicalId);
+        if (platform is null || registrationScopeId is null || senderId is null)
+            return null;
+
+        // The sender's NyxID is resolved by the relay ingress (NyxID `/me` with the
+        // user access token) and stashed in TransportExtras. Using it here matches
+        // per-user channel policies; an empty value falls through to scope-only
+        // policies (same key shape as policy upserts without a per-user binding).
+        var senderNyxUserId = NormalizeOptional(activity.TransportExtras?.NyxSenderUserId)
+                              ?? string.Empty;
+        return OwnerScope.ForChannel(senderNyxUserId, platform, registrationScopeId, senderId);
+    }
+
+    private static string ExtractCommandName(string? text)
+    {
+        var first = ChannelTextCommandParser.Tokenize(text).FirstOrDefault();
+        return first is { Length: > 1 } && first[0] == '/' ? first : string.Empty;
     }
 
     /// <summary>
@@ -251,7 +466,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 FailedAtUnixMs = nowMs,
             };
             await PersistDomainEventAsync(failed);
-            RemoveNyxRelayReplyToken(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity);
+            await ClearReplyLifecyclesAsync(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity, "turn_failed");
             Logger.LogWarning(
                 "Inbound turn retries exhausted: activity={ActivityId} retryCount={RetryCount} code={Code}",
                 activity.Id,
@@ -275,7 +490,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var scheduled = new InboundTurnRetryScheduledEvent
         {
             ActivityId = activity.Id,
-            Activity = activity.Clone(),
+            Activity = CloneForDurableState(activity),
             RetryCount = nextRetryCount,
             FirstFailedUnixMs = firstFailedUnixMs,
             NextRetryUnixMs = nextRetryUnixMs,
@@ -292,7 +507,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             result.ErrorCode);
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleDeferredLlmReplyDispatchRequestedAsync(DeferredLlmReplyDispatchRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -314,6 +529,19 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     {
         ArgumentNullException.ThrowIfNull(evt);
 
+        // ADR-0021 §6 / canon §9 absorbing-finalized: a late drop notification for an
+        // already-finalized turn (e.g. the run actor's terminal-cleanup callback fires
+        // after a successful reply already landed) must no-op rather than overwrite the
+        // turn outcome with a synthetic ConversationContinueFailedEvent.
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
+        {
+            Logger.LogDebug(
+                "Ignoring deferred LLM reply drop for already-finalized turn: correlation={CorrelationId} reason={Reason}",
+                evt.CorrelationId,
+                evt.Reason);
+            return;
+        }
+
         var pending = FindPendingLlmReplyRequest(evt.CorrelationId);
         if (pending is null)
         {
@@ -332,22 +560,22 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             CausationId = string.Empty,
             Kind = FailureKind.PermanentAdapterError,
             ErrorCode = reason,
-            ErrorSummary = "Deferred LLM reply request was dropped by the inbox pre-LLM gate.",
+            ErrorSummary = "Deferred LLM reply request was dropped by the run actor pre-LLM gate.",
             NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
             FailedAtUnixMs = evt.DroppedAtUnixMs > 0
                 ? evt.DroppedAtUnixMs
                 : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
         await PersistDomainEventAsync(failed);
-        RemoveNyxRelayReplyToken(evt.CorrelationId, pending.Activity);
+        await ClearReplyLifecyclesAsync(evt.CorrelationId, pending.Activity, "deferred_llm_reply_dropped");
 
         Logger.LogInformation(
-            "Retired pending LLM reply after inbox drop: correlation={CorrelationId} reason={Reason}",
+            "Retired pending LLM reply after run drop: correlation={CorrelationId} reason={Reason}",
             evt.CorrelationId,
             reason);
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleDeferredInboundTurnRetryRequestedAsync(DeferredInboundTurnRetryRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -364,90 +592,115 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
-        // The in-memory _nyxRelayReplyTokens dict is the authoritative source for the relay
-        // reply credential. If the activation is still alive, BuildNyxRelayRuntimeContext
-        // will re-hydrate it from activity.outbound_delivery.correlation_id; if the pod was
-        // restarted between attempts the dict is empty and the retry runs with Empty
-        // context. In both cases the runner is invoked identically to the first turn.
         var runtimeContext = BuildNyxRelayRuntimeContext(
             pending.Activity.OutboundDelivery?.CorrelationId,
             pending.Activity);
 
-        await HandleInboundActivityCoreAsync(pending.Activity.Clone(), runtimeContext);
+        if (IsRelayActivity(pending.Activity) && runtimeContext.NyxRelayReplyToken is null)
+        {
+            await PersistMissingRuntimeCredentialFailureAsync(
+                commandId: string.Empty,
+                correlationId: pending.ActivityId,
+                errorCode: "missing_runtime_reply_token",
+                errorSummary: "Pending relay inbound retry cannot continue after rehydration because reply credentials are runtime-only.",
+                failedAtUnixMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            return;
+        }
+
+        var activity = pending.Activity.Clone();
+        RestoreRuntimeTransportCredentials(activity, runtimeContext);
+        await HandleInboundActivityCoreAsync(activity, runtimeContext);
     }
 
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
-        var inbox = Services.GetService<IChannelLlmReplyInbox>();
-        if (inbox is null)
+        var dispatcher = Services.GetService<IChannelLlmReplyRunDispatcher>();
+        if (dispatcher is null)
         {
             Logger.LogWarning(
-                "Channel LLM reply inbox not registered; scheduling durable retry: correlation={CorrelationId}",
+                "Channel LLM reply run dispatcher not registered; scheduling durable retry: correlation={CorrelationId}",
                 request.CorrelationId);
             await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
             return;
         }
 
-        // Retry and rehydration paths read `request` from State.PendingLlmReplyRequests,
-        // which always carries an empty ReplyToken (the inbound handler strips it before
-        // persist). If the actor is still alive and the in-memory dict still has the
-        // token for this correlation, re-enrich the inbox copy so the subscriber's relay
-        // credential gate does not mistake a legitimate retry for a dead request.
-        var enriched = EnrichWithRuntimeReplyTokenIfNeeded(request);
+        if (IsRelayActivity(request.Activity) && string.IsNullOrWhiteSpace(request.ReplyToken))
+        {
+            await PersistMissingRuntimeCredentialFailureAsync(
+                BuildLlmReplyCommandId(request.CorrelationId),
+                request.CorrelationId,
+                "missing_runtime_reply_token",
+                "Pending relay LLM reply cannot be dispatched after rehydration because reply credentials are runtime-only.",
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.RunId))
+        {
+            await DropLegacyPendingLlmReplyWithoutRunIdAsync(request);
+            return;
+        }
 
         try
         {
-            await inbox.EnqueueAsync(enriched.Clone(), ct);
+            // Refactor (iter56/cluster-935-agent-run-actor-admission): old=dispatcher in-process admission, new=actor-owned admission with plain Task
+            //   Conversation observes only dispatch handoff success/failure here.
+            //   Run duplicate/stale decisions are committed by AgentRunGAgent events.
+            await dispatcher.DispatchAsync(request.Clone(), ct);
             Logger.LogInformation(
-                "Enqueued LLM reply request to inbox: correlation={CorrelationId} conversation={Key} replyTokenSource={Source}",
-                enriched.CorrelationId,
-                enriched.Activity?.Conversation?.CanonicalKey,
-                DescribeEnqueuedReplyTokenSource(request, enriched));
+                "Dispatched LLM reply run request: runId={RunId} correlation={CorrelationId} conversation={Key}",
+                request.RunId,
+                request.CorrelationId,
+                request.Activity?.Conversation?.CanonicalKey);
         }
         catch (Exception ex)
         {
             Logger.LogError(
                 ex,
-                "Failed to enqueue LLM reply request; scheduling durable retry: correlation={CorrelationId}",
+                "Failed to dispatch LLM reply run request; scheduling durable retry: correlation={CorrelationId}",
                 request.CorrelationId);
             await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
         }
     }
 
-    private NeedsLlmReplyEvent EnrichWithRuntimeReplyTokenIfNeeded(NeedsLlmReplyEvent request)
+    private async Task DropLegacyPendingLlmReplyWithoutRunIdAsync(NeedsLlmReplyEvent request)
     {
-        if (!string.IsNullOrWhiteSpace(request.ReplyToken))
-            return request;
-
-        var correlationId = NormalizeOptional(request.Activity?.OutboundDelivery?.CorrelationId) ??
-                            NormalizeOptional(request.CorrelationId);
-        if (correlationId is null)
-            return request;
-
-        if (!_nyxRelayReplyTokens.TryGetValue(correlationId, out var tokenContext))
-            return request;
-
-        if (tokenContext.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        // Refactor (iter98/cluster-002): Old=dispatcher recovered actor identity from correlation_id; New=legacy persisted requests without run_id are explicitly quarantined/dropped.
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        Logger.LogWarning(
+            "Dropping legacy pending LLM reply request without run_id; correlation remains trace-only. correlation={CorrelationId}",
+            request.CorrelationId);
+        await PersistDomainEventAsync(new ConversationContinueFailedEvent
         {
-            _nyxRelayReplyTokens.Remove(correlationId);
-            return request;
-        }
-
-        var enriched = request.Clone();
-        enriched.ReplyToken = tokenContext.ReplyToken;
-        enriched.ReplyTokenExpiresAtUnixMs = tokenContext.ExpiresAtUtc.ToUnixTimeMilliseconds();
-        return enriched;
+            CommandId = BuildLlmReplyCommandId(request.CorrelationId),
+            CorrelationId = request.CorrelationId,
+            CausationId = string.Empty,
+            Kind = FailureKind.PermanentAdapterError,
+            ErrorCode = "legacy_pending_llm_reply_missing_run_id_dropped",
+            ErrorSummary = "Legacy pending LLM reply request did not contain run_id and was dropped instead of deriving actor identity from correlation_id.",
+            NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
+            FailedAtUnixMs = nowMs,
+        });
     }
 
-    private static string DescribeEnqueuedReplyTokenSource(
-        NeedsLlmReplyEvent original,
-        NeedsLlmReplyEvent enriched)
+    private async Task DropNewLlmReplyWithoutRunIdAsync(NeedsLlmReplyEvent request)
     {
-        if (!string.IsNullOrWhiteSpace(original.ReplyToken))
-            return "inbound-direct";
-        if (!string.IsNullOrWhiteSpace(enriched.ReplyToken))
-            return "actor-runtime-dict";
-        return "none";
+        // Refactor (iter98/cluster-002): Old=ConversationGAgent supplied implicit run_id; New=new dispatch without run_id is rejected before persistence/dispatch.
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        Logger.LogWarning(
+            "Rejecting deferred LLM reply request without run_id before persistence/dispatch. correlation={CorrelationId}",
+            request.CorrelationId);
+        await PersistDomainEventAsync(new ConversationContinueFailedEvent
+        {
+            CommandId = BuildLlmReplyCommandId(request.CorrelationId),
+            CorrelationId = request.CorrelationId,
+            CausationId = string.Empty,
+            Kind = FailureKind.PermanentAdapterError,
+            ErrorCode = "deferred_llm_reply_missing_run_id_rejected",
+            ErrorSummary = "Deferred LLM reply request must carry explicit run_id before persistence and dispatch.",
+            NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
+            FailedAtUnixMs = nowMs,
+        });
     }
 
     [EventHandler]
@@ -457,7 +710,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
         var commandId = BuildLlmReplyCommandId(evt.CorrelationId);
         var pendingRequest = FindPendingLlmReplyRequest(evt.CorrelationId);
-        if (State.ProcessedCommandIds.Contains(commandId))
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
         {
             Logger.LogInformation(
                 "Duplicate LLM reply ready event {CorrelationId} (conversation={Key}); skipping outbound",
@@ -475,7 +728,16 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             DescribeReplyTokenSource(evt, runtimeContext));
 
         if (await TryCompleteStreamedReplyAsync(evt, commandId, referenceActivity, runtimeContext))
+        {
+            // Streaming path bypasses RunLlmReplyAsync entirely (the reply was already finalized via
+            // RunStreamChunkAsync edits), so the runner's post-reply housekeeping never fires from
+            // there. Trigger the hook explicitly so platform-specific cleanup (e.g. Lark
+            // "Typing"→"DONE" reaction swap) still runs on the most common production reply path.
+            var streamingActivity = referenceActivity ?? evt.Activity;
+            if (streamingActivity is not null)
+                _ = ResolveRunner().OnReplyDeliveredAsync(streamingActivity, CancellationToken.None);
             return;
+        }
 
         var runner = ResolveRunner();
         var result = await runner.RunLlmReplyAsync(
@@ -497,8 +759,21 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 CompletedAtUnixMs = nowMs,
                 OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
+            completed.AppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
+            // ADR-0021 chain.delivered observable: persist the user-visible delivery ack
+            // before the turn-completed summary event so readers do not need to infer
+            // delivery status from the channel sink return code, and so existing
+            // "events.Last() is turn-completed" consumers stay correct.
+            var delivered = new LlmReplyDeliveredEvent
+            {
+                CorrelationId = evt.CorrelationId ?? string.Empty,
+                RunId = evt.RunId ?? string.Empty,
+                AckedAtUnixMs = nowMs,
+                ChannelMessageId = result.OutboundDelivery?.ReplyMessageId ?? string.Empty,
+            };
+            await PersistDomainEventAsync(delivered);
             await PersistDomainEventAsync(completed);
-            RemoveNyxRelayReplyToken(evt.CorrelationId, pendingRequest?.Activity ?? evt.Activity);
+            await ClearReplyLifecyclesAsync(evt.CorrelationId, pendingRequest?.Activity ?? evt.Activity, "llm_reply_completed");
             Logger.LogInformation(
                 "Completed deferred LLM reply: correlation={CorrelationId} sent={SentId} conversation={Key}",
                 evt.CorrelationId,
@@ -518,10 +793,21 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             FailedAtUnixMs = nowMs,
         };
         AssignRetryPolicy(failed, result);
+        // ADR-0021 chain.delivered failure observable: structured delivery failure persists
+        // before the chain-finalizing failure event so existing "events.Last() is
+        // ConversationContinueFailedEvent" consumers stay correct.
+        var deliveryFailed = new LlmReplyDeliveryFailedEvent
+        {
+            CorrelationId = evt.CorrelationId ?? string.Empty,
+            RunId = evt.RunId ?? string.Empty,
+            FailedAtUnixMs = nowMs,
+            ErrorCode = result.ErrorCode ?? string.Empty,
+            ErrorMessage = result.ErrorSummary ?? string.Empty,
+        };
+        await PersistDomainEventAsync(deliveryFailed);
         await PersistDomainEventAsync(failed);
-        SweepExpiredNyxRelayReplyTokens();
         if (failed.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable)
-            RemoveNyxRelayReplyToken(evt.CorrelationId, pendingRequest?.Activity ?? evt.Activity);
+            await ClearReplyLifecyclesAsync(evt.CorrelationId, pendingRequest?.Activity ?? evt.Activity, "llm_reply_failed_not_retryable");
         if (failed.RetryPolicyCase != ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable &&
             pendingRequest is not null)
         {
@@ -552,10 +838,63 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     /// boundary and the edit ordering is enforced by actor serialization.
     /// </summary>
     [EventHandler]
-    public async Task HandleLlmReplyStreamChunkAsync(LlmReplyStreamChunkEvent evt)
+    public Task HandleLlmReplyStreamChunkAsync(LlmReplyStreamChunkEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        return HandleNyxRelayStreamingChunkCoreAsync(evt);
+    }
+
+    /// <summary>
+    /// CardKit-streaming chunks travel on a structurally distinct proto type so a misbehaving
+    /// persistence layer cannot silently re-route a replayed event back to the card sink. The
+    /// card handler owns Idle / Creating / Streaming / terminal transitions; on
+    /// <c>CreationFailed</c> it returns false and we drop into the legacy text-edit core
+    /// helper so the user still sees a reply for the rest of the turn.
+    /// </summary>
+    [EventHandler]
+    public async Task HandleLlmReplyCardStreamChunkAsync(LlmReplyCardStreamChunkEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
 
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null || evt.Activity is null || string.IsNullOrWhiteSpace(evt.AccumulatedText))
+        {
+            Logger.LogDebug(
+                "Dropping malformed card streaming chunk: correlation={CorrelationId}",
+                evt.CorrelationId);
+            return;
+        }
+
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
+        {
+            // Turn already finalized; drop any late chunk that sneaks in via the actor inbox.
+            return;
+        }
+
+        // Plain `await`: actor turns run on a single-threaded scheduler and the continuation
+        // must observe that context for subsequent state mutations on
+        // active reply lifecycles.
+        if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId))
+            return;
+
+        // CardCreation failed (pre-flight or first chunk). Route the rest of the turn through
+        // the legacy text-edit core so the user still gets a reply. Synthesize the equivalent
+        // edit-message chunk from the card-event payload — both proto types carry the same
+        // fields so the projection is loss-less.
+        await HandleNyxRelayStreamingChunkCoreAsync(new LlmReplyStreamChunkEvent
+        {
+            CorrelationId = evt.CorrelationId,
+            RegistrationId = evt.RegistrationId,
+            Activity = evt.Activity.Clone(),
+            AccumulatedText = evt.AccumulatedText,
+            ChunkAtUnixMs = evt.ChunkAtUnixMs,
+            ReplyToken = evt.ReplyToken,
+            ReplyTokenExpiresAtUnixMs = evt.ReplyTokenExpiresAtUnixMs,
+        });
+    }
+
+    private async Task HandleNyxRelayStreamingChunkCoreAsync(LlmReplyStreamChunkEvent evt)
+    {
         var correlationId = NormalizeOptional(evt.CorrelationId);
         if (correlationId is null || evt.Activity is null || string.IsNullOrWhiteSpace(evt.AccumulatedText))
         {
@@ -565,71 +904,79 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
-        var state = _nyxRelayStreamingStates.GetValueOrDefault(correlationId) ?? NyxRelayStreamingState.Initial;
-        if (state.Disabled || state.SuppressInterim)
-            return;
-
-        if (State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(evt.CorrelationId)))
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
         {
             // Turn already finalized; drop any late chunk that sneaks in via the actor inbox.
             return;
         }
 
-        var runtimeContext = BuildNyxRelayRuntimeContext(evt.CorrelationId, evt.Activity);
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.AcceptInterimChunk))
+            return;
+
+        if (state.InFlight is not null)
+        {
+            await PersistNyxRelayTextCoalescedStateAsync(correlationId, state, evt.AccumulatedText);
+            return;
+        }
+
+        var runtimeContext = BuildNyxRelayRuntimeContext(
+            evt.CorrelationId,
+            evt.Activity,
+            evt.ReplyToken,
+            evt.ReplyTokenExpiresAtUnixMs);
         if (runtimeContext.NyxRelayReplyToken is null)
         {
             Logger.LogInformation(
                 "Streaming chunk received but relay reply token is unavailable; disabling streaming for turn. correlation={CorrelationId}",
                 evt.CorrelationId);
-            _nyxRelayStreamingStates[correlationId] = state with { Disabled = true };
+            await TransitionNyxRelayStreamingPhaseAsync(
+                correlationId,
+                state,
+                NyxRelayStreamingPhase.DisabledPreSend,
+                terminalReason: "no_reply_token");
             return;
         }
 
-        var runner = ResolveRunner();
-        var result = await runner.RunStreamChunkAsync(
+        var sequence = state.EditCount + 1L;
+        var generation = NextNyxRelayTextOperationGeneration(state);
+        await TransitionNyxRelayStreamingPhaseAsync(
+            correlationId,
+            state,
+            state.Phase,
+            fieldUpdate: s => s with
+            {
+                InFlight = new NyxRelayTextOperationInFlight(
+                    NyxRelayTextOperationKind.Interim,
+                    sequence,
+                    generation),
+                OperationGeneration = generation,
+                PendingAccumulatedText = evt.AccumulatedText,
+                RetryAttempt = 0,
+            });
+        await ScheduleNyxRelayTextOperationTimeoutAsync(
+            correlationId,
+            NyxRelayTextOperationKind.Interim,
+            sequence,
+            generation,
             evt,
             state.PlatformMessageId,
-            runtimeContext,
+            commandId: string.Empty,
+            finalText: string.Empty,
+            lastFlushedText: state.LastFlushedText,
+            editCount: state.EditCount,
             CancellationToken.None);
-        if (!result.Success)
-        {
-            if (state.ReplyTokenConsumed)
-            {
-                // First chunk already consumed the reply token. Skip further interim edits but
-                // preserve PlatformMessageId so the final edit on LlmReplyReady can still try
-                // to reconcile the user-visible message. Falling back to /reply would reuse a
-                // dead token.
-                Logger.LogInformation(
-                    "Streaming interim edit failed after token consumed; suppressing interim edits, final edit will still be attempted. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
-                    evt.CorrelationId,
-                    result.ErrorCode,
-                    result.EditUnsupported);
-                _nyxRelayStreamingStates[correlationId] = state with { SuppressInterim = true };
-            }
-            else
-            {
-                // First send itself failed, so the reply token is still usable. Let
-                // LlmReplyReady fall back to a single-shot /reply via RunLlmReplyAsync.
-                Logger.LogInformation(
-                    "Streaming initial send failed before token consumed; disabling streaming and allowing /reply fallback. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
-                    evt.CorrelationId,
-                    result.ErrorCode,
-                    result.EditUnsupported);
-                _nyxRelayStreamingStates[correlationId] = state with { Disabled = true };
-            }
-            return;
-        }
-
-        var isFirstChunk = string.IsNullOrEmpty(state.PlatformMessageId);
-        var newPlatformMessageId = string.IsNullOrWhiteSpace(result.PlatformMessageId)
-            ? state.PlatformMessageId
-            : result.PlatformMessageId;
-        _nyxRelayStreamingStates[correlationId] = state with
-        {
-            PlatformMessageId = newPlatformMessageId,
-            LastFlushedText = evt.AccumulatedText,
-            EditCount = isFirstChunk ? 0 : state.EditCount + 1,
-        };
+        await StartNyxRelayTextOperationAsync(
+            NyxRelayTextOperationKind.Interim,
+            evt,
+            correlationId,
+            state.PlatformMessageId,
+            commandId: string.Empty,
+            finalText: string.Empty,
+            lastFlushedText: state.LastFlushedText,
+            editCount: state.EditCount,
+            sequence,
+            generation);
     }
 
     private async Task<bool> TryCompleteStreamedReplyAsync(
@@ -638,22 +985,116 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         ChatActivity? referenceActivity,
         ConversationTurnRuntimeContext runtimeContext)
     {
-        if (evt.TerminalState != LlmReplyTerminalState.Completed)
-            return false;
-
         var correlationId = NormalizeOptional(evt.CorrelationId);
         if (correlationId is null)
             return false;
 
-        if (!_nyxRelayStreamingStates.TryGetValue(correlationId, out var state))
-            return false;
-        // Disabled means the initial send never landed, so the reply token is still usable
-        // and the caller may fall back to a single-shot /reply. A missing PlatformMessageId
-        // with SuppressInterim would be inconsistent, but treat it the same for safety.
-        if (state.Disabled || string.IsNullOrEmpty(state.PlatformMessageId))
+        // Card path takes precedence when active; falls through to text-edit when card never
+        // started (Idle), card creation failed (CreationFailed → text-edit fallback), or card
+        // finished as a terminal phase. Plain `await` so the continuation stays on the
+        // actor's single-threaded scheduler (no ConfigureAwait(false) — it would let the
+        // post-await active lifecycle reads run off the actor turn).
+        if (await TryCompleteCardStreamedReplyAsync(evt, correlationId, commandId, referenceActivity))
+            return true;
+
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.Finalize))
             return false;
 
         var platformMessageId = state.PlatformMessageId!;
+
+        if (state.InFlight is not null)
+        {
+            if (evt.TerminalState == LlmReplyTerminalState.Failed)
+            {
+                var failureText = NormalizeOptional(evt.Outbound?.Text)
+                    ?? NormalizeOptional(evt.ErrorSummary)
+                    ?? "Sorry, the reply failed. Please try again.";
+                await PersistNyxRelayTextCoalescedStateAsync(
+                    correlationId,
+                    state,
+                    finalizeText: failureText,
+                    finalizeCommandId: commandId,
+                    terminalState: LlmReplyTerminalState.Failed,
+                    appendedHistory: evt.AppendedHistory);
+                return true;
+            }
+
+            if (evt.TerminalState == LlmReplyTerminalState.Completed)
+            {
+                await PersistNyxRelayTextCoalescedStateAsync(
+                    correlationId,
+                    state,
+                    finalizeText: evt.Outbound?.Text ?? string.Empty,
+                    finalizeCommandId: commandId,
+                    terminalState: LlmReplyTerminalState.Completed,
+                    appendedHistory: evt.AppendedHistory);
+                return true;
+            }
+        }
+
+        // Streaming-start already consumed the reply token. On Failed, falling through to
+        // RunLlmReplyAsync would issue a fresh /reply against the dead token and surface
+        // as `401 Reply token already used` to NyxID — leaving the user staring at the
+        // streaming partial (often just "...") forever with no error explanation. Self-heal
+        // by editing the existing placeholder in place with the classified failure text;
+        // turn is then terminal (no retry, no second /reply).
+        if (evt.TerminalState == LlmReplyTerminalState.Failed)
+        {
+            var failureText = NormalizeOptional(evt.Outbound?.Text)
+                ?? NormalizeOptional(evt.ErrorSummary)
+                ?? "Sorry, the reply failed. Please try again.";
+            var failureChunk = new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = evt.CorrelationId,
+                RegistrationId = evt.RegistrationId,
+                Activity = referenceActivity?.Clone() ?? evt.Activity?.Clone() ?? new ChatActivity(),
+                AccumulatedText = failureText,
+                ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+            var sequence = state.EditCount + 1L;
+            var generation = NextNyxRelayTextOperationGeneration(state);
+            await TransitionNyxRelayStreamingPhaseAsync(
+                correlationId,
+                state,
+                state.Phase,
+                fieldUpdate: s => s with
+                {
+                    InFlight = new NyxRelayTextOperationInFlight(
+                        NyxRelayTextOperationKind.FailureSelfHeal,
+                        sequence,
+                        generation),
+                    OperationGeneration = generation,
+                    RetryAttempt = 0,
+                });
+            await ScheduleNyxRelayTextOperationTimeoutAsync(
+                correlationId,
+                NyxRelayTextOperationKind.FailureSelfHeal,
+                sequence,
+                generation,
+                failureChunk,
+                platformMessageId,
+                commandId,
+                finalText: failureText,
+                lastFlushedText: state.LastFlushedText,
+                editCount: state.EditCount,
+                CancellationToken.None);
+            await StartNyxRelayTextOperationAsync(
+                NyxRelayTextOperationKind.FailureSelfHeal,
+                failureChunk,
+                correlationId,
+                platformMessageId,
+                commandId,
+                finalText: failureText,
+                lastFlushedText: state.LastFlushedText,
+                editCount: state.EditCount,
+                sequence,
+                generation);
+            return true;
+        }
+
+        if (evt.TerminalState != LlmReplyTerminalState.Completed)
+            return false;
         var finalText = evt.Outbound?.Text ?? string.Empty;
         if (string.IsNullOrWhiteSpace(finalText))
         {
@@ -665,6 +1106,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 "Streaming LLM reply final text was empty; persisting last flushed partial as terminal. correlation={CorrelationId} platformMessageId={PlatformMessageId}",
                 evt.CorrelationId,
                 platformMessageId);
+            await TransitionNyxRelayStreamingPhaseAsync(
+                correlationId,
+                state,
+                NyxRelayStreamingPhase.TerminalPartial,
+                terminalReason: "empty_final_text");
             await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, state.LastFlushedText, state.EditCount);
             return true;
         }
@@ -672,7 +1118,6 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var edits = state.EditCount;
         if (!string.Equals(finalText, state.LastFlushedText, StringComparison.Ordinal))
         {
-            var runner = ResolveRunner();
             var finalChunk = new LlmReplyStreamChunkEvent
             {
                 CorrelationId = evt.CorrelationId,
@@ -681,32 +1126,722 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 AccumulatedText = finalText,
                 ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
-            var finalResult = await runner.RunStreamChunkAsync(
+            var sequence = state.EditCount + 1L;
+            var generation = NextNyxRelayTextOperationGeneration(state);
+            await TransitionNyxRelayStreamingPhaseAsync(
+                correlationId,
+                state,
+                state.Phase,
+                fieldUpdate: s => s with
+                {
+                    InFlight = new NyxRelayTextOperationInFlight(
+                        NyxRelayTextOperationKind.Final,
+                        sequence,
+                        generation),
+                    OperationGeneration = generation,
+                    RetryAttempt = 0,
+                });
+            await ScheduleNyxRelayTextOperationTimeoutAsync(
+                correlationId,
+                NyxRelayTextOperationKind.Final,
+                sequence,
+                generation,
                 finalChunk,
                 platformMessageId,
-                runtimeContext,
+                commandId,
+                finalText,
+                state.LastFlushedText,
+                state.EditCount,
                 CancellationToken.None);
-            if (!finalResult.Success)
-            {
-                // The reply token was already consumed by the first chunk, so falling back to
-                // a fresh /reply via RunLlmReplyAsync would reuse a dead JTI and surface as 401
-                // to the user. Persist the last flushed partial as the terminal state instead —
-                // the user sees the stale partial, but we don't spin on a guaranteed-failing
-                // send. Retries cannot help here.
-                Logger.LogWarning(
-                    "Streaming final flush failed after token consumed; persisting last flushed partial as terminal. correlation={CorrelationId}, code={Code}, platformMessageId={PlatformMessageId}",
-                    evt.CorrelationId,
-                    finalResult.ErrorCode,
-                    platformMessageId);
-                await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, state.LastFlushedText, state.EditCount);
-                return true;
-            }
-            edits += 1;
+            await StartNyxRelayTextOperationAsync(
+                NyxRelayTextOperationKind.Final,
+                finalChunk,
+                correlationId,
+                platformMessageId,
+                commandId,
+                finalText,
+                state.LastFlushedText,
+                state.EditCount,
+                sequence,
+                generation);
+            return true;
         }
 
+        await TransitionNyxRelayStreamingPhaseAsync(
+            correlationId,
+            state,
+            NyxRelayStreamingPhase.TerminalSucceeded,
+            terminalReason: "completed");
         await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, finalText, edits);
         return true;
     }
+
+    private Task<NyxRelayStreamingState> PersistNyxRelayTextCoalescedStateAsync(
+        string correlationId,
+        NyxRelayStreamingState state,
+        string? accumulatedText = null,
+        string? finalizeText = null,
+        string? finalizeCommandId = null,
+        LlmReplyTerminalState terminalState = LlmReplyTerminalState.Unspecified,
+        IEnumerable<ConversationHistoryEntry>? appendedHistory = null) =>
+        TransitionNyxRelayStreamingPhaseAsync(
+            correlationId,
+            state,
+            state.Phase,
+            fieldUpdate: s => s with
+            {
+                PendingAccumulatedText = NormalizeOptional(accumulatedText) ?? s.PendingAccumulatedText,
+                PendingFinalizeText = NormalizeOptional(finalizeText) ?? s.PendingFinalizeText,
+                PendingFinalizeCommandId = NormalizeOptional(finalizeCommandId) ?? s.PendingFinalizeCommandId,
+                PendingTerminalState = terminalState == LlmReplyTerminalState.Unspecified
+                    ? s.PendingTerminalState
+                    : terminalState,
+                PendingAppendedHistory = appendedHistory is null
+                    ? s.PendingAppendedHistory
+                    : appendedHistory.Select(entry => entry.Clone()).ToArray(),
+            });
+
+    private async Task ScheduleNyxRelayTextOperationTimeoutAsync(
+        string correlationId,
+        NyxRelayTextOperationKind operation,
+        long sequence,
+        long generation,
+        LlmReplyStreamChunkEvent chunk,
+        string? currentPlatformMessageId,
+        string? commandId,
+        string? finalText,
+        string? lastFlushedText,
+        int editCount,
+        CancellationToken ct)
+    {
+        await ScheduleSelfDurableTimeoutAsync(
+            BuildNyxRelayTextOperationTimeoutCallbackId(correlationId, operation, generation),
+            StreamingFailureUpdateTimeout,
+            new NyxRelayTextOperationTimeoutFiredEvent
+            {
+                CorrelationId = correlationId,
+                Operation = operation,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Chunk = CloneNyxRelayTextTimeoutChunkForDurableState(chunk),
+                CurrentPlatformMessageId = currentPlatformMessageId ?? string.Empty,
+                CommandId = commandId ?? string.Empty,
+                FinalText = finalText ?? string.Empty,
+                LastFlushedText = lastFlushedText ?? string.Empty,
+                EditCount = editCount,
+                FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            ct: ct);
+    }
+
+    private static LlmReplyStreamChunkEvent CloneNyxRelayTextTimeoutChunkForDurableState(
+        LlmReplyStreamChunkEvent chunk) =>
+        new()
+        {
+            CorrelationId = chunk.CorrelationId ?? string.Empty,
+            RegistrationId = chunk.RegistrationId ?? string.Empty,
+            Activity = CloneForDurableState(chunk.Activity) ?? new ChatActivity(),
+            AccumulatedText = chunk.AccumulatedText ?? string.Empty,
+            ChunkAtUnixMs = chunk.ChunkAtUnixMs,
+        };
+
+    private Task StartNyxRelayTextOperationAsync(
+        NyxRelayTextOperationKind operation,
+        LlmReplyStreamChunkEvent chunk,
+        string correlationId,
+        string? currentPlatformMessageId,
+        string? commandId,
+        string? finalText,
+        string? lastFlushedText,
+        int editCount,
+        long sequence,
+        long generation)
+    {
+        var workItemId = BuildNyxRelayTextOperationId(correlationId, operation, sequence, generation);
+        return PublishReplyOperationStepAsync(
+            workItemId,
+            $"nyx-relay-text-{operation}",
+            correlationId,
+            generation,
+            ReplyOperationStepEvent.PayloadOneofCase.NyxRelayText,
+            new NyxRelayTextOperationStepPayload
+            {
+                Operation = operation,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Chunk = chunk.Clone(),
+                CurrentPlatformMessageId = currentPlatformMessageId ?? string.Empty,
+                CommandId = commandId ?? string.Empty,
+                FinalText = finalText ?? string.Empty,
+                LastFlushedText = lastFlushedText ?? string.Empty,
+                EditCount = editCount,
+            },
+            CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleReplyOperationStepAsync(ReplyOperationStepEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!string.Equals(NormalizeOptional(evt.CorrelationId), evt.CorrelationId, StringComparison.Ordinal))
+            return;
+
+        switch (evt.PayloadCase)
+        {
+            case ReplyOperationStepEvent.PayloadOneofCase.NyxRelayText:
+                await ExecuteNyxRelayTextOperationStepAsync(evt, evt.NyxRelayText);
+                return;
+            case ReplyOperationStepEvent.PayloadOneofCase.LarkCard:
+                await ExecuteLarkCardOperationStepAsync(evt, evt.LarkCard);
+                return;
+            default:
+                Logger.LogDebug(
+                    "Ignoring reply operation step without payload. operationId={OperationId}",
+                    evt.OperationId);
+                return;
+        }
+    }
+
+    private async Task ExecuteNyxRelayTextOperationStepAsync(
+        ReplyOperationStepEvent evt,
+        NyxRelayTextOperationStepPayload step)
+    {
+        var correlationId = evt.CorrelationId;
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (!MatchesNyxRelayTextInFlight(state, step.Operation, step.Sequence, step.OperationGeneration))
+            return;
+
+        var runtimeContext = BuildNyxRelayRuntimeContext(
+            step.Chunk?.CorrelationId,
+            step.Chunk?.Activity,
+            step.Chunk?.ReplyToken,
+            step.Chunk?.ReplyTokenExpiresAtUnixMs ?? 0);
+        await ExecuteNyxRelayTextOperationAsync(
+            ResolveRunner(),
+            step.Operation,
+            step.Chunk?.Clone() ?? new LlmReplyStreamChunkEvent(),
+            correlationId,
+            NormalizeOptional(step.CurrentPlatformMessageId),
+            NormalizeOptional(step.CommandId),
+            NormalizeOptional(step.FinalText),
+            NormalizeOptional(step.LastFlushedText),
+            step.EditCount,
+            step.Sequence,
+            step.OperationGeneration,
+            runtimeContext,
+            CancellationToken.None);
+    }
+
+    private async Task ExecuteNyxRelayTextOperationAsync(
+        IConversationTurnRunner runner,
+        NyxRelayTextOperationKind operation,
+        LlmReplyStreamChunkEvent chunk,
+        string correlationId,
+        string? currentPlatformMessageId,
+        string? commandId,
+        string? finalText,
+        string? lastFlushedText,
+        int editCount,
+        long sequence,
+        long generation,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        NyxRelayTextOperationCompletedEvent signal;
+        try
+        {
+            var result = await runner.RunStreamChunkAsync(
+                    chunk,
+                    currentPlatformMessageId,
+                    runtimeContext,
+                    ct)
+                .ConfigureAwait(false);
+            signal = new NyxRelayTextOperationCompletedEvent
+            {
+                OperationId = BuildNyxRelayTextOperationId(correlationId, operation, sequence, generation),
+                CorrelationId = correlationId,
+                Operation = operation,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                State = result.Success
+                    ? NyxRelayTextOperationResultState.Succeeded
+                    : NyxRelayTextOperationResultState.Failed,
+                RawResult = ToRawResult(result),
+                Chunk = chunk,
+                CurrentPlatformMessageId = currentPlatformMessageId ?? string.Empty,
+                CommandId = commandId ?? string.Empty,
+                FinalText = finalText ?? string.Empty,
+                LastFlushedText = lastFlushedText ?? string.Empty,
+                EditCount = editCount,
+            };
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Nyx relay text operation executor threw. correlation={CorrelationId}, operation={Operation}", correlationId, operation);
+            signal = new NyxRelayTextOperationCompletedEvent
+            {
+                OperationId = BuildNyxRelayTextOperationId(correlationId, operation, sequence, generation),
+                CorrelationId = correlationId,
+                Operation = operation,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                State = NyxRelayTextOperationResultState.Faulted,
+                RawResult = ToNyxRelayTextRawFault(ex),
+                Chunk = chunk,
+                CurrentPlatformMessageId = currentPlatformMessageId ?? string.Empty,
+                CommandId = commandId ?? string.Empty,
+                FinalText = finalText ?? string.Empty,
+                LastFlushedText = lastFlushedText ?? string.Empty,
+                EditCount = editCount,
+            };
+        }
+
+        await DispatchNyxRelayTextOperationCompletedSignalAsync(signal, correlationId, CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private async Task DispatchNyxRelayTextOperationCompletedSignalAsync(
+        NyxRelayTextOperationCompletedEvent evt,
+        string correlationId,
+        CancellationToken ct)
+    {
+        var dispatchPort = Services.GetService<IActorDispatchPort>();
+        if (dispatchPort is null)
+        {
+            Logger.LogWarning(
+                "IActorDispatchPort unavailable; cannot dispatch Nyx relay text operation signal. correlation={CorrelationId}",
+                correlationId);
+            return;
+        }
+
+        await dispatchPort.DispatchAsync(
+                Id,
+                new EventEnvelope
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Payload = Any.Pack(evt),
+                    Route = EnvelopeRouteSemantics.CreateDirect(Id, Id),
+                    Propagation = new EnvelopePropagation { CorrelationId = correlationId },
+                },
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private static NyxRelayTextOperationRawResult ToRawResult(ConversationStreamChunkResult result) =>
+        new()
+        {
+            PlatformMessageId = result.PlatformMessageId ?? string.Empty,
+            EditUnsupported = result.EditUnsupported,
+            RawErrorCode = result.ErrorCode ?? string.Empty,
+            RawErrorSummary = result.ErrorSummary ?? string.Empty,
+            FailureKind = result.FailureKind,
+            RetryAfterMs = result.RetryAfter.HasValue ? (long)result.RetryAfter.Value.TotalMilliseconds : 0,
+            HttpStatus = result.HttpStatus,
+            RawErrorKey = result.RawErrorKey ?? string.Empty,
+            RawErrorCodeValue = result.RawErrorCode,
+        };
+
+    private static NyxRelayTextOperationRawResult ToNyxRelayTextRawFault(Exception ex) =>
+        new()
+        {
+            ExceptionType = ex.GetType().Name,
+            ExceptionMessage = ex.Message,
+        };
+
+    private static ConversationStreamChunkResult ToStreamChunkResult(NyxRelayTextOperationCompletedEvent evt)
+    {
+        var raw = evt.RawResult ?? new NyxRelayTextOperationRawResult();
+        if (evt.State == NyxRelayTextOperationResultState.Succeeded)
+            return ConversationStreamChunkResult.Succeeded(raw.PlatformMessageId);
+
+        return ConversationStreamChunkResult.Failed(
+            evt.State == NyxRelayTextOperationResultState.Faulted
+                ? BuildNyxRelayTextFaultErrorCode(raw)
+                : raw.RawErrorCode,
+            evt.State == NyxRelayTextOperationResultState.Faulted
+                ? raw.ExceptionMessage
+                : raw.RawErrorSummary,
+            raw.EditUnsupported,
+            raw.FailureKind,
+            raw.RetryAfterMs > 0 ? TimeSpan.FromMilliseconds(raw.RetryAfterMs) : null,
+            raw.HttpStatus,
+            raw.RawErrorKey,
+            raw.RawErrorCodeValue);
+    }
+
+    private static string BuildNyxRelayTextFaultErrorCode(NyxRelayTextOperationRawResult raw)
+    {
+        var exceptionType = string.IsNullOrWhiteSpace(raw.ExceptionType)
+            ? "Exception"
+            : raw.ExceptionType;
+        return $"relay_text_threw:{exceptionType}";
+    }
+
+    // Text-edit streaming is the fallback path behind Lark CardKit. Its Task.Run
+    // executor also reports completion through a self-dispatched Direct envelope,
+    // so the handler must opt in to self handling or the fallback cannot progress.
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleNyxRelayTextOperationCompletedAsync(NyxRelayTextOperationCompletedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null)
+            return;
+
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (!MatchesNyxRelayTextInFlight(state, evt.Operation, evt.Sequence, evt.OperationGeneration))
+            return;
+
+        switch (evt.Operation)
+        {
+            case NyxRelayTextOperationKind.Interim:
+                await HandleNyxRelayTextInterimCompletionAsync(correlationId, state, evt);
+                return;
+            case NyxRelayTextOperationKind.FailureSelfHeal:
+                await HandleNyxRelayTextFailureSelfHealCompletionAsync(correlationId, state, evt);
+                return;
+            case NyxRelayTextOperationKind.Final:
+                await HandleNyxRelayTextFinalCompletionAsync(correlationId, state, evt);
+                return;
+            default:
+                return;
+        }
+    }
+
+    private async Task HandleNyxRelayTextInterimCompletionAsync(
+        string correlationId,
+        NyxRelayStreamingState state,
+        NyxRelayTextOperationCompletedEvent evt)
+    {
+        var result = ToStreamChunkResult(evt);
+        if (!result.Success)
+        {
+            if (ShouldRetryNyxRelayInterimUpdate(result, state))
+            {
+                var retryAttempt = state.RetryAttempt + 1;
+                var retryGeneration = NextNyxRelayTextOperationGeneration(state);
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    state.Phase,
+                    fieldUpdate: s => s with
+                    {
+                        InFlight = new NyxRelayTextOperationInFlight(
+                            NyxRelayTextOperationKind.Interim,
+                            evt.Sequence,
+                            retryGeneration),
+                        OperationGeneration = retryGeneration,
+                        RetryAttempt = retryAttempt,
+                    });
+                await StartNyxRelayTextOperationAsync(
+                    NyxRelayTextOperationKind.Interim,
+                    evt.Chunk?.Clone() ?? new LlmReplyStreamChunkEvent(),
+                    correlationId,
+                    NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId,
+                    commandId: string.Empty,
+                    finalText: string.Empty,
+                    lastFlushedText: state.LastFlushedText,
+                    editCount: state.EditCount,
+                    evt.Sequence,
+                    retryGeneration);
+                return;
+            }
+
+            if (state.AllowsFinalEdit)
+            {
+                Logger.LogInformation(
+                    "Streaming interim edit failed after token consumed; suppressing interim edits, final edit will still be attempted. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
+                    evt.CorrelationId,
+                    result.ErrorCode,
+                    result.EditUnsupported);
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.SuppressingInterim,
+                    terminalReason: $"interim_edit_failed:{result.ErrorCode}",
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
+            }
+            else
+            {
+                Logger.LogInformation(
+                    "Streaming initial send failed before token consumed; disabling streaming and allowing /reply fallback. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
+                    evt.CorrelationId,
+                    result.ErrorCode,
+                    result.EditUnsupported);
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.DisabledPreSend,
+                    terminalReason: $"first_send_failed:{result.ErrorCode}",
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
+            }
+            return;
+        }
+
+        var isFirstChunk = state.Phase == NyxRelayStreamingPhase.Idle;
+        var newPlatformMessageId = string.IsNullOrWhiteSpace(result.PlatformMessageId)
+            ? state.PlatformMessageId
+            : result.PlatformMessageId;
+        var ackedText = evt.Chunk?.AccumulatedText ?? state.PendingAccumulatedText ?? state.LastFlushedText;
+        var pendingText = string.Equals(state.PendingAccumulatedText, ackedText, StringComparison.Ordinal)
+            ? null
+            : state.PendingAccumulatedText;
+        var updated = await TransitionNyxRelayStreamingPhaseAsync(
+            correlationId,
+            state,
+            isFirstChunk ? NyxRelayStreamingPhase.PlaceholderSent : NyxRelayStreamingPhase.Streaming,
+            fieldUpdate: s => s with
+            {
+                PlatformMessageId = newPlatformMessageId,
+                LastFlushedText = ackedText,
+                EditCount = isFirstChunk ? 0 : s.EditCount + 1,
+                InFlight = null,
+                PendingAccumulatedText = pendingText,
+                RetryAttempt = 0,
+            });
+        await ContinueNyxRelayTextCoalescedWorkAsync(correlationId, updated, evt.Chunk);
+    }
+
+    private static bool ShouldRetryNyxRelayInterimUpdate(
+        ConversationStreamChunkResult result,
+        NyxRelayStreamingState state) =>
+        state.AllowsFinalEdit &&
+        result.FailureKind == FailureKind.TransientAdapterError &&
+        (result.RetryAfter is null || result.RetryAfter <= TimeSpan.Zero) &&
+        state.RetryAttempt < MaxNyxRelayInterimUpdateRetryCount;
+
+    private async Task HandleNyxRelayTextFailureSelfHealCompletionAsync(
+        string correlationId,
+        NyxRelayStreamingState state,
+        NyxRelayTextOperationCompletedEvent evt)
+    {
+        var result = ToStreamChunkResult(evt);
+        var platformMessageId = NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId ?? string.Empty;
+        var commandId = NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId);
+        var failureText = state.PendingFinalizeText ?? evt.FinalText ?? evt.Chunk?.AccumulatedText ?? string.Empty;
+        if (result.Success)
+        {
+            Logger.LogWarning(
+                "LLM reply failed after streaming-start; updated placeholder with failure text. correlation={CorrelationId}, platformMessageId={PlatformMessageId}",
+                evt.CorrelationId,
+                platformMessageId);
+            await TransitionNyxRelayStreamingPhaseAsync(
+                correlationId,
+                state,
+                NyxRelayStreamingPhase.TerminalSucceeded,
+                terminalReason: "failed_self_heal",
+                fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
+            await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, failureText, state.EditCount + 1);
+            return;
+        }
+
+        Logger.LogWarning(
+            "Streaming LLM failure-update could not edit placeholder; persisting last flushed partial as terminal. correlation={CorrelationId}, code={Code}, platformMessageId={PlatformMessageId}",
+            evt.CorrelationId,
+            result.ErrorCode,
+            platformMessageId);
+        await TransitionNyxRelayStreamingPhaseAsync(
+            correlationId,
+            state,
+            NyxRelayStreamingPhase.TerminalPartial,
+            terminalReason: $"failed_self_heal_edit_failed:{result.ErrorCode}",
+            fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
+        await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, state.LastFlushedText, state.EditCount);
+    }
+
+    private async Task HandleNyxRelayTextFinalCompletionAsync(
+        string correlationId,
+        NyxRelayStreamingState state,
+        NyxRelayTextOperationCompletedEvent evt)
+    {
+        var result = ToStreamChunkResult(evt);
+        var platformMessageId = NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId ?? string.Empty;
+        var commandId = NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId);
+        var finalText = state.PendingFinalizeText ?? evt.FinalText ?? evt.Chunk?.AccumulatedText ?? string.Empty;
+        if (!result.Success)
+        {
+            Logger.LogWarning(
+                "Streaming final flush failed after token consumed; persisting last flushed partial as terminal. correlation={CorrelationId}, code={Code}, platformMessageId={PlatformMessageId}",
+                evt.CorrelationId,
+                result.ErrorCode,
+                platformMessageId);
+            await TransitionNyxRelayStreamingPhaseAsync(
+                correlationId,
+                state,
+                NyxRelayStreamingPhase.TerminalPartial,
+                terminalReason: $"final_edit_failed:{result.ErrorCode}",
+                fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
+            await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, state.LastFlushedText, state.EditCount);
+            return;
+        }
+
+        await TransitionNyxRelayStreamingPhaseAsync(
+            correlationId,
+            state,
+            NyxRelayStreamingPhase.TerminalSucceeded,
+            terminalReason: "completed",
+            fieldUpdate: s => s with
+            {
+                LastFlushedText = finalText,
+                EditCount = state.EditCount + 1,
+                InFlight = null,
+                RetryAttempt = 0,
+            });
+        await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, finalText, state.EditCount + 1);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleNyxRelayTextOperationTimeoutFiredAsync(NyxRelayTextOperationTimeoutFiredEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null)
+            return;
+
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (!MatchesNyxRelayTextInFlight(state, evt.Operation, evt.Sequence, evt.OperationGeneration))
+            return;
+
+        switch (evt.Operation)
+        {
+            case NyxRelayTextOperationKind.Interim:
+                if (state.AllowsFinalEdit)
+                {
+                    await TransitionNyxRelayStreamingPhaseAsync(
+                        correlationId,
+                        state,
+                        NyxRelayStreamingPhase.SuppressingInterim,
+                        terminalReason: "interim_edit_timeout",
+                        fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
+                }
+                else
+                {
+                    await TransitionNyxRelayStreamingPhaseAsync(
+                        correlationId,
+                        state,
+                        NyxRelayStreamingPhase.DisabledPreSend,
+                        terminalReason: "first_send_timeout",
+                        fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
+                }
+                return;
+            case NyxRelayTextOperationKind.FailureSelfHeal:
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.TerminalPartial,
+                    terminalReason: "failed_self_heal_timeout",
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
+                await PersistStreamedCompletionAsync(
+                    evt,
+                    NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
+                    NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId ?? string.Empty,
+                    state.LastFlushedText,
+                    state.EditCount);
+                return;
+            case NyxRelayTextOperationKind.Final:
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.TerminalPartial,
+                    terminalReason: "final_edit_timeout",
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
+                await PersistStreamedCompletionAsync(
+                    evt,
+                    NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
+                    NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId ?? string.Empty,
+                    state.LastFlushedText,
+                    state.EditCount);
+                return;
+        }
+    }
+
+    private async Task ContinueNyxRelayTextCoalescedWorkAsync(
+        string correlationId,
+        NyxRelayStreamingState state,
+        LlmReplyStreamChunkEvent? sourceChunk)
+    {
+        if (state.InFlight is not null || IsTerminalNyxRelayStreamingPhase(state.Phase))
+            return;
+
+        if (state.PendingFinalizeText is not null)
+        {
+            var commandId = state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId);
+            var ready = new LlmReplyReadyEvent
+            {
+                CorrelationId = correlationId,
+                RunId = ResolvePendingLlmReplyRunId(correlationId) ?? string.Empty,
+                RegistrationId = sourceChunk?.RegistrationId ?? string.Empty,
+                Activity = sourceChunk?.Activity?.Clone() ?? new ChatActivity(),
+                Outbound = new MessageContent { Text = state.PendingFinalizeText },
+                TerminalState = state.PendingTerminalState == LlmReplyTerminalState.Unspecified
+                    ? LlmReplyTerminalState.Completed
+                    : state.PendingTerminalState,
+                ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+            ready.AppendedHistory.AddRange(state.PendingAppendedHistory.Select(entry => entry.Clone()));
+            var runtimeContext = BuildNyxRelayRuntimeContext(
+                correlationId,
+                ready.Activity,
+                sourceChunk?.ReplyToken,
+                sourceChunk?.ReplyTokenExpiresAtUnixMs ?? 0);
+            await TryCompleteStreamedReplyAsync(ready, commandId, ready.Activity, runtimeContext);
+            return;
+        }
+
+        if (state.PendingAccumulatedText is null || sourceChunk is null)
+            return;
+
+        var chunk = sourceChunk.Clone();
+        chunk.AccumulatedText = state.PendingAccumulatedText;
+        await HandleNyxRelayStreamingChunkCoreAsync(chunk);
+    }
+
+    private async Task PersistStreamedCompletionAsync(
+        NyxRelayTextOperationCompletedEvent evt,
+        string commandId,
+        string platformMessageId,
+        string outboundText,
+        int edits) =>
+        await PersistStreamedCompletionAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = evt.CorrelationId,
+                RunId = ResolvePendingLlmReplyRunId(evt.CorrelationId) ?? string.Empty,
+                RegistrationId = evt.Chunk?.RegistrationId ?? string.Empty,
+                Activity = evt.Chunk?.Activity?.Clone() ?? new ChatActivity(),
+                Outbound = new MessageContent { Text = outboundText },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            commandId,
+            evt.Chunk?.Activity,
+            platformMessageId,
+            outboundText,
+            edits);
+
+    private async Task PersistStreamedCompletionAsync(
+        NyxRelayTextOperationTimeoutFiredEvent evt,
+        string commandId,
+        string platformMessageId,
+        string outboundText,
+        int edits) =>
+        await PersistStreamedCompletionAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = evt.CorrelationId,
+                RunId = ResolvePendingLlmReplyRunId(evt.CorrelationId) ?? string.Empty,
+                RegistrationId = evt.Chunk?.RegistrationId ?? string.Empty,
+                Activity = evt.Chunk?.Activity?.Clone() ?? new ChatActivity(),
+                Outbound = new MessageContent { Text = outboundText },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            commandId,
+            evt.Chunk?.Activity,
+            platformMessageId,
+            outboundText,
+            edits);
 
     private async Task PersistStreamedCompletionAsync(
         LlmReplyReadyEvent evt,
@@ -730,31 +1865,28 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             CompletedAtUnixMs = nowMs,
             OutboundDelivery = ToOutboundDeliveryReceipt(evt.Activity?.OutboundDelivery),
         };
+        completed.AppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
+        // ADR-0021 chain.delivered observable: the streaming path always reaches this
+        // function with a user-visible placeholder message id (any partial / full /
+        // failure-self-heal text the user actually saw). Persist a Delivered event
+        // BEFORE the turn-completed summary so "events.Last() is turn-completed"
+        // consumers keep working.
+        var delivered = new LlmReplyDeliveredEvent
+        {
+            CorrelationId = evt.CorrelationId ?? string.Empty,
+            RunId = evt.RunId ?? string.Empty,
+            AckedAtUnixMs = nowMs,
+            ChannelMessageId = $"nyx-relay-stream:{platformMessageId}",
+        };
+        await PersistDomainEventAsync(delivered);
+        await ClearReplyLifecyclesAsync(evt.CorrelationId, referenceActivity, "streamed_completion");
         await PersistDomainEventAsync(completed);
-        RemoveNyxRelayReplyToken(evt.CorrelationId, referenceActivity);
         Logger.LogInformation(
             "Completed streamed LLM reply: correlation={CorrelationId} platformMessageId={PlatformMessageId} edits={EditCount} conversation={Key}",
             evt.CorrelationId,
             platformMessageId,
             edits,
             completed.Conversation?.CanonicalKey);
-    }
-
-    [EventHandler]
-    public Task HandleNyxRelayReplyTokenCleanupRequestedAsync(NyxRelayReplyTokenCleanupRequestedEvent evt)
-    {
-        ArgumentNullException.ThrowIfNull(evt);
-
-        var correlationId = NormalizeOptional(evt.CorrelationId);
-        if (correlationId is not null &&
-            _nyxRelayReplyTokens.TryGetValue(correlationId, out var tokenContext) &&
-            tokenContext.ExpiresAtUtc <= DateTimeOffset.UtcNow)
-        {
-            _nyxRelayReplyTokens.Remove(correlationId);
-        }
-
-        SweepExpiredNyxRelayReplyTokens();
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -848,11 +1980,47 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private static string BuildLlmReplyCommandId(string? correlationId) =>
         $"llm:{correlationId?.Trim() ?? string.Empty}";
 
+    private Task PublishReplyOperationStepAsync(
+        string operationId,
+        string operationName,
+        string correlationId,
+        long leaseEpoch,
+        ReplyOperationStepEvent.PayloadOneofCase payloadCase,
+        IMessage payload,
+        CancellationToken ct)
+    {
+        var step = new ReplyOperationStepEvent
+        {
+            OperationId = operationId,
+            OperationName = operationName,
+            CorrelationId = correlationId,
+            LeaseEpoch = leaseEpoch,
+        };
+        switch (payloadCase)
+        {
+            case ReplyOperationStepEvent.PayloadOneofCase.NyxRelayText:
+                step.NyxRelayText = (NyxRelayTextOperationStepPayload)payload;
+                break;
+            case ReplyOperationStepEvent.PayloadOneofCase.LarkCard:
+                step.LarkCard = (LarkCardOperationStepPayload)payload;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(payloadCase), payloadCase, "Unsupported reply operation step payload.");
+        }
+
+        return SendToAsync(Id, step, ct);
+    }
+
+    // ADR-0021 §6 / canon §9 — single source of truth for "this LLM reply turn is
+    // already finalized". Every reply-ready / dropped / streaming-chunk handler entry
+    // uses this so late or duplicate signals uniformly no-op. The dedup key is the
+    // `llm:<correlationId>` form appended to ProcessedCommandIds by
+    // ApplyTurnCompleted / ApplyContinueFailed when the turn reaches chain.finalized.
+    private bool IsLlmReplyTurnFinalized(string? correlationId) =>
+        State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(correlationId));
+
     private static string BuildDeferredLlmReplyCallbackId(string? correlationId) =>
         $"conversation-llm-dispatch:{correlationId?.Trim() ?? string.Empty}";
-
-    private static string BuildNyxRelayReplyTokenCleanupCallbackId(string? correlationId) =>
-        $"nyx-relay-reply-token-cleanup:{correlationId?.Trim() ?? string.Empty}";
 
     private static string BuildDeferredInboundTurnRetryCallbackId(string? activityId) =>
         $"conversation-inbound-turn-retry:{activityId?.Trim() ?? string.Empty}";
@@ -918,21 +2086,30 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         }
     }
 
-    private Task ScheduleNyxRelayReplyTokenCleanupAsync(NyxRelayReplyTokenContext tokenContext, CancellationToken ct)
+    // Refactor (iter17/cluster-038): Old pattern: relay callback continuation lived behind process-local replay/idempotency guards. New principle: pending callback admissions are actor-owned state and are re-dispatched through the actor inbox after activation.
+    private async Task DispatchPendingRelayAdmissionTurnsAsync(CancellationToken ct)
     {
-        var dueTime = tokenContext.ExpiresAtUtc - DateTimeOffset.UtcNow;
-        if (dueTime <= TimeSpan.Zero)
-            dueTime = TimeSpan.FromSeconds(1);
-
-        return ScheduleSelfDurableTimeoutAsync(
-            BuildNyxRelayReplyTokenCleanupCallbackId(tokenContext.CorrelationId),
-            dueTime,
-            new NyxRelayReplyTokenCleanupRequestedEvent
+        var pending = State.PendingRelayAdmissions.ToArray();
+        foreach (var admission in pending)
+        {
+            if (string.IsNullOrWhiteSpace(admission.ActivityId) ||
+                string.IsNullOrWhiteSpace(admission.RelayApiKeyId) ||
+                string.IsNullOrWhiteSpace(admission.CallbackJti))
             {
-                CorrelationId = tokenContext.CorrelationId,
-                RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            },
-            ct: ct);
+                continue;
+            }
+
+            await SendToAsync(
+                Id,
+                new NyxRelayCallbackTurnRequestedEvent
+                {
+                    ActivityId = admission.ActivityId,
+                    RelayApiKeyId = admission.RelayApiKeyId,
+                    CallbackJti = admission.CallbackJti,
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                },
+                ct);
+        }
     }
 
     private async Task SchedulePendingLlmReplyDispatchesAsync(CancellationToken ct)
@@ -989,53 +2166,36 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private IConversationTurnRunner ResolveRunner() =>
         Services.GetService<IConversationTurnRunner>() ?? new NullConversationTurnRunner();
 
-    private ConversationTurnRuntimeContext CaptureNyxRelayReplyToken(
-        NyxRelayInboundActivity relayActivity,
-        ChatActivity activity)
-    {
-        SweepExpiredNyxRelayReplyTokens();
-
-        var outboundDelivery = activity.OutboundDelivery;
-        var correlationId = NormalizeOptional(outboundDelivery?.CorrelationId) ??
-                            NormalizeOptional(relayActivity.CorrelationId);
-        var replyToken = NormalizeOptional(relayActivity.ReplyToken);
-        var replyMessageId = NormalizeOptional(outboundDelivery?.ReplyMessageId);
-        if (correlationId is null || replyToken is null || replyMessageId is null)
-            return ConversationTurnRuntimeContext.Empty;
-
-        var expiresAt = relayActivity.ReplyTokenExpiresAtUnixMs > 0
-            ? DateTimeOffset.FromUnixTimeMilliseconds(relayActivity.ReplyTokenExpiresAtUnixMs)
-            : DateTimeOffset.UtcNow.AddMinutes(30);
-        var tokenContext = new NyxRelayReplyTokenContext(
-            correlationId,
-            replyToken,
-            replyMessageId,
-            expiresAt);
-        _nyxRelayReplyTokens[correlationId] = tokenContext;
-        return new ConversationTurnRuntimeContext(tokenContext);
-    }
-
     private ConversationTurnRuntimeContext BuildNyxRelayRuntimeContext(
         string? correlationId,
-        ChatActivity? activity)
+        ChatActivity? activity,
+        string? replyToken = null,
+        long replyTokenExpiresAtUnixMs = 0,
+        string? nyxUserAccessToken = null)
     {
-        SweepExpiredNyxRelayReplyTokens();
-
         var normalizedCorrelationId = NormalizeOptional(activity?.OutboundDelivery?.CorrelationId) ??
                                       NormalizeOptional(correlationId);
-        if (normalizedCorrelationId is null)
-            return ConversationTurnRuntimeContext.Empty;
+        var normalizedReplyToken = NormalizeOptional(replyToken);
+        var replyMessageId = NormalizeOptional(activity?.OutboundDelivery?.ReplyMessageId);
+        var accessToken = NormalizeOptional(nyxUserAccessToken) ??
+                          NormalizeOptional(activity?.TransportExtras?.NyxUserAccessToken);
+        if (normalizedCorrelationId is null || normalizedReplyToken is null || replyMessageId is null)
+            return new ConversationTurnRuntimeContext(null, accessToken);
 
-        if (!_nyxRelayReplyTokens.TryGetValue(normalizedCorrelationId, out var tokenContext))
-            return ConversationTurnRuntimeContext.Empty;
+        var expiresAt = replyTokenExpiresAtUnixMs > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(replyTokenExpiresAtUnixMs)
+            : DateTimeOffset.UtcNow.AddMinutes(30);
+        if (expiresAt <= DateTimeOffset.UtcNow)
+            return new ConversationTurnRuntimeContext(null, accessToken);
 
-        if (tokenContext.ExpiresAtUtc <= DateTimeOffset.UtcNow)
-        {
-            _nyxRelayReplyTokens.Remove(normalizedCorrelationId);
-            return ConversationTurnRuntimeContext.Empty;
-        }
-
-        return new ConversationTurnRuntimeContext(tokenContext);
+        return new ConversationTurnRuntimeContext(
+            new NyxRelayReplyTokenContext(
+                normalizedCorrelationId,
+                normalizedReplyToken,
+                replyMessageId,
+                expiresAt,
+                accessToken),
+            accessToken);
     }
 
     private ConversationTurnRuntimeContext BuildNyxRelayRuntimeContextForReply(
@@ -1044,28 +2204,46 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     {
         var activity = pendingActivity ?? evt.Activity;
 
-        // Inbox-echoed credential is the authoritative source — it survives actor
-        // deactivation between inbound capture and LLM reply ready, which the in-memory
-        // dict cannot. Fall back to the dict only when the inbox didn't carry a token
-        // (legacy in-flight messages from before this change deployed).
-        var inlineToken = NormalizeOptional(evt.ReplyToken);
-        if (inlineToken is not null)
-        {
-            var expiresAt = evt.ReplyTokenExpiresAtUnixMs > 0
-                ? DateTimeOffset.FromUnixTimeMilliseconds(evt.ReplyTokenExpiresAtUnixMs)
-                : DateTimeOffset.UtcNow.AddMinutes(30);
-            if (expiresAt > DateTimeOffset.UtcNow)
-            {
-                var correlationId = NormalizeOptional(activity?.OutboundDelivery?.CorrelationId) ??
-                                    NormalizeOptional(evt.CorrelationId) ??
-                                    string.Empty;
-                var replyMessageId = NormalizeOptional(activity?.OutboundDelivery?.ReplyMessageId) ?? string.Empty;
-                return new ConversationTurnRuntimeContext(
-                    new NyxRelayReplyTokenContext(correlationId, inlineToken, replyMessageId, expiresAt));
-            }
-        }
+        return BuildNyxRelayRuntimeContext(
+            evt.CorrelationId,
+            activity,
+            evt.ReplyToken,
+            evt.ReplyTokenExpiresAtUnixMs);
+    }
 
-        return BuildNyxRelayRuntimeContext(evt.CorrelationId, activity);
+    // Refactor (iter17/cluster-038): Old pattern: transient relay credentials could ride inside persisted ChatActivity clones. New principle: durable admission/retry/LLM state stores only non-secret relay facts; same-activation credentials stay in runtime context.
+    private static ChatActivity? CloneForDurableState(ChatActivity? activity)
+    {
+        if (activity is null)
+            return null;
+
+        var durable = activity.Clone();
+        if (durable.TransportExtras is not null)
+            durable.TransportExtras.NyxUserAccessToken = string.Empty;
+        return durable;
+    }
+
+    private static void RestoreRuntimeTransportCredentials(
+        ChatActivity? activity,
+        string? nyxUserAccessToken)
+    {
+        if (activity is null || NormalizeOptional(nyxUserAccessToken) is not { } accessToken)
+            return;
+
+        activity.TransportExtras ??= new TransportExtras();
+        activity.TransportExtras.NyxUserAccessToken = accessToken;
+    }
+
+    private static void RestoreRuntimeTransportCredentials(
+        ChatActivity? activity,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        var accessToken = NormalizeOptional(runtimeContext.NyxUserAccessToken);
+        if (activity is null || accessToken is null)
+            return;
+
+        activity.TransportExtras ??= new TransportExtras();
+        activity.TransportExtras.NyxUserAccessToken = accessToken;
     }
 
     private string DescribeReplyTokenSource(LlmReplyReadyEvent evt, ConversationTurnRuntimeContext runtimeContext)
@@ -1073,32 +2251,72 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (runtimeContext.NyxRelayReplyToken is null)
             return "none";
         if (!string.IsNullOrWhiteSpace(evt.ReplyToken))
-            return "inbox-echo";
-        return "actor-runtime-dict";
+            return "run-echo";
+        return "runtime-message";
     }
 
-    private void SweepExpiredNyxRelayReplyTokens()
+    // Refactor (iter17/cluster-038): Old pattern: active callback_jti claims were checked in singleton ConcurrentDictionary guards. New principle: replay admission checks read only ConversationGAgent typed state.
+    private bool HasActiveRelayReplayClaim(string relayApiKeyId, string callbackJti, long nowMs) =>
+        State.RelayReplayClaims.Any(claim =>
+            string.Equals(claim.RelayApiKeyId, relayApiKeyId, StringComparison.Ordinal) &&
+            string.Equals(claim.CallbackJti, callbackJti, StringComparison.Ordinal) &&
+            (claim.ExpiresAtUnixMs <= 0 || claim.ExpiresAtUnixMs > nowMs));
+
+    // Refactor (iter17/cluster-038): Old pattern: callback work was recovered from process-local callback context. New principle: callback continuation resolves the admitted activity from persisted actor-owned pending admission state.
+    private PendingRelayAdmission? FindPendingRelayAdmission(
+        string? relayApiKeyId,
+        string? callbackJti,
+        string? activityId)
     {
-        if (_nyxRelayReplyTokens.Count == 0)
+        var normalizedRelayApiKeyId = NormalizeOptional(relayApiKeyId);
+        var normalizedCallbackJti = NormalizeOptional(callbackJti);
+        var normalizedActivityId = NormalizeOptional(activityId);
+        if (normalizedRelayApiKeyId is null || normalizedCallbackJti is null || normalizedActivityId is null)
+            return null;
+
+        return State.PendingRelayAdmissions.FirstOrDefault(admission =>
+            string.Equals(admission.RelayApiKeyId, normalizedRelayApiKeyId, StringComparison.Ordinal) &&
+            string.Equals(admission.CallbackJti, normalizedCallbackJti, StringComparison.Ordinal) &&
+            string.Equals(admission.ActivityId, normalizedActivityId, StringComparison.Ordinal));
+    }
+
+    private static bool IsRelayActivity(ChatActivity? activity) =>
+        activity?.OutboundDelivery is
+        {
+            ReplyMessageId.Length: > 0,
+            CorrelationId.Length: > 0,
+        };
+
+    private static void ApplyRuntimeReplyToken(
+        NeedsLlmReplyEvent request,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        if (runtimeContext.NyxRelayReplyToken is not { } token)
             return;
 
-        var now = DateTimeOffset.UtcNow;
-        foreach (var token in _nyxRelayReplyTokens.ToArray())
-        {
-            if (token.Value.ExpiresAtUtc <= now)
-                _nyxRelayReplyTokens.Remove(token.Key);
-        }
+        request.ReplyToken = token.ReplyToken;
+        request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
     }
 
-    private void RemoveNyxRelayReplyToken(string? correlationId, ChatActivity? activity)
+    private async Task PersistMissingRuntimeCredentialFailureAsync(
+        string commandId,
+        string? correlationId,
+        string errorCode,
+        string errorSummary,
+        long failedAtUnixMs)
     {
-        var normalizedCorrelationId = NormalizeOptional(activity?.OutboundDelivery?.CorrelationId) ??
-                                      NormalizeOptional(correlationId);
-        if (normalizedCorrelationId is not null)
+        var failed = new ConversationContinueFailedEvent
         {
-            _nyxRelayReplyTokens.Remove(normalizedCorrelationId);
-            _nyxRelayStreamingStates.Remove(normalizedCorrelationId);
-        }
+            CommandId = commandId,
+            CorrelationId = correlationId ?? string.Empty,
+            CausationId = string.Empty,
+            Kind = FailureKind.PermanentAdapterError,
+            ErrorCode = errorCode,
+            ErrorSummary = errorSummary,
+            NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
+            FailedAtUnixMs = failedAtUnixMs,
+        };
+        await PersistDomainEventAsync(failed);
     }
 
     private static OutboundDeliveryReceipt? ToOutboundDeliveryReceipt(OutboundDeliveryContext? outboundDelivery)
@@ -1121,6 +2339,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             AppendBounded(next.ProcessedMessageIds, evt.ProcessedActivityId, ProcessedIdsCap);
             // Successful inbound completion supersedes any pending retry entry.
             RemovePendingInboundTurn(next.PendingInboundTurns, evt.ProcessedActivityId);
+            RemovePendingRelayAdmission(next.PendingRelayAdmissions, evt.ProcessedActivityId);
         }
         if (!string.IsNullOrEmpty(evt.CausationCommandId))
         {
@@ -1131,6 +2350,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         {
             next.Conversation = evt.Conversation.Clone();
         }
+        AppendHistoryBounded(next.RetainedHistory, evt.AppendedHistory, RetainedHistoryMessagesCap);
         next.LastUpdatedUnixMs = evt.CompletedAtUnixMs;
         return next;
     }
@@ -1152,7 +2372,50 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             NextRetryUnixMs = evt.NextRetryUnixMs,
         };
         UpsertPendingInboundTurn(next.PendingInboundTurns, pending);
+        RemovePendingRelayAdmission(next.PendingRelayAdmissions, evt.ActivityId);
         next.LastUpdatedUnixMs = evt.ScheduledAtUnixMs > 0 ? evt.ScheduledAtUnixMs : evt.NextRetryUnixMs;
+        return next;
+    }
+
+    // Refactor (iter17/cluster-038): Old pattern: relay replay/idempotency facts were mutated outside the actor. New principle: admission, replay claim, and pending continuation state mutate together through the event-sourced actor state transition.
+    private static ConversationGAgentState ApplyNyxRelayCallbackAdmitted(
+        ConversationGAgentState current,
+        NyxRelayCallbackAdmittedEvent evt)
+    {
+        var next = current.Clone();
+        var nowMs = evt.AdmittedAtUnixMs > 0
+            ? evt.AdmittedAtUnixMs
+            : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        SweepExpiredRelayReplayClaims(next.RelayReplayClaims, nowMs);
+        if (!string.IsNullOrWhiteSpace(evt.RelayApiKeyId) && !string.IsNullOrWhiteSpace(evt.CallbackJti))
+        {
+            UpsertRelayReplayClaim(next.RelayReplayClaims, new RelayReplayClaim
+            {
+                RelayApiKeyId = evt.RelayApiKeyId,
+                CallbackJti = evt.CallbackJti,
+                ActivityId = evt.ActivityId,
+                ExpiresAtUnixMs = evt.ClaimExpiresAtUnixMs,
+            });
+            TrimRelayReplayClaims(next.RelayReplayClaims, RelayReplayClaimsCap);
+        }
+
+        if (!string.IsNullOrWhiteSpace(evt.ActivityId))
+        {
+            UpsertPendingRelayAdmission(next.PendingRelayAdmissions, new PendingRelayAdmission
+            {
+                ActivityId = evt.ActivityId,
+                RelayApiKeyId = evt.RelayApiKeyId,
+                CallbackJti = evt.CallbackJti,
+                Activity = evt.Activity?.Clone(),
+                AdmittedAtUnixMs = nowMs,
+            });
+            TrimPendingRelayAdmissions(next.PendingRelayAdmissions, PendingRelayAdmissionsCap);
+        }
+
+        if (evt.Activity?.Conversation != null && next.Conversation == null)
+            next.Conversation = evt.Activity.Conversation.Clone();
+
+        next.LastUpdatedUnixMs = nowMs;
         return next;
     }
 
@@ -1170,6 +2433,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             // LLM path would leave the stale pending entry in state, where it would be
             // re-scheduled on every activation and silently no-op against the dedup guard.
             RemovePendingInboundTurn(next.PendingInboundTurns, activityId);
+            RemovePendingRelayAdmission(next.PendingRelayAdmissions, activityId);
         }
 
         if (evt.Activity?.Conversation != null && next.Conversation == null)
@@ -1222,9 +2486,190 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             && evt.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable)
         {
             RemovePendingInboundTurn(next.PendingInboundTurns, evt.CorrelationId);
+            RemovePendingRelayAdmission(next.PendingRelayAdmissions, evt.CorrelationId);
         }
         next.LastUpdatedUnixMs = evt.FailedAtUnixMs;
         return next;
+    }
+
+    // ADR-0021 chain.delivered observable: user-visible delivery succeeded via the channel sink.
+    private static ConversationGAgentState ApplyLastReplyDelivered(
+        ConversationGAgentState current,
+        LlmReplyDeliveredEvent evt)
+    {
+        var next = current.Clone();
+        next.LastReplyDelivery = new ReplyDeliveryStatus
+        {
+            RunId = evt.RunId ?? string.Empty,
+            Delivered = new ReplyDeliveryStatus.Types.Delivered
+            {
+                AckedAtUnixMs = evt.AckedAtUnixMs,
+                ChannelMessageId = evt.ChannelMessageId ?? string.Empty,
+            },
+        };
+        if (evt.AckedAtUnixMs > 0)
+            next.LastUpdatedUnixMs = evt.AckedAtUnixMs;
+        return next;
+    }
+
+    // ADR-0021 chain.delivered failure observable: channel sink rejected the reply (4xx/5xx/timeout).
+    private static ConversationGAgentState ApplyLastReplyDeliveryFailed(
+        ConversationGAgentState current,
+        LlmReplyDeliveryFailedEvent evt)
+    {
+        var next = current.Clone();
+        next.LastReplyDelivery = new ReplyDeliveryStatus
+        {
+            RunId = evt.RunId ?? string.Empty,
+            Failed = new ReplyDeliveryStatus.Types.DeliveryFailed
+            {
+                FailedAtUnixMs = evt.FailedAtUnixMs,
+                ErrorCode = evt.ErrorCode ?? string.Empty,
+                ErrorMessage = evt.ErrorMessage ?? string.Empty,
+            },
+        };
+        if (evt.FailedAtUnixMs > 0)
+            next.LastUpdatedUnixMs = evt.FailedAtUnixMs;
+        return next;
+    }
+
+    // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
+    //   Old pattern: ConversationReplyLifecycleChangedEvent carried full ConversationReplyLifecycleState
+    //   New principle: event describes transition facts; reducer derives current state from event + actor state
+    private static ConversationGAgentState ApplyReplyLifecycleChanged(
+        ConversationGAgentState current,
+        ConversationReplyLifecycleChangedEvent evt)
+    {
+        var next = current.Clone();
+
+        var normalizedCorrelationId = NormalizeOptional(evt.CorrelationId);
+        if (normalizedCorrelationId is null || evt.Mode == ConversationReplyLifecycleMode.Unspecified)
+            return next;
+
+        var lifecycle = FindReplyLifecycle(next.ActiveReplyLifecycles, normalizedCorrelationId, evt.Mode)?.Clone() ??
+                        new ConversationReplyLifecycleState
+                        {
+                            CorrelationId = normalizedCorrelationId,
+                            Mode = evt.Mode,
+                        };
+        ApplyReplyLifecycleTransitionFact(lifecycle, evt);
+        next.LastUpdatedUnixMs = evt.ChangedAtUnixMs > 0
+            ? evt.ChangedAtUnixMs
+            : lifecycle.UpdatedAtUnixMs;
+        UpsertReplyLifecycle(next.ActiveReplyLifecycles, lifecycle);
+        return next;
+    }
+
+    private static void ApplyReplyLifecycleTransitionFact(
+        ConversationReplyLifecycleState lifecycle,
+        ConversationReplyLifecycleChangedEvent evt)
+    {
+        if (evt.Phase != ConversationReplyLifecyclePhase.Unspecified)
+            lifecycle.Phase = evt.Phase;
+
+        if (evt.HasPlatformMessageIdAssigned)
+            lifecycle.PlatformMessageId = evt.PlatformMessageIdAssigned ?? string.Empty;
+        if (evt.HasCardIdAssigned)
+            lifecycle.CardId = evt.CardIdAssigned ?? string.Empty;
+        if (evt.HasCardMessageIdAssigned)
+            lifecycle.CardMessageId = evt.CardMessageIdAssigned ?? string.Empty;
+        if (evt.HasOriginalCardIdAssigned)
+            lifecycle.OriginalCardId = evt.OriginalCardIdAssigned ?? string.Empty;
+        if (evt.HasFlushedTextDelta)
+            lifecycle.LastFlushedText = evt.FlushedTextDelta ?? string.Empty;
+        if (evt.HasEditCountDelta)
+            lifecycle.EditCount += evt.EditCountDelta;
+        if (evt.HasSequenceDelta)
+            lifecycle.Sequence += evt.SequenceDelta;
+        if (evt.HasStreamingElementIdSelected)
+            lifecycle.StreamingElementId = evt.StreamingElementIdSelected ?? string.Empty;
+        if (evt.HasTerminalReason)
+            lifecycle.TerminalReason = evt.TerminalReason ?? string.Empty;
+        if (evt.HasLarkCardOperation)
+            lifecycle.LarkCardInFlightOperation = evt.LarkCardOperation;
+        if (evt.HasNyxRelayOperation)
+            lifecycle.NyxRelayInFlightOperation = evt.NyxRelayOperation;
+        if (evt.HasOperationSequence)
+        {
+            if (evt.Mode == ConversationReplyLifecycleMode.LarkCard)
+                lifecycle.LarkCardInFlightSequence = evt.OperationSequence;
+            else if (evt.Mode == ConversationReplyLifecycleMode.NyxRelayText)
+                lifecycle.NyxRelayInFlightSequence = evt.OperationSequence;
+        }
+
+        if (evt.HasOperationGeneration)
+        {
+            if (evt.Mode == ConversationReplyLifecycleMode.LarkCard)
+                lifecycle.LarkCardOperationGeneration = evt.OperationGeneration;
+            else if (evt.Mode == ConversationReplyLifecycleMode.NyxRelayText)
+                lifecycle.NyxRelayOperationGeneration = evt.OperationGeneration;
+        }
+
+        if (evt.HasQueuedAccumulatedText)
+            lifecycle.PendingAccumulatedText = evt.QueuedAccumulatedText ?? string.Empty;
+        if (evt.HasFinalizeText)
+            lifecycle.PendingFinalizeText = evt.FinalizeText ?? string.Empty;
+        if (evt.HasFinalizeCommandId)
+            lifecycle.PendingFinalizeCommandId = evt.FinalizeCommandId ?? string.Empty;
+        if (evt.HasNyxRelayTerminalState)
+            lifecycle.PendingNyxRelayTerminalState = evt.NyxRelayTerminalState;
+        if (evt.HasNyxRelayRetryAttempt)
+            lifecycle.NyxRelayRetryAttempt = evt.NyxRelayRetryAttempt;
+        if (evt.AppendedHistory.Count > 0)
+        {
+            lifecycle.PendingAppendedHistory.Clear();
+            lifecycle.PendingAppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
+        }
+
+        if (evt.ChangedAtUnixMs > 0)
+            lifecycle.UpdatedAtUnixMs = evt.ChangedAtUnixMs;
+    }
+
+    private static ConversationGAgentState ApplyReplyLifecycleCleared(
+        ConversationGAgentState current,
+        ConversationReplyLifecycleClearedEvent evt)
+    {
+        var next = current.Clone();
+        RemoveReplyLifecycle(next.ActiveReplyLifecycles, evt.CorrelationId, evt.Mode);
+        if (evt.ClearedAtUnixMs > 0)
+            next.LastUpdatedUnixMs = evt.ClearedAtUnixMs;
+        return next;
+    }
+
+    private async Task ClearReplyLifecyclesAsync(
+        string? correlationId,
+        ChatActivity? activity,
+        string reason)
+    {
+        var normalizedCorrelationId = NormalizeOptional(activity?.OutboundDelivery?.CorrelationId) ??
+                                      NormalizeOptional(correlationId);
+        if (normalizedCorrelationId is null)
+            return;
+
+        await ClearReplyLifecycleAsync(normalizedCorrelationId, ConversationReplyLifecycleMode.NyxRelayText, reason);
+        await ClearReplyLifecycleAsync(normalizedCorrelationId, ConversationReplyLifecycleMode.LarkCard, reason);
+    }
+
+    // Clears only an existing lifecycle so duplicate cleanup paths do not emit empty clear events.
+    private async Task ClearReplyLifecycleAsync(
+        string? correlationId,
+        ConversationReplyLifecycleMode mode,
+        string reason)
+    {
+        var normalizedCorrelationId = NormalizeOptional(correlationId);
+        if (normalizedCorrelationId is null)
+            return;
+
+        if (FindReplyLifecycle(normalizedCorrelationId, mode) is null)
+            return;
+
+        await PersistDomainEventAsync(new ConversationReplyLifecycleClearedEvent
+        {
+            CorrelationId = normalizedCorrelationId,
+            Mode = mode,
+            Reason = reason,
+            ClearedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
     }
 
     private NeedsLlmReplyEvent? FindPendingLlmReplyRequest(string? correlationId)
@@ -1236,6 +2681,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         return State.PendingLlmReplyRequests.FirstOrDefault(request =>
             string.Equals(request.CorrelationId, normalizedCorrelationId, StringComparison.Ordinal));
     }
+
+    private string? ResolvePendingLlmReplyRunId(string? correlationId) =>
+        NormalizeOptional(FindPendingLlmReplyRequest(correlationId)?.RunId);
 
     private static void UpsertPendingLlmReplyRequest(
         Google.Protobuf.Collections.RepeatedField<NeedsLlmReplyEvent> field,
@@ -1257,6 +2705,41 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         {
             if (string.Equals(field[i].CorrelationId, normalizedCorrelationId, StringComparison.Ordinal))
                 field.RemoveAt(i);
+        }
+    }
+
+    private static void UpsertReplyLifecycle(
+        Google.Protobuf.Collections.RepeatedField<ConversationReplyLifecycleState> field,
+        ConversationReplyLifecycleState lifecycle)
+    {
+        RemoveReplyLifecycle(field, lifecycle.CorrelationId, lifecycle.Mode);
+        field.Add(lifecycle.Clone());
+    }
+
+    private static ConversationReplyLifecycleState? FindReplyLifecycle(
+        Google.Protobuf.Collections.RepeatedField<ConversationReplyLifecycleState> field,
+        string correlationId,
+        ConversationReplyLifecycleMode mode) =>
+        field.FirstOrDefault(lifecycle =>
+            lifecycle.Mode == mode &&
+            string.Equals(lifecycle.CorrelationId, correlationId, StringComparison.Ordinal));
+
+    private static void RemoveReplyLifecycle(
+        Google.Protobuf.Collections.RepeatedField<ConversationReplyLifecycleState> field,
+        string? correlationId,
+        ConversationReplyLifecycleMode mode)
+    {
+        var normalizedCorrelationId = NormalizeOptional(correlationId);
+        if (normalizedCorrelationId is null)
+            return;
+
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (field[i].Mode == mode &&
+                string.Equals(field[i].CorrelationId, normalizedCorrelationId, StringComparison.Ordinal))
+            {
+                field.RemoveAt(i);
+            }
         }
     }
 
@@ -1293,6 +2776,73 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         }
     }
 
+    // Refactor (iter17/cluster-038): Old pattern: replay claim maps were process-local and lost on deactivation. New principle: bounded callback_jti claims are persisted as typed actor state and swept by actor transitions.
+    private static void UpsertRelayReplayClaim(
+        Google.Protobuf.Collections.RepeatedField<RelayReplayClaim> field,
+        RelayReplayClaim entry)
+    {
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(field[i].RelayApiKeyId, entry.RelayApiKeyId, StringComparison.Ordinal) &&
+                string.Equals(field[i].CallbackJti, entry.CallbackJti, StringComparison.Ordinal))
+            {
+                field.RemoveAt(i);
+            }
+        }
+
+        field.Add(entry.Clone());
+    }
+
+    private static void SweepExpiredRelayReplayClaims(
+        Google.Protobuf.Collections.RepeatedField<RelayReplayClaim> field,
+        long nowMs)
+    {
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (field[i].ExpiresAtUnixMs > 0 && field[i].ExpiresAtUnixMs <= nowMs)
+                field.RemoveAt(i);
+        }
+    }
+
+    private static void TrimRelayReplayClaims(
+        Google.Protobuf.Collections.RepeatedField<RelayReplayClaim> field,
+        int cap)
+    {
+        while (field.Count > cap)
+            field.RemoveAt(0);
+    }
+
+    private static void UpsertPendingRelayAdmission(
+        Google.Protobuf.Collections.RepeatedField<PendingRelayAdmission> field,
+        PendingRelayAdmission entry)
+    {
+        RemovePendingRelayAdmission(field, entry.ActivityId);
+        field.Add(entry.Clone());
+    }
+
+    private static void RemovePendingRelayAdmission(
+        Google.Protobuf.Collections.RepeatedField<PendingRelayAdmission> field,
+        string? activityId)
+    {
+        var normalizedActivityId = NormalizeOptional(activityId);
+        if (normalizedActivityId is null)
+            return;
+
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(field[i].ActivityId, normalizedActivityId, StringComparison.Ordinal))
+                field.RemoveAt(i);
+        }
+    }
+
+    private static void TrimPendingRelayAdmissions(
+        Google.Protobuf.Collections.RepeatedField<PendingRelayAdmission> field,
+        int cap)
+    {
+        while (field.Count > cap)
+            field.RemoveAt(0);
+    }
+
     private static string? ExtractLlmReplyCorrelationId(string? commandId)
     {
         var normalizedCommandId = NormalizeOptional(commandId);
@@ -1314,6 +2864,119 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         while (field.Count > cap)
             field.RemoveAt(0);
     }
+
+    private static void AppendHistoryBounded(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        IEnumerable<ConversationHistoryEntry> entries,
+        int cap)
+    {
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Role))
+                continue;
+            field.Add(entry.Clone());
+        }
+
+        NormalizeHistoryWindow(field, cap);
+    }
+
+    private static void NormalizeHistoryWindow(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        int cap)
+    {
+        while (field.Count > cap)
+            RemoveOldestHistoryUnit(field);
+
+        DropOrphanToolResults(field);
+    }
+
+    private static void RemoveOldestHistoryUnit(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field)
+    {
+        if (field.Count == 0)
+            return;
+
+        var first = field[0];
+        if (IsAssistantToolCallMessage(first))
+        {
+            var callIds = first.ToolCalls.Select(static call => call.Id).ToHashSet(StringComparer.Ordinal);
+            field.RemoveAt(0);
+            RemoveToolResults(field, callIds);
+            return;
+        }
+
+        if (IsToolResultMessage(first))
+        {
+            var callId = first.ToolCallId;
+            field.RemoveAt(0);
+            if (!string.IsNullOrWhiteSpace(callId))
+                RemoveAssistantToolCall(field, callId);
+            return;
+        }
+
+        field.RemoveAt(0);
+    }
+
+    private static void RemoveToolResults(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        HashSet<string> callIds)
+    {
+        if (callIds.Count == 0)
+            return;
+
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (IsToolResultMessage(field[i]) && callIds.Contains(field[i].ToolCallId))
+                field.RemoveAt(i);
+        }
+    }
+
+    private static void RemoveAssistantToolCall(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        string callId)
+    {
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (IsAssistantToolCallMessage(field[i]) &&
+                field[i].ToolCalls.Any(call => string.Equals(call.Id, callId, StringComparison.Ordinal)))
+            {
+                field.RemoveAt(i);
+            }
+        }
+    }
+
+    private static void DropOrphanToolResults(Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field)
+    {
+        var openCallIds = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < field.Count; i++)
+        {
+            var entry = field[i];
+            if (IsAssistantToolCallMessage(entry))
+            {
+                foreach (var call in entry.ToolCalls)
+                {
+                    if (!string.IsNullOrWhiteSpace(call.Id))
+                        openCallIds.Add(call.Id);
+                }
+                continue;
+            }
+
+            if (!IsToolResultMessage(entry))
+                continue;
+
+            if (string.IsNullOrWhiteSpace(entry.ToolCallId) || !openCallIds.Remove(entry.ToolCallId))
+            {
+                field.RemoveAt(i);
+                i--;
+            }
+        }
+    }
+
+    private static bool IsAssistantToolCallMessage(ConversationHistoryEntry entry) =>
+        string.Equals(entry.Role, "assistant", StringComparison.Ordinal) && entry.ToolCalls.Count > 0;
+
+    private static bool IsToolResultMessage(ConversationHistoryEntry entry) =>
+        string.Equals(entry.Role, "tool", StringComparison.Ordinal);
 
     private static string? NormalizeOptional(string? value)
     {

@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
@@ -11,13 +9,11 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 public sealed class NyxIdProxyTool : IAgentTool
 {
     private readonly NyxIdApiClient _client;
-    private readonly IServiceDiscoveryCache _cache;
     private readonly ILogger _logger;
 
-    public NyxIdProxyTool(NyxIdApiClient client, IServiceDiscoveryCache? cache = null, ILogger? logger = null)
+    public NyxIdProxyTool(NyxIdApiClient client, ILogger? logger = null)
     {
         _client = client;
-        _cache = cache ?? new InMemoryServiceDiscoveryCache();
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -70,8 +66,11 @@ public sealed class NyxIdProxyTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
-        var orgToken = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdOrgToken);
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
+        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var orgToken = AgentToolRequestContext.NyxIdOrgToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
@@ -135,6 +134,19 @@ public sealed class NyxIdProxyTool : IAgentTool
         var userServicesJson = await _client.DiscoverProxyServicesAsync(userToken, ct);
         var orgServicesJson = await _client.DiscoverProxyServicesAsync(orgToken, ct);
 
+        // PR #471 reviewer concern: when both tokens fail discovery, both responses are
+        // NyxID error envelopes, neither has a `services` array, the merge below quietly
+        // synthesizes `[]`, and the SkillRunner safety net classifies an empty array as a
+        // successful call. Surface the user-token error verbatim instead so the middleware
+        // can classify it. A single-token failure stays masked: the healthy token's slugs
+        // still merge in and the call counts as a successful discovery.
+        if (LooksLikeErrorEnvelope(userServicesJson) && LooksLikeErrorEnvelope(orgServicesJson))
+        {
+            _logger.LogWarning(
+                "[nyxid_proxy] Both user and org discovery returned error envelopes; surfacing user envelope");
+            return userServicesJson;
+        }
+
         try
         {
             using var userDoc = System.Text.Json.JsonDocument.Parse(userServicesJson);
@@ -162,10 +174,6 @@ public sealed class NyxIdProxyTool : IAgentTool
                     }
                 }
             }
-
-            // Populate cache with both service lists
-            _cache.SetSlugs(HashToken(userToken), userSlugs);
-            _cache.SetSlugs(HashToken(orgToken), ParseServiceSlugs(orgDoc));
 
             return System.Text.Json.JsonSerializer.Serialize(merged);
         }
@@ -202,25 +210,19 @@ public sealed class NyxIdProxyTool : IAgentTool
 
     /// <summary>
     /// Check whether a given token can access a service by slug.
-    /// Uses cache first, falls back to live discovery.
+    /// Reads NyxID's live proxy-services surface for every route decision.
     /// </summary>
     private async Task<bool> ServiceExistsForTokenAsync(
         string token, string slug, CancellationToken ct)
     {
-        var hash = HashToken(token);
-
-        // Check cache first
-        var cached = _cache.GetSlugs(hash);
-        if (cached != null)
-            return cached.Contains(slug);
-
-        // Cache miss — fetch and cache
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源; routing checks read the live NyxID proxy-services surface and never keep slug facts in a process-local cache.
         try
         {
             var servicesJson = await _client.DiscoverProxyServicesAsync(token, ct);
             using var doc = System.Text.Json.JsonDocument.Parse(servicesJson);
             var slugs = ParseServiceSlugs(doc);
-            _cache.SetSlugs(hash, slugs);
             return slugs.Contains(slug);
         }
         catch
@@ -275,10 +277,37 @@ public sealed class NyxIdProxyTool : IAgentTool
         }
     }
 
-    private static string HashToken(string token)
+    /// <summary>
+    /// Detect a NyxID error envelope by the truthy <c>error</c> property
+    /// <see cref="NyxIdApiClient.SendAsync"/> emits on every non-2xx and exception path.
+    /// Used by <see cref="DiscoverMergedServicesAsync"/> to short-circuit the dual-token
+    /// merge when neither call returned a real services list. Conservative on purpose —
+    /// only the explicit <c>error</c> marker counts; bare envelopes like
+    /// <c>{"code": 401}</c> are left to the regular merge path.
+    /// </summary>
+    internal static bool LooksLikeErrorEnvelope(string? response)
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
-        return Convert.ToHexString(bytes)[..16];
+        if (string.IsNullOrEmpty(response))
+            return false;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(response);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return false;
+            if (!doc.RootElement.TryGetProperty("error", out var errorProp))
+                return false;
+            return errorProp.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.False => false,
+                System.Text.Json.JsonValueKind.Null => false,
+                _ => true,
+            };
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -302,4 +331,5 @@ public sealed class NyxIdProxyTool : IAgentTool
             return false;
         }
     }
+
 }

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -6,6 +5,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
@@ -18,6 +19,8 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutionContext>
 {
+    private const string ModuleStateKey = "connector_call";
+    private const string TimeoutCallbackPrefix = "workflow-connector-timeout";
     private readonly IWorkflowConnectorResolver _connectorResolver;
 
     public ConnectorCallModule(IWorkflowConnectorResolver connectorResolver)
@@ -35,6 +38,8 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
                 payload.Is(SecureValueCapturedEvent.Descriptor) ||
+                payload.Is(WorkflowConnectorTimeoutFiredEvent.Descriptor) ||
+                payload.Is(WorkflowConnectorAttemptCompletedEvent.Descriptor) ||
                 payload.Is(WorkflowCompletedEvent.Descriptor));
     }
 
@@ -49,14 +54,34 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             var captured = envelope.Payload.Unpack<SecureValueCapturedEvent>();
             if (!string.IsNullOrWhiteSpace(captured.Variable) && !string.IsNullOrEmpty(captured.Value))
             {
-                SecureInputRuntimeItemsAccess.SetCapturedValue(ctx, captured.RunId, captured.Variable, captured.Value);
+                await SecureInputRuntimeContextAccess.SetCapturedValueAsync(
+                    ctx,
+                    captured.RunId,
+                    captured.Variable,
+                    captured.Value,
+                    ct);
             }
             return;
         }
 
         if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
         {
-            SecureInputRuntimeItemsAccess.RemoveRun(ctx, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
+            await SecureInputRuntimeContextAccess.RemoveRunAsync(
+                ctx,
+                envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId,
+                ct);
+            return;
+        }
+
+        if (envelope.Payload.Is(WorkflowConnectorTimeoutFiredEvent.Descriptor))
+        {
+            await HandleTimeoutFiredAsync(envelope.Payload.Unpack<WorkflowConnectorTimeoutFiredEvent>(), envelope, ctx, ct);
+            return;
+        }
+
+        if (envelope.Payload.Is(WorkflowConnectorAttemptCompletedEvent.Descriptor))
+        {
+            await HandleAttemptCompletedAsync(envelope.Payload.Unpack<WorkflowConnectorAttemptCompletedEvent>(), ctx, ct);
             return;
         }
 
@@ -116,116 +141,432 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             }
         }
 
-        var sw = Stopwatch.StartNew();
+        // Refactor (iter89/cluster-089-workflow-module-clock-state):
+        //   Old: Connector elapsed metadata used Stopwatch directly inside
+        //        the module.
+        //   New: Connector duration is measured through the workflow context
+        //        monotonic elapsed API.
         var attempts = Math.Max(1, retry + 1);
-        ConnectorResponse? response = null;
-        Exception? lastError = null;
+        var runId = string.IsNullOrEmpty(request.RunId)
+            ? envelope.Propagation?.CorrelationId ?? string.Empty
+            : request.RunId;
+        await StartAttemptAsync(
+            envelope,
+            request,
+            runId,
+            connectorName,
+            operation,
+            connector,
+            attempt: 1,
+            attempts,
+            timeoutMs,
+            string.Equals(onError, "continue", StringComparison.OrdinalIgnoreCase),
+            isSecureStep,
+            ctx,
+            ct);
+    }
 
-        for (var attempt = 1; attempt <= attempts; attempt++)
+    private async Task HandleTimeoutFiredAsync(
+        WorkflowConnectorTimeoutFiredEvent evt,
+        EventEnvelope envelope,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(evt.OperationId))
+            return;
+
+        var state = WorkflowExecutionStateAccess.Load<ConnectorCallModuleState>(ctx, ModuleStateKey);
+        if (!state.PendingByOperationId.TryGetValue(evt.OperationId, out var pending))
+            return;
+
+        if (!MatchesPendingTimeout(envelope, pending))
         {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
-
-            try
-            {
-                var runId = string.IsNullOrEmpty(request.RunId)
-                    ? envelope.Propagation?.CorrelationId ?? string.Empty
-                    : request.RunId;
-                var connectorRequest = new ConnectorRequest
-                {
-                    Metadata = ExtractConnectorMetadata(ctx),
-                    RunId = runId,
-                    StepId = request.StepId,
-                    Connector = connectorName,
-                    Operation = operation,
-                    Payload = ResolvePayload(request, isSecureStep, ctx) ?? string.Empty,
-                    Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
-                };
-
-                response = await connector.ExecuteAsync(connectorRequest, timeoutCts.Token);
-                if (response.Success) break;
-
-                lastError = new InvalidOperationException(response.Error);
-                if (attempt < attempts)
-                {
-                    ctx.Logger.LogWarning(
-                        "ConnectorCall: step={StepId} connector={Connector} attempt={Attempt}/{Attempts} failed: {Error}",
-                        request.StepId, connectorName, attempt, attempts, response.Error);
-                }
-            }
-            catch (Exception ex)
-            {
-                lastError = ex;
-                if (attempt < attempts)
-                {
-                    ctx.Logger.LogWarning(
-                        ex,
-                        "ConnectorCall: step={StepId} connector={Connector} attempt={Attempt}/{Attempts} exception",
-                        request.StepId, connectorName, attempt, attempts);
-                }
-            }
+            ctx.Logger.LogDebug(
+                "ConnectorCall: ignore timeout without matching lease operation={OperationId}",
+                evt.OperationId);
+            return;
         }
 
-        sw.Stop();
-        if (response is { Success: true })
+        // Refactor (iter158/cluster-157-004-timeout-cts):
+        //   Old: connector timeout used inline CTS/call-stack cancellation, so late
+        //        connector completions raced with in-memory continuation state.
+        //   New: the actor owns a typed durable timeout event keyed by operation id;
+        //        timeout and late completion both reconcile through persisted module state.
+        var completion = new StepCompletedEvent
         {
-            var resolvedOutput = response.Output ?? string.Empty;
-            if (!TryAssertResponseOutput(request.Parameters, resolvedOutput, out var assertionError))
+            StepId = pending.StepId,
+            RunId = pending.RunId,
+            Success = pending.OnErrorContinue,
+            Output = pending.OnErrorContinue ? pending.Input : string.Empty,
+            Error = pending.OnErrorContinue ? string.Empty : $"connector call timed out after {evt.TimeoutMs}ms",
+            ExecutionId = pending.ExecutionId,
+        };
+        completion.Annotations["connector.name"] = pending.ConnectorName;
+        completion.Annotations["connector.step_id"] = pending.StepId;
+        completion.Annotations["connector.run_id"] = pending.RunId;
+        completion.Annotations["connector.type"] = pending.ConnectorType;
+        completion.Annotations["connector.operation"] = pending.Operation;
+        completion.Annotations["connector.attempts"] = pending.Attempt.ToString();
+        completion.Annotations["connector.timeout_ms"] = evt.TimeoutMs.ToString();
+        completion.Annotations["connector.duration_ms"] = evt.TimeoutMs.ToString("F2");
+        completion.Annotations["connector.timeout_fired"] = "true";
+        if (pending.OnErrorContinue)
+        {
+            completion.Annotations["connector.continued_on_error"] = "true";
+            completion.Annotations["connector.error"] = completion.Error;
+        }
+
+        await ctx.PublishAsync(completion, TopologyAudience.Self, ct);
+        RemovePending(state, pending);
+        await SaveStateAsync(state, ctx, ct);
+    }
+
+    private async Task HandleAttemptCompletedAsync(
+        WorkflowConnectorAttemptCompletedEvent evt,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(evt.OperationId))
+            return;
+
+        var state = WorkflowExecutionStateAccess.Load<ConnectorCallModuleState>(ctx, ModuleStateKey);
+        if (!state.PendingByOperationId.TryGetValue(evt.OperationId, out var pending))
+            return;
+
+        RemovePending(state, pending);
+        await SaveStateAsync(state, ctx, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.TimeoutLease, CancellationToken.None);
+
+        var durationMs = ParseDuration(evt);
+        if (evt.Success)
+        {
+            var resolvedOutput = evt.Output ?? string.Empty;
+            if (!TryAssertResponseOutput(pending.Parameters, resolvedOutput, out var assertionError))
             {
-                await PublishFailureAsync(ctx, request, assertionError, ct);
+                await PublishPendingCompletionAsync(pending, false, string.Empty, assertionError, durationMs, evt.Annotations, ctx, ct);
                 return;
             }
 
-            if (ParseBool(request.Parameters.GetValueOrDefault("pass_through_input", "false")))
-                resolvedOutput = request.Input ?? string.Empty;
+            if (ParseBool(pending.Parameters.GetValueOrDefault("pass_through_input", "false")))
+                resolvedOutput = pending.Input ?? string.Empty;
 
-            var ok = new StepCompletedEvent
-            {
-                StepId = request.StepId,
-                RunId = request.RunId,
-                Success = true,
-                Output = resolvedOutput,
-            };
-            AppendBaseMetadata(ok, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
-            foreach (var (key, value) in response.Metadata)
-                ok.Annotations[key] = value;
-            await ctx.PublishAsync(ok, TopologyAudience.Self, ct);
+            await PublishPendingCompletionAsync(pending, true, resolvedOutput, string.Empty, durationMs, evt.Annotations, ctx, ct);
             return;
         }
 
-        var errorText = response?.Error;
-        if (string.IsNullOrWhiteSpace(errorText))
-            errorText = lastError?.Message ?? "connector call failed";
-
-        if (string.Equals(onError, "continue", StringComparison.OrdinalIgnoreCase))
+        var errorText = string.IsNullOrWhiteSpace(evt.Error) ? "connector call failed" : evt.Error;
+        if (pending.Attempt < pending.Attempts)
         {
             ctx.Logger.LogWarning(
-                "ConnectorCall: step={StepId} connector={Connector} failed but continue: {Error}",
-                request.StepId, connectorName, errorText);
-
-            var continued = new StepCompletedEvent
+                "ConnectorCall: step={StepId} connector={Connector} attempt={Attempt}/{Attempts} failed: {Error}",
+                pending.StepId, pending.ConnectorName, pending.Attempt, pending.Attempts, errorText);
+            var nextRequest = BuildRetryStepRequest(pending);
+            var connector = await _connectorResolver.ResolveAsync(ctx, pending.ConnectorName, ct);
+            if (connector == null)
             {
-                StepId = request.StepId,
-                RunId = request.RunId,
-                Success = true,
-                Output = request.Input,
-            };
-            AppendBaseMetadata(continued, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
-            continued.Annotations["connector.continued_on_error"] = "true";
-            continued.Annotations["connector.error"] = errorText ?? "";
-            await ctx.PublishAsync(continued, TopologyAudience.Self, ct);
+                await PublishPendingCompletionAsync(
+                    pending,
+                    false,
+                    string.Empty,
+                    $"connector '{pending.ConnectorName}' not found",
+                    durationMs,
+                    evt.Annotations,
+                    ctx,
+                    ct);
+                return;
+            }
+
+            await StartAttemptAsync(
+                new EventEnvelope { Id = pending.OperationId },
+                nextRequest,
+                pending.RunId,
+                pending.ConnectorName,
+                pending.Operation,
+                connector,
+                pending.Attempt + 1,
+                pending.Attempts,
+                pending.TimeoutMs,
+                pending.OnErrorContinue,
+                pending.SecureStep,
+                ctx,
+                ct);
             return;
         }
 
-        var failed = new StepCompletedEvent
+        await PublishPendingCompletionAsync(
+            pending,
+            false,
+            string.Empty,
+            errorText,
+            durationMs,
+            evt.Annotations,
+            ctx,
+            ct);
+    }
+
+    private async Task StartAttemptAsync(
+        EventEnvelope envelope,
+        StepRequestEvent request,
+        string runId,
+        string connectorName,
+        string operation,
+        IConnector connector,
+        int attempt,
+        int attempts,
+        int timeoutMs,
+        bool onErrorContinue,
+        bool isSecureStep,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var pending = await RegisterPendingAsync(
+            envelope,
+            request,
+            runId,
+            connectorName,
+            operation,
+            connector.Type,
+            attempt,
+            attempts,
+            timeoutMs,
+            onErrorContinue,
+            isSecureStep,
+            ctx,
+            ct);
+        var connectorRequest = new ConnectorRequest
+        {
+            HttpAuthorization = ExtractConnectorHttpAuthorization(ctx),
+            RunId = runId,
+            StepId = request.StepId,
+            Connector = connectorName,
+            Operation = operation,
+            Payload = ResolvePayload(request, isSecureStep, ctx) ?? string.Empty,
+            Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
+        };
+        _ = ExecuteConnectorAndSignalAsync(ctx, connector, connectorRequest, pending);
+    }
+
+    private static async Task ExecuteConnectorAndSignalAsync(
+        IWorkflowExecutionContext ctx,
+        IConnector connector,
+        ConnectorRequest request,
+        PendingConnectorCallState pending)
+    {
+        var startedAt = ctx.GetTimestamp();
+        var completed = new WorkflowConnectorAttemptCompletedEvent
+        {
+            RunId = pending.RunId,
+            StepId = pending.StepId,
+            OperationId = pending.OperationId,
+            Attempt = pending.Attempt,
+            ExecutionId = pending.ExecutionId,
+        };
+        try
+        {
+            var response = await connector.ExecuteAsync(request, CancellationToken.None);
+            completed.Success = response.Success;
+            completed.Output = response.Output ?? string.Empty;
+            completed.Error = response.Error ?? string.Empty;
+            foreach (var (key, value) in response.Metadata)
+                completed.Annotations[key] = value;
+        }
+        catch (Exception ex)
+        {
+            completed.Success = false;
+            completed.Error = ex.Message;
+        }
+
+        completed.Annotations["connector.duration_ms"] = ctx.GetElapsedTime(startedAt).TotalMilliseconds.ToString("F2");
+        await ctx.PublishAsync(completed, TopologyAudience.Self, CancellationToken.None);
+    }
+
+    private async Task<PendingConnectorCallState> RegisterPendingAsync(
+        EventEnvelope envelope,
+        StepRequestEvent request,
+        string runId,
+        string connectorName,
+        string operation,
+        string connectorType,
+        int attempt,
+        int attempts,
+        int timeoutMs,
+        bool onErrorContinue,
+        bool isSecureStep,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var operationId = BuildOperationId(runId, request.StepId, attempt, request.ExecutionId, ResolveOriginEnvelopeId(envelope));
+        var callbackId = RuntimeCallbackKeyComposer.BuildCallbackId(
+            TimeoutCallbackPrefix,
+            runId,
+            request.StepId,
+            operationId,
+            attempt.ToString());
+        var pending = new PendingConnectorCallState
         {
             StepId = request.StepId,
-            RunId = request.RunId,
-            Success = false,
-            Error = errorText ?? "connector call failed",
+            RunId = runId,
+            OperationId = operationId,
+            Input = request.Input ?? string.Empty,
+            ConnectorName = connectorName,
+            Operation = operation,
+            Attempt = attempt,
+            Attempts = attempts,
+            TimeoutMs = timeoutMs,
+            OnErrorContinue = onErrorContinue,
+            TimeoutCallbackId = callbackId,
+            ExecutionId = request.ExecutionId,
+            SecureStep = isSecureStep,
+            ConnectorType = connectorType,
         };
-        AppendBaseMetadata(failed, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
-        await ctx.PublishAsync(failed, TopologyAudience.Self, ct);
+        foreach (var (key, value) in request.Parameters)
+            pending.Parameters[key] = value;
+
+        var state = WorkflowExecutionStateAccess.Load<ConnectorCallModuleState>(ctx, ModuleStateKey);
+        RemovePendingForStep(state, runId, request.StepId);
+        state.PendingByOperationId[operationId] = pending;
+        state.PendingOperationIdByStepId[BuildStepKey(runId, request.StepId)] = operationId;
+        await SaveStateAsync(state, ctx, ct);
+
+        var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
+            callbackId,
+            TimeSpan.FromMilliseconds(timeoutMs),
+            new WorkflowConnectorTimeoutFiredEvent
+            {
+                RunId = runId,
+                StepId = request.StepId,
+                OperationId = operationId,
+                TimeoutMs = timeoutMs,
+                Attempt = attempt,
+            },
+            ct: ct);
+
+        state = WorkflowExecutionStateAccess.Load<ConnectorCallModuleState>(ctx, ModuleStateKey);
+        if (!state.PendingByOperationId.TryGetValue(operationId, out pending))
+            return pending;
+
+        pending.TimeoutLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+        state.PendingByOperationId[operationId] = pending;
+        await SaveStateAsync(state, ctx, ct);
+        return pending;
+    }
+
+    private static bool MatchesPendingTimeout(EventEnvelope envelope, PendingConnectorCallState pending)
+    {
+        if (pending.TimeoutLease != null)
+            return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.TimeoutLease);
+
+        return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var callbackState) &&
+               string.Equals(callbackState.CallbackId, pending.TimeoutCallbackId, StringComparison.Ordinal);
+    }
+
+    private static void RemovePendingForStep(
+        ConnectorCallModuleState state,
+        string runId,
+        string stepId)
+    {
+        var stepKey = BuildStepKey(runId, stepId);
+        if (!state.PendingOperationIdByStepId.Remove(stepKey, out var operationId))
+            return;
+
+        state.PendingByOperationId.Remove(operationId);
+    }
+
+    private static void RemovePending(
+        ConnectorCallModuleState state,
+        PendingConnectorCallState pending)
+    {
+        state.PendingByOperationId.Remove(pending.OperationId);
+        state.PendingOperationIdByStepId.Remove(BuildStepKey(pending.RunId, pending.StepId));
+    }
+
+    private static Task SaveStateAsync(
+        ConnectorCallModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct) =>
+        WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+
+    private static string ResolveOriginEnvelopeId(EventEnvelope envelope) =>
+        string.IsNullOrWhiteSpace(envelope.Id)
+            ? Guid.NewGuid().ToString("N")
+            : envelope.Id;
+
+    private static string BuildOperationId(
+        string runId,
+        string stepId,
+        int attempt,
+        string executionId,
+        string originEnvelopeId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId(
+            "connector-operation",
+            runId,
+            stepId,
+            string.IsNullOrWhiteSpace(executionId) ? originEnvelopeId : executionId,
+            attempt.ToString());
+
+    private static string BuildStepKey(string runId, string stepId) =>
+        $"{runId}:{stepId}";
+
+    private static StepRequestEvent BuildRetryStepRequest(PendingConnectorCallState pending)
+    {
+        var request = new StepRequestEvent
+        {
+            StepId = pending.StepId,
+            StepType = pending.SecureStep ? "secure_connector_call" : "connector_call",
+            RunId = pending.RunId,
+            Input = pending.Input,
+            ExecutionId = pending.ExecutionId,
+        };
+        foreach (var (key, value) in pending.Parameters)
+            request.Parameters[key] = value;
+        return request;
+    }
+
+    private static double ParseDuration(WorkflowConnectorAttemptCompletedEvent evt)
+    {
+        return double.TryParse(
+            evt.Annotations.GetValueOrDefault("connector.duration_ms", "0"),
+            out var durationMs)
+            ? durationMs
+            : 0d;
+    }
+
+    private static async Task PublishPendingCompletionAsync(
+        PendingConnectorCallState pending,
+        bool success,
+        string output,
+        string error,
+        double durationMs,
+        IReadOnlyDictionary<string, string> responseAnnotations,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var completed = new StepCompletedEvent
+        {
+            StepId = pending.StepId,
+            RunId = pending.RunId,
+            Success = success,
+            Output = success ? output : string.Empty,
+            Error = success ? string.Empty : error,
+            ExecutionId = pending.ExecutionId,
+        };
+        AppendBaseMetadata(completed, pending, durationMs);
+        foreach (var (key, value) in responseAnnotations)
+        {
+            if (!string.Equals(key, "connector.duration_ms", StringComparison.Ordinal))
+                completed.Annotations[key] = value;
+        }
+
+        if (!success && pending.OnErrorContinue)
+        {
+            completed.Success = true;
+            completed.Output = pending.Input;
+            completed.Error = string.Empty;
+            completed.Annotations["connector.continued_on_error"] = "true";
+            completed.Annotations["connector.error"] = error ?? string.Empty;
+        }
+
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 
     private static async Task PublishFailureAsync(
@@ -322,7 +663,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         if (string.IsNullOrWhiteSpace(normalizedVariable))
             throw new InvalidOperationException("connector_call secure stdin requires 'stdin_secret_variable'.");
 
-        if (SecureInputRuntimeItemsAccess.TryGetCapturedValue(ctx, runId, normalizedVariable, out var value))
+        if (SecureInputRuntimeContextAccess.TryGetCapturedValue(ctx, runId, normalizedVariable, out var value))
         {
             return value;
         }
@@ -364,18 +705,14 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
 
     private static void AppendBaseMetadata(
         StepCompletedEvent evt,
-        IConnector connector,
-        string connectorName,
-        string operation,
-        int attempts,
-        int timeoutMs,
+        PendingConnectorCallState pending,
         double durationMs)
     {
-        evt.Annotations["connector.name"] = connectorName;
-        evt.Annotations["connector.type"] = connector.Type;
-        evt.Annotations["connector.operation"] = operation;
-        evt.Annotations["connector.attempts"] = attempts.ToString();
-        evt.Annotations["connector.timeout_ms"] = timeoutMs.ToString();
+        evt.Annotations["connector.name"] = pending.ConnectorName;
+        evt.Annotations["connector.type"] = pending.ConnectorType;
+        evt.Annotations["connector.operation"] = pending.Operation;
+        evt.Annotations["connector.attempts"] = pending.Attempt.ToString();
+        evt.Annotations["connector.timeout_ms"] = pending.TimeoutMs.ToString();
         evt.Annotations["connector.duration_ms"] = durationMs.ToString("F2");
     }
 
@@ -486,18 +823,18 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
 
-    private static IReadOnlyDictionary<string, string> ExtractConnectorMetadata(
+    // Refactor (issue1422/phase9-first-slice):
+    //   Old pattern: Connector execution rewrapped typed runtime authorization into Metadata.
+    //   New principle: Connector authorization crosses the execution boundary as a typed request field.
+    private static string ExtractConnectorHttpAuthorization(
         IWorkflowExecutionContext ctx)
     {
-        if (ConnectorAuthorizationRuntimeItemsAccess.TryGetAuthorization(ctx, out var authorization) &&
+        if (ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(ctx, out var authorization) &&
             !string.IsNullOrWhiteSpace(authorization))
         {
-            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = authorization.Trim(),
-            };
+            return authorization.Trim();
         }
 
-        return new Dictionary<string, string>();
+        return string.Empty;
     }
 }

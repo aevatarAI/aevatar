@@ -13,110 +13,63 @@ public sealed class ServiceDeploymentCatalogProjector
     : IProjectionArtifactMaterializer<ServiceDeploymentCatalogProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceDeploymentCatalogReadModel> _storeDispatcher;
-    private readonly IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public ServiceDeploymentCatalogProjector(
         IProjectionWriteDispatcher<ServiceDeploymentCatalogReadModel> storeDispatcher,
-        IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string> documentReader,
         IProjectionClock clock)
     {
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
-        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
+    // Refactor (iter34/cluster-006-artifact-projectors-state-root):
+    //   Old pattern: Service artifact projectors injected document reader and incrementally mutated prior readmodel state.
+    //   New principle: 服务投影器仅做 state-root overwrite; catalog definition-only, deployment/serving facts come from their readmodels.
+    //   No new actor, envelope kind, projection phase, layer, or docs/canon change.
     public async ValueTask ProjectAsync(ServiceDeploymentCatalogProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        if (!ServiceCommittedStateSupport.TryGetObservedPayload(
+        if (!ServiceCommittedStateSupport.TryGetObservedState<ServiceDeploymentState>(
                 envelope,
                 _clock,
-                out var payload,
+                out var state,
                 out var eventId,
                 out var stateVersion,
                 out var observedAt) ||
-            payload == null)
+            state?.Identity == null)
         {
             return;
         }
 
-        if (payload.Is(ServiceDeploymentActivatedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ServiceDeploymentActivatedEvent>();
-            await UpsertAsync(context.RootActorId, evt.Identity, evt.DeploymentId, eventId, stateVersion, observedAt, readModel =>
-            {
-                readModel.RevisionId = evt.RevisionId ?? string.Empty;
-                readModel.PrimaryActorId = evt.PrimaryActorId ?? string.Empty;
-                readModel.Status = evt.Status.ToString();
-                readModel.ActivatedAt = evt.ActivatedAt?.ToDateTimeOffset();
-                readModel.UpdatedAt = ServiceProjectionMapping.FromTimestamp(evt.ActivatedAt, _clock.UtcNow);
-            }, ct);
+        var serviceKey = ServiceProjectionMapping.ServiceKey(state.Identity);
+        if (string.IsNullOrWhiteSpace(serviceKey))
             return;
-        }
 
-        if (payload.Is(ServiceDeploymentDeactivatedEvent.Descriptor))
+        var readModel = new ServiceDeploymentCatalogReadModel
         {
-            var evt = payload.Unpack<ServiceDeploymentDeactivatedEvent>();
-            await UpsertAsync(context.RootActorId, evt.Identity, evt.DeploymentId, eventId, stateVersion, observedAt, readModel =>
-            {
-                readModel.RevisionId = evt.RevisionId ?? string.Empty;
-                readModel.Status = ServiceDeploymentStatus.Deactivated.ToString();
-                readModel.UpdatedAt = ServiceProjectionMapping.FromTimestamp(evt.DeactivatedAt, _clock.UtcNow);
-            }, ct);
-            return;
-        }
-
-        if (payload.Is(ServiceDeploymentHealthChangedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ServiceDeploymentHealthChangedEvent>();
-            await UpsertAsync(context.RootActorId, evt.Identity, evt.DeploymentId, eventId, stateVersion, observedAt, readModel =>
-            {
-                readModel.Status = evt.Status.ToString();
-                readModel.UpdatedAt = ServiceProjectionMapping.FromTimestamp(evt.OccurredAt, _clock.UtcNow);
-            }, ct);
-        }
+            Id = serviceKey,
+            ActorId = context.RootActorId,
+            StateVersion = stateVersion,
+            LastEventId = eventId,
+            UpdatedAt = observedAt,
+            Deployments = state.Deployments
+                .Values
+                .Select(MapDeployment)
+                .OrderByDescending(x => x.UpdatedAt)
+                .ThenBy(x => x.DeploymentId, StringComparer.Ordinal)
+                .ToList(),
+        };
+        await _storeDispatcher.UpsertAsync(readModel, ct);
     }
 
-    private async Task UpsertAsync(
-        string actorId,
-        ServiceIdentity? identity,
-        string deploymentId,
-        string eventId,
-        long stateVersion,
-        DateTimeOffset observedAt,
-        Action<ServiceDeploymentReadModel> mutate,
-        CancellationToken ct)
-    {
-        var serviceKey = ServiceProjectionMapping.ServiceKey(identity);
-        if (string.IsNullOrWhiteSpace(serviceKey) || string.IsNullOrWhiteSpace(deploymentId))
-            return;
-
-        var existing = await _documentReader.GetAsync(serviceKey, ct)
-            ?? new ServiceDeploymentCatalogReadModel
-            {
-                Id = serviceKey,
-                UpdatedAt = _clock.UtcNow,
-            };
-        var deployment = existing.Deployments.FirstOrDefault(x => string.Equals(x.DeploymentId, deploymentId, StringComparison.Ordinal));
-        if (deployment == null)
+    private static ServiceDeploymentReadModel MapDeployment(ServiceDeploymentRecord source) =>
+        new()
         {
-            deployment = new ServiceDeploymentReadModel
-            {
-                DeploymentId = deploymentId,
-                UpdatedAt = _clock.UtcNow,
-            };
-            existing.Deployments.Add(deployment);
-        }
-
-        mutate(deployment);
-        existing.ActorId = actorId;
-        existing.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(existing.StateVersion, stateVersion);
-        existing.LastEventId = eventId;
-        existing.UpdatedAt = observedAt;
-        existing.Deployments = existing.Deployments
-            .OrderByDescending(x => x.UpdatedAt)
-            .ThenBy(x => x.DeploymentId, StringComparer.Ordinal)
-            .ToList();
-        await _storeDispatcher.UpsertAsync(existing, ct);
-    }
+            DeploymentId = source.DeploymentId ?? string.Empty,
+            RevisionId = source.RevisionId ?? string.Empty,
+            PrimaryActorId = source.PrimaryActorId ?? string.Empty,
+            Status = source.Status.ToString(),
+            ActivatedAt = source.ActivatedAt?.ToDateTimeOffset(),
+            UpdatedAt = ServiceProjectionMapping.FromTimestamp(source.UpdatedAt, DateTimeOffset.UnixEpoch),
+        };
 }

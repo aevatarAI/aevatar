@@ -7,6 +7,8 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 import "google/protobuf/empty.proto";
 import "chat_activity.proto";
 import "channel_contracts.proto";
+import "chat_route_policy.proto";
+import "ai_messages.proto";
 
 message OutboundDeliveryReceipt {
   string reply_message_id = 1;
@@ -21,6 +23,9 @@ message ConversationTurnCompletedEvent {
   aevatar.gagents.channel.abstractions.MessageContent outbound = 6;
   int64 completed_at_unix_ms = 7;
   OutboundDeliveryReceipt outbound_delivery = 8;
+  // History entries to append to the conversation-owned transcript window
+  // after this turn is terminal. Non-LLM turns leave this empty.
+  repeated ConversationHistoryEntry appended_history = 9;
 }
 
 message NeedsLlmReplyEvent {
@@ -30,28 +35,90 @@ message NeedsLlmReplyEvent {
   aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
   map<string, string> metadata = 5;
   int64 requested_at_unix_ms = 6;
-  // Transient inbox-only credential. The actor MUST clear `reply_token` and
+  // Transient run-command-only credential. The actor MUST clear `reply_token` and
   // `reply_token_expires_at_unix_ms` (set them to the empty default) on the
-  // copy passed to PersistDomainEventAsync; only the inbox-bound copy may
-  // carry them so the LLM worker can echo the credential back without the
+  // copy passed to PersistDomainEventAsync; only the run-bound copy may
+  // carry them so AgentRunGAgent can echo the credential back without the
   // actor's in-memory dict surviving deactivation. Never persist to event
   // store, projection, or read model.
   string reply_token = 7;
   int64 reply_token_expires_at_unix_ms = 8;
+  // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+  //   Old pattern: request credentials/routing/channel facts lived in Metadata.
+  //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 9;
+  // Transient run-command-only routing target chosen at ingress. ConversationGAgent MUST
+  // clear this field on the copy passed to PersistDomainEventAsync; only the run-bound
+  // command copy may carry it so AgentRunGAgent can apply the route before execution.
+  // Never persist to event store, projection, read model, or actor state.
+  aevatar.chat_routing.v1.ChatRouteAction target_ref = 10;
+  // Stable run identity owned by AgentRunGAgent. New dispatch MUST set this
+  // explicitly before persistence and before handoff to the run dispatcher.
+  // correlation_id is trace-only and MUST NOT be used to derive actor identity.
+  string run_id = 11;
+  // Runtime command-only LLM control carrier. ConversationGAgent clears this on
+  // the copy persisted to actor state; the run-bound command may carry it to the
+  // LLM call owner.
+  aevatar.ai.LLMControlContextPayload llm_control = 12;
+  // Conversation-owned prior transcript snapshot. This is copied from
+  // ConversationGAgentState.retained_history into the transient run command so
+  // per-message AgentRunGAgent instances still see the same conversation context.
+  repeated ConversationHistoryEntry prior_history = 13;
+}
+
+message ConversationHistoryEntry {
+  string role = 1;
+  string content = 2;
+  string reasoning_content = 3;
+  repeated aevatar.ai.ChatContentPart content_parts = 4;
+  string tool_call_id = 5;
+  repeated ConversationToolCallEntry tool_calls = 6;
+}
+
+message ConversationToolCallEntry {
+  string id = 1;
+  string name = 2;
+  string arguments_json = 3;
 }
 
 // Transient actor-inbox envelope used by the NyxID relay endpoint to hand a single
 // inbound callback turn to ConversationGAgent together with the short-lived reply
-// credential. The actor MUST NOT persist this message or any of its fields into
-// event store, projection, read model, or any durable state. The handler is
-// expected to immediately move `reply_token` and `reply_token_expires_at_unix_ms`
-// into actor-owned in-memory runtime state (keyed by `correlation_id`) and only
-// persist downstream domain events that omit the reply credential entirely.
+// credential. The actor MUST NOT persist this message or any credential field into
+// event store, projection, read model, or any durable state. The handler may copy
+// the credential only into same-turn runtime messages/commands that omit it before
+// persistence.
 message NyxRelayInboundActivity {
   aevatar.gagents.channel.abstractions.ChatActivity activity = 1;
   string reply_token = 2;
   int64 reply_token_expires_at_unix_ms = 3;
   string correlation_id = 4;
+  string relay_api_key_id = 5;
+  string callback_jti = 6;
+  int64 callback_observed_at_unix_ms = 7;
+  int64 callback_replay_expires_at_unix_ms = 8;
+}
+
+// Refactor (iter17/cluster-038): Old pattern: callback_jti replay claims were process-local guard entries. New principle: admission is a persisted typed actor event before any business turn work.
+message NyxRelayCallbackAdmittedEvent {
+  string activity_id = 1;
+  string relay_api_key_id = 2;
+  string callback_jti = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  int64 admitted_at_unix_ms = 5;
+  int64 claim_expires_at_unix_ms = 6;
+}
+
+// Refactor (iter17/cluster-038): Old pattern: relay callback execution depended on inline endpoint/guard flow. New principle: admitted callbacks continue through an explicit actor self-message.
+message NyxRelayCallbackTurnRequestedEvent {
+  string activity_id = 1;
+  string relay_api_key_id = 2;
+  string callback_jti = 3;
+  int64 requested_at_unix_ms = 4;
+  // Runtime-only credential copied from NyxRelayInboundActivity into the same-turn
+  // self message. Never persisted to actor state/event store/read models.
+  string reply_token = 5;
+  int64 reply_token_expires_at_unix_ms = 6;
+  string nyx_user_access_token = 7;
 }
 
 enum LlmReplyTerminalState {
@@ -70,23 +137,117 @@ message LlmReplyReadyEvent {
   string error_code = 7;
   string error_summary = 8;
   int64 ready_at_unix_ms = 9;
-  // Transient inbox-echoed credential carried back from the LLM worker so the
+  // Transient run-echoed credential carried back from AgentRunGAgent so the
   // actor's outbound relay reply does not depend on its in-memory token dict
   // surviving deactivation. The actor consumes these fields directly and never
-  // persists them. The inbox subscriber copies the values from the inbound
+  // persists them. AgentRunGAgent copies the values from the inbound
   // NeedsLlmReplyEvent verbatim.
   string reply_token = 10;
   int64 reply_token_expires_at_unix_ms = 11;
+  // AgentRunGAgent run_id producing this reply. correlation_id remains trace-only
+  // and MUST NOT be used as actor/run identity.
+  string run_id = 12;
+  // History entries produced by this LLM turn. ConversationGAgent persists
+  // them only after the reply reaches a terminal user-visible outcome.
+  repeated ConversationHistoryEntry appended_history = 13;
 }
 
-// Per-delta streaming signal dispatched from the LLM inbox runtime to the conversation actor while
+enum ConversationReplyLifecycleMode {
+  CONVERSATION_REPLY_LIFECYCLE_MODE_UNSPECIFIED = 0;
+  CONVERSATION_REPLY_LIFECYCLE_MODE_NYX_RELAY_TEXT = 1;
+  CONVERSATION_REPLY_LIFECYCLE_MODE_LARK_CARD = 2;
+}
+
+enum ConversationReplyLifecyclePhase {
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_UNSPECIFIED = 0;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_TEXT_IDLE = 1;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_TEXT_PLACEHOLDER_SENT = 2;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_TEXT_STREAMING = 3;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_TEXT_SUPPRESSING_INTERIM = 4;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_TEXT_DISABLED_PRE_SEND = 5;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_TEXT_TERMINAL_SUCCEEDED = 6;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_TEXT_TERMINAL_PARTIAL = 7;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_CREATING = 8;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_STREAMING = 9;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_COMPLETED = 10;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_ABORTED = 11;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_TERMINATED = 12;
+  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_CREATION_FAILED = 13;
+}
+
+enum LarkCardOperationPhase {
+  LARK_CARD_OPERATION_PHASE_UNSPECIFIED = 0;
+  LARK_CARD_OPERATION_PHASE_CREATE = 1;
+  LARK_CARD_OPERATION_PHASE_STREAM = 2;
+  LARK_CARD_OPERATION_PHASE_FINALIZE = 3;
+}
+
+enum NyxRelayTextOperationKind {
+  NYX_RELAY_TEXT_OPERATION_KIND_UNSPECIFIED = 0;
+  NYX_RELAY_TEXT_OPERATION_KIND_INTERIM = 1;
+  NYX_RELAY_TEXT_OPERATION_KIND_FAILURE_SELF_HEAL = 2;
+  NYX_RELAY_TEXT_OPERATION_KIND_FINAL = 3;
+}
+
+// Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
+//   Old pattern: ConversationReplyLifecycleChangedEvent carried full ConversationReplyLifecycleState
+//   New principle: event describes transition facts; reducer derives current state from event + actor state
+message ConversationReplyLifecycleChangedEvent {
+  reserved 1, 7 to 25;
+  reserved "lifecycle", "legacy_lifecycle_snapshot";
+
+  int64 changed_at_unix_ms = 2;
+  string correlation_id = 3;
+  ConversationReplyLifecycleMode mode = 4;
+  ConversationReplyLifecyclePhase previous_phase = 5;
+  ConversationReplyLifecyclePhase phase = 6;
+  optional LarkCardOperationPhase lark_card_operation = 26;
+  optional NyxRelayTextOperationKind nyx_relay_operation = 27;
+  optional int64 operation_sequence = 28;
+  optional int64 operation_generation = 29;
+  optional string platform_message_id_assigned = 30;
+  optional string card_id_assigned = 31;
+  optional string card_message_id_assigned = 32;
+  optional string original_card_id_assigned = 33;
+  optional string flushed_text_delta = 34;
+  optional int32 edit_count_delta = 35;
+  optional int64 sequence_delta = 36;
+  optional string streaming_element_id_selected = 37;
+  optional string terminal_reason = 38;
+  optional string queued_accumulated_text = 39;
+  optional string finalize_text = 40;
+  optional string finalize_command_id = 41;
+  optional LlmReplyTerminalState nyx_relay_terminal_state = 42;
+  repeated ConversationHistoryEntry appended_history = 43;
+  optional int32 nyx_relay_retry_attempt = 44;
+}
+
+// Refactor (iter20/cluster-004):
+//   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
+//   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+message ConversationReplyLifecycleClearedEvent {
+  string correlation_id = 1;
+  ConversationReplyLifecycleMode mode = 2;
+  string reason = 3;
+  int64 cleared_at_unix_ms = 4;
+}
+
+// Per-delta streaming signal dispatched from AgentRunGAgent to the conversation actor while
 // the reply is still being generated. The actor owns the outbound reply credential and the
 // placeholder message identifier for the turn, so it must be the one issuing the relay placeholder
-// send and subsequent edit calls. This message carries only the cumulative accumulated text for
-// the current delta; the actor tracks streaming state (placeholder message id, disabled flag)
-// in-memory keyed by `correlation_id`. This event must never be persisted — it is a runtime-only
-// signal.
+// send and subsequent edit calls. This message carries only runtime credentials plus the
+// cumulative accumulated text for the current delta; visible lifecycle is persisted separately
+// through ConversationReplyLifecycleChangedEvent. This event must never be persisted — it is a
+// runtime-only signal.
 message LlmReplyStreamChunkEvent {
+  // Field 6 (`card_mode`) was a runtime-only routing flag that has been promoted to its own
+  // message type (`LlmReplyCardStreamChunkEvent`) so the structural contract of this domain-
+  // event-shaped envelope no longer carries any "should I re-route to a different sink?"
+  // signal. Reserved here so accidental reuse of the field number, or a stale serializer
+  // built before the split, fails loudly instead of silently flipping back to card mode.
+  reserved 6;
+  reserved "card_mode";
+
   string correlation_id = 1;
   string registration_id = 2;
   // Clone of the inbound activity so the actor/turn runner can resolve the platform, conversation,
@@ -95,6 +256,192 @@ message LlmReplyStreamChunkEvent {
   // Current accumulated reply text (not a delta slice). Each chunk supersedes the previous one.
   string accumulated_text = 4;
   int64 chunk_at_unix_ms = 5;
+  // Runtime-only relay credential copied from the run command. Never persisted to
+  // actor state/event store/read models.
+  string reply_token = 7;
+  int64 reply_token_expires_at_unix_ms = 8;
+}
+
+// Per-delta streaming signal for the Lark CardKit (card-mode) outbound path. Identical
+// payload to LlmReplyStreamChunkEvent, but a separate proto type so the routing decision is
+// structural: there is no boolean a misbehaving persistence layer can flip — the actor's
+// HandleLlmReplyCardStreamChunkAsync handler is reachable only via this type. Like its
+// edit-message sibling, this event is a runtime-only signal and must never be persisted to
+// the event store, projection, or any durable state.
+message LlmReplyCardStreamChunkEvent {
+  string correlation_id = 1;
+  string registration_id = 2;
+  // Clone of the inbound activity so the actor/runner can resolve the platform, conversation,
+  // delivery context, and TransportExtras (NyxUserAccessToken, NyxLarkChatId, NyxLarkUnionId)
+  // without re-reading from durable state.
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 3;
+  // Current accumulated reply text (not a delta slice). Each chunk supersedes the previous one.
+  string accumulated_text = 4;
+  int64 chunk_at_unix_ms = 5;
+  // Runtime-only relay credential copied from the run command. Never persisted to
+  // actor state/event store/read models.
+  string reply_token = 6;
+  int64 reply_token_expires_at_unix_ms = 7;
+}
+
+// Refactor (iter57/cluster-065-lark-card-signal-only):
+//   Old pattern: Lark CardKit Task.Run helpers built rich create/stream/finalize continuation
+//   payloads outside the actor turn, including timestamps, error codes, and lifecycle field
+//   mapping. New principle: helpers only report the typed operation signal and minimal raw
+//   external result; ConversationGAgent handlers interpret it against actor-owned state.
+enum LarkCardOperationResultState {
+  LARK_CARD_OPERATION_RESULT_STATE_UNSPECIFIED = 0;
+  LARK_CARD_OPERATION_RESULT_STATE_SUCCEEDED = 1;
+  LARK_CARD_OPERATION_RESULT_STATE_FAILED = 2;
+  LARK_CARD_OPERATION_RESULT_STATE_FAULTED = 3;
+}
+
+message LarkCardOperationRawResult {
+  string card_id = 1;
+  string card_message_id = 2;
+  bool is_rate_limited = 3;
+  bool is_table_limit_exceeded = 4;
+  bool is_card_unavailable = 5;
+  bool is_post_send_failure = 6;
+  bool final_text_written = 7;
+  string raw_error_code = 8;
+  string raw_error_summary = 9;
+  string exception_type = 10;
+  string exception_message = 11;
+}
+
+message LarkCardOperationCompletedEvent {
+  string operation_id = 1;
+  string correlation_id = 2;
+  LarkCardOperationPhase operation = 3;
+  int64 sequence = 4;
+  int64 operation_generation = 5;
+  LarkCardOperationResultState state = 6;
+  LarkCardOperationRawResult raw_result = 7;
+  LlmReplyCardStreamChunkEvent chunk = 8;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 9;
+  string command_id = 10;
+  string final_text = 11;
+  string last_flushed_text = 12;
+  string card_id = 13;
+  string card_message_id = 14;
+  string streaming_element_id = 15;
+  repeated ConversationHistoryEntry appended_history = 16;
+}
+
+message LarkCardOperationTimeoutFiredEvent {
+  // Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
+  //   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
+  //   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
+  reserved 8;
+  reserved "chunk";
+
+  string correlation_id = 1;
+  LarkCardOperationPhase operation = 2;
+  int64 sequence = 3;
+  int64 operation_generation = 4;
+  string card_id = 5;
+  string card_message_id = 6;
+  string command_id = 7;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 9;
+  string final_text = 10;
+  string last_flushed_text = 11;
+  int64 fired_at_unix_ms = 12;
+}
+
+message ReplyOperationStepEvent {
+  string operation_id = 1;
+  string operation_name = 2;
+  string correlation_id = 3;
+  int64 lease_epoch = 4;
+  oneof payload {
+    NyxRelayTextOperationStepPayload nyx_relay_text = 5;
+    LarkCardOperationStepPayload lark_card = 6;
+  }
+}
+
+enum NyxRelayTextOperationResultState {
+  NYX_RELAY_TEXT_OPERATION_RESULT_STATE_UNSPECIFIED = 0;
+  NYX_RELAY_TEXT_OPERATION_RESULT_STATE_SUCCEEDED = 1;
+  NYX_RELAY_TEXT_OPERATION_RESULT_STATE_FAILED = 2;
+  NYX_RELAY_TEXT_OPERATION_RESULT_STATE_FAULTED = 3;
+}
+
+// Refactor (iter1535/cluster-issue-1535): Old pattern: Nyx relay continuations inferred retry
+// behavior from raw strings and edit_unsupported flags. New principle: actor-owned continuation
+// events carry typed failure classification plus sanitized adapter diagnostics.
+message NyxRelayTextOperationRawResult {
+  string platform_message_id = 1;
+  bool edit_unsupported = 2;
+  string raw_error_code = 3;
+  string raw_error_summary = 4;
+  string exception_type = 5;
+  string exception_message = 6;
+  aevatar.gagents.channel.abstractions.FailureKind failure_kind = 7;
+  int64 retry_after_ms = 8;
+  int32 http_status = 9;
+  string raw_error_key = 10;
+  int32 raw_error_code_value = 11;
+}
+
+message NyxRelayTextOperationCompletedEvent {
+  string operation_id = 1;
+  string correlation_id = 2;
+  NyxRelayTextOperationKind operation = 3;
+  int64 sequence = 4;
+  int64 operation_generation = 5;
+  NyxRelayTextOperationResultState state = 6;
+  NyxRelayTextOperationRawResult raw_result = 7;
+  LlmReplyStreamChunkEvent chunk = 8;
+  string current_platform_message_id = 9;
+  string command_id = 10;
+  string final_text = 11;
+  string last_flushed_text = 12;
+  int32 edit_count = 13;
+}
+
+message NyxRelayTextOperationTimeoutFiredEvent {
+  string correlation_id = 1;
+  NyxRelayTextOperationKind operation = 2;
+  int64 sequence = 3;
+  int64 operation_generation = 4;
+  LlmReplyStreamChunkEvent chunk = 5;
+  string current_platform_message_id = 6;
+  string command_id = 7;
+  string final_text = 8;
+  string last_flushed_text = 9;
+  int32 edit_count = 10;
+  int64 fired_at_unix_ms = 11;
+}
+
+// Refactor helper, no behavior change: typed payload for one actor-owned Nyx relay text IO continuation.
+message NyxRelayTextOperationStepPayload {
+  NyxRelayTextOperationKind operation = 1;
+  int64 sequence = 2;
+  int64 operation_generation = 3;
+  LlmReplyStreamChunkEvent chunk = 4;
+  string current_platform_message_id = 5;
+  string command_id = 6;
+  string final_text = 7;
+  string last_flushed_text = 8;
+  int32 edit_count = 9;
+}
+
+// Refactor helper, no behavior change: typed payload for one actor-owned Lark CardKit IO continuation.
+message LarkCardOperationStepPayload {
+  LarkCardOperationPhase operation = 1;
+  int64 sequence = 2;
+  int64 operation_generation = 3;
+  LlmReplyCardStreamChunkEvent chunk = 4;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 5;
+  string command_id = 6;
+  string final_text = 7;
+  string last_flushed_text = 8;
+  string card_id = 9;
+  string card_message_id = 10;
+  string streaming_element_id = 11;
+  bool final_differs = 12;
+  repeated ConversationHistoryEntry appended_history = 13;
 }
 
 message DeferredLlmReplyDispatchRequestedEvent {
@@ -104,8 +451,9 @@ message DeferredLlmReplyDispatchRequestedEvent {
 
 // Actor self-message fired by the durable scheduler when an inbound turn retry
 // is due. The handler looks up `activity_id` in
-// ConversationGAgentState.pending_inbound_turns, rebuilds the runtime context
-// from the in-memory reply-token dict, and re-invokes the turn runner.
+// ConversationGAgentState.pending_inbound_turns. Reply credentials are runtime-only;
+// a rehydrated relay retry without command-carried credentials must finalize as not
+// retryable instead of reading an actor token registry.
 message DeferredInboundTurnRetryRequestedEvent {
   string activity_id = 1;
   int64 requested_at_unix_ms = 2;
@@ -123,12 +471,7 @@ message InboundTurnRetryScheduledEvent {
   int64 scheduled_at_unix_ms = 6;
 }
 
-message NyxRelayReplyTokenCleanupRequestedEvent {
-  string correlation_id = 1;
-  int64 requested_at_unix_ms = 2;
-}
-
-// Sent by ChannelLlmReplyInboxRuntime when its pre-LLM gates (stale age,
+// Sent by AgentRunGAgent when its pre-LLM gates (stale age,
 // missing relay credential, malformed payload) refuse to process a deferred
 // LLM reply. The actor consumes this to retire the matching pending entry
 // from State.PendingLlmReplyRequests via a NotRetryable
@@ -174,7 +517,7 @@ message ConversationContinueFailedEvent {
   string command_id = 1;
   string correlation_id = 2;
   string causation_id = 3;
-  FailureKind kind = 4;
+  aevatar.gagents.channel.abstractions.FailureKind kind = 4;
   string error_code = 5;
   string error_summary = 6;
   oneof retry_policy {
@@ -184,10 +527,30 @@ message ConversationContinueFailedEvent {
   int64 failed_at_unix_ms = 9;
 }
 
-enum FailureKind {
-  FAILURE_KIND_UNSPECIFIED = 0;
-  FAILURE_KIND_TRANSIENT_ADAPTER_ERROR = 1;
-  FAILURE_KIND_PERMANENT_ADAPTER_ERROR = 2;
-  FAILURE_KIND_CREDENTIAL_RESOLUTION_FAILED = 3;
-  FAILURE_KIND_PLATFORM_UNAVAILABLE = 4;
+// Persisted by ConversationGAgent after the channel sink (e.g. Lark
+// edit_message) has ack'd the final reply chunk. Drives
+// ConversationGAgentState.last_reply_delivery into the Delivered outcome,
+// satisfying chain.delivered per ADR-0021. Single source of user-visible
+// delivery truth — downstream readers MUST NOT rely on lark API log lines
+// or other side-channel signals.
+message LlmReplyDeliveredEvent {
+  string correlation_id = 1;
+  // AgentRunGAgent run_id producing this reply.
+  string run_id = 2;
+  int64 acked_at_unix_ms = 3;
+  // Channel-side message id from the sink ack (e.g. Lark message_id).
+  string channel_message_id = 4;
+}
+
+// Persisted by ConversationGAgent when the channel sink rejects or times
+// out on the reply send/edit. Drives
+// ConversationGAgentState.last_reply_delivery into the DeliveryFailed
+// outcome. The downstream ConversationContinueFailedEvent is the
+// chain-finalizing signal — this event captures the structured cause.
+message LlmReplyDeliveryFailedEvent {
+  string correlation_id = 1;
+  string run_id = 2;
+  int64 failed_at_unix_ms = 3;
+  string error_code = 4;
+  string error_message = 5;
 }

@@ -18,19 +18,22 @@ namespace Aevatar.GAgents.Authoring.Lark;
 /// </summary>
 public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 {
-    private readonly IUserAgentCatalogRuntimeQueryPort _agentRegistryQueryPort;
+    private readonly IUserAgentDeliveryTargetReader _deliveryTargetReader;
     private readonly NyxIdApiClient _nyxIdApiClient;
+    private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly LarkMessageComposer _composer;
     private readonly ILogger<FeishuCardHumanInteractionPort> _logger;
 
     public FeishuCardHumanInteractionPort(
-        IUserAgentCatalogRuntimeQueryPort agentRegistryQueryPort,
+        IUserAgentDeliveryTargetReader deliveryTargetReader,
         NyxIdApiClient nyxIdApiClient,
         LarkMessageComposer composer,
-        ILogger<FeishuCardHumanInteractionPort> logger)
+        ILogger<FeishuCardHumanInteractionPort> logger,
+        ILarkOutboundDispatcher? larkOutboundDispatcher = null)
     {
-        _agentRegistryQueryPort = agentRegistryQueryPort ?? throw new ArgumentNullException(nameof(agentRegistryQueryPort));
+        _deliveryTargetReader = deliveryTargetReader ?? throw new ArgumentNullException(nameof(deliveryTargetReader));
         _nyxIdApiClient = nyxIdApiClient ?? throw new ArgumentNullException(nameof(nyxIdApiClient));
+        _larkOutboundDispatcher = larkOutboundDispatcher;
         _composer = composer ?? throw new ArgumentNullException(nameof(composer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -71,16 +74,6 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             "Feishu approval resolution delivery returned empty response.",
             "Feishu approval resolution delivery failed",
             cancellationToken);
-
-        if (ShouldSendApprovedContent(target, resolution))
-        {
-            await SendTextMessageAsync(
-                target,
-                resolution.ResolvedContent!,
-                "Feishu approved-content delivery returned empty response.",
-                "Feishu approved-content delivery failed",
-                cancellationToken);
-        }
 
         _logger.LogInformation(
             "Delivered human approval resolution text: target={DeliveryTargetId}, run={RunId}, step={StepId}, approved={Approved}",
@@ -131,7 +124,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
     internal static string BuildApprovalResolutionText(
         HumanApprovalResolution resolution,
-        UserAgentCatalogEntry? target = null)
+        UserAgentDeliveryTarget? target = null)
     {
         var lines = new List<string>
         {
@@ -143,14 +136,6 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         if (!string.IsNullOrWhiteSpace(resolution.Feedback))
             lines.Add($"Feedback: {resolution.Feedback}");
 
-        if (!resolution.Approved && target is not null &&
-            string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase))
-        {
-            lines.Add(string.Empty);
-            lines.Add($"Run again: /run-agent {target.AgentId}");
-            lines.Add("View agents: /agents");
-        }
-
         return string.Join('\n', lines);
     }
 
@@ -159,14 +144,10 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     /// <see cref="MessageContent"/> intent and delegating rendering to <see cref="LarkMessageComposer"/>.
     /// </summary>
     /// <remarks>
-    /// The outbound button-value payload must stay byte-compatible with the inbound card-action
-    /// parser in <see cref="Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayTransport"/>, which maps
-    /// <c>content.text.value</c> into <see cref="CardActionSubmission.Arguments"/> and
-    /// <c>content.text.form_value</c> into <see cref="CardActionSubmission.FormFields"/>. The
-    /// correlation keys (<c>actor_id</c>, <c>run_id</c>, <c>step_id</c>, <c>approved</c>) are
-    /// carried via the <c>ActionElement.Arguments</c> map and form-input names
-    /// (<c>edited_content</c>, <c>user_input</c>) are carried as action ids, so
-    /// <see cref="ChannelCardActionRouting"/> can rebuild the workflow resume command downstream.
+    /// The outbound button-value payload stays JSON-compatible with the inbound card-action parser
+    /// in <see cref="Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayTransport"/> at the Lark/Nyx
+    /// boundary, while repository-owned workflow resume semantics are authored as
+    /// <see cref="WorkflowResumeActionPayload"/>.
     /// </remarks>
     internal static string BuildCardJson(HumanInteractionRequest request) =>
         BuildCardJson(request, new LarkMessageComposer());
@@ -252,14 +233,25 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             Label = label,
             IsPrimary = isPrimary,
             IsDanger = isDanger,
+            WorkflowResume = BuildWorkflowResumePayload(request, approved),
         };
         button.Arguments["action_id"] = actionId;
-        button.Arguments["actor_id"] = request.ActorId;
-        button.Arguments["run_id"] = request.RunId;
-        button.Arguments["step_id"] = request.StepId;
-        if (approved.HasValue)
-            button.Arguments["approved"] = approved.Value ? "true" : "false";
         return button;
+    }
+
+    private static WorkflowResumeActionPayload BuildWorkflowResumePayload(
+        HumanInteractionRequest request,
+        bool? approved)
+    {
+        var payload = new WorkflowResumeActionPayload
+        {
+            ActorId = request.ActorId,
+            RunId = request.RunId,
+            StepId = request.StepId,
+        };
+        if (approved.HasValue)
+            payload.Approved = approved.Value;
+        return payload;
     }
 
     private static ComposeContext BuildComposeContext() => new()
@@ -267,11 +259,11 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
     };
 
-    private async Task<UserAgentCatalogEntry> ResolveTargetAsync(
+    private async Task<UserAgentDeliveryTarget> ResolveTargetAsync(
         string deliveryTargetId,
         CancellationToken cancellationToken)
     {
-        var target = await _agentRegistryQueryPort.GetAsync(deliveryTargetId, cancellationToken);
+        var target = await _deliveryTargetReader.GetAsync(deliveryTargetId, cancellationToken);
         if (target == null)
             throw new InvalidOperationException($"Agent delivery target not found: {deliveryTargetId}");
 
@@ -281,15 +273,8 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         return target;
     }
 
-    private static bool ShouldSendApprovedContent(
-        UserAgentCatalogEntry target,
-        HumanApprovalResolution resolution) =>
-        resolution.Approved &&
-        !string.IsNullOrWhiteSpace(resolution.ResolvedContent) &&
-        string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase);
-
     private async Task SendTextMessageAsync(
-        UserAgentCatalogEntry target,
+        UserAgentDeliveryTarget target,
         string text,
         string emptyResponseMessage,
         string failurePrefix,
@@ -303,7 +288,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             cancellationToken);
 
     private async Task SendInteractiveCardMessageAsync(
-        UserAgentCatalogEntry target,
+        UserAgentDeliveryTarget target,
         string cardJson,
         string emptyResponseMessage,
         string failurePrefix,
@@ -317,7 +302,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             cancellationToken);
 
     private async Task SendMessageAsync(
-        UserAgentCatalogEntry target,
+        UserAgentDeliveryTarget target,
         string messageType,
         string contentJson,
         string emptyResponseMessage,
@@ -353,77 +338,45 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         }
     }
 
-    private readonly record struct SendOutcome(bool Succeeded, int? LarkCode, string Detail)
-    {
-        public static SendOutcome Success() => new(true, null, string.Empty);
-        public static SendOutcome Failed(int? larkCode, string detail) => new(false, larkCode, detail);
-    }
-
     /// <summary>
-    /// Mirrors <c>SkillRunnerGAgent.TrySendWithFallbackAsync</c>: tries the typed primary
-    /// delivery target, then on a Lark <c>230002 bot not in chat</c> rejection retries once
-    /// with the fallback target persisted on <see cref="UserAgentCatalogEntry.LarkReceiveIdFallback"/>.
-    /// Returns success vs. failure (with Lark code+detail) so the caller can throw cleanly.
+    /// Sends via the shared Lark new-message dispatcher so proactive human-interaction cards
+    /// keep the same primary, fallback, and parser semantics as SkillRunner output.
     /// </summary>
-    private async Task<SendOutcome> TrySendWithFallbackAsync(
-        UserAgentCatalogEntry target,
+    private async Task<LarkSendNewMessageResult> TrySendWithFallbackAsync(
+        UserAgentDeliveryTarget target,
         string messageType,
         string contentJson,
         LarkReceiveTarget primary,
         string emptyResponseMessage,
         CancellationToken cancellationToken)
     {
-        var primaryResult = await SendOutboundAsync(target, messageType, contentJson, primary, cancellationToken);
-        if (string.IsNullOrWhiteSpace(primaryResult))
+        var result = await ResolveLarkOutboundDispatcher().SendNewMessageAsync(
+            new LarkSendNewMessageRequest(
+                target.NyxApiKey,
+                target.NyxProviderSlug,
+                messageType,
+                contentJson,
+                primary,
+                ResolveFallbackTarget(target)),
+            cancellationToken);
+
+        if (!result.Succeeded && string.IsNullOrWhiteSpace(result.Detail))
             throw new InvalidOperationException(emptyResponseMessage);
-        if (!LarkProxyResponse.TryGetError(primaryResult, out var larkCode, out var detail))
-            return SendOutcome.Success();
 
-        if (larkCode != LarkBotErrorCodes.BotNotInChat)
-            return SendOutcome.Failed(larkCode, detail);
+        return result;
+    }
 
+    private static LarkReceiveTarget? ResolveFallbackTarget(UserAgentDeliveryTarget target)
+    {
         var fallbackId = target.LarkReceiveIdFallback?.Trim();
         var fallbackType = target.LarkReceiveIdTypeFallback?.Trim();
-        if (string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType))
-            return SendOutcome.Failed(larkCode, detail);
-
-        _logger.LogInformation(
-            "Feishu human interaction port primary delivery target rejected as `bot not in chat` (code 230002); retrying with fallback typed pair: agent={AgentId}, fallbackType={FallbackType}",
-            target.AgentId,
-            fallbackType);
-
-        var fallbackTarget = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
-        var fallbackResult = await SendOutboundAsync(target, messageType, contentJson, fallbackTarget, cancellationToken);
-        if (string.IsNullOrWhiteSpace(fallbackResult))
-            throw new InvalidOperationException(emptyResponseMessage);
-        if (!LarkProxyResponse.TryGetError(fallbackResult, out var fallbackCode, out var fallbackDetail))
-            return SendOutcome.Success();
-        return SendOutcome.Failed(fallbackCode, fallbackDetail);
+        return string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType)
+            ? null
+            : new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
     }
 
-    private async Task<string> SendOutboundAsync(
-        UserAgentCatalogEntry target,
-        string messageType,
-        string contentJson,
-        LarkReceiveTarget receiveTarget,
-        CancellationToken cancellationToken)
-    {
-        var body = JsonSerializer.Serialize(new
-        {
-            receive_id = receiveTarget.ReceiveId,
-            msg_type = messageType,
-            content = contentJson,
-        });
-
-        return await _nyxIdApiClient.ProxyRequestAsync(
-            target.NyxApiKey,
-            target.NyxProviderSlug,
-            $"open-apis/im/v1/messages?receive_id_type={receiveTarget.ReceiveIdType}",
-            "POST",
-            body,
-            extraHeaders: null,
-            cancellationToken);
-    }
+    private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher() =>
+        _larkOutboundDispatcher ?? new LarkOutboundDispatcher(_nyxIdApiClient, _logger);
 
     private static string BuildLarkRejectionMessage(string failurePrefix, int? larkCode, string detail)
     {
@@ -436,8 +389,8 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             // instead of the cryptic Lark `99992361 open_id cross app`.
             return
                 $"{failurePrefix} (code={larkCode}): {detail}. " +
-                "This workflow agent was created before cross-app union_id ingress existed; " +
-                "delete and recreate it (`/agents` → Delete → `/social-media`) to pick up the cross-app safe target.";
+                "This agent was created before cross-app union_id ingress existed; " +
+                "delete it (`/agents` → Delete) and recreate it to pick up the cross-app safe target.";
         }
 
         if (larkCode == LarkBotErrorCodes.UserIdCrossTenant)
@@ -449,10 +402,9 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             return
                 $"{failurePrefix} (code={larkCode}): {detail}. " +
                 "The outbound Lark app is in a different tenant than the inbound app, so " +
-                "user-id translation is impossible. Delete and recreate the workflow agent " +
-                "(`/agents` → Delete → `/social-media`) so the new chat_id-preferred outbound " +
-                "path takes effect, or align the NyxID `s/api-lark-bot` proxy with the channel-bot " +
-                "that received the inbound event.";
+                "user-id translation is impossible. Delete the agent (`/agents` → Delete) and recreate " +
+                "it so the new chat_id-preferred outbound path takes effect, or align the NyxID " +
+                "`s/api-lark-bot` proxy with the channel-bot that received the inbound event.";
         }
 
         return larkCode is { } code

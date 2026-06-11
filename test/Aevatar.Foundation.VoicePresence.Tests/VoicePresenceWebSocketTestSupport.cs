@@ -21,6 +21,8 @@ internal sealed class FakeWebSocket : WebSocket
 {
     private readonly Queue<ReceiveFrame> _frames = [];
     private readonly bool _keepOpenUntilCancelledWhenEmpty;
+    private readonly TaskCompletionSource _closeWhenEmpty =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private WebSocketState _state;
 
     public FakeWebSocket(WebSocketState state, bool keepOpenUntilCancelledWhenEmpty = false)
@@ -32,6 +34,8 @@ internal sealed class FakeWebSocket : WebSocket
     public bool ThrowOnReceive { get; set; }
 
     public bool ThrowOnClose { get; set; }
+
+    public Exception? SendException { get; set; }
 
     public bool Disposed { get; private set; }
 
@@ -51,6 +55,8 @@ internal sealed class FakeWebSocket : WebSocket
 
     public void EnqueueReceive(WebSocketMessageType messageType, byte[] data, bool endOfMessage = true) =>
         _frames.Enqueue(new ReceiveFrame(messageType, data, endOfMessage));
+
+    public void CompleteReceiveClose() => _closeWhenEmpty.TrySetResult();
 
     public override void Abort()
     {
@@ -103,9 +109,7 @@ internal sealed class FakeWebSocket : WebSocket
         {
             if (_keepOpenUntilCancelledWhenEmpty)
             {
-                var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                using var registration = cancellationToken.Register(() => gate.TrySetResult());
-                await gate.Task;
+                await _closeWhenEmpty.Task.WaitAsync(cancellationToken);
             }
 
             _state = WebSocketState.CloseReceived;
@@ -128,6 +132,8 @@ internal sealed class FakeWebSocket : WebSocket
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = endOfMessage;
+        if (SendException != null)
+            throw SendException;
 
         if (messageType == WebSocketMessageType.Text)
         {
@@ -141,6 +147,28 @@ internal sealed class FakeWebSocket : WebSocket
         }
 
         return Task.CompletedTask;
+    }
+
+    public override ValueTask SendAsync(
+        ReadOnlyMemory<byte> buffer,
+        WebSocketMessageType messageType,
+        WebSocketMessageFlags flags,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (SendException != null)
+            throw SendException;
+
+        if (messageType == WebSocketMessageType.Text)
+        {
+            SentTexts.Add(Encoding.UTF8.GetString(buffer.Span));
+        }
+        else if (messageType == WebSocketMessageType.Binary)
+        {
+            SentBinaries.Add(buffer.ToArray());
+        }
+
+        return ValueTask.CompletedTask;
     }
 
     private readonly record struct ReceiveFrame(

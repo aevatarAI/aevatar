@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
@@ -22,7 +21,7 @@ internal static class WorkflowArtifactFactBuilder
             ? WorkflowRunIdNormalizer.Normalize(actorId)
             : WorkflowRunIdNormalizer.Normalize(stateRunId);
 
-        if (TryBuildWorkflowRoleReplyRecordedEvent(envelope, actorId, normalizedRunId, out var roleReplyFact))
+        if (TryBuildWorkflowRoleReplyRecordedEvent(envelope, normalizedRunId, out var roleReplyFact))
         {
             artifactFact = roleReplyFact;
             return true;
@@ -66,7 +65,6 @@ internal static class WorkflowArtifactFactBuilder
 
     private static bool TryBuildWorkflowRoleReplyRecordedEvent(
         EventEnvelope envelope,
-        string actorId,
         string runId,
         out WorkflowRoleReplyRecordedEvent evt)
     {
@@ -77,49 +75,27 @@ internal static class WorkflowArtifactFactBuilder
 
         var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
         if (published?.StateEvent?.EventData == null ||
-            !published.StateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            !published.StateEvent.EventData.Is(WorkflowLlmInvocationCompletedEvent.Descriptor))
         {
             return false;
         }
 
+        var completed = published.StateEvent.EventData.Unpack<WorkflowLlmInvocationCompletedEvent>();
         var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
-        if (!IsRoleChildActor(actorId, publisherActorId))
-            return false;
-
-        var completed = published.StateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>();
+        // Refactor (iter15/cluster-028):
+        //   Old pattern: parsed childActorId prefix to derive RoleId via string split.
+        //   New principle: role id comes from typed event payload / readmodel; actor id is opaque address only.
         evt = new WorkflowRoleReplyRecordedEvent
         {
             RunId = runId,
             RoleActorId = publisherActorId,
-            RoleId = ResolveRoleId(actorId, publisherActorId),
+            RoleId = publisherActorId,
             SessionId = completed.SessionId ?? string.Empty,
             Content = completed.Content ?? string.Empty,
             ReasoningContent = completed.ReasoningContent ?? string.Empty,
-            Prompt = completed.Prompt ?? string.Empty,
-            ContentEmitted = completed.ContentEmitted,
+            ContentEmitted = completed.Success,
         };
 
-        foreach (var toolCall in completed.ToolCalls)
-        {
-            evt.ToolCalls.Add(new WorkflowRoleReplyToolCall
-            {
-                ToolName = toolCall.ToolName ?? string.Empty,
-                CallId = toolCall.CallId ?? string.Empty,
-            });
-        }
-
         return true;
-    }
-
-    private static bool IsRoleChildActor(string actorId, string childActorId) =>
-        !string.IsNullOrWhiteSpace(childActorId) &&
-        childActorId.StartsWith(actorId + ":", StringComparison.Ordinal);
-
-    private static string ResolveRoleId(string actorId, string childActorId)
-    {
-        if (!IsRoleChildActor(actorId, childActorId))
-            return childActorId ?? string.Empty;
-
-        return childActorId[(actorId.Length + 1)..];
     }
 }

@@ -1,4 +1,4 @@
-using System.Text.Json;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Sdk.Contracts;
 using Aevatar.Workflow.Sdk.Errors;
 
@@ -50,24 +50,24 @@ public sealed class RunSessionTracker
         Track(evt.Frame);
     }
 
-    public void Track(WorkflowOutputFrame frame)
+    public void Track(WorkflowRunEventEnvelope frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
 
-        if (string.Equals(frame.Type, WorkflowEventTypes.RunStarted, StringComparison.Ordinal) &&
-            !string.IsNullOrWhiteSpace(frame.ThreadId))
+        if (frame.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunStarted &&
+            !string.IsNullOrWhiteSpace(frame.RunStarted.ThreadId))
         {
-            _actorId ??= frame.ThreadId;
+            _actorId ??= frame.RunStarted.ThreadId;
             return;
         }
 
-        if (!string.Equals(frame.Type, WorkflowEventTypes.Custom, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(frame.Name))
+        if (frame.EventCase != WorkflowRunEventEnvelope.EventOneofCase.Custom ||
+            string.IsNullOrWhiteSpace(frame.Custom?.Name))
         {
             return;
         }
 
-        TrackCustomFrame(frame.Name!, frame.Value);
+        TrackCustomFrame(frame);
     }
 
     public WorkflowResumeRequest CreateResumeRequest(
@@ -94,7 +94,8 @@ public sealed class RunSessionTracker
             UserInput = userInput,
             EditedContent = editedContent,
             Feedback = feedback,
-            CommandId = commandId ?? _commandId,
+            // Refactor (issue1326): Old pattern: Resume requests inherited the tracked start-run command id from the session. New principle: Resume control commands use a fresh server id unless the caller supplies an explicit id.
+            CommandId = commandId,
             Metadata = metadata,
         };
     }
@@ -128,13 +129,14 @@ public sealed class RunSessionTracker
             SignalName = resolvedSignalName!,
             StepId = resolvedStepId,
             Payload = payload,
-            CommandId = commandId ?? _commandId,
+            // Refactor (issue1326): Old pattern: Signal requests inherited the tracked start-run command id from the session. New principle: Signal control commands use a fresh server id unless the caller supplies an explicit id.
+            CommandId = commandId,
         };
     }
 
-    private void TrackCustomFrame(string customEventName, JsonElement? value)
+    private void TrackCustomFrame(WorkflowRunEventEnvelope frame)
     {
-        if (WorkflowCustomEventParser.TryParseRunContext(customEventName, value, out var runContext))
+        if (WorkflowCustomEventParser.TryParseRunContext(frame, out var runContext))
         {
             _actorId = runContext.ActorId ?? _actorId;
             _workflowName = runContext.WorkflowName ?? _workflowName;
@@ -142,21 +144,21 @@ public sealed class RunSessionTracker
             return;
         }
 
-        if (WorkflowCustomEventParser.TryParseStepRequest(customEventName, value, out var stepRequest))
+        if (WorkflowCustomEventParser.TryParseStepRequest(frame, out var stepRequest))
         {
             _runId = stepRequest.RunId ?? _runId;
             _stepId = stepRequest.StepId ?? _stepId;
             return;
         }
 
-        if (WorkflowCustomEventParser.TryParseStepCompleted(customEventName, value, out var stepCompleted))
+        if (WorkflowCustomEventParser.TryParseStepCompleted(frame, out var stepCompleted))
         {
             _runId = stepCompleted.RunId ?? _runId;
             _stepId = stepCompleted.StepId ?? _stepId;
             return;
         }
 
-        if (WorkflowCustomEventParser.TryParseHumanInputRequest(customEventName, value, out var humanInput))
+        if (WorkflowCustomEventParser.TryParseHumanInputRequest(frame, out var humanInput))
         {
             _runId = humanInput.RunId ?? _runId;
             _stepId = humanInput.StepId ?? _stepId;
@@ -164,7 +166,7 @@ public sealed class RunSessionTracker
             return;
         }
 
-        if (WorkflowCustomEventParser.TryParseWaitingSignal(customEventName, value, out var waitingSignal))
+        if (WorkflowCustomEventParser.TryParseWaitingSignal(frame, out var waitingSignal))
         {
             _runId = waitingSignal.RunId ?? _runId;
             _stepId = waitingSignal.StepId ?? _stepId;
@@ -172,7 +174,7 @@ public sealed class RunSessionTracker
             return;
         }
 
-        if (WorkflowCustomEventParser.TryParseSignalBuffered(customEventName, value, out var bufferedSignal))
+        if (WorkflowCustomEventParser.TryParseSignalBuffered(frame, out var bufferedSignal))
         {
             _runId = bufferedSignal.RunId ?? _runId;
             _stepId = bufferedSignal.StepId ?? _stepId;

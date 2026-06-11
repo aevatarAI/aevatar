@@ -12,6 +12,7 @@ public class ChatRunStartErrorMapperTests
     [InlineData(WorkflowChatRunStartError.WorkflowNotFound, StatusCodes.Status404NotFound)]
     [InlineData(WorkflowChatRunStartError.AgentTypeNotSupported, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.ProjectionDisabled, StatusCodes.Status503ServiceUnavailable)]
+    [InlineData(WorkflowChatRunStartError.ProjectionUnavailable, StatusCodes.Status503ServiceUnavailable)]
     [InlineData(WorkflowChatRunStartError.WorkflowBindingMismatch, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.AgentWorkflowNotConfigured, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.InvalidWorkflowYaml, StatusCodes.Status400BadRequest)]
@@ -49,5 +50,14 @@ public class ChatRunStartErrorMapperTests
 
         mapped.Code.Should().Be("INVALID_WORKFLOW_YAML");
         mapped.Message.Should().Be("Workflow YAML is invalid.");
+    }
+
+    [Fact]
+    public void ToCommandError_ProjectionUnavailable_ShouldMapExpectedPayload()
+    {
+        var mapped = ChatRunStartErrorMapper.ToCommandError(WorkflowChatRunStartError.ProjectionUnavailable);
+
+        mapped.Code.Should().Be("WORKFLOW_PROJECTION_UNAVAILABLE");
+        mapped.Message.Should().Be("Workflow projection is unavailable.");
     }
 }

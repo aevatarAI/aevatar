@@ -6,6 +6,9 @@ namespace Aevatar.Scripting.Core.Compilation;
 
 public static class ScriptPackageModel
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     public static ScriptPackageSpec ToPackageSpec(ScriptSourcePackage? package)
     {
         var normalized = (package ?? ScriptSourcePackage.Empty).Normalize();

@@ -6,6 +6,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
@@ -37,11 +38,35 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
 
         service.LastCommand.Should().NotBeNull();
-        service.LastCommand!.WorkflowName.Should().Be("direct");
+        service.LastCommand!.Source.WorkflowName.Should().Be("direct");
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         body.Should().Contain("cmd-1");
         body.Should().Contain("corr-1");
         body.Should().Contain("actor-1");
+    }
+
+    [Fact]
+    public async Task HandleCommand_ShouldReturnAcceptedPayload_WithoutWaitingForTerminalWorkflowEvents()
+    {
+        var service = new FakeCommandDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        body.Should().Contain("cmd-1");
+        service.DispatchCalls.Should().Be(1);
     }
 
     [Fact]
@@ -65,7 +90,7 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        http.Response.Headers.Location.ToString().Should().Be($"/api/actors/{opaqueActorId}");
+        http.Response.Headers.Location.ToString().Should().Be($"/api/workflow-actors/{Uri.EscapeDataString(opaqueActorId)}/current-state");
         body.Should().Contain(opaqueActorId);
     }
 
@@ -91,7 +116,7 @@ public sealed class ChatEndpointsInternalTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         body.Should().Contain("WORKFLOW_NOT_FOUND");
         service.LastCommand.Should().NotBeNull();
-        service.LastCommand!.WorkflowName.Should().Be("missing");
+        service.LastCommand!.Source.WorkflowName.Should().Be("missing");
     }
 
     [Fact]
@@ -146,7 +171,8 @@ public sealed class ChatEndpointsInternalTests
         service.LastCommand.Should().NotBeNull();
         service.LastCommand!.Prompt.Should().Be("[image]");
         service.LastCommand.InputParts.Should().ContainSingle();
-        service.LastCommand.InputParts![0].Kind.Should().Be(WorkflowChatInputPartKind.Image);
+        service.LastCommand.InputParts![0].Kind.Should()
+            .Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image);
     }
 
     [Fact]
@@ -298,6 +324,41 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         body.Should().Contain("WORKFLOW_BINDING_MISMATCH");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldPassTrustedBearerAsTypedConnectorAuthorization()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer trusted-token";
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput
+            {
+                Prompt = "hello",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["connector.http.authorization"] = "Bearer untrusted",
+                },
+            },
+            interactionService,
+            CancellationToken.None);
+
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.ConnectorHttpAuthorization.Should().Be("Bearer trusted-token");
+        capturedCommand.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
@@ -536,7 +597,11 @@ public sealed class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/actor-1/current-state");
+        var body = await ReadBodyAsync(http.Response);
+        body.Should().Contain("\"acceptedCommandId\":\"cmd-1\"");
+        body.Should().Contain("\"statusUrl\":\"/api/workflow-actors/actor-1/current-state\"");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be("actor-1");
         service.Commands.Single().RunId.Should().Be("run-1");
@@ -572,7 +637,10 @@ public sealed class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be($"/api/workflow-actors/{Uri.EscapeDataString(opaqueActorId)}/current-state");
+        var body = await ReadBodyAsync(http.Response);
+        body.Should().Contain("\"acceptedCommandId\":\"cmd-1\"");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be(opaqueActorId);
     }
@@ -763,7 +831,8 @@ public sealed class ChatEndpointsInternalTests
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/actor-1/current-state");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be("actor-1");
         service.Commands.Single().RunId.Should().Be("run-1");
@@ -802,7 +871,8 @@ public sealed class ChatEndpointsInternalTests
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/actor-1/current-state");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be("actor-1");
         service.Commands.Single().RunId.Should().Be("run-1");
@@ -810,7 +880,8 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().Payload.Should().Be("yes");
         service.Commands.Single().CommandId.Should().BeNull();
         service.Commands.Single().StepId.Should().BeNull();
-        body.Should().Contain(receipt.CommandId);
+        body.Should().Contain($"\"acceptedCommandId\":\"{receipt.CommandId}\"");
+        body.Should().Contain("\"statusUrl\":\"/api/workflow-actors/actor-1/current-state\"");
         body.Should().Contain("\"accepted\":true");
     }
 
@@ -886,14 +957,16 @@ public sealed class ChatEndpointsInternalTests
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/actor-1/current-state");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be("actor-1");
         service.Commands.Single().RunId.Should().Be("run-1");
         service.Commands.Single().CommandId.Should().Be("stop-cmd-1");
         service.Commands.Single().Reason.Should().Be("user requested stop");
         body.Should().Contain("user requested stop");
-        body.Should().Contain("stop-cmd-1");
+        body.Should().Contain("\"acceptedCommandId\":\"stop-cmd-1\"");
+        body.Should().Contain("\"statusUrl\":\"/api/workflow-actors/actor-1/current-state\"");
     }
 
     [Fact]
@@ -1040,8 +1113,7 @@ public sealed class ChatEndpointsInternalTests
         };
     }
 
-    private sealed class FakeCommandInteractionService
-        : ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
+    private sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort
     {
         public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
             (_, _, _, _) => Task.FromResult(
@@ -1065,12 +1137,14 @@ public sealed class ChatEndpointsInternalTests
 
         public Exception? DispatchException { get; set; }
         public WorkflowChatRunRequest? LastCommand { get; private set; }
+        public int DispatchCalls { get; private set; }
 
         public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
             WorkflowChatRunRequest command,
             CancellationToken ct = default)
         {
             LastCommand = command;
+            DispatchCalls++;
             ct.ThrowIfCancellationRequested();
             if (DispatchException != null)
                 throw DispatchException;

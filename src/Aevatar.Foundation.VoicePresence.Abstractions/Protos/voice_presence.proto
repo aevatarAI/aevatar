@@ -5,6 +5,22 @@ package aevatar.voice;
 option csharp_namespace = "Aevatar.Foundation.VoicePresence.Abstractions";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/any.proto";
+
+enum VoicePresenceRuntimeStatus {
+  VOICE_PRESENCE_RUNTIME_STATUS_UNSPECIFIED = 0;
+  VOICE_PRESENCE_RUNTIME_STATUS_IDLE = 1;
+  VOICE_PRESENCE_RUNTIME_STATUS_USER_SPEAKING = 2;
+  VOICE_PRESENCE_RUNTIME_STATUS_RESPONSE_IN_PROGRESS = 3;
+  VOICE_PRESENCE_RUNTIME_STATUS_AUDIO_DRAINING = 4;
+}
+
+enum VoiceRemoteAudioSupport {
+  VOICE_REMOTE_AUDIO_SUPPORT_UNSPECIFIED = 0;
+  VOICE_REMOTE_AUDIO_SUPPORT_LOCAL_ONLY = 1;
+  VOICE_REMOTE_AUDIO_SUPPORT_SUPPORTED = 2;
+  VOICE_REMOTE_AUDIO_SUPPORT_UNAVAILABLE = 3;
+}
 
 message VoiceProviderConfig {
   string provider_name = 1;
@@ -35,6 +51,53 @@ message VoiceConversationEventInjection {
   google.protobuf.Timestamp observed_at = 5;
 }
 
+message VoicePendingEventInjection {
+  string envelope_id = 1;
+  string publisher_actor_id = 2;
+  string event_type = 3;
+  google.protobuf.Any payload = 4;
+  google.protobuf.Timestamp observed_at = 5;
+}
+
+message VoiceProviderResponseBinding {
+  string provider_response_id = 1;
+  int32 response_id = 2;
+}
+
+message VoicePresenceEventDedupeFenceEntry {
+  string key = 1;
+  google.protobuf.Timestamp recorded_at = 2;
+}
+
+message VoicePresenceRuntimeState {
+  VoicePresenceRuntimeStatus status = 1;
+  int32 current_response_id = 2;
+  int64 last_drain_ack_playout_sequence = 3;
+  int32 last_drain_ack_response_id = 4;
+  int32 next_response_id = 5;
+  repeated VoiceProviderResponseBinding provider_response_bindings = 6;
+  repeated string cancelled_provider_response_ids = 7;
+  bool awaiting_injected_response_start = 8;
+  string active_provider_response_id = 9;
+  string remote_session_id = 10;
+  repeated VoicePendingEventInjection pending_injections = 11;
+  bool initialized = 12;
+  bool transport_attached = 13;
+  int32 pcm_sample_rate_hz = 14;
+  string active_session_id = 15;
+  google.protobuf.Timestamp lease_expires_at = 16;
+  VoiceRemoteAudioSupport remote_audio_support = 17;
+  string active_transport_lease_id = 18;
+  string active_lease_owner_id = 19;
+  repeated VoicePresenceEventDedupeFenceEntry event_dedupe_fence = 20;
+  int64 lease_epoch = 21;
+}
+
+message VoicePresenceRuntimeStateChangedEvent {
+  string module_name = 1;
+  VoicePresenceRuntimeState state = 2;
+}
+
 message VoiceRemoteSessionOpenRequested {
   string session_id = 1;
 }
@@ -44,26 +107,36 @@ message VoiceRemoteSessionCloseRequested {
   string reason = 2;
 }
 
-message VoiceRemoteAudioInputReceived {
+message VoicePresenceSessionLeaseRequested {
   string session_id = 1;
-  bytes pcm16 = 2;
+  string owner_id = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message VoicePresenceSessionLeaseReleased {
+  string session_id = 1;
+  string reason = 2;
 }
 
 message VoiceAudioReceived {
   bytes pcm16 = 1;
   int32 sample_rate_hz = 2;
+  string provider_response_id = 3;
 }
 
 message VoiceResponseStarted {
   int32 response_id = 1;
+  string provider_response_id = 2;
 }
 
 message VoiceResponseDone {
   int32 response_id = 1;
+  string provider_response_id = 2;
 }
 
 message VoiceResponseCancelled {
   int32 response_id = 1;
+  string provider_response_id = 2;
 }
 
 message VoiceFunctionCallRequested {
@@ -71,6 +144,7 @@ message VoiceFunctionCallRequested {
   string tool_name = 2;
   string arguments_json = 3;
   int32 response_id = 4;
+  string provider_response_id = 5;
 }
 
 message VoiceSpeechStarted {}
@@ -100,6 +174,37 @@ message VoiceProviderEvent {
   }
 }
 
+message VoiceTranscriptDelta {
+  string text = 1;
+  string provider_response_id = 2;
+  int32 response_id = 3;
+}
+
+message VoiceTranscriptCompleted {
+  string text = 1;
+  string provider_response_id = 2;
+  int32 response_id = 3;
+}
+
+message VoiceRealtimeFrame {
+  string module_name = 1;
+  string session_id = 2;
+
+  oneof frame {
+    VoiceResponseStarted response_started = 3;
+    VoiceResponseDone response_done = 4;
+    VoiceResponseCancelled response_cancelled = 5;
+    VoiceSpeechStarted speech_started = 6;
+    VoiceSpeechStopped speech_stopped = 7;
+    VoiceFunctionCallRequested function_call = 8;
+    VoiceProviderError error = 9;
+    VoiceProviderDisconnected disconnected = 10;
+    VoiceTranscriptDelta transcript_delta = 11;
+    VoiceTranscriptCompleted transcript_completed = 12;
+    VoiceRemoteSessionClosed session_closed = 13;
+  }
+}
+
 message VoiceDrainAcknowledged {
   int32 response_id = 1;
   int64 playout_sequence = 2;
@@ -116,21 +221,89 @@ message VoiceRemoteControlInputReceived {
   VoiceControlFrame control_frame = 2;
 }
 
+message VoiceTransportAttachRequested {
+  string session_id = 1;
+  string owner_id = 2;
+  string transport_lease_id = 3;
+  google.protobuf.Timestamp lease_expires_at = 4;
+  int64 lease_epoch = 6;
+}
+
+message VoiceTransportDetachRequested {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  string reason = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
+}
+
+message VoiceTransportControlFrameReceived {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  VoiceControlFrame control_frame = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
+}
+
+message VoiceTransportAudioFrameReceived {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  bytes pcm16 = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+  int32 sample_rate_hz = 6;
+  int64 lease_epoch = 7;
+}
+
+message VoiceTransportRelayStopped {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  string reason = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
+}
+
+message VoiceTransportLifetimeCompleted {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  string reason = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
+}
+
+message VoiceProviderEventReceived {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  VoiceProviderEvent provider_event = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
+}
+
 message VoiceRemoteSessionClosed {
   string reason = 1;
 }
 
 message VoiceRemoteTransportOutput {
+  reserved 3;
+  reserved "audio_output";
+
   string module_name = 1;
   string session_id = 2;
 
   oneof output {
-    VoiceAudioReceived audio_output = 3;
     VoiceRemoteSessionClosed session_closed = 4;
   }
 }
 
 message VoiceModuleSignal {
+  reserved 6;
+  reserved "remote_audio_input_received";
+
   string module_name = 1;
 
   oneof signal {
@@ -138,7 +311,31 @@ message VoiceModuleSignal {
     VoiceControlFrame control_frame = 3;
     VoiceRemoteSessionOpenRequested remote_session_open_requested = 4;
     VoiceRemoteSessionCloseRequested remote_session_close_requested = 5;
-    VoiceRemoteAudioInputReceived remote_audio_input_received = 6;
     VoiceRemoteControlInputReceived remote_control_input_received = 7;
+    VoicePresenceSessionLeaseRequested session_lease_requested = 8;
+    VoicePresenceSessionLeaseReleased session_lease_released = 9;
+    VoiceTransportAttachRequested transport_attach_requested = 10;
+    VoiceTransportDetachRequested transport_detach_requested = 11;
+    VoiceTransportControlFrameReceived transport_control_frame_received = 12;
+    VoiceTransportRelayStopped transport_relay_stopped = 13;
+    VoiceProviderEventReceived provider_event_received = 14;
+    VoiceTransportAudioFrameReceived transport_audio_frame_received = 15;
+    VoiceTransportLifetimeCompleted transport_lifetime_completed = 16;
   }
+}
+
+message VoicePresenceCapabilityReadModel {
+  string id = 1;
+  string actor_id = 2;
+  string module_name = 3;
+  int64 state_version = 4;
+  string last_event_id = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  bool initialized = 7;
+  bool transport_attached = 8;
+  int32 pcm_sample_rate_hz = 9;
+  string active_session_id = 10;
+  google.protobuf.Timestamp lease_expires_at = 11;
+  VoiceRemoteAudioSupport remote_audio_support = 12;
+  string active_transport_lease_id = 13;
 }

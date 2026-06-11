@@ -4,14 +4,15 @@
 // 在每次 LLM 调用和 Tool 执行前后调用 Hook Pipeline + Middleware
 // ─────────────────────────────────────────────────────────────
 
-using System.Text;
-using System.Text.Json;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 
 namespace Aevatar.AI.Core.Tools;
 
@@ -53,15 +54,12 @@ public sealed class ToolCallLoop
         ILLMProvider provider, List<ChatMessage> messages,
         LLMRequest baseRequest, int maxRounds, CancellationToken ct)
     {
-        AgentToolRequestContext.CurrentMetadata = baseRequest.Metadata;
-        try
-        {
-            return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+        // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+        //   Old pattern: ToolCallLoop pushed raw request Metadata into AsyncLocal.
+        //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
+        var toolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
+        using var _ = AgentToolContextScope.Push(toolContext);
+        return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
     }
 
     /// <summary>Max recovery attempts when the LLM response is truncated by output token limit.</summary>
@@ -86,7 +84,11 @@ public sealed class ToolCallLoop
             {
                 Messages = [..messages],
                 RequestId = baseRequest.RequestId,
-                Metadata = BuildPerCallMetadata(baseRequest.Metadata, callId),
+                Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
+                CallerContext = baseRequest.CallerContext,
+                ToolContext = AgentToolExecutionContextMapper.FromRequestWithCallId(baseRequest, callId),
+                RoutingContext = baseRequest.RoutingContext,
+                LlmControl = baseRequest.LlmControl,
                 Tools = baseRequest.Tools,
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
@@ -111,7 +113,7 @@ public sealed class ToolCallLoop
                     && block is true)
                 {
                     if (response.Content != null)
-                        messages.Add(ChatMessage.Assistant(response.Content));
+                        messages.Add(ChatMessage.Assistant(response.Content, response.ReasoningContent));
                     return response.Content;
                 }
             }
@@ -134,6 +136,7 @@ public sealed class ToolCallLoop
                                 LLMResponse = new LLMResponse
                                 {
                                     Content = parsed.CleanedContent,
+                                    ReasoningContent = response.ReasoningContent,
                                     ToolCalls = parsed.ToolCalls,
                                 },
                             };
@@ -144,14 +147,15 @@ public sealed class ToolCallLoop
                                 && block is true)
                             {
                                 if (parsed.CleanedContent != null)
-                                    messages.Add(ChatMessage.Assistant(parsed.CleanedContent));
+                                    messages.Add(ChatMessage.Assistant(parsed.CleanedContent, response.ReasoningContent));
                                 return parsed.CleanedContent;
                             }
                         }
 
-                        if (!string.IsNullOrWhiteSpace(parsed.CleanedContent))
-                            messages.Add(ChatMessage.Assistant(parsed.CleanedContent));
-                        messages.Add(new ChatMessage { Role = "assistant", ToolCalls = parsed.ToolCalls });
+                        messages.Add(BuildAssistantToolCallMessage(
+                            parsed.CleanedContent,
+                            response.ReasoningContent,
+                            parsed.ToolCalls));
                         await ExecuteToolCallsCoreAsync(parsed.ToolCalls, messages, ct);
                         accumulatedContent = null;
                         continue;
@@ -168,7 +172,7 @@ public sealed class ToolCallLoop
                     {
                         accumulatedContent ??= new StringBuilder();
                         accumulatedContent.Append(response.Content);
-                        messages.Add(ChatMessage.Assistant(response.Content));
+                        messages.Add(ChatMessage.Assistant(response.Content, response.ReasoningContent));
                     }
                     messages.Add(ChatMessage.User(LengthRecoveryNudge));
                     lengthRecoveryCount++;
@@ -186,7 +190,7 @@ public sealed class ToolCallLoop
                 }
 
                 if (resultContent != null)
-                    messages.Add(ChatMessage.Assistant(resultContent));
+                    messages.Add(ChatMessage.Assistant(resultContent, response.ReasoningContent));
                 return resultContent;
             }
 
@@ -194,7 +198,13 @@ public sealed class ToolCallLoop
             accumulatedContent = null;
 
             // 记录 assistant tool_call 消息
-            messages.Add(new ChatMessage { Role = "assistant", ToolCalls = response.ToolCalls });
+            messages.Add(new ChatMessage
+            {
+                Role = "assistant",
+                Content = response.Content,
+                ReasoningContent = response.ReasoningContent,
+                ToolCalls = response.ToolCalls,
+            });
             await ExecuteToolCallsCoreAsync(response.ToolCalls!, messages, ct);
         }
 
@@ -205,7 +215,11 @@ public sealed class ToolCallLoop
         {
             Messages = [..messages],
             RequestId = baseRequest.RequestId,
-            Metadata = BuildPerCallMetadata(baseRequest.Metadata, finalCallId),
+            Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
+            CallerContext = baseRequest.CallerContext,
+            ToolContext = AgentToolExecutionContextMapper.FromRequestWithCallId(baseRequest, finalCallId),
+            RoutingContext = baseRequest.RoutingContext,
+            LlmControl = baseRequest.LlmControl,
             Tools = null,
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
@@ -221,9 +235,10 @@ public sealed class ToolCallLoop
             var finalParsed = TextToolCallParser.Parse(finalContent);
             if (finalParsed.ToolCalls.Count > 0)
             {
-                if (!string.IsNullOrWhiteSpace(finalParsed.CleanedContent))
-                    messages.Add(ChatMessage.Assistant(finalParsed.CleanedContent));
-                messages.Add(new ChatMessage { Role = "assistant", ToolCalls = finalParsed.ToolCalls });
+                messages.Add(BuildAssistantToolCallMessage(
+                    finalParsed.CleanedContent,
+                    finalResponse?.ReasoningContent,
+                    finalParsed.ToolCalls));
                 await ExecuteToolCallsCoreAsync(finalParsed.ToolCalls, messages, ct);
 
                 // One more LLM call to summarize
@@ -232,6 +247,10 @@ public sealed class ToolCallLoop
                     Messages = [..messages],
                     RequestId = finalRequest.RequestId,
                     Metadata = finalRequest.Metadata,
+                    CallerContext = finalRequest.CallerContext,
+                    ToolContext = finalRequest.ToolContext,
+                    RoutingContext = finalRequest.RoutingContext,
+                    LlmControl = finalRequest.LlmControl,
                     Tools = null,
                     Model = finalRequest.Model,
                     Temperature = finalRequest.Temperature,
@@ -241,11 +260,11 @@ public sealed class ToolCallLoop
                 var (summaryResponse, _) = await InvokeLlmAsync(provider, summaryRequest, ct);
                 var summaryContent = summaryResponse?.Content;
                 if (summaryContent != null)
-                    messages.Add(ChatMessage.Assistant(summaryContent));
+                    messages.Add(ChatMessage.Assistant(summaryContent, summaryResponse?.ReasoningContent));
                 return summaryContent;
             }
 
-            messages.Add(ChatMessage.Assistant(finalContent));
+            messages.Add(ChatMessage.Assistant(finalContent, finalResponse?.ReasoningContent));
         }
 
         return finalContent;
@@ -257,15 +276,13 @@ public sealed class ToolCallLoop
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken ct)
     {
-        AgentToolRequestContext.CurrentMetadata = metadata;
-        try
+        // Refactor (issue1574): Old pattern: standalone tool execution promoted Metadata into tool control.
+        // New principle: core tool execution receives typed control; Metadata only supplies scrubbed annotations.
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
-            await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        });
+        await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
     }
 
     private async Task<(LLMResponse Response, bool Terminated)> InvokeLlmAsync(
@@ -273,55 +290,39 @@ public sealed class ToolCallLoop
         LLMRequest request,
         CancellationToken ct)
     {
+        // Refactor (iter15/cluster-024):
+        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
+        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
         // ─── Hook: LLM Request Start ───
         var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = request };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmCtx, ct);
+        var llmStartedAt = Stopwatch.GetTimestamp();
 
         var llmCallContext = new LLMCallContext
         {
             Request = request,
             Provider = provider,
             CancellationToken = ct,
-            IsStreaming = false,
+            IsStreaming = true,
         };
         AnnotateRequestIdentity(llmCallContext);
 
         await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
         {
             if (llmCallContext.Terminate) return;
-            llmCallContext.Response = await provider.ChatAsync(llmCallContext.Request, ct);
+            llmCallContext.Response = await ChatStreamContentAggregator.AggregateResponseAsync(provider, llmCallContext.Request, ct);
         });
 
         var response = llmCallContext.Response
             ?? new LLMResponse { Content = null, ToolCalls = null };
         _budgetTracker?.RecordUsage(response.Usage);
         llmCtx.LLMResponse = response;
+        llmCtx.Duration = Stopwatch.GetElapsedTime(llmStartedAt);
 
         // ─── Hook: LLM Request End ───
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
 
         return (response, llmCallContext.Terminate);
-    }
-
-    internal static IReadOnlyDictionary<string, string>? BuildPerCallMetadata(
-        IReadOnlyDictionary<string, string>? baseMetadata,
-        string? callId)
-    {
-        if (baseMetadata == null || baseMetadata.Count == 0)
-        {
-            if (string.IsNullOrWhiteSpace(callId))
-                return null;
-
-            return new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.CallId] = callId,
-            };
-        }
-
-        var metadata = new Dictionary<string, string>(baseMetadata, StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(callId))
-            metadata[LLMRequestMetadataKeys.CallId] = callId;
-        return metadata;
     }
 
     internal static string? ComposeRoundCallId(string? baseRequestId, int round)
@@ -347,15 +348,14 @@ public sealed class ToolCallLoop
         if (!string.IsNullOrWhiteSpace(context.Request.RequestId))
             context.Items[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
 
-        if (context.Request.Metadata != null &&
-            context.Request.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callId) &&
-            !string.IsNullOrWhiteSpace(callId))
+        var callId = context.Request.ToolContext?.Request.CallId;
+        if (!string.IsNullOrWhiteSpace(callId))
         {
             context.Items[LLMRequestMetadataKeys.CallId] = callId;
         }
     }
 
-    internal static ChatMessage BuildToolResultMessage(string callId, string toolResult)
+    public static ChatMessage BuildToolResultMessage(string callId, string toolResult)
     {
         if (!TryExtractToolContentParts(toolResult, out var text, out var parts))
             return ChatMessage.Tool(callId, toolResult);
@@ -559,14 +559,30 @@ public sealed class ToolCallLoop
         List<ChatMessage> messages,
         CancellationToken ct)
     {
-        using var executor = new StreamingToolExecutor(_tools, _hooks, _toolMiddlewares);
+        // Refactor (iter35/cluster-040-streaming-tool-executor):
+        //   Old pattern: StreamingToolExecutor owns process-local channel coordinator + TaskCompletionSource waiters + List<TrackedTool>/List<TaskCompletionSource> as object fields for tool execution ordering.
+        //   New principle: Tool execution state kept in owning chat/actor turn,或 narrow runtime-neutral tool scheduling abstraction(no process-local progress storage)。Streaming tool progress advanced by owning execution flow;process-local channels 仅作 transport mechanics,不作 business progress 来源。
+        var executor = new StreamingToolExecutor(_tools, _hooks, _toolMiddlewares);
+        using var executionState = executor.CreateExecutionState();
 
         foreach (var call in toolCalls)
-            executor.AddTool(call);
+            executor.AddTool(executionState, call);
 
-        await foreach (var result in executor.GetRemainingResultsAsync(ct))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, ct))
             messages.Add(BuildToolResultMessage(result.CallId, result.Result));
     }
+
+    private static ChatMessage BuildAssistantToolCallMessage(
+        string? content,
+        string? reasoningContent,
+        IReadOnlyList<ToolCall> toolCalls) =>
+        new()
+        {
+            Role = "assistant",
+            Content = string.IsNullOrWhiteSpace(content) ? null : content,
+            ReasoningContent = reasoningContent,
+            ToolCalls = toolCalls,
+        };
 
     /// <summary>
     /// Detects whether the LLM response was truncated by the output token limit.

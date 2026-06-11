@@ -19,7 +19,7 @@ public static class LarkBotErrorCodes
     /// outbound (e.g. customer's <c>api-lark-bot</c>) are different apps, sending to a
     /// <c>receive_id_type=open_id</c> with the relay-app-scoped <c>ou_*</c> is rejected. Surfaces
     /// on legacy SkillRunner / human-interaction state captured before <c>union_id</c> ingress
-    /// existed; rebuild the agent (e.g. <c>/agents</c> → Delete → <c>/daily</c>) to pin the new
+    /// existed; rebuild the agent from <c>/agents</c> to pin the new
     /// cross-app safe pair.
     /// </summary>
     public const int OpenIdCrossApp = 99992361;

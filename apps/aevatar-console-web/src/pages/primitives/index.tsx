@@ -21,6 +21,7 @@ import {
   summaryMetricStyle,
   summaryMetricValueStyle,
 } from "@/shared/ui/proComponents";
+import { t } from "@/shared/i18n/messages";
 
 const primitiveCatalogPageSize = 8;
 
@@ -50,8 +51,8 @@ function buildPrimitiveSummary(primitive: WorkflowPrimitiveDescriptor): string {
   }
 
   return primitive.aliases.length > 0
-    ? `别名：${primitive.aliases.join(", ")}`
-    : "已就绪，可继续查看参数契约和示例行为定义。";
+    ? t("pages.primitives.index.alias", "Alias: {value1}", { value1: primitive.aliases.join(", ") })
+    : t("pages.primitives.index.you.re.ready.to", "You're ready to continue looking at the parameter contracts and sample behavior definitions.");
 }
 
 const PrimitiveSummaryMetric: React.FC<{
@@ -74,7 +75,7 @@ const PrimitiveCatalogCard: React.FC<{
 
   return (
     <div
-      aria-label={`查看连接器 ${primitive.name}`}
+      aria-label={t("pages.primitives.index.view.connector", "View connector {value1}", { value1: primitive.name })}
       onClick={onInspect}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -113,8 +114,7 @@ const PrimitiveCatalogCard: React.FC<{
           </Typography.Text>
         </Space>
         <Typography.Text style={{ color: "var(--ant-color-text-tertiary)" }}>
-          {primitive.aliases.length} aliases
-        </Typography.Text>
+          {primitive.aliases.length} {t("pages.primitives.index.aliases", "aliases")}</Typography.Text>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -140,30 +140,29 @@ const PrimitiveCatalogCard: React.FC<{
           width: "100%",
         }}
       >
-        <PrimitiveSummaryMetric label="分类" value={primitive.category} />
+        <PrimitiveSummaryMetric label={t("pages.primitives.index.classification", "Classification")} value={primitive.category} />
         <PrimitiveSummaryMetric
-          label="参数"
-          value={`${primitive.parameters.length} 个`}
+          label={t("pages.primitives.index.parameter", "parameter")}
+          value={t("pages.primitives.index.copy", "{value1}", { value1: primitive.parameters.length })}
         />
         <PrimitiveSummaryMetric
-          label="示例"
-          value={`${primitive.exampleWorkflows.length} 个`}
+          label={t("pages.primitives.index.example", "Example")}
+          value={t("pages.primitives.index.copy.2", "{value1}", { value1: primitive.exampleWorkflows.length })}
         />
       </div>
 
       <div style={cardListActionStyle}>
         <Button
-          aria-label="查看"
+          aria-label={t("pages.primitives.index.check", "Check")}
           icon={<EyeOutlined />}
           onClick={(event) => {
             event.stopPropagation();
             onInspect();
           }}
         >
-          查看
-        </Button>
+          {t("pages.primitives.index.check.2", "Check")}</Button>
         <Button
-          aria-label="示例行为定义"
+          aria-label={t("pages.primitives.index.example.behavior.definition", "Example behavior definition")}
           disabled={!hasExampleWorkflow}
           icon={<BuildOutlined />}
           onClick={(event) => {
@@ -174,8 +173,7 @@ const PrimitiveCatalogCard: React.FC<{
           }}
           type="primary"
         >
-          示例行为定义
-        </Button>
+          {t("pages.primitives.index.example.behavior.definition.2", "Example behavior definition")}</Button>
       </div>
     </div>
   );
@@ -245,8 +243,8 @@ const PrimitivesPage: React.FC = () => {
   return (
     <AevatarPageShell
       layoutMode="document"
-      title="连接器目录"
-      titleHelp="这里继续复用 runtime primitive 数据，但对外展示成团队可复用的连接器能力目录。"
+      title={t("pages.primitives.index.connector.catalog", "Connector catalog")}
+      titleHelp={t("pages.primitives.index.the.runtime.primitive.data", "The runtime primitive data continues to be reused here, but is displayed externally as a connector capability directory that can be reused by the team.")}
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
@@ -254,8 +252,8 @@ const PrimitivesPage: React.FC = () => {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <AevatarPanel
               layoutMode="document"
-              title="筛选连接器"
-              titleHelp="按分类或关键字过滤连接器能力，不离开当前视口。"
+              title={t("pages.primitives.index.filter.connector", "filter connector")}
+              titleHelp={t("pages.primitives.index.ability.to.filter.connectors", "Ability to filter connectors by category or keyword without leaving the current viewport.")}
             >
               <div
                 style={{
@@ -267,7 +265,7 @@ const PrimitivesPage: React.FC = () => {
               >
                 <Input
                   onChange={(event) => setKeyword(event.target.value)}
-                  placeholder="搜索连接器、分类或别名"
+                  placeholder={t("pages.primitives.index.search.for.connectors.categories", "Search for connectors, categories or aliases")}
                   style={{ width: "100%" }}
                   value={keyword}
                 />
@@ -275,7 +273,7 @@ const PrimitivesPage: React.FC = () => {
                   mode="multiple"
                   onChange={setSelectedCategories}
                   options={categoryOptions}
-                  placeholder="筛选分类"
+                  placeholder={t("pages.primitives.index.filter.categories", "Filter categories")}
                   style={{ width: "100%" }}
                   value={selectedCategories}
                 />
@@ -286,24 +284,21 @@ const PrimitivesPage: React.FC = () => {
                     setSelectedPrimitiveName("");
                   }}
                 >
-                  重置筛选
-                </Button>
+                  {t("pages.primitives.index.reset.filter", "Reset filter")}</Button>
               </div>
             </AevatarPanel>
 
-            <AevatarPanel layoutMode="document" title="目录摘要">
+            <AevatarPanel layoutMode="document" title={t("pages.primitives.index.table.of.contents.summary", "Table of Contents Summary")}>
               <Space orientation="vertical" size={6}>
                 <Typography.Text strong>
-                  {filteredRows.length} 个连接器能力
-                </Typography.Text>
+                  {filteredRows.length} {t("pages.primitives.index.connector.capabilities", "connector capabilities")}</Typography.Text>
                 <Typography.Text type="secondary">
-                  {categoryOptions.length} 个分类 ·{" "}
+                  {categoryOptions.length} {t("pages.primitives.index.categories", "categories ·")}{" "}
                   {filteredRows.reduce(
                     (count, primitive) => count + primitive.parameters.length,
                     0,
                   )}{" "}
-                  个已暴露参数
-                </Typography.Text>
+                  {t("pages.primitives.index.exposed.parameters", "exposed parameters")}</Typography.Text>
               </Space>
             </AevatarPanel>
           </div>
@@ -311,12 +306,12 @@ const PrimitivesPage: React.FC = () => {
         stage={
           <AevatarPanel
             layoutMode="document"
-            title="可用连接器"
-            titleHelp="卡片流目录帮助你快速浏览能力分类、参数契约和示例行为定义。"
+            title={t("pages.primitives.index.available.connectors", "Available connectors")}
+            titleHelp={t("pages.primitives.index.the.card.flow.catalog", "The card flow catalog helps you quickly browse capability categories, parameter contracts, and sample behavior definitions.")}
           >
             {filteredRows.length === 0 ? (
               <Empty
-                description="当前筛选条件下没有匹配的连接器。"
+                description={t("pages.primitives.index.there.are.no.matching", "There are no matching connectors under the current filter criteria.")}
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
               />
             ) : (
@@ -354,16 +349,16 @@ const PrimitivesPage: React.FC = () => {
       <AevatarContextDrawer
         onClose={() => setSelectedPrimitiveName("")}
         open={Boolean(selectedPrimitiveName)}
-        subtitle="连接器契约"
-        title={selectedPrimitive?.name || selectedPrimitiveName || "连接器"}
+        subtitle={t("pages.primitives.index.connector.contract", "Connector contract")}
+        title={selectedPrimitive?.name || selectedPrimitiveName || t("pages.primitives.index.connector", "connector")}
       >
         {!selectedPrimitive ? (
-          <AevatarInspectorEmpty description="选择一个连接器以查看它的参数契约和示例行为定义。" />
+          <AevatarInspectorEmpty description={t("pages.primitives.index.select.connector.to.view", "Select a connector to view its parameter contracts and sample behavior definitions.")} />
         ) : (
           <>
             <AevatarPanel
-              title="定义"
-              titleHelp="连接器描述和别名保持精简，方便快速决策。"
+              title={t("pages.primitives.index.definition", "definition")}
+              titleHelp={t("pages.primitives.index.connector.descriptions.and.aliases", "Connector descriptions and aliases are kept simple to facilitate quick decision-making.")}
             >
               <Space orientation="vertical" size={8}>
                 <Space wrap size={[8, 8]}>
@@ -373,20 +368,19 @@ const PrimitivesPage: React.FC = () => {
                   </Typography.Text>
                 </Space>
                 <Typography.Text>
-                  {selectedPrimitive.description || "当前连接器还没有描述。"}
+                  {selectedPrimitive.description || t("pages.primitives.index.the.current.connector.has", "The current connector has no description yet.")}
                 </Typography.Text>
                 <Typography.Text type="secondary">
-                  别名：
-                  {selectedPrimitive.aliases.length > 0
+                  {t("pages.primitives.index.alias.2", "Alias:")}{selectedPrimitive.aliases.length > 0
                     ? selectedPrimitive.aliases.join(", ")
-                    : "无"}
+                    : t("pages.primitives.index.none", "none")}
                 </Typography.Text>
               </Space>
             </AevatarPanel>
 
             <AevatarPanel
-              title="参数"
-              titleHelp="参数契约收进右侧抽屉，保持主目录轻量。"
+              title={t("pages.primitives.index.parameter.2", "parameter")}
+              titleHelp={t("pages.primitives.index.the.parameter.contract.is", "The parameter contract is stored in the right drawer to keep the main directory lightweight.")}
             >
               {selectedPrimitive.parameters.length > 0 ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -406,7 +400,7 @@ const PrimitivesPage: React.FC = () => {
                         <Typography.Text strong>{parameter.name}</Typography.Text>
                         <AevatarStatusTag
                           domain="governance"
-                          label={parameter.required ? "必填" : "可选"}
+                          label={parameter.required ? t("pages.primitives.index.required", "Required") : t("pages.primitives.index.optional", "Optional")}
                           status={parameter.required ? "ready" : "draft"}
                         />
                         <Typography.Text type="secondary">
@@ -414,25 +408,25 @@ const PrimitivesPage: React.FC = () => {
                         </Typography.Text>
                       </Space>
                       <Typography.Text type="secondary">
-                        {parameter.description || "当前参数还没有描述。"}
+                        {parameter.description || t("pages.primitives.index.the.current.parameter.has", "The current parameter has no description yet.")}
                       </Typography.Text>
                       <Typography.Text type="secondary">
-                        默认值：{parameter.default || "n/a"}
+                        {t("pages.primitives.index.default.value", "default value:")}{parameter.default || "n/a"}
                       </Typography.Text>
                     </div>
                   ))}
                 </div>
               ) : (
                 <Empty
-                  description="当前连接器没有声明参数。"
+                  description={t("pages.primitives.index.the.current.connector.has.2", "The current connector has no parameters declared.")}
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               )}
             </AevatarPanel>
 
             <AevatarPanel
-              title="示例覆盖"
-              titleHelp="示例行为定义会把连接器目录和行为设计串起来。"
+              title={t("pages.primitives.index.example.coverage", "Example coverage")}
+              titleHelp={t("pages.primitives.index.sample.behavior.definitions.link", "Sample behavior definitions link the connector catalog with the behavior design.")}
             >
               {selectedPrimitive.exampleWorkflows.length > 0 ? (
                 <Space orientation="vertical" size={8} style={{ width: "100%" }}>
@@ -458,14 +452,13 @@ const PrimitivesPage: React.FC = () => {
                           )
                         }
                       >
-                        打开行为定义
-                      </Button>
+                        {t("pages.primitives.index.open.behavior.definition", "Open behavior definition")}</Button>
                     </div>
                   ))}
                 </Space>
               ) : (
                 <Empty
-                  description="当前还没有关联示例行为定义。"
+                  description={t("pages.primitives.index.there.is.currently.no", "There is currently no associated sample behavior definition.")}
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               )}

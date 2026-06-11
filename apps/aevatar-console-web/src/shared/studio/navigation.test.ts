@@ -4,6 +4,7 @@ import {
   buildStudioScriptsWorkspaceRoute,
   buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
+  resolveStudioMemberRouteKey,
 } from './navigation';
 
 describe('buildStudioRoute', () => {
@@ -69,10 +70,27 @@ describe('buildStudioRoute', () => {
   it('supports the typed create-member Studio intent', () => {
     expect(
       buildStudioRoute({
+        scopeId: 'scope-1',
+        teamId: 't-alpha',
         tab: 'studio',
         intent: 'create-member',
       }),
-    ).toBe('/studio?tab=studio&intent=create-member');
+    ).toBe('/studio?scopeId=scope-1&teamId=t-alpha&tab=studio&intent=create-member');
+  });
+
+  it('carries a return target for Team handoffs', () => {
+    expect(
+      buildStudioRoute({
+        scopeId: 'scope-1',
+        teamId: 't-alpha',
+        memberId: 'member-alpha',
+        step: 'build',
+        tab: 'studio',
+        returnTo: '/teams/scope-1/t-alpha?tab=members',
+      }),
+    ).toBe(
+      '/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Amember-alpha&step=build&tab=studio&returnTo=%2Fteams%2Fscope-1%2Ft-alpha%3Ftab%3Dmembers',
+    );
   });
 
   it('drops invalid Studio intent values', () => {
@@ -138,10 +156,10 @@ describe('buildStudioRoute', () => {
       buildStudioWorkflowWorkspaceRoute({
         scopeId: 'scope-a',
         scopeLabel: '团队 A',
-        memberId: 'service-alpha',
+        memberId: 'member-alpha',
         memberLabel: '默认成员',
       }),
-    ).toBe('/studio?scopeId=scope-a&member=member%3Aservice-alpha&tab=studio');
+    ).toBe('/studio?scopeId=scope-a&member=member%3Amember-alpha&tab=studio');
     expect(
       buildStudioWorkflowEditorRoute({
         scopeId: 'scope-1',
@@ -175,10 +193,17 @@ describe('buildStudioRoute', () => {
     expect(
       buildStudioScriptsWorkspaceRoute({
         scopeId: 'scope-1',
+        memberId: 'script-member',
+        scriptId: 'script-1',
+      }),
+    ).toBe('/studio?scopeId=scope-1&member=member%3Ascript-member&focus=script%3Ascript-1&tab=scripts');
+    expect(
+      buildStudioScriptsWorkspaceRoute({
+        scopeId: 'scope-1',
         memberKey: 'script:script-1',
         scriptId: 'script-1',
       }),
-    ).toBe('/studio?scopeId=scope-1&member=script%3Ascript-1&tab=scripts');
+    ).toBe('/studio?scopeId=scope-1&focus=script%3Ascript-1&tab=scripts');
   });
 
   it('infers the workflow editor when only a workflow id is provided', () => {
@@ -214,12 +239,42 @@ describe('buildStudioRoute', () => {
       buildStudioRoute({
         scopeId: 'scope-a',
         scopeLabel: '团队 A',
-        memberId: 'service-alpha',
+        memberId: 'member-alpha',
         memberLabel: '成员 Alpha',
         focus: 'workflow:workflow-1',
       }),
     ).toBe(
-      '/studio?scopeId=scope-a&member=member%3Aservice-alpha&focus=workflow%3Aworkflow-1&tab=studio',
+      '/studio?scopeId=scope-a&member=member%3Amember-alpha&focus=workflow%3Aworkflow-1&tab=studio',
     );
+  });
+});
+
+describe('resolveStudioMemberRouteKey', () => {
+  it('prefers backend member identity over implementation identities', () => {
+    expect(
+      resolveStudioMemberRouteKey({
+        memberId: 'member-alpha',
+        memberKey: 'workflow:workflow-1',
+        workflowId: 'workflow-2',
+        scriptId: 'script-1',
+      }),
+    ).toBe('member:member-alpha');
+  });
+
+  it('keeps an existing member key before falling back to workflow assets', () => {
+    expect(
+      resolveStudioMemberRouteKey({
+        memberKey: 'workflow:workflow-1',
+        scriptId: 'script-1',
+      }),
+    ).toBe('workflow:workflow-1');
+    expect(resolveStudioMemberRouteKey({ workflowId: 'workflow-2' })).toBe(
+      'workflow:workflow-2',
+    );
+    expect(resolveStudioMemberRouteKey({ scriptId: 'script-1' })).toBeUndefined();
+  });
+
+  it('returns undefined when no stable route identity is available', () => {
+    expect(resolveStudioMemberRouteKey({ memberId: ' ', memberKey: 'unknown' })).toBeUndefined();
   });
 });

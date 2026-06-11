@@ -11,6 +11,88 @@ namespace Aevatar.CQRS.Core.Tests;
 public sealed class DefaultCommandInteractionServiceTests
 {
     [Fact]
+    public async Task ExecuteAsync_ShouldBindObservationBeforeDispatch_ThenEmitAcceptedAndPump()
+    {
+        var order = new List<string>();
+        var sink = new EventChannel<string>();
+        sink.Push("done:completed");
+        sink.Complete();
+
+        var target = new TestTarget("target-1", sink);
+        var receipt = new TestReceipt("target-1", "receipt-before-observe");
+        var execution = CreateExecution(target, receipt, commandId: "cmd-observe");
+        var pipeline = new RecordingInteractionPipeline(
+            CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(execution),
+            order);
+        var observation = new RecordingObservationLifecycle(order);
+        var receiptFactory = new RecordingTestReceiptFactory(order, new TestReceipt("target-1", "receipt-after-observe"));
+        var accepted = new List<TestReceipt>();
+        var frames = new List<string>();
+        var service = CreateService(
+            pipeline,
+            observationLifecycle: observation,
+            receiptFactory: receiptFactory);
+
+        var result = await service.ExecuteAsync(
+            "command-observe",
+            (frame, _) =>
+            {
+                order.Add("emit");
+                frames.Add(frame);
+                return ValueTask.CompletedTask;
+            },
+            (acceptedReceipt, _) =>
+            {
+                order.Add("accepted");
+                accepted.Add(acceptedReceipt);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be(receiptFactory.Receipt);
+        accepted.Should().ContainSingle().Which.Should().Be(receiptFactory.Receipt);
+        frames.Should().ContainSingle().Which.Should().Be("done:completed");
+        observation.Calls.Should().ContainSingle();
+        observation.Calls[0].Execution.Should().Be(execution);
+        order.Should().StartWith("prepare", "observe", "dispatch", "receipt", "accepted", "emit");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenObservationBindingFails_ShouldReturnFailureWithoutDispatchOrAccepted()
+    {
+        var order = new List<string>();
+        var target = new TestTarget("target-1", new EventChannel<string>());
+        var pipeline = new RecordingInteractionPipeline(
+            CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                CreateExecution(target, new TestReceipt("target-1", "receipt-1"))),
+            order);
+        var observation = new RecordingObservationLifecycle(order, "observation_failed");
+        var accepted = new List<TestReceipt>();
+        var service = CreateService(
+            pipeline,
+            observationLifecycle: observation,
+            receiptFactory: new RecordingTestReceiptFactory(order, new TestReceipt("target-1", "unused")));
+
+        var result = await service.ExecuteAsync(
+            "command-fail",
+            static (_, _) => ValueTask.CompletedTask,
+            (acceptedReceipt, _) =>
+            {
+                accepted.Add(acceptedReceipt);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("observation_failed");
+        pipeline.DispatchCalls.Should().Be(0);
+        accepted.Should().BeEmpty();
+        target.ReleaseCalls.Should().BeEmpty();
+        order.Should().Equal("prepare", "observe");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenDispatchFails_ShouldReturnFailure()
     {
         var service = CreateService(
@@ -186,13 +268,30 @@ public sealed class DefaultCommandInteractionServiceTests
         ICommandDispatchPipeline<string, TestTarget, TestReceipt, string> dispatchPipeline,
         ICommandCompletionPolicy<string, string>? completionPolicy = null,
         ICommandFinalizeEmitter<TestReceipt, string, string>? finalizeEmitter = null,
-        ICommandDurableCompletionResolver<TestReceipt, string>? durableResolver = null) =>
+        ICommandDurableCompletionResolver<TestReceipt, string>? durableResolver = null,
+        ICommandObservationLifecycle<string, TestTarget, TestReceipt, string>? observationLifecycle = null,
+        ICommandReceiptFactory<TestTarget, TestReceipt>? receiptFactory = null) =>
         new(
             dispatchPipeline,
             new DefaultEventOutputStream<string, string>(new PassThroughFrameMapper()),
             completionPolicy ?? new TestCompletionPolicy(),
             finalizeEmitter ?? new RecordingFinalizeEmitter(),
-            durableResolver ?? new RecordingDurableResolver(CommandDurableCompletionObservation<string>.Incomplete));
+            durableResolver ?? new RecordingDurableResolver(CommandDurableCompletionObservation<string>.Incomplete),
+            logger: null,
+            observationLifecycle,
+            receiptFactory);
+
+    private static CommandDispatchExecution<TestTarget, TestReceipt> CreateExecution(
+        TestTarget target,
+        TestReceipt receipt,
+        string commandId = "cmd-1") =>
+        new()
+        {
+            Target = target,
+            Context = new CommandContext(target.TargetId, commandId, "corr-1", new Dictionary<string, string>()),
+            Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = $"env-{commandId}" },
+            Receipt = receipt,
+        };
 
     private sealed record TestReceipt(string TargetId, string ReceiptId);
 
@@ -233,13 +332,13 @@ public sealed class DefaultCommandInteractionServiceTests
             return Task.FromResult(result);
         }
 
-        public Task DispatchPreparedAsync(
+        public Task<DispatchAdmission> DispatchPreparedAsync(
             CommandDispatchExecution<TestTarget, TestReceipt> execution,
             CancellationToken ct = default)
         {
-            _ = execution;
+            ArgumentNullException.ThrowIfNull(execution);
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope));
         }
 
         public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
@@ -255,8 +354,84 @@ public sealed class DefaultCommandInteractionServiceTests
             if (!prepared.Succeeded || prepared.Target == null)
                 return prepared;
 
-            await DispatchPreparedAsync(prepared.Target, ct);
-            return prepared;
+            var admission = await DispatchPreparedAsync(prepared.Target, ct);
+            return CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                prepared.Target with { Admission = admission });
+        }
+    }
+
+    private sealed class RecordingInteractionPipeline(
+        CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string> result,
+        List<string> order)
+        : ICommandDispatchPipeline<string, TestTarget, TestReceipt, string>
+    {
+        public int DispatchCalls { get; private set; }
+
+        public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> PrepareAsync(
+            string command,
+            CancellationToken ct = default)
+        {
+            _ = command;
+            ct.ThrowIfCancellationRequested();
+            order.Add("prepare");
+            return Task.FromResult(result);
+        }
+
+        public Task<DispatchAdmission> DispatchPreparedAsync(
+            CommandDispatchExecution<TestTarget, TestReceipt> execution,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(execution);
+            ct.ThrowIfCancellationRequested();
+            DispatchCalls++;
+            order.Add("dispatch");
+            return Task.FromResult(DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope));
+        }
+
+        public async Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
+            string command,
+            CancellationToken ct = default)
+        {
+            var prepared = await PrepareAsync(command, ct);
+            if (!prepared.Succeeded || prepared.Target == null)
+                return prepared;
+
+            var admission = await DispatchPreparedAsync(prepared.Target, ct);
+            return CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                prepared.Target with { Admission = admission });
+        }
+    }
+
+    private sealed class RecordingObservationLifecycle(List<string> order, string? failure = null)
+        : ICommandObservationLifecycle<string, TestTarget, TestReceipt, string>
+    {
+        public List<(string Command, CommandDispatchExecution<TestTarget, TestReceipt> Execution)> Calls { get; } = [];
+
+        public Task<CommandObservationBindingResult<string>> BindAsync(
+            string command,
+            CommandDispatchExecution<TestTarget, TestReceipt> execution,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            order.Add("observe");
+            Calls.Add((command, execution));
+            return Task.FromResult(failure == null
+                ? CommandObservationBindingResult<string>.Success()
+                : CommandObservationBindingResult<string>.Failure(failure));
+        }
+    }
+
+    private sealed class RecordingTestReceiptFactory(List<string> order, TestReceipt receipt)
+        : ICommandReceiptFactory<TestTarget, TestReceipt>
+    {
+        public TestReceipt Receipt => receipt;
+
+        public TestReceipt Create(TestTarget target, CommandContext context)
+        {
+            _ = target;
+            _ = context;
+            order.Add("receipt");
+            return receipt;
         }
     }
 
@@ -398,6 +573,15 @@ public sealed class FallbackCommandServiceTests
             }
 
             return Task.FromResult(Result);
+        }
+
+        async Task<RealtimeSessionResult<string, string, string>> IRealtimeSession<string, string, string, string, string>.ExecuteAsync(
+            string inbound,
+            Func<string, CancellationToken, ValueTask> emitAsync,
+            Func<string, CancellationToken, ValueTask>? onAcceptedAsync,
+            CancellationToken ct)
+        {
+            return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
         }
     }
 

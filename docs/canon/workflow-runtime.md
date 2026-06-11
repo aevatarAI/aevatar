@@ -46,6 +46,7 @@ owner: eanzhao
 - workflow 运行主链路建立在 `EventEnvelope` 消息流之上。
 - `EventEnvelope` 在这里是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - `WorkflowRunGAgent` / `WorkflowGAgent` 只有在显式 `PersistDomainEventAsync(...)` 时，才把领域事实写入 EventStore。
+- 定时触发属于 Aevatar workflow runtime 能力；NyxID 只保留 credential/proxy/audit 职责，ORNN 只保留 deterministic skill/payload-builder 职责。
 
 ---
 
@@ -61,7 +62,7 @@ owner: eanzhao
    - 作为 definition/source actor 被解析与绑定
 2. `WorkflowRunGAgent`
    - 一次 run 一个 actor
-   - 按 `roles` 创建 run-scoped `RoleGAgent` 树
+   - 按 `roles` 创建 run-scoped role actor 树；`agent_kind` 由 Foundation runtime 解析
    - 通过依赖推导（`IWorkflowModuleDependencyExpander`）确定所需模块，经 `WorkflowModuleFactory` 创建并安装
    - 收到 `ChatRequestEvent` envelope 后发布 `StartWorkflowEvent`
    - 由 `WorkflowExecutionKernel` 推进 `StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`
@@ -95,6 +96,27 @@ BindWorkflowDefinition(yaml)
 
 模块和静态 `[EventHandler]` 方法一起进入统一事件管线。可以在不改业务代码的情况下替换流程行为。
 
+### Scheduled Dispatch API
+
+第一版定时触发只提供 API 配置面，不提供 UI。主 API 路径为 `/api/scheduled-dispatches`，支持 create/update/enable/disable/list/get/preview/run-now。`/api/workflow-schedules` 仅作为 workflow 兼容入口，内部映射到统一 scheduled dispatch 应用契约。
+
+运行边界：
+
+- `ScheduledDispatchGAgent` 是每个 schedule 的唯一写侧事实源，持有 cron、timezone、enabled、typed target descriptor、dispatch headers、next fire lease 与 recent fire records。
+- 定时唤醒走 `ScheduleSelfDurableTimeoutAsync`，在 Orleans runtime 下由 durable callback/reminder 机制承载；回调只向 schedule actor 发 fire command，不在中间层保存 schedule 状态。
+- schedule actor 只负责计算下一次 fire、生成幂等 key 并投递 prepared target envelope；workflow、GAgent service invocation 与 scripting 目标准备由 application/infrastructure adapter 承载，不进入 schedule actor core。
+- workflow schedule 的 `WorkflowName`、`Prompt`、`ScopeId` 仅存在 typed workflow target descriptor 中；service invocation 与 envelope target 使用各自 typed target descriptor；dispatch `Headers` 只保留传输扩展。
+- public API identity fields 必须显式区分 `ScheduleActorId` 与 `TargetActorId`：`ScheduleActorId` 表示持有定时配置与 fire 事实的 schedule actor receipt，`TargetActorId` 表示最近一次或摘要中的投递目标；不得用一个 `ActorId` 混用 schedule actor receipt 和目标摘要。
+- 幂等 key 格式固定为 `schedule:{scheduleId}:fire:{scheduledFireAtUtc:o}`，并随 scheduled fire dispatch headers 透传。
+- schedule 查询只读取 `ScheduledDispatchDocument` read model；API 不读取 actor state，不在 query path replay event store。
+- projection 使用 committed `ScheduledDispatchState` current-state payload 物化 read model，版本来自权威 actor committed version。
+
+配置边界：
+
+- cron 使用 standard 5-field format。
+- timezone 为空时默认为 `UTC`，非空时必须能被 runtime `TimeZoneInfo` 解析。
+- `Headers` 是 command dispatch headers，不用于承载 schedule 核心语义。
+
 ### WorkflowModuleFactory
 
 按名称创建模块实例。DI 注册时每个模块有一个或多个名称：
@@ -110,12 +132,13 @@ YAML 里 `type: parallel` 会经工厂解析到 `ParallelFanOutModule`。
 
 ### Workflow Roles（正式 schema）
 
-`workflow yaml` 里的 `roles` 现在是 `RoleGAgent` 的正式初始化入口，运行时会完整透传到 `InitializeRoleAgentEvent`：
+`workflow yaml` 里的 `roles` 现在是 role actor 的正式初始化入口，运行时会完整透传到 `InitializeRoleAgentEvent`：
 
 ```yaml
 roles:
   - id: planner
     name: Planner
+    agent_kind: aevatar.role-agent
     system_prompt: "You are a planning assistant."
     provider: openai
     model: gpt-5.4
@@ -123,7 +146,6 @@ roles:
     max_tokens: 512
     max_tool_rounds: 4
     max_history_messages: 50
-    stream_buffer_capacity: 128
     event_modules: "llm_handler,tool_handler"
     event_routes: |
       event.type == ChatRequestEvent -> llm_handler
@@ -136,8 +158,12 @@ roles:
 语义规则：
 
 - `workflow roles` 与 `role yaml` 共用同一份解析归一化逻辑（`RoleConfigurationNormalizer`）。
+- `agent_kind` 是 role-level actor lifecycle 入口；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
 - `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
 - 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。
+- Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+  Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+  New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
 
 ---
 
@@ -198,11 +224,11 @@ steps:
 ## 四、运行链路（从请求到结果）
 
 ```
-POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
+POST /api/chat { prompt, workflow?, workflowYaml?, source? }
   │
   ├── ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>.ExecuteAsync
   │     ├── WorkflowRunCommandTargetResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
-  │     ├── WorkflowRunCommandTargetBinder: 建立 projection lease + live sink + accepted receipt
+  │     ├── WorkflowRunObservationLifecycle: attach 到既有 projection session + live sink，不做 pre-dispatch projection activation；accepted receipt 由 receipt factory 生成
   │     └── DefaultCommandDispatchPipeline / ActorCommandTargetDispatcher: 将 `ChatRequestEvent` 包装为 `EventEnvelope`，由 `IActorDispatchPort` 投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责
   │
   ├── WorkflowRunGAgent 收到 `ChatRequestEvent` envelope
@@ -224,7 +250,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │
   ├── run actor envelope 流进入统一 Projection Pipeline（一对多分发）
   │     ├── WorkflowExecutionCurrentStateProjector / WorkflowRunInsightReportArtifactProjector / WorkflowRunTimelineArtifactProjector / WorkflowRunGraphArtifactProjector: 按消费场景物化 current-state + durable artifacts
-  │     └── WorkflowExecutionAGUIEventProjector: 映射 AGUI 事件 → run event sink
+  │     └── WorkflowExecutionRunEventProjector: EventEnvelope -> WorkflowRunEventEnvelope run event stream
   │
   ├── DefaultEventOutputStream + IdentityEventFrameMapper: 从 sink 读事件 → 透传 WorkflowRunEventEnvelope → emitAsync
   └── SSE 流返回客户端
@@ -238,9 +264,9 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 |------|------------|------|
 | 新建 Actor，按名称加载已注册 workflow | `{ "prompt": "...", "workflow": "direct" }` | `workflow` 按名称从 registry 查 YAML。 |
 | 新建 Actor，`workflow/workflowYaml` 都不传 | `{ "prompt": "..." }` | 默认走 `direct`；如开启 `UseAutoAsDefaultWhenWorkflowUnspecified`，则默认走 `auto`。 |
-| 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "agentId": "actor-123" }` | 只传 `prompt + agentId` 即可，`workflow/workflowYaml` 可留空。 |
+| 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "source": { "kind": "definition_actor", "definitionActor": { "actorId": "actor-123" } } }` | actor-targeted execution 只通过 typed source 子消息表达。 |
 | 新建 Actor，直接提交 inline YAML | `{ "prompt": "...", "workflowYaml": "name: demo\\nroles: ...\\nsteps: ..." }` | 不依赖预存文件，服务端先解析 `workflowYaml`。 |
-| 给指定 Actor 传 inline YAML | `{ "prompt": "...", "agentId": "actor-123", "workflowYaml": "..." }` | 仅允许“未绑定 actor 首次绑定”或“同名 workflow 更新”；不允许切换到其它 workflow 名。 |
+| 给指定 Actor 传 inline YAML | `{ "prompt": "...", "source": { "kind": "inline_yaml_bundle", "inlineBundle": { "actorId": "actor-123", "yamlDocuments": [{ "yaml": "..." }] } } }` | 仅允许“未绑定 actor 首次绑定”或“同名 workflow 更新”；不允许切换到其它 workflow 名。 |
 | 同时传 `workflow` + `workflowYaml` | `{ "prompt": "...", "workflow": "demo", "workflowYaml": "name: demo\\n..." }` | 两者名称必须一致；不一致返回 `WORKFLOW_NAME_MISMATCH`（400）。 |
 
 错误码要点：
@@ -248,7 +274,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 - `INVALID_WORKFLOW_YAML`（400）：`workflowYaml` 解析/校验失败。
 - `WORKFLOW_NAME_MISMATCH`（400）：`workflow` 与 `workflowYaml.name` 不一致。
 - `WORKFLOW_BINDING_MISMATCH`（409）：目标 actor 已绑定其它 workflow。
-- `AGENT_WORKFLOW_NOT_CONFIGURED`（409）：传了 `agentId`，但 actor 未绑定且未提供 `workflowYaml`。
+- `AGENT_WORKFLOW_NOT_CONFIGURED`（409）：typed source 指定的 actor 未绑定且未提供 inline YAML。
 
 异常回退语义：
 
@@ -260,7 +286,12 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 ```json
 {
   "prompt": "继续上一次分析，给我三条行动建议",
-  "agentId": "actor-123"
+  "source": {
+    "kind": "definition_actor",
+    "definitionActor": {
+      "actorId": "actor-123"
+    }
+  }
 }
 ```
 

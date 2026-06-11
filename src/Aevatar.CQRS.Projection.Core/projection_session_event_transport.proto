@@ -2,10 +2,15 @@ syntax = "proto3";
 
 option csharp_namespace = "Aevatar.CQRS.Projection.Core.Streaming";
 
+// Refactor (iter34/cluster-003-projection-session-legacy-payload):
+//   Old pattern: Projection session event transport carries both protobuf bytes and legacy string payload compatibility (legacy_payload string field in proto + legacy codec interface + legacy payload write path).
+//   New principle: Projection session event transport carries protobuf payload only; obsolete legacy codec surface is deleted; tests/docs updated; protobuf legacy_payload field reserved per protobuf evolution rules; no concrete codec depended on the legacy interface.
 message ProjectionSessionEventTransportMessage {
-  string scope_id = 1;
+  reserved 4;
+  reserved "legacy_payload";
+
+  string root_actor_id = 1;
   string session_id = 2;
   string event_type = 3;
-  string legacy_payload = 4;
   bytes payload = 5;
 }

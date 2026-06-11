@@ -13,6 +13,7 @@ import {
   AEVATAR_INTERACTIVE_CHIP_CLASS,
   AEVATAR_PRESSABLE_CARD_CLASS,
 } from '@/shared/ui/interactionStandards';
+import { t } from "@/shared/i18n/messages";
 
 export type StudioShellMemberKind =
   | 'workflow'
@@ -50,6 +51,7 @@ export type StudioLifecycleStep = {
 type StudioShellProps = {
   readonly alerts?: React.ReactNode;
   readonly contentOverflow?: 'auto' | 'hidden';
+  readonly contentScrollMode?: 'contained' | 'page';
   readonly contextBar?: React.ReactNode;
   readonly currentLifecycleStep?: string;
   readonly inventoryActions?: React.ReactNode;
@@ -59,11 +61,26 @@ type StudioShellProps = {
   readonly onSelectMember?: (memberKey: string) => void;
   readonly pageTitle: string;
   readonly pageToolbar?: React.ReactNode;
-  readonly railFooter?: React.ReactNode;
   readonly selectedMemberKey?: string;
+  readonly showLifecycle?: boolean;
+  readonly showMemberRail?: boolean;
   readonly showPageHeader?: boolean;
   readonly children: React.ReactNode;
 };
+
+function formatMemberTone(tone: StudioShellMemberTone | undefined): string {
+  switch (tone) {
+    case 'live':
+      return t("pages.studio.studioshell.live", "Live");
+    case 'draft':
+      return t("pages.studio.studioshell.draft", "Draft");
+    case 'planned':
+      return t("pages.studio.studioshell.planned", "Planned");
+    case 'idle':
+    default:
+      return t("pages.studio.studioshell.idle", "Idle");
+  }
+}
 
 const shellRootStyle: React.CSSProperties = {
   background: '#f7f8fb',
@@ -108,7 +125,7 @@ const railSectionHeaderStyle: React.CSSProperties = {
   fontSize: 10,
   fontWeight: 700,
   gap: 6,
-  letterSpacing: '0.08em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
 };
 
@@ -139,6 +156,8 @@ const shellMainStyle: React.CSSProperties = {
   flex: 1,
   flexDirection: 'column',
   minHeight: 0,
+  minWidth: 0,
+  overflow: 'hidden',
 };
 
 const shellContentStyle: React.CSSProperties = {
@@ -267,11 +286,6 @@ const railPillStyle: React.CSSProperties = {
   padding: '0 8px',
 };
 
-const railFooterStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 8,
-};
-
 const inlineInfoButtonStyle: React.CSSProperties = {
   alignItems: 'center',
   background: '#ffffff',
@@ -371,9 +385,9 @@ function formatMemberKindLabel(kind: StudioShellMemberKind | undefined): string 
     case 'gagent':
       return 'GAgent';
     case 'member':
-      return 'Member';
+      return t("pages.studio.studioshell.member", "Member");
     default:
-      return 'Focus';
+      return t("pages.studio.studioshell.focus", "Focus");
   }
 }
 
@@ -406,6 +420,7 @@ function handleCardKeyboardSelect(
 const StudioShell: React.FC<StudioShellProps> = ({
   alerts,
   contentOverflow = 'auto',
+  contentScrollMode = 'contained',
   contextBar,
   currentLifecycleStep,
   inventoryActions,
@@ -416,6 +431,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
   pageTitle,
   pageToolbar,
   selectedMemberKey,
+  showLifecycle = true,
+  showMemberRail = true,
   showPageHeader = true,
   children,
 }) => {
@@ -434,7 +451,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
     return [
       {
         key: 'all' as const,
-        label: 'All',
+        label: t("pages.studio.studioshell.all", "All"),
         count: members.length,
       },
       {
@@ -454,7 +471,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
       },
       {
         key: 'member' as const,
-        label: 'Member',
+        label: t("pages.studio.studioshell.member", "Member"),
         count: counts.member ?? 0,
       },
     ].filter((item) => item.key === 'all' || item.count > 0);
@@ -475,10 +492,36 @@ const StudioShell: React.FC<StudioShellProps> = ({
       return buildMemberSearchText(member).includes(normalizedSearch);
     });
   }, [memberFilter, memberSearch, members]);
+  const usesPageScroll = contentScrollMode === 'page';
+  const mainStyle = usesPageScroll
+    ? ({
+        ...shellMainStyle,
+        overflowX: 'hidden',
+        overflowY: 'auto',
+      } satisfies React.CSSProperties)
+    : shellMainStyle;
+  const contentStyle = usesPageScroll
+    ? ({
+        ...shellContentStyle,
+        flex: '0 0 auto',
+        overflow: 'visible',
+      } satisfies React.CSSProperties)
+    : shellContentStyle;
+  const pageBodyStyle = usesPageScroll
+    ? ({
+        ...shellPageBodyStyle,
+        flex: '0 0 auto',
+        overflow: 'visible',
+      } satisfies React.CSSProperties)
+    : ({
+        ...shellPageBodyStyle,
+        overflowY: contentOverflow,
+      } satisfies React.CSSProperties);
 
   return (
     <div style={shellRootStyle}>
-      <aside style={railStyle} aria-label="Team members">
+      {showMemberRail ? (
+      <aside style={railStyle} aria-label={t("pages.studio.studioshell.team.members.3", "Team members")}>
         <div style={railHeaderStyle}>
           <div
             style={{
@@ -498,19 +541,18 @@ const StudioShell: React.FC<StudioShellProps> = ({
                 lineHeight: '20px',
               }}
             >
-              Team members
-            </Typography.Title>
+              {t("pages.studio.studioshell.team.members.4", "Team members")}</Typography.Title>
             <span style={railPillStyle}>{members.length}</span>
             <InlineInfoButton
-              ariaLabel="Open team members help"
-              content="Keep one member in focus while Build, Bind, Invoke, and Observe gradually converge into the same workbench."
+              ariaLabel={t("pages.studio.studioshell.open.team.members.help", "Open team members help")}
+              content={t("pages.studio.studioshell.keep.one.member.in", "Keep one member in focus while Build, Bind, Invoke, and Observe gradually converge into the same workbench.")}
             />
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
             <input
-              aria-label="Search team members"
+              aria-label={t("pages.studio.studioshell.search.team.members.2", "Search team members")}
               onChange={(event) => setMemberSearch(event.target.value)}
-              placeholder="Search members or revisions"
+              placeholder={t("pages.studio.studioshell.search.members.or.revisions.2", "Search members or revisions")}
               style={railSearchInputStyle}
               type="search"
               value={memberSearch}
@@ -551,7 +593,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
           <div style={railSectionHeaderStackStyle}>
             <div style={railSectionHeaderRowStyle}>
               <div style={railSectionHeaderStyle}>
-                <span>Member inventory</span>
+                <span>{t("pages.studio.studioshell.member.inventory.2", "Member inventory")}</span>
               </div>
             </div>
             {inventoryActions}
@@ -566,6 +608,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                   memberKindIconByKey[kind] ?? memberKindIconByKey.unknown;
 
                 return (
+                  // biome-ignore lint/a11y/useSemanticElements: The member card keeps the existing composite card interaction contract.
                   <div
                     key={member.key}
                     aria-current={isSelected ? 'true' : undefined}
@@ -713,7 +756,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                             width: 7,
                           }}
                         />
-                        {member.tone ?? 'idle'}
+                        {formatMemberTone(member.tone)}
                       </div>
                     </div>
                   </div>
@@ -729,17 +772,18 @@ const StudioShell: React.FC<StudioShellProps> = ({
               }}
             >
               {members.length > 0
-                ? 'No members match the current search or filter. Try clearing the rail controls.'
-                : 'No team members yet. Create a member to start building in Studio.'}
+                ? t("pages.studio.studioshell.no.members.match.the.current.search", "No members match the current search or filter. Try clearing the rail controls.")
+                : t("pages.studio.studioshell.no.team.members.yet.create.member", "No team members yet. Create a member to start building in Studio.")}
             </Typography.Text>
           )}
         </div>
 
       </aside>
+      ) : null}
 
-      <div style={shellMainStyle}>
+      <div data-testid="studio-shell-main" style={mainStyle}>
         {contextBar}
-        {lifecycleSteps.length > 0 ? (
+        {showLifecycle && lifecycleSteps.length > 0 ? (
           <div data-testid="studio-lifecycle-section" style={lifecycleSectionStyle}>
             <div style={lifecycleHeaderStyle}>
               <Typography.Text
@@ -747,19 +791,18 @@ const StudioShell: React.FC<StudioShellProps> = ({
                   color: '#6b7280',
                   fontSize: 10,
                   fontWeight: 700,
-                  letterSpacing: '0.08em',
+                  letterSpacing: 0,
                   textTransform: 'uppercase',
                 }}
               >
-                Member lifecycle
-              </Typography.Text>
+                {t("pages.studio.studioshell.member.lifecycle.3", "Member lifecycle")}</Typography.Text>
               <InlineInfoButton
                 ariaLabel="Open lifecycle help"
                 content="Keep the selected member in one shell while Build, Bind, Invoke, and Observe stay aligned to the same workbench."
               />
             </div>
             <nav
-              aria-label="Member lifecycle"
+              aria-label={t("pages.studio.studioshell.member.lifecycle.4", "Member lifecycle")}
               data-testid="studio-lifecycle-stepper"
               style={lifecycleRowStyle}
             >
@@ -846,7 +889,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
           </div>
         ) : null}
         {alerts ? <div style={shellAlertsStyle}>{alerts}</div> : null}
-        <div data-testid="studio-shell-content" style={shellContentStyle}>
+        <div data-testid="studio-shell-content" style={contentStyle}>
           {showPageHeader ? (
             <div style={shellHeaderStyle}>
               <Typography.Title level={4} style={shellHeaderTitleStyle}>
@@ -855,12 +898,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
               {pageToolbar}
             </div>
           ) : null}
-          <div
-            style={{
-              ...shellPageBodyStyle,
-              overflowY: contentOverflow,
-            }}
-          >
+          <div style={pageBodyStyle}>
             {children}
           </div>
         </div>

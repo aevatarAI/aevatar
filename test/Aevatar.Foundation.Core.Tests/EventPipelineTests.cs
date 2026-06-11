@@ -1,9 +1,9 @@
 // ─── EventPipeline tests: Verify unified pipeline priority ordering ───
 
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Core.Pipeline;
+using Microsoft.Extensions.Logging;
 using Shouldly;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Core.Tests;
 
@@ -31,6 +31,9 @@ public class OrderTrackingModule : IEventModule<IEventHandlerContext>
 
 public class EventPipelineTests
 {
+    // Refactor (iter11/cluster-020):
+    // Old: static handler tests did not lock down reflection wrapper or per-message invocation regression.
+    // New: tests assert direct exception propagation and no MethodInfo.Invoke in the adapter hot path.
 
     [Fact]
     public async Task Pipeline_ModulesAndHandlers_InterleavedByPriority()
@@ -81,5 +84,143 @@ public class EventPipelineTests
         await agent.HandleEventAsync(TestHelper.Envelope(new PingEvent { Message = "hi" }));
         module.InvocationCount.ShouldBe(1);
     }
+
+    [Fact]
+    public async Task StaticHandler_SyncException_ShouldPropagateWithoutTargetInvocationException()
+    {
+        var agent = new ThrowingSyncHandlerAgent();
+        agent.SetId("sync-throw");
+
+        var ex = await Should.ThrowAsync<InvalidOperationException>(
+            () => agent.HandleEventAsync(TestHelper.Envelope(new PingEvent { Message = "boom" })));
+
+        ex.Message.ShouldBe("sync-handler-failed");
+        ex.ShouldNotBeOfType<System.Reflection.TargetInvocationException>();
+    }
+
+    [Fact]
+    public void StaticHandlerAdapter_HandleAsync_ShouldNotInvokeMethodInfoInHotPath()
+    {
+        var source = File.ReadAllText(Path.GetFullPath(
+            "../../../../../src/Aevatar.Foundation.Core/Pipeline/StaticHandlerAdapter.cs",
+            AppContext.BaseDirectory));
+        var handleStart = source.IndexOf(
+            "public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)",
+            StringComparison.Ordinal);
+        handleStart.ShouldBeGreaterThanOrEqualTo(0);
+
+        var nextMember = source.IndexOf("    private object? Unpack", handleStart, StringComparison.Ordinal);
+        nextMember.ShouldBeGreaterThan(handleStart);
+        var handleBody = source[handleStart..nextMember];
+
+        handleBody.ShouldNotContain(".Invoke(");
+        handleBody.ShouldNotContain("Invoke(_agent");
+    }
+
+    [Fact]
+    public async Task StaticHandlerAdapter_HandleAsync_ShouldNotAllocateObjectArrayForRepeatedCalls()
+    {
+        var agent = new AllEventSyncCountingAgent();
+        agent.SetId("sync-counting");
+        var metadata = EventHandlerDiscoverer.Discover(typeof(AllEventSyncCountingAgent)).Single();
+        var adapter = new StaticHandlerAdapter(metadata, agent);
+        var context = new NoopEventHandlerContext(agent);
+        var envelope = TestHelper.Envelope(new PingEvent { Message = "hot-path" });
+
+        await adapter.HandleAsync(envelope, context, CancellationToken.None);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        for (var i = 0; i < 1000; i++)
+        {
+            await adapter.HandleAsync(envelope, context, CancellationToken.None);
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        agent.Count.ShouldBe(1001);
+        allocated.ShouldBeLessThan(1000 * IntPtr.Size);
+    }
 }
 
+public class ThrowingSyncHandlerAgent : TestGAgentBase<CounterState>
+{
+    // Refactor (iter11/cluster-020):
+    // Old: reflection dispatch wrapped this exception in TargetInvocationException.
+    // New: compiled delegate dispatch exposes the original handler exception.
+    [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
+    public void HandlePing(PingEvent evt) => throw new InvalidOperationException("sync-handler-failed");
+}
+
+public class AllEventSyncCountingAgent : TestGAgentBase<CounterState>
+{
+    public int Count { get; private set; }
+
+    // Refactor (iter11/cluster-020):
+    // Old: each sync handler call allocated a reflection argument array.
+    // New: repeated dispatch uses the adapter's cached compiled delegate.
+    [Aevatar.Foundation.Abstractions.Attributes.AllEventHandler(AllowSelfHandling = true)]
+    public void HandleAny(EventEnvelope envelope) => Count++;
+}
+
+internal sealed class NoopEventHandlerContext : IEventHandlerContext
+{
+    // Refactor (iter11/cluster-020):
+    // Old: allocation sanity flowed through GAgentBase and mixed unrelated pipeline allocations into the assertion.
+    // New: the test context calls StaticHandlerAdapter directly so the sanity check stays scoped to invocation.
+    public NoopEventHandlerContext(IAgent agent)
+    {
+        Agent = agent;
+        InboundEnvelope = TestHelper.Envelope(new PingEvent { Message = "context" });
+    }
+
+    public EventEnvelope InboundEnvelope { get; }
+    public string AgentId => Agent.Id;
+    public IAgent Agent { get; }
+    public IServiceProvider Services => TestRuntimeServices.BuildProvider();
+    public ILogger Logger => Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+
+    public Task PublishAsync<TEvent>(
+        TEvent evt,
+        TopologyAudience audience = TopologyAudience.Children,
+        CancellationToken ct = default,
+        EventEnvelopePublishOptions? options = null)
+        where TEvent : Google.Protobuf.IMessage =>
+        Task.CompletedTask;
+
+    public Task SendToAsync<TEvent>(
+        string targetActorId,
+        TEvent evt,
+        CancellationToken ct = default,
+        EventEnvelopePublishOptions? options = null)
+        where TEvent : Google.Protobuf.IMessage =>
+        Task.CompletedTask;
+
+    public Task<Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        Google.Protobuf.IMessage evt,
+        EventEnvelopePublishOptions? options = null,
+        CancellationToken ct = default) =>
+        Task.FromResult(new Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
+            AgentId,
+            callbackId,
+            1,
+            Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+
+    public Task<Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        TimeSpan period,
+        Google.Protobuf.IMessage evt,
+        EventEnvelopePublishOptions? options = null,
+        CancellationToken ct = default) =>
+        Task.FromResult(new Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
+            AgentId,
+            callbackId,
+            1,
+            Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+
+    public Task CancelDurableCallbackAsync(
+        Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease lease,
+        CancellationToken ct = default) =>
+        Task.CompletedTask;
+}

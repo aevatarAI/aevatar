@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Projection.Orchestration;
@@ -9,19 +9,19 @@ public sealed class WorkflowActorBindingProjector
     : IProjectionArtifactMaterializer<WorkflowBindingProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<WorkflowActorBindingDocument> _writeDispatcher;
-    private readonly IProjectionDocumentReader<WorkflowActorBindingDocument, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public WorkflowActorBindingProjector(
         IProjectionWriteDispatcher<WorkflowActorBindingDocument> writeDispatcher,
-        IProjectionDocumentReader<WorkflowActorBindingDocument, string> documentReader,
         IProjectionClock clock)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
-        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
+    // Refactor (iter355/issue1436-first):
+    //   Old pattern: WorkflowActorBindingProjector reads target document during materialization to merge fields
+    //   New principle: Projector constructs full document from committed event payload only; overwrites without reading prior readmodel
     public async ValueTask ProjectAsync(
         WorkflowBindingProjectionContext context,
         EventEnvelope envelope,
@@ -38,16 +38,7 @@ public sealed class WorkflowActorBindingProjector
         if (payload.Is(BindWorkflowDefinitionEvent.Descriptor))
         {
             var evt = payload.Unpack<BindWorkflowDefinitionEvent>();
-            var document = await GetOrCreateAsync(context.RootActorId, ct);
-            document.Id = context.RootActorId;
-            document.ActorId = context.RootActorId;
-            document.ActorKind = WorkflowActorKind.Definition;
-            document.DefinitionActorId = context.RootActorId;
-            document.RunId = string.Empty;
-            document.WorkflowName = NormalizeWorkflowName(evt.WorkflowName);
-            document.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
-            document.ScopeId = evt.ScopeId?.Trim() ?? string.Empty;
-            ReplaceInlineWorkflowYamls(document.InlineWorkflowYamls, evt.InlineWorkflowYamls);
+            var document = CreateDefinitionDocument(context.RootActorId, evt);
             ApplyProjectionMetadata(document, eventId, stateVersion, updatedAt);
             await _writeDispatcher.UpsertAsync(document, ct);
             return;
@@ -57,18 +48,47 @@ public sealed class WorkflowActorBindingProjector
             return;
 
         var bindRun = payload.Unpack<BindWorkflowRunDefinitionEvent>();
-        var runDocument = await GetOrCreateAsync(context.RootActorId, ct);
-        runDocument.Id = context.RootActorId;
-        runDocument.ActorId = context.RootActorId;
-        runDocument.ActorKind = WorkflowActorKind.Run;
-        runDocument.DefinitionActorId = bindRun.DefinitionActorId?.Trim() ?? string.Empty;
-        runDocument.RunId = ResolveRunId(bindRun.RunId, context.RootActorId);
-        runDocument.WorkflowName = NormalizeWorkflowName(bindRun.WorkflowName);
-        runDocument.WorkflowYaml = bindRun.WorkflowYaml ?? string.Empty;
-        runDocument.ScopeId = bindRun.ScopeId?.Trim() ?? string.Empty;
-        ReplaceInlineWorkflowYamls(runDocument.InlineWorkflowYamls, bindRun.InlineWorkflowYamls);
+        var runDocument = CreateRunDocument(context.RootActorId, bindRun);
         ApplyProjectionMetadata(runDocument, eventId, stateVersion, updatedAt);
         await _writeDispatcher.UpsertAsync(runDocument, ct);
+    }
+
+    private static WorkflowActorBindingDocument CreateDefinitionDocument(
+        string actorId,
+        BindWorkflowDefinitionEvent evt)
+    {
+        var document = new WorkflowActorBindingDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ActorKind = WorkflowActorKind.Definition,
+            DefinitionActorId = actorId,
+            RunId = string.Empty,
+            WorkflowName = NormalizeWorkflowName(evt.WorkflowName),
+            WorkflowYaml = evt.WorkflowYaml ?? string.Empty,
+            ScopeId = evt.ScopeId?.Trim() ?? string.Empty,
+        };
+        ReplaceInlineWorkflowYamls(document.InlineWorkflowYamls, evt.InlineWorkflowYamls);
+        return document;
+    }
+
+    private static WorkflowActorBindingDocument CreateRunDocument(
+        string actorId,
+        BindWorkflowRunDefinitionEvent evt)
+    {
+        var document = new WorkflowActorBindingDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ActorKind = WorkflowActorKind.Run,
+            DefinitionActorId = evt.DefinitionActorId?.Trim() ?? string.Empty,
+            RunId = ResolveRunId(evt.RunId, actorId),
+            WorkflowName = NormalizeWorkflowName(evt.WorkflowName),
+            WorkflowYaml = evt.WorkflowYaml ?? string.Empty,
+            ScopeId = evt.ScopeId?.Trim() ?? string.Empty,
+        };
+        ReplaceInlineWorkflowYamls(document.InlineWorkflowYamls, evt.InlineWorkflowYamls);
+        return document;
     }
 
     private static void ApplyProjectionMetadata(
@@ -77,8 +97,7 @@ public sealed class WorkflowActorBindingProjector
         long stateVersion,
         DateTimeOffset updatedAt)
     {
-        if (document.CreatedAt == default)
-            document.CreatedAt = updatedAt;
+        document.CreatedAt = updatedAt;
         document.UpdatedAt = updatedAt;
         if (stateVersion > 0)
             document.StateVersion = stateVersion;
@@ -111,14 +130,5 @@ public sealed class WorkflowActorBindingProjector
 
             target[normalizedWorkflowName] = workflowYamlValue;
         }
-    }
-
-    private async Task<WorkflowActorBindingDocument> GetOrCreateAsync(string actorId, CancellationToken ct)
-    {
-        return await _documentReader.GetAsync(actorId, ct) ?? new WorkflowActorBindingDocument
-        {
-            Id = actorId,
-            ActorId = actorId,
-        };
     }
 }

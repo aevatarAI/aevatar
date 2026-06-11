@@ -7,11 +7,12 @@ namespace Aevatar.Bootstrap;
 
 public static class ConnectorRegistration
 {
-    public static int RegisterConnectors(
+    public static async Task<int> RegisterConnectorsAsync(
         IConnectorRegistry registry,
         IEnumerable<IConnectorBuilder> connectorBuilders,
         ILogger logger,
-        string? connectorsJsonPath = null)
+        string? connectorsJsonPath = null,
+        CancellationToken ct = default)
     {
         var entries = AevatarConnectorConfig.LoadConnectors(connectorsJsonPath);
         if (entries.Count == 0)
@@ -33,7 +34,12 @@ public static class ConnectorRegistration
             if (!builder.TryBuild(entry, logger, out var connector) || connector == null)
                 continue;
 
-            registry.Register(connector);
+            // Refactor (iter87/cluster-087):
+            //   Old pattern: startup-built disposable MCP connectors were stored in a sync registry with no shutdown owner.
+            //   New principle: bootstrap-created connectors enter the registry as owned lifecycle resources.
+            await registry.RegisterAsync(
+                global::Aevatar.Foundation.Abstractions.Connectors.ConnectorRegistration.Owned(connector),
+                ct);
             added++;
         }
 

@@ -22,6 +22,7 @@ description: demo
 roles:
   - id: assistant
     name: Assistant
+    agent_kind: aevatar.role-agent
     system_prompt: "You are helpful."
 steps:
   - id: step_1
@@ -50,7 +51,6 @@ roles:
     max_tokens: 512
     max_tool_rounds: 4
     max_history_messages: 80
-    stream_buffer_capacity: 256
     event_modules: "llm_handler,tool_handler"
     event_routes: |
       event.type == ChatRequestEvent -> llm_handler
@@ -60,9 +60,14 @@ roles:
       event_routes: "event.type == X -> fallback_module"
 ```
 
-- `roles` 配置会透传到 `InitializeRoleAgentEvent`，并在 `RoleGAgent` 运行时生效。
+- `agent_kind` 是可选的稳定 kind token；配置后由 `WorkflowRunGAgent` 通过 Foundation runtime 创建该 role actor。
+- `roles` 配置会透传到 `InitializeRoleAgentEvent`，并在 role actor 运行时生效。
 - `event_modules/event_routes` 合并优先级：平铺字段 > `extensions.*`。
 - `workflow yaml roles` 与独立 `role yaml` 共享同一归一化语义，避免双套解析规则。
+- step 只能通过 `target_role` / `role` 指向角色；`parameters.agent_type` 与 `parameters.agent_id` 不是 workflow DSL。
+- Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+  Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+  New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
 
 ## 2. Data 原语
 

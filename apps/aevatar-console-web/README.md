@@ -24,7 +24,10 @@ pnpm install
 Use `pnpm dev`, `pnpm build`, `pnpm preview`, or `pnpm exec max <command>` from `apps/aevatar-console-web`.
 If you see `max: command not found`, install dependencies first with `pnpm install` in this directory.
 
-`pnpm dev` reads proxy targets from `.env.local`. If you also want your shell to reuse the same values for manually starting backend processes, export the file first:
+`pnpm dev` reads proxy targets from `.env.local`, and `./boot.sh` loads the
+same file before applying command-line overrides. If you also want your shell
+to reuse the same values for manually starting backend processes, export the
+file first:
 
 ```bash
 cd apps/aevatar-console-web
@@ -33,9 +36,11 @@ source .env.local
 set +a
 ```
 
-If you change backend ports, also keep `AEVATAR_API_TARGET` and `AEVATAR_STUDIO_API_TARGET` aligned with those ports.
-
-When starting the Studio sidecar manually, set `Cli__App__ScopeId=aevatar` and keep `Cli__App__NyxId__Enabled=true` unless you intentionally want to disable protected Studio APIs. Chrono-storage backed connector and role catalogs require both the scope and a valid Studio NyxID session.
+If you change backend ports, also keep `AEVATAR_API_TARGET` and
+`AEVATAR_STUDIO_API_TARGET` aligned with those ports. To point the whole local
+console at the hosted backend, set both targets to the hosted API URL in
+`.env.local` and set `AEVATAR_PROXY_PRESERVE_AUTH_HOST=false` so `/api/auth/*`
+uses the hosted backend Host header.
 
 For NyxID login, also set these values in `.env.local`:
 
@@ -66,16 +71,11 @@ pnpm tsc
 
 ## Local stack
 
-`aevatar-console-web` depends on two local backend services during development:
+`aevatar-console-web` depends on the local Mainnet Host API during development.
+Mainnet composes the runtime APIs and `Aevatar.Studio.Hosting`, including the
+Team endpoints.
 
 - `Mainnet Host API` on `http://127.0.0.1:5080`
-- `Studio sidecar` on `http://127.0.0.1:6690`
-
-The dedicated local configuration tool is still available when you need to edit
-secrets, workflows, providers, MCP servers, or raw config files, but it is no
-longer proxied through the console:
-
-- `aevatar config ui --no-browser`
 
 Start the required services in separate terminals:
 
@@ -83,20 +83,17 @@ Start the required services in separate terminals:
 env ASPNETCORE_URLS=http://127.0.0.1:5080 \
   dotnet run --project src/Aevatar.Mainnet.Host.Api
 
-env Cli__App__NyxId__Enabled=true Cli__App__ScopeId=aevatar \
-  dotnet run --project tools/Aevatar.Tools.Cli -- app --no-browser --port 6690 --api-base http://127.0.0.1:5080
-
 cd apps/aevatar-console-web
 AEVATAR_API_TARGET=http://127.0.0.1:5080 \
-AEVATAR_STUDIO_API_TARGET=http://127.0.0.1:6690 \
+AEVATAR_STUDIO_API_TARGET=http://127.0.0.1:5080 \
 ORNN_BASE_URL=https://ornn.chrono-ai.fun \
 pnpm dev
 ```
 
 Current proxy split during local development:
 
-- `/api/chat`, `/api/workflows/*`, `/api/actors/*`, `/api/runs/*`, `/api/primitives`, `/api/capabilities`, `/api/scopes/*` -> `Mainnet Host API`
-- `/api/app/*`, `/api/auth/*`, `/api/workspace/*`, `/api/editor/*`, `/api/executions/*`, `/api/roles/*`, `/api/connectors/*`, `/api/settings/*` -> `Studio sidecar`
+- `/api/chat`, `/api/workflows/*`, `/api/actors/*`, `/api/runs/*`, `/api/primitives`, `/api/capabilities`, most `/api/scopes/*` runtime routes -> `Mainnet Host API`
+- `/api/app/*`, `/api/auth/*`, `/api/workspace/*`, `/api/editor/*`, `/api/executions/*`, `/api/roles/*`, `/api/connectors/*`, `/api/settings/*`, `/api/scopes/{scopeId}/teams*` -> `Studio Hosting API target`
 
 ## Current scope
 

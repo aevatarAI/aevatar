@@ -9,37 +9,38 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
-/// Actor-backed implementation of <see cref="IConnectorCatalogStore"/>.
+/// Actor-backed implementation of connector catalog query and command ports.
 /// Reads from the projection document store (CQRS read model).
-/// Writes send commands to the Write GAgent.
-/// Local workspace operations (import, draft backup) delegate to <see cref="IStudioWorkspaceStore"/>.
+/// Writes send commands to the Write GAgent through CQRS Core dispatch.
+/// Local JSON is only an explicit import boundary, never a draft backup.
 /// Per-scope isolation: each scope gets its own <c>connector-catalog-{scopeId}</c> actor.
 /// </summary>
-internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
+internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryPort, IConnectorCatalogCommandPort
 {
     private const string WriteActorIdPrefix = "connector-catalog-";
     private const string ActorHomeDirectory = "actor://connector-catalog";
     private const string ActorFilePath = "actor://connector-catalog/connectors";
+    private const string PublisherId = "aevatar.studio.infrastructure.connector-catalog";
 
     private readonly IStudioActorBootstrap _bootstrap;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioActorCommandDispatch _commandDispatch;
     private readonly IAppScopeResolver _scopeResolver;
-    private readonly IStudioWorkspaceStore _workspaceStore;
+    private readonly IStudioLocalConnectorCatalogImportReader _localImportReader;
     private readonly IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedConnectorCatalogStore> _logger;
 
     public ActorBackedConnectorCatalogStore(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort,
+        StudioActorCommandDispatch commandDispatch,
         IAppScopeResolver scopeResolver,
-        IStudioWorkspaceStore workspaceStore,
+        IStudioLocalConnectorCatalogImportReader localImportReader,
         IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedConnectorCatalogStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
-        _workspaceStore = workspaceStore ?? throw new ArgumentNullException(nameof(workspaceStore));
+        _localImportReader = localImportReader ?? throw new ArgumentNullException(nameof(localImportReader));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -82,7 +83,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
         evt.Connectors.AddRange(catalog.Connectors.Select(ToProtoConnectorDefinition));
         if (expectedVersion is not null)
             evt.ExpectedVersion = expectedVersion.Value;
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
         return new StoredConnectorCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -95,7 +96,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     public async Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(
         CancellationToken cancellationToken = default)
     {
-        var localCatalog = await _workspaceStore.GetConnectorCatalogAsync(cancellationToken);
+        var localCatalog = await _localImportReader.ReadAsync(cancellationToken);
         if (!localCatalog.FileExists)
         {
             throw new InvalidOperationException(
@@ -105,7 +106,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new ConnectorCatalogSavedEvent();
         evt.Connectors.AddRange(localCatalog.Connectors.Select(ToProtoConnectorDefinition));
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
         var importedCatalog = new StoredConnectorCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -156,9 +157,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
         };
         if (expectedVersion is not null)
             evt.ExpectedVersion = expectedVersion.Value;
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
-
-        await _workspaceStore.SaveConnectorDraftAsync(draft, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
         return new StoredConnectorDraft(
             HomeDirectory: ActorHomeDirectory,
@@ -177,9 +176,8 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
         var evt = new ConnectorDraftDeletedEvent();
         if (expectedVersion is not null)
             evt.ExpectedVersion = expectedVersion.Value;
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
-        await _workspaceStore.DeleteConnectorDraftAsync(cancellationToken);
     }
 
     // Post-write version is deterministic only when caller supplied expected_version

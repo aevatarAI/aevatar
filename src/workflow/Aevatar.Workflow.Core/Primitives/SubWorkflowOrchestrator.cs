@@ -14,6 +14,9 @@ namespace Aevatar.Workflow.Core.Primitives;
 /// Encapsulates workflow_call runtime orchestration for <see cref="WorkflowRunGAgent"/>.
 /// Keeps sub-workflow actor lifecycle and state transition helpers out of the run actor.
 /// </summary>
+// Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
+//   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
+//   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
 internal sealed class SubWorkflowOrchestrator
 {
     private static readonly WorkflowParser DefinitionParser = new();
@@ -155,6 +158,7 @@ internal sealed class SubWorkflowOrchestrator
                     RuntimeCallbackBackend.Dedicated => (int)WorkflowRuntimeCallbackBackendState.Dedicated,
                     _ => (int)WorkflowRuntimeCallbackBackendState.InMemory,
                 },
+                TimeoutCallbackSlotEpoch = timeoutLease.SlotEpoch,
                 TimeoutMs = timeoutMs,
             }, ct);
 
@@ -364,65 +368,27 @@ internal sealed class SubWorkflowOrchestrator
         ArgumentNullException.ThrowIfNull(state);
         ValidateDefinitionSnapshotOrThrow(definition);
 
-        var childRunId = invocationId;
-        var childActor = await ResolveOrCreateSubWorkflowActorAsync(definition, lifecycle, state, childRunId, ct);
+        var registered = BuildPendingSubWorkflowInvocation(invocationId, parentRunId, parentStepId, input, lifecycle, definition, state);
 
         await _persistDomainEventAsync(new SubWorkflowInvocationRegisteredEvent
         {
-            InvocationId = invocationId,
-            ParentRunId = parentRunId,
-            ParentStepId = parentStepId,
-            WorkflowName = definition.WorkflowName ?? string.Empty,
-            ChildActorId = childActor.Id,
-            ChildRunId = childRunId,
-            Lifecycle = lifecycle,
-            DefinitionActorId = definition.DefinitionActorId ?? string.Empty,
-            DefinitionVersion = definition.DefinitionVersion,
+            InvocationId = registered.InvocationId,
+            ParentRunId = registered.ParentRunId,
+            ParentStepId = registered.ParentStepId,
+            WorkflowName = registered.WorkflowName,
+            ChildActorId = registered.ChildActorId,
+            ChildRunId = registered.ChildRunId,
+            Lifecycle = registered.Lifecycle,
+            DefinitionActorId = registered.DefinitionActorId,
+            DefinitionVersion = registered.DefinitionVersion,
+            Input = registered.Input,
+            HandoffPhase = (int)SubWorkflowInvocationHandoffPhase.Registered,
+            DefinitionYaml = registered.DefinitionYaml,
+            ScopeId = registered.ScopeId,
+            InlineWorkflowYamls = { registered.InlineWorkflowYamls },
         }, ct);
 
-        var start = new StartWorkflowEvent
-        {
-            WorkflowName = definition.WorkflowName ?? string.Empty,
-            Input = input ?? string.Empty,
-            RunId = childRunId,
-        };
-        start.Parameters[WorkflowCallInvocationIdMetadataKey] = invocationId;
-        start.Parameters[WorkflowCallParentRunIdMetadataKey] = parentRunId;
-        start.Parameters[WorkflowCallParentStepIdMetadataKey] = parentStepId;
-        start.Parameters[WorkflowCallWorkflowNameMetadataKey] = definition.WorkflowName ?? string.Empty;
-        start.Parameters[WorkflowCallLifecycleMetadataKey] = lifecycle;
-
-        try
-        {
-            await _sendToAsync(childActor.Id, start, ct);
-        }
-        catch (Exception ex)
-        {
-            await _persistDomainEventAsync(
-                new SubWorkflowInvocationCompletedEvent
-                {
-                    InvocationId = invocationId,
-                    ChildRunId = childRunId,
-                    Success = false,
-                    Error = $"workflow_call failed to dispatch StartWorkflowEvent: {ex.Message}",
-                },
-                ct);
-            await TryFinalizeNonSingletonChildAsync(
-                new WorkflowRunState.Types.PendingSubWorkflowInvocation
-                {
-                    InvocationId = invocationId,
-                    ParentRunId = parentRunId,
-                    ParentStepId = parentStepId,
-                    WorkflowName = definition.WorkflowName ?? string.Empty,
-                    ChildActorId = childActor.Id,
-                    ChildRunId = childRunId,
-                    Lifecycle = lifecycle,
-                    DefinitionActorId = definition.DefinitionActorId ?? string.Empty,
-                    DefinitionVersion = definition.DefinitionVersion,
-                },
-                ct);
-            throw;
-        }
+        await DrivePendingSubWorkflowInvocationHandoffAsync(registered, definition, state, ct);
     }
 
     public async Task<bool> TryHandleCompletionAsync(
@@ -624,6 +590,7 @@ internal sealed class SubWorkflowOrchestrator
                     ActorId = evt.TimeoutCallbackActorId?.Trim() ?? string.Empty,
                     CallbackId = evt.TimeoutCallbackId?.Trim() ?? string.Empty,
                     Generation = evt.TimeoutCallbackGeneration,
+                    SlotEpoch = evt.TimeoutCallbackSlotEpoch,
                     Backend = evt.TimeoutCallbackBackend == (int)WorkflowRuntimeCallbackBackendState.Dedicated
                         ? WorkflowRuntimeCallbackBackendState.Dedicated
                         : WorkflowRuntimeCallbackBackendState.InMemory,
@@ -665,10 +632,35 @@ internal sealed class SubWorkflowOrchestrator
             Lifecycle = WorkflowCallLifecycle.Normalize(evt.Lifecycle),
             DefinitionActorId = evt.DefinitionActorId?.Trim() ?? string.Empty,
             DefinitionVersion = evt.DefinitionVersion,
+            HandoffPhase = ToSubWorkflowInvocationHandoffPhase(evt.HandoffPhase),
+            Input = evt.Input ?? string.Empty,
+            DefinitionYaml = evt.DefinitionYaml ?? string.Empty,
+            ScopeId = evt.ScopeId ?? string.Empty,
+            InlineWorkflowYamls = { evt.InlineWorkflowYamls },
         };
         RemovePendingDefinitionResolution(next, invocationId);
         RemovePendingInvocation(next, invocationId, childRunId);
         AddPendingInvocation(next, pending);
+        return next;
+    }
+
+    public static WorkflowRunState ApplySubWorkflowInvocationHandoffAdvanced(
+        WorkflowRunState current,
+        SubWorkflowInvocationHandoffAdvancedEvent evt)
+    {
+        var next = current.Clone();
+        var childRunId = evt.ChildRunId?.Trim() ?? string.Empty;
+        if (!TryGetPendingInvocationByChildRunId(next, childRunId, out var pending))
+            return next;
+
+        var invocationId = evt.InvocationId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(invocationId) &&
+            !string.Equals(pending.InvocationId, invocationId, StringComparison.Ordinal))
+        {
+            return next;
+        }
+
+        pending.HandoffPhase = ToSubWorkflowInvocationHandoffPhase(evt.HandoffPhase);
         return next;
     }
 
@@ -695,25 +687,167 @@ internal sealed class SubWorkflowOrchestrator
         }
     }
 
-    private async Task<IActor> ResolveOrCreateSubWorkflowActorAsync(
+    private WorkflowRunState.Types.PendingSubWorkflowInvocation BuildPendingSubWorkflowInvocation(
+        string invocationId,
+        string parentRunId,
+        string parentStepId,
+        string input,
+        string lifecycle,
+        WorkflowDefinitionSnapshot definition,
+        WorkflowRunState state)
+    {
+        var normalizedLifecycle = WorkflowCallLifecycle.Normalize(lifecycle);
+        var childRunId = invocationId;
+        var childActorId = ResolveSubWorkflowActorId(invocationId, definition, normalizedLifecycle, state);
+        var pending = new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = invocationId,
+            ParentRunId = WorkflowRunIdNormalizer.Normalize(parentRunId),
+            ParentStepId = parentStepId?.Trim() ?? string.Empty,
+            WorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(definition.WorkflowName),
+            ChildActorId = childActorId,
+            ChildRunId = childRunId,
+            Lifecycle = normalizedLifecycle,
+            DefinitionActorId = definition.DefinitionActorId?.Trim() ?? string.Empty,
+            DefinitionVersion = definition.DefinitionVersion,
+            HandoffPhase = SubWorkflowInvocationHandoffPhase.Registered,
+            Input = input ?? string.Empty,
+            DefinitionYaml = definition.WorkflowYaml ?? string.Empty,
+            ScopeId = string.IsNullOrWhiteSpace(definition.ScopeId)
+                ? state.ScopeId ?? string.Empty
+                : definition.ScopeId,
+        };
+
+        foreach (var (inlineWorkflowName, inlineWorkflowYaml) in definition.InlineWorkflowYamls.Count > 0
+                     ? definition.InlineWorkflowYamls
+                     : state.InlineWorkflowYamls)
+        {
+            pending.InlineWorkflowYamls[inlineWorkflowName] = inlineWorkflowYaml;
+        }
+
+        return pending;
+    }
+
+    private string ResolveSubWorkflowActorId(
+        string invocationId,
         WorkflowDefinitionSnapshot definition,
         string lifecycle,
+        WorkflowRunState state)
+    {
+        var childRunId = invocationId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(childRunId) &&
+            TryGetPendingInvocationByChildRunId(state, childRunId, out var pending) &&
+            !string.IsNullOrWhiteSpace(pending.ChildActorId))
+        {
+            return pending.ChildActorId.Trim();
+        }
+
+        var normalizedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(definition.WorkflowName);
+        var definitionActorId = definition.DefinitionActorId?.Trim() ?? string.Empty;
+        var normalizedLifecycle = WorkflowCallLifecycle.Normalize(lifecycle);
+        if (string.Equals(normalizedLifecycle, WorkflowCallLifecycle.Singleton, StringComparison.OrdinalIgnoreCase))
+        {
+            var existingBinding = state.SubWorkflowBindings.FirstOrDefault(x =>
+                BindingMatches(x, normalizedWorkflowName, definitionActorId, normalizedLifecycle));
+            if (existingBinding != null && !string.IsNullOrWhiteSpace(existingBinding.ChildActorId))
+                return existingBinding.ChildActorId.Trim();
+        }
+
+        return BuildSubWorkflowActorId(definition, normalizedLifecycle, state.RunId, childRunId);
+    }
+
+    public async Task RecoverPendingSubWorkflowInvocationsAsync(
         WorkflowRunState state,
-        string childRunId,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        foreach (var pending in state.PendingSubWorkflowInvocations.ToList())
+        {
+            if (pending.HandoffPhase == SubWorkflowInvocationHandoffPhase.StartDispatched ||
+                pending.HandoffPhase == SubWorkflowInvocationHandoffPhase.StartFailed)
+            {
+                continue;
+            }
+
+            var definition = TryResolvePendingInvocationDefinitionSnapshot(pending, state);
+            if (definition == null)
+            {
+                _loggerAccessor().LogWarning(
+                    "Skip workflow_call pending handoff recovery because definition is unavailable. invocation={InvocationId} childRun={ChildRunId} workflow={WorkflowName}",
+                    pending.InvocationId,
+                    pending.ChildRunId,
+                    pending.WorkflowName);
+                continue;
+            }
+
+            await DrivePendingSubWorkflowInvocationHandoffAsync(pending, definition, state, ct);
+        }
+    }
+
+    private async Task DrivePendingSubWorkflowInvocationHandoffAsync(
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
+        WorkflowDefinitionSnapshot definition,
+        WorkflowRunState state,
+        CancellationToken ct)
+    {
+        var (childActor, persistBinding) = await ResolveOrCreateSubWorkflowActorAsync(definition, pending, state, ct);
+        if (pending.HandoffPhase < SubWorkflowInvocationHandoffPhase.ActorResolved)
+        {
+            await AdvancePendingSubWorkflowInvocationHandoffAsync(
+                pending,
+                SubWorkflowInvocationHandoffPhase.ActorResolved,
+                ct);
+        }
+
+        if (pending.HandoffPhase < SubWorkflowInvocationHandoffPhase.Linked)
+        {
+            await _runtime.LinkAsync(_ownerActorIdAccessor(), childActor.Id, ct);
+            await AdvancePendingSubWorkflowInvocationHandoffAsync(
+                pending,
+                SubWorkflowInvocationHandoffPhase.Linked,
+                ct);
+        }
+
+        if (pending.HandoffPhase < SubWorkflowInvocationHandoffPhase.Bound)
+        {
+            await BindSubWorkflowActorAsync(childActor.Id, definition, pending.ChildRunId, state, ct);
+            if (persistBinding)
+            {
+                await PersistBindingUpsertedAsync(
+                    WorkflowRunIdNormalizer.NormalizeWorkflowName(definition.WorkflowName),
+                    childActor.Id,
+                    WorkflowCallLifecycle.Normalize(pending.Lifecycle),
+                    definition.DefinitionActorId ?? string.Empty,
+                    definition.DefinitionVersion,
+                    ct);
+            }
+
+            await AdvancePendingSubWorkflowInvocationHandoffAsync(
+                pending,
+                SubWorkflowInvocationHandoffPhase.Bound,
+                ct);
+        }
+
+        await DispatchSubWorkflowStartAsync(pending, definition, childActor.Id, ct);
+    }
+
+    private async Task<(IActor Actor, bool PersistBinding)> ResolveOrCreateSubWorkflowActorAsync(
+        WorkflowDefinitionSnapshot definition,
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
+        WorkflowRunState state,
         CancellationToken ct)
     {
         var normalizedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(definition.WorkflowName);
         var definitionActorId = definition.DefinitionActorId?.Trim() ?? string.Empty;
-        var normalizedLifecycle = WorkflowCallLifecycle.Normalize(lifecycle);
+        var normalizedLifecycle = WorkflowCallLifecycle.Normalize(pending.Lifecycle);
         if (!string.Equals(normalizedLifecycle, WorkflowCallLifecycle.Singleton, StringComparison.OrdinalIgnoreCase))
         {
-            return await CreateSubWorkflowActorAsync(
+            var transientActor = await CreateSubWorkflowActorAsync(
                 definition,
-                normalizedLifecycle,
-                state,
-                childRunId,
-                persistBinding: false,
+                pending,
                 ct);
+            return (transientActor, false);
         }
 
         var existingBinding = state.SubWorkflowBindings.FirstOrDefault(x =>
@@ -727,38 +861,22 @@ internal sealed class SubWorkflowOrchestrator
                 var existingActor = await _runtime.GetAsync(existingActorId);
                 if (existingActor != null)
                 {
-                    if (!BindingVersionMatches(existingBinding, definition))
-                    {
-                        await BindSubWorkflowActorAsync(existingActor.Id, definition, childRunId, state, ct);
-                        await PersistBindingUpsertedAsync(
-                            normalizedWorkflowName,
-                            existingActor.Id,
-                            normalizedLifecycle,
-                            definitionActorId,
-                            definition.DefinitionVersion,
-                            ct);
-                    }
-
-                    return existingActor;
+                    pending.ChildActorId = existingActor.Id;
+                    return (existingActor, !BindingVersionMatches(existingBinding, definition));
                 }
             }
         }
 
-        return await CreateSubWorkflowActorAsync(
+        var singletonActor = await CreateSubWorkflowActorAsync(
             definition,
-            normalizedLifecycle,
-            state,
-            childRunId,
-            persistBinding: true,
+            pending,
             ct);
+        return (singletonActor, true);
     }
 
     private async Task<IActor> CreateSubWorkflowActorAsync(
         WorkflowDefinitionSnapshot definition,
-        string lifecycle,
-        WorkflowRunState state,
-        string childRunId,
-        bool persistBinding,
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
         CancellationToken ct)
     {
         var workflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(definition.WorkflowName);
@@ -766,23 +884,85 @@ internal sealed class SubWorkflowOrchestrator
         if (string.IsNullOrWhiteSpace(workflowYaml))
             throw new InvalidOperationException($"workflow_call references unregistered workflow '{workflowName}'");
 
-        var childActorId = BuildSubWorkflowActorId(definition, lifecycle);
-        var childActor = await ResolveOrCreateWorkflowActorByIdAsync(childActorId);
-        await _runtime.LinkAsync(_ownerActorIdAccessor(), childActor.Id);
-        await BindSubWorkflowActorAsync(childActor.Id, definition, childRunId, state, ct);
+        var childActorId = pending.ChildActorId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(childActorId))
+            throw new InvalidOperationException($"workflow_call pending invocation '{pending.InvocationId}' is missing child actor id.");
 
-        if (persistBinding)
+        return await ResolveOrCreateWorkflowActorByIdAsync(childActorId);
+    }
+
+    private async Task DispatchSubWorkflowStartAsync(
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
+        WorkflowDefinitionSnapshot definition,
+        string childActorId,
+        CancellationToken ct)
+    {
+        var start = new StartWorkflowEvent
         {
-            await PersistBindingUpsertedAsync(
-                workflowName,
-                childActor.Id,
-                lifecycle,
-                definition.DefinitionActorId ?? string.Empty,
-                definition.DefinitionVersion,
+            WorkflowName = definition.WorkflowName ?? string.Empty,
+            Input = pending.Input ?? string.Empty,
+            RunId = pending.ChildRunId,
+        };
+        start.Parameters[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
+        start.Parameters[WorkflowCallParentRunIdMetadataKey] = pending.ParentRunId;
+        start.Parameters[WorkflowCallParentStepIdMetadataKey] = pending.ParentStepId;
+        start.Parameters[WorkflowCallWorkflowNameMetadataKey] = definition.WorkflowName ?? string.Empty;
+        start.Parameters[WorkflowCallLifecycleMetadataKey] = pending.Lifecycle;
+
+        try
+        {
+            await AdvancePendingSubWorkflowInvocationHandoffAsync(
+                pending,
+                SubWorkflowInvocationHandoffPhase.StartDispatchPending,
+                ct);
+            await _sendToAsync(childActorId, start, ct);
+            await AdvancePendingSubWorkflowInvocationHandoffAsync(
+                pending,
+                SubWorkflowInvocationHandoffPhase.StartDispatched,
                 ct);
         }
+        catch (Exception ex)
+        {
+            await AdvancePendingSubWorkflowInvocationHandoffAsync(
+                pending,
+                SubWorkflowInvocationHandoffPhase.StartFailed,
+                ct);
+            await _persistDomainEventAsync(
+                new SubWorkflowInvocationCompletedEvent
+                {
+                    InvocationId = pending.InvocationId,
+                    ChildRunId = pending.ChildRunId,
+                    Success = false,
+                    Error = $"workflow_call failed to dispatch StartWorkflowEvent: {ex.Message}",
+                },
+                ct);
+            await TryFinalizeNonSingletonChildAsync(pending, ct);
+            throw;
+        }
+    }
 
-        return childActor;
+    private async Task AdvancePendingSubWorkflowInvocationHandoffAsync(
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
+        SubWorkflowInvocationHandoffPhase phase,
+        CancellationToken ct)
+    {
+        if (pending.HandoffPhase >= phase)
+            return;
+
+        await _persistDomainEventAsync(new SubWorkflowInvocationHandoffAdvancedEvent
+        {
+            InvocationId = pending.InvocationId,
+            ChildRunId = pending.ChildRunId,
+            HandoffPhase = (int)phase,
+        }, ct);
+        pending.HandoffPhase = phase;
+    }
+
+    private static SubWorkflowInvocationHandoffPhase ToSubWorkflowInvocationHandoffPhase(int phase)
+    {
+        return System.Enum.IsDefined(typeof(SubWorkflowInvocationHandoffPhase), phase)
+            ? (SubWorkflowInvocationHandoffPhase)phase
+            : SubWorkflowInvocationHandoffPhase.Registered;
     }
 
     private Task BindSubWorkflowActorAsync(
@@ -844,6 +1024,42 @@ internal sealed class SubWorkflowOrchestrator
         }
 
         return null;
+    }
+
+    private static WorkflowDefinitionSnapshot? TryResolvePendingInvocationDefinitionSnapshot(
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
+        WorkflowRunState state)
+    {
+        var workflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(pending.WorkflowName);
+        var workflowYaml = pending.DefinitionYaml ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(workflowYaml))
+        {
+            var inline = TryResolveInlineWorkflowDefinitionSnapshot(workflowName, state);
+            workflowYaml = inline?.WorkflowYaml ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(workflowYaml))
+            return null;
+
+        var snapshot = new WorkflowDefinitionSnapshot
+        {
+            DefinitionActorId = pending.DefinitionActorId ?? string.Empty,
+            WorkflowName = workflowName,
+            WorkflowYaml = workflowYaml,
+            ScopeId = string.IsNullOrWhiteSpace(pending.ScopeId)
+                ? state.ScopeId ?? string.Empty
+                : pending.ScopeId,
+            DefinitionVersion = pending.DefinitionVersion,
+        };
+
+        foreach (var (inlineWorkflowName, inlineWorkflowYaml) in pending.InlineWorkflowYamls.Count > 0
+                     ? pending.InlineWorkflowYamls
+                     : state.InlineWorkflowYamls)
+        {
+            snapshot.InlineWorkflowYamls[inlineWorkflowName] = inlineWorkflowYaml;
+        }
+
+        return snapshot;
     }
 
     private static void ValidateDefinitionSnapshotOrThrow(WorkflowDefinitionSnapshot definition)
@@ -1033,13 +1249,30 @@ internal sealed class SubWorkflowOrchestrator
     }
 
     private string BuildSubWorkflowActorId(WorkflowDefinitionSnapshot definition, string lifecycle)
+        => BuildSubWorkflowActorId(definition, lifecycle, null, null);
+
+    private string BuildSubWorkflowActorId(
+        WorkflowDefinitionSnapshot definition,
+        string lifecycle,
+        string? parentRunId,
+        string? childRunId)
     {
         var stableBindingKey = string.IsNullOrWhiteSpace(definition.DefinitionActorId)
             ? WorkflowRunIdNormalizer.NormalizeWorkflowName(definition.WorkflowName)
             : definition.DefinitionActorId.Trim();
         var workflowSegment = SanitizeActorSegment(stableBindingKey);
         if (!string.Equals(lifecycle, WorkflowCallLifecycle.Singleton, StringComparison.OrdinalIgnoreCase))
-            return $"{_ownerActorIdAccessor()}:workflow:{workflowSegment}:{Guid.NewGuid():N}";
+        {
+            var parentRunSegment = SanitizeActorSegment(
+                string.IsNullOrWhiteSpace(parentRunId)
+                    ? _ownerActorIdAccessor()
+                    : WorkflowRunIdNormalizer.Normalize(parentRunId));
+            var childRunSegment = SanitizeActorSegment(
+                string.IsNullOrWhiteSpace(childRunId)
+                    ? Guid.NewGuid().ToString("N")
+                    : childRunId.Trim());
+            return $"{_ownerActorIdAccessor()}:workflow:{workflowSegment}:{parentRunSegment}:{childRunSegment}";
+        }
 
         return $"{_ownerActorIdAccessor()}:workflow:{workflowSegment}";
     }

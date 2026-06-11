@@ -13,6 +13,7 @@ import {
 import type { WorkflowActorTimelineItem } from "@/shared/models/runtime/actors";
 import type { WorkflowAuthoringStep } from "@/shared/models/runtime/authoring";
 import type { WorkflowCatalogStep } from "@/shared/models/runtime/catalog";
+import { t } from "@/shared/i18n/messages";
 
 type PlaygroundReferenceStep = WorkflowCatalogStep | WorkflowAuthoringStep;
 
@@ -283,7 +284,9 @@ export function buildPlaygroundStepSummaries(input: {
         status: "running",
         updatedAt,
         stage: event.type,
-        message: `Human input submitted for ${event.stepId ?? "unknown step"}`,
+        message: t("shared.playground.stepsummary.human.input.submitted", "Human input submitted for {stepId}", {
+          stepId: event.stepId ?? t("shared.playground.stepsummary.unknown.step", "unknown step"),
+        }),
       });
       continue;
     }

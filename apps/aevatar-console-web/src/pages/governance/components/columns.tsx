@@ -6,6 +6,47 @@ import type {
   ServicePolicySnapshot,
 } from '@/shared/models/governance';
 import { AevatarCompactText } from '@/shared/ui/compactText';
+import {
+  ConsoleMessage,
+  type ConsoleMessageDescriptor,
+} from '@/shared/i18n/messages';
+
+const bindingColumnMessages = {
+  displayName: {
+    id: 'pages.governance.columns.display.name',
+    defaultMessage: 'Display name',
+  },
+} satisfies Record<string, ConsoleMessageDescriptor>;
+
+const policyColumnMessages = {
+  activeDeploymentRequired: {
+    id: 'pages.governance.columns.active.deployment.required',
+    defaultMessage: 'Active deployment required',
+  },
+  activationBindings: {
+    id: 'pages.governance.columns.activation.bindings',
+    defaultMessage: 'Activation bindings',
+  },
+  allowedCallers: {
+    id: 'pages.governance.columns.allowed.callers',
+    defaultMessage: 'Allowed callers',
+  },
+  displayName: {
+    id: 'pages.governance.columns.display.name.3',
+    defaultMessage: 'Display name',
+  },
+} satisfies Record<string, ConsoleMessageDescriptor>;
+
+const endpointColumnMessages = {
+  displayName: {
+    id: 'pages.governance.columns.display.name.2',
+    defaultMessage: 'Display name',
+  },
+  requestType: {
+    id: 'pages.governance.columns.request.type',
+    defaultMessage: 'Request type',
+  },
+} satisfies Record<string, ConsoleMessageDescriptor>;
 
 export const bindingColumns: ProColumns<ServiceBindingSnapshot>[] = [
   {
@@ -16,7 +57,7 @@ export const bindingColumns: ProColumns<ServiceBindingSnapshot>[] = [
     ),
   },
   {
-    title: 'Display name',
+    title: <ConsoleMessage descriptor={bindingColumnMessages.displayName} />,
     dataIndex: 'displayName',
   },
   {
@@ -79,11 +120,13 @@ export const policyColumns: ProColumns<ServicePolicySnapshot>[] = [
     ),
   },
   {
-    title: 'Display name',
+    title: <ConsoleMessage descriptor={policyColumnMessages.displayName} />,
     dataIndex: 'displayName',
   },
   {
-    title: 'Activation bindings',
+    title: (
+      <ConsoleMessage descriptor={policyColumnMessages.activationBindings} />
+    ),
     render: (_, record) =>
       record.activationRequiredBindingIds.length > 0 ? (
         <AevatarCompactText
@@ -97,7 +140,7 @@ export const policyColumns: ProColumns<ServicePolicySnapshot>[] = [
       ),
   },
   {
-    title: 'Allowed callers',
+    title: <ConsoleMessage descriptor={policyColumnMessages.allowedCallers} />,
     render: (_, record) =>
       record.invokeAllowedCallerServiceKeys.length > 0 ? (
         <AevatarCompactText
@@ -111,7 +154,11 @@ export const policyColumns: ProColumns<ServicePolicySnapshot>[] = [
       ),
   },
   {
-    title: 'Active deployment required',
+    title: (
+      <ConsoleMessage
+        descriptor={policyColumnMessages.activeDeploymentRequired}
+      />
+    ),
     render: (_, record) =>
       record.invokeRequiresActiveDeployment ? 'yes' : 'no',
   },
@@ -130,7 +177,7 @@ export const endpointColumns: ProColumns<ServiceEndpointExposureSnapshot>[] = [
     ),
   },
   {
-    title: 'Display name',
+    title: <ConsoleMessage descriptor={endpointColumnMessages.displayName} />,
     dataIndex: 'displayName',
   },
   {
@@ -142,7 +189,7 @@ export const endpointColumns: ProColumns<ServiceEndpointExposureSnapshot>[] = [
     dataIndex: 'exposureKind',
   },
   {
-    title: 'Request type',
+    title: <ConsoleMessage descriptor={endpointColumnMessages.requestType} />,
     dataIndex: 'requestTypeUrl',
     render: (_, record) => (
       <AevatarCompactText

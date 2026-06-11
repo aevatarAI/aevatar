@@ -37,7 +37,26 @@ public sealed partial class EmitResult
         string errorCode,
         string? errorMessage = null,
         TimeSpan? retryAfter = null,
-        ComposeCapability capability = ComposeCapability.Unsupported)
+        ComposeCapability capability = ComposeCapability.Unsupported) =>
+        Failed(
+            errorCode,
+            errorMessage,
+            retryAfter,
+            capability,
+            FailureKind.Unspecified);
+
+    /// <summary>
+    /// Creates one failed emit result with typed adapter diagnostics.
+    /// </summary>
+    public static EmitResult Failed(
+        string errorCode,
+        string? errorMessage,
+        TimeSpan? retryAfter,
+        ComposeCapability capability,
+        FailureKind failureKind,
+        int httpStatus = 0,
+        string? rawErrorKey = null,
+        int rawErrorCode = 0)
     {
         var result = new EmitResult
         {
@@ -45,6 +64,10 @@ public sealed partial class EmitResult
             ErrorCode = NormalizeRequired(errorCode, nameof(errorCode)),
             ErrorMessage = string.IsNullOrWhiteSpace(errorMessage) ? string.Empty : errorMessage.Trim(),
             Capability = capability,
+            FailureKind = failureKind,
+            HttpStatus = httpStatus,
+            RawErrorKey = string.IsNullOrWhiteSpace(rawErrorKey) ? string.Empty : rawErrorKey.Trim(),
+            RawErrorCode = rawErrorCode,
         };
         result.RetryAfterTimeSpan = retryAfter;
         return result;

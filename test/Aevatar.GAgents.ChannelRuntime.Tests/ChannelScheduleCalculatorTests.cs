@@ -13,7 +13,7 @@ public sealed class ChannelScheduleCalculatorTests
 
         var ok = ChannelScheduleCalculator.TryGetNextOccurrence(
             "30 9 * * *",
-            "UTC",
+            TimeZoneInfo.Utc,
             fromUtc,
             out var nextRunAtUtc,
             out var error);
@@ -30,7 +30,7 @@ public sealed class ChannelScheduleCalculatorTests
 
         var ok = ChannelScheduleCalculator.TryGetNextOccurrence(
             "0 9 * * *",
-            "Asia/Singapore",
+            TimeZoneInfo.FindSystemTimeZoneById("Asia/Singapore"),
             fromUtc,
             out var nextRunAtUtc,
             out var error);
@@ -43,7 +43,7 @@ public sealed class ChannelScheduleCalculatorTests
     [Fact]
     public void TryResolveTimeZone_ReturnsFalse_ForUnknownTimezone()
     {
-        var ok = ChannelScheduleCalculator.TryResolveTimeZone(
+        var ok = new TimeZoneResolver().TryResolve(
             "Mars/Olympus",
             out var timeZone,
             out var error);

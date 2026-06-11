@@ -123,15 +123,18 @@ behaviour without redeploying.
 - New abstractions (`ChannelNativeMessage`, `IChannelMessageComposerRegistry`,
   `IInteractiveReplyCollector`, `IChannelNativeMessageProducer`,
   `IInteractiveReplyDispatcher`).
-- Proto additions: `ActionElementKind.TEXT_INPUT` and `ActionElement.arguments` map
-  (carries correlation keys forwarded verbatim to the adapter so inbound parsers still
-  see them in the expected locations).
+- Proto additions: `ActionElementKind.TEXT_INPUT`, `WorkflowResumeActionPayload`,
+  `LlmSelectionActionPayload`, and the `ActionElement.arguments` extension map.
+  Workflow resume and LLM selection fields are repository-owned control semantics and
+  therefore use typed payloads on `ActionElement` / `CardActionSubmission`; `arguments`
+  is only an open adapter-extension / deprecated inbound compatibility map.
 - `NyxIdApiClient.SendChannelRelayReplyAsync` rich overload; existing text overload
   becomes a thin wrapper.
 - `LarkMessageComposer` extended to render form-wrapped cards when `TextInput` actions
   are present (emits `body.elements[].tag=form` with mixed `tag=input` + `tag=button`
-  children, merges `ActionElement.Arguments` into the button `value` object, and picks
-  the `orange` header template whenever any action is marked `is_danger`).
+  children, projects typed action payloads plus `ActionElement.Arguments` into the
+  boundary callback `value` object, and picks the `orange` header template whenever any
+  action is marked `is_danger`).
 - `LarkChannelNativeMessageProducer` wrapping the existing `LarkMessageComposer`.
 - `NyxIdRelayInteractiveReplyDispatcher` default implementation.
 - New project `Aevatar.AI.ToolProviders.Channel` with `ReplyWithInteractionTool` and
@@ -152,7 +155,7 @@ behaviour without redeploying.
   finalize path is prepared to dispatch an interactive reply but the bridge has no hook
   to populate the collector. A follow-up can surface an interactive reply API on
   `INyxRelayDayOneBridge`.
-- **`AgentBuilderCardFlow` migration.** The agent-builder flow (daily report / social
+- **`AgentBuilderCardFlow` migration.** The agent-builder flow (summary report / social
   media / list-agents cards) still builds Lark 2.0 card JSON inline. It's an
   independent card surface (user-driven agent creation UI, not workflow human
   interaction) and migrating it is a self-contained second pass. The CI guard

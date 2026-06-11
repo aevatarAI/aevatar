@@ -27,6 +27,7 @@ public static class ServiceCollectionExtensions
         configure(options);
         services.TryAddSingleton(options);
         services.TryAddSingleton<MCPClientManager>();
+        services.TryAddSingleton<IMCPToolDiscoveryPort>(sp => sp.GetRequiredService<MCPClientManager>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, MCPAgentToolSource>());
         return services;

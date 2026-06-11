@@ -1,4 +1,3 @@
-using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
@@ -22,7 +21,7 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
         if (configuration == null)
         {
-            if (HasAllScriptingDocumentReaders(services, DocumentProviderKind.InMemory))
+            if (HasAllScriptingDocumentReaders(services, ProjectionDocumentProviderKind.InMemory))
                 return services;
 
             AddInMemoryDocumentStores(services);
@@ -32,29 +31,15 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
         EnsureLegacyProviderOptionsNotUsed(configuration);
 
-        var enableElasticsearchDocument = ResolveElasticsearchDocumentEnabled(configuration);
+        var documentProvider = ProjectionDocumentProviderConfiguration.Resolve(configuration, "Scripting");
         var enableNeo4jGraph = ResolveNeo4jGraphEnabled(configuration);
-        var enableInMemoryDocument = ResolveOptionalBool(
-            configuration["Projection:Document:Providers:InMemory:Enabled"],
-            fallbackValue: !enableElasticsearchDocument);
         var enableInMemoryGraph = ResolveOptionalBool(
             configuration["Projection:Graph:Providers:InMemory:Enabled"],
             fallbackValue: !enableNeo4jGraph);
 
-        EnforceDocumentProviderPolicy(configuration, enableInMemoryDocument);
         EnforceGraphProviderPolicy(configuration, enableInMemoryGraph);
 
-        var documentProviderCount = (enableElasticsearchDocument ? 1 : 0) + (enableInMemoryDocument ? 1 : 0);
-        if (documentProviderCount != 1)
-        {
-            throw new InvalidOperationException(
-                "Exactly one document projection provider must be enabled. Configure either Projection:Document:Providers:Elasticsearch:Enabled=true or Projection:Document:Providers:InMemory:Enabled=true.");
-        }
-
-        var selectedDocumentProvider = enableElasticsearchDocument
-            ? DocumentProviderKind.Elasticsearch
-            : DocumentProviderKind.InMemory;
-        if (HasAllScriptingDocumentReaders(services, selectedDocumentProvider))
+        if (HasAllScriptingDocumentReaders(services, documentProvider.Kind))
             return services;
 
         var graphProviderCount = (enableNeo4jGraph ? 1 : 0) + (enableInMemoryGraph ? 1 : 0);
@@ -64,7 +49,7 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
                 "Exactly one graph projection provider must be enabled. Configure either Projection:Graph:Providers:Neo4j:Enabled=true or Projection:Graph:Providers:InMemory:Enabled=true.");
         }
 
-        if (enableElasticsearchDocument)
+        if (documentProvider.ElasticsearchEnabled)
         {
             TryAddElasticsearchDocumentStore<ScriptDefinitionSnapshotDocument>(
                 services,
@@ -117,7 +102,7 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
     private static bool HasAllScriptingDocumentReaders(
         IServiceCollection services,
-        DocumentProviderKind providerKind)
+        ProjectionDocumentProviderKind providerKind)
     {
         return HasDocumentReaderForProvider<ScriptDefinitionSnapshotDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ScriptCatalogEntryDocument>(services, providerKind)
@@ -134,20 +119,20 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
     private static bool HasDocumentReaderForProvider<TDocument>(
         IServiceCollection services,
-        DocumentProviderKind providerKind)
+        ProjectionDocumentProviderKind providerKind)
         where TDocument : class, IProjectionReadModel<TDocument>, new()
     {
         return providerKind switch
         {
-            DocumentProviderKind.Elasticsearch => services.Any(x => x.ServiceType == typeof(ElasticsearchProjectionDocumentStore<TDocument, string>)),
-            DocumentProviderKind.InMemory => services.Any(x => x.ServiceType == typeof(InMemoryProjectionDocumentStore<TDocument, string>)),
+            ProjectionDocumentProviderKind.Elasticsearch => services.Any(x => x.ServiceType == typeof(ElasticsearchProjectionDocumentStore<TDocument, string>)),
+            ProjectionDocumentProviderKind.InMemory => services.Any(x => x.ServiceType == typeof(InMemoryProjectionDocumentStore<TDocument, string>)),
             _ => false,
         };
     }
 
     private static void EnsureCompatibleDocumentReaderProvider<TDocument>(
         IServiceCollection services,
-        DocumentProviderKind providerKind)
+        ProjectionDocumentProviderKind providerKind)
         where TDocument : class, IProjectionReadModel<TDocument>, new()
     {
         if (!HasAnyDocumentReader<TDocument>(services))
@@ -166,12 +151,12 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         Func<TDocument, string?>? indexScopeSelector = null)
         where TDocument : class, IProjectionReadModel<TDocument>, new()
     {
-        EnsureCompatibleDocumentReaderProvider<TDocument>(services, DocumentProviderKind.Elasticsearch);
-        if (HasDocumentReaderForProvider<TDocument>(services, DocumentProviderKind.Elasticsearch))
+        EnsureCompatibleDocumentReaderProvider<TDocument>(services, ProjectionDocumentProviderKind.Elasticsearch);
+        if (HasDocumentReaderForProvider<TDocument>(services, ProjectionDocumentProviderKind.Elasticsearch))
             return;
 
         services.AddElasticsearchDocumentProjectionStore<TDocument, string>(
-            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<TDocument>>().Metadata,
             keySelector: keySelector,
             keyFormatter: static key => key,
@@ -183,8 +168,8 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         Func<TDocument, string> keySelector)
         where TDocument : class, IProjectionReadModel<TDocument>, new()
     {
-        EnsureCompatibleDocumentReaderProvider<TDocument>(services, DocumentProviderKind.InMemory);
-        if (HasDocumentReaderForProvider<TDocument>(services, DocumentProviderKind.InMemory))
+        EnsureCompatibleDocumentReaderProvider<TDocument>(services, ProjectionDocumentProviderKind.InMemory);
+        if (HasDocumentReaderForProvider<TDocument>(services, ProjectionDocumentProviderKind.InMemory))
             return;
 
         services.AddInMemoryDocumentProjectionStore<TDocument, string>(
@@ -205,38 +190,12 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         }
     }
 
-    private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)
-    {
-        var section = configuration.GetSection("Projection:Document:Providers:Elasticsearch");
-        var explicitEnabled = section["Enabled"];
-        var hasEndpoints = section
-            .GetSection("Endpoints")
-            .GetChildren()
-            .Select(x => x.Value?.Trim() ?? string.Empty)
-            .Any(x => x.Length > 0);
-        return ResolveOptionalBool(explicitEnabled, hasEndpoints);
-    }
-
     private static bool ResolveNeo4jGraphEnabled(IConfiguration configuration)
     {
         var section = configuration.GetSection("Projection:Graph:Providers:Neo4j");
         var explicitEnabled = section["Enabled"];
         var hasUri = (section["Uri"]?.Trim().Length ?? 0) > 0;
         return ResolveOptionalBool(explicitEnabled, hasUri);
-    }
-
-    private static ElasticsearchProjectionDocumentStoreOptions BuildElasticsearchDocumentOptions(
-        IConfiguration configuration)
-    {
-        var options = new ElasticsearchProjectionDocumentStoreOptions();
-        configuration.GetSection("Projection:Document:Providers:Elasticsearch").Bind(options);
-        if (options.Endpoints.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Projection:Document:Providers:Elasticsearch is enabled but Endpoints is empty.");
-        }
-
-        return options;
     }
 
     private static Neo4jProjectionGraphStoreOptions BuildNeo4jGraphOptions(
@@ -258,22 +217,6 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         }
 
         return options;
-    }
-
-    private static void EnforceDocumentProviderPolicy(
-        IConfiguration configuration,
-        bool enableInMemoryDocumentProvider)
-    {
-        var denyInMemoryDocumentProvider = ResolveOptionalBool(
-            configuration["Projection:Policies:DenyInMemoryDocumentReadStore"],
-            fallbackValue: false);
-        var environment = ResolveRuntimeEnvironment(configuration["Projection:Policies:Environment"]);
-        if ((denyInMemoryDocumentProvider || IsProductionEnvironment(environment)) && enableInMemoryDocumentProvider)
-        {
-            throw new InvalidOperationException(
-                "InMemory document provider is not allowed by projection policy. " +
-                "Disable Projection:Document:Providers:InMemory:Enabled and configure Elasticsearch.");
-        }
     }
 
     private static void EnforceGraphProviderPolicy(
@@ -319,9 +262,4 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         return parsed;
     }
 
-    private enum DocumentProviderKind
-    {
-        InMemory,
-        Elasticsearch,
-    }
 }

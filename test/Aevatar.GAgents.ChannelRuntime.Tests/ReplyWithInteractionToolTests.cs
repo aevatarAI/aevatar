@@ -72,7 +72,7 @@ public sealed class ReplyWithInteractionToolTests
             """
             {"cards":[{
                 "title":"Report",
-                "text":"Daily totals",
+                "text":"Summary totals",
                 "fields":[{"title":"Calls","text":"42"},{"title":"Errors","text":"3"}],
                 "actions":[{"action_id":"detail","label":"Open","style":"default"}]
             }]}
@@ -83,7 +83,7 @@ public sealed class ReplyWithInteractionToolTests
         captured!.Cards.Should().HaveCount(1);
         var card = captured.Cards[0];
         card.Title.Should().Be("Report");
-        card.Text.Should().Be("Daily totals");
+        card.Text.Should().Be("Summary totals");
         card.Fields.Should().HaveCount(2);
         card.Actions.Should().HaveCount(1);
         card.Actions[0].ActionId.Should().Be("detail");

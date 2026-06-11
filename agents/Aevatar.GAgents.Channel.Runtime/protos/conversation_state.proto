@@ -15,6 +15,77 @@ message ConversationGAgentState {
   int64 last_updated_unix_ms = 5;
   repeated NeedsLlmReplyEvent pending_llm_reply_requests = 6;
   repeated PendingInboundTurn pending_inbound_turns = 7;
+  // User-visible delivery outcome of the most recent LLM reply turn —
+  // single field by design (multi-turn history reconstructable from event
+  // log). See ADR-0021 chain.delivered phase.
+  ReplyDeliveryStatus last_reply_delivery = 8;
+  repeated RelayReplayClaim relay_replay_claims = 9;
+  repeated PendingRelayAdmission pending_relay_admissions = 10;
+  // Refactor (iter20/cluster-004):
+  //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
+  //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+  repeated ConversationReplyLifecycleState active_reply_lifecycles = 11;
+  // Conversation-owned LLM transcript window. Each normal channel LLM run receives
+  // this snapshot as prior context and, after successful user-visible delivery,
+  // appends the new turn entries through ConversationTurnCompletedEvent.
+  repeated ConversationHistoryEntry retained_history = 12;
+}
+
+// Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
+//   Old pattern: ConversationReplyLifecycleChangedEvent carried full ConversationReplyLifecycleState
+//   New principle: event describes transition facts; reducer derives current state from event + actor state
+message ConversationReplyLifecycleState {
+  string correlation_id = 1;
+  ConversationReplyLifecycleMode mode = 2;
+  ConversationReplyLifecyclePhase phase = 3;
+  string platform_message_id = 4;
+  string card_id = 5;
+  string card_message_id = 6;
+  string original_card_id = 7;
+  string last_flushed_text = 8;
+  int32 edit_count = 9;
+  int64 sequence = 10;
+  string streaming_element_id = 11;
+  string terminal_reason = 12;
+  int64 updated_at_unix_ms = 13;
+  LarkCardOperationPhase lark_card_in_flight_operation = 14;
+  int64 lark_card_in_flight_sequence = 15;
+  int64 lark_card_operation_generation = 16;
+  string pending_accumulated_text = 17;
+  string pending_finalize_text = 18;
+  string pending_finalize_command_id = 19;
+  NyxRelayTextOperationKind nyx_relay_in_flight_operation = 20;
+  int64 nyx_relay_in_flight_sequence = 21;
+  int64 nyx_relay_operation_generation = 22;
+  LlmReplyTerminalState pending_nyx_relay_terminal_state = 23;
+  repeated ConversationHistoryEntry pending_appended_history = 24;
+  int32 nyx_relay_retry_attempt = 25;
+}
+
+// Channel-sink ack tracking for the most recent reply turn. Carries either
+// an in-flight pending marker, a successful delivery (with channel-side
+// message id) or a structured failure. Used by ConversationGAgent to make
+// chain.delivered observable per ADR-0021; downstream readers MUST NOT
+// infer delivery status from any other state field.
+message ReplyDeliveryStatus {
+  string run_id = 1;
+  oneof outcome {
+    Pending pending = 2;
+    Delivered delivered = 3;
+    DeliveryFailed failed = 4;
+  }
+  message Pending {
+    int64 started_at_unix_ms = 1;
+  }
+  message Delivered {
+    int64 acked_at_unix_ms = 1;
+    string channel_message_id = 2;
+  }
+  message DeliveryFailed {
+    int64 failed_at_unix_ms = 1;
+    string error_code = 2;
+    string error_message = 3;
+  }
 }
 
 message PendingSession {
@@ -25,12 +96,30 @@ message PendingSession {
 
 // Tracks an inbound activity that hit a transient adapter failure and is waiting
 // for a grain-owned durable retry. The reply credential (if any) is intentionally
-// NOT persisted here; on retry firing the actor rebuilds the runtime context from
-// its in-memory _nyxRelayReplyTokens dict using activity.outbound_delivery.correlation_id.
+// NOT persisted here; on retry firing the actor only uses credentials carried by
+// the runtime message/command. Rehydrated relay retries without those credentials
+// finalize as not-retryable.
 message PendingInboundTurn {
   string activity_id = 1;
   aevatar.gagents.channel.abstractions.ChatActivity activity = 2;
   int32 retry_count = 3;
   int64 first_failed_unix_ms = 4;
   int64 next_retry_unix_ms = 5;
+}
+
+// Refactor (iter17/cluster-038): Old pattern: relay replay claims lived in process-local guard dictionaries. New principle: callback_jti replay authority is bounded, typed, actor-owned state.
+message RelayReplayClaim {
+  string relay_api_key_id = 1;
+  string callback_jti = 2;
+  string activity_id = 3;
+  int64 expires_at_unix_ms = 4;
+}
+
+// Refactor (iter17/cluster-038): Old pattern: admitted callback work relied on transient endpoint/guard context. New principle: pending relay admissions are durable actor state until the self-continuation consumes them.
+message PendingRelayAdmission {
+  string activity_id = 1;
+  string relay_api_key_id = 2;
+  string callback_jti = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  int64 admitted_at_unix_ms = 5;
 }

@@ -55,6 +55,8 @@ message ServiceInvocationAcceptedReceipt {
   string endpoint_id = 5;
   string command_id = 6;
   string correlation_id = 7;
+  string run_id = 8;
+  string status_url = 9;
 }
 
 message ServiceInvocationCaller {

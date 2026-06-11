@@ -23,12 +23,18 @@ public sealed class WorkflowStatusTool : IAgentTool
 
     public string Name => "workflow_status";
 
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     public string Description =>
         "Query the status of a workflow execution. " +
         "Shows completion status, steps, role replies, and timeline events. " +
         "Use 'list' action to see available workflows, 'catalog' for definitions, " +
-        "or provide an actor_id to get a specific run's status.";
+        "or provide a workflow_run_id to get a specific run's status.";
 
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     public string ParametersSchema => """
         {
           "type": "object",
@@ -38,9 +44,9 @@ public sealed class WorkflowStatusTool : IAgentTool
               "enum": ["status", "list", "catalog", "detail", "timeline"],
               "description": "Action: 'status' (default) run report, 'list' available workflows, 'catalog' definitions, 'detail' specific definition, 'timeline' execution timeline"
             },
-            "actor_id": {
+            "workflow_run_id": {
               "type": "string",
-              "description": "Workflow actor ID (required for 'status' and 'timeline')"
+              "description": "Workflow run ID (required for 'status' and 'timeline')"
             },
             "workflow_name": {
               "type": "string",
@@ -72,8 +78,8 @@ public sealed class WorkflowStatusTool : IAgentTool
             return action switch
             {
                 "list" => ListWorkflows(),
-                "catalog" => ListCatalog(),
-                "detail" => GetDetail(args),
+                "catalog" => await ListCatalogAsync(ct),
+                "detail" => await GetDetailAsync(args, ct),
                 "timeline" => await GetTimelineAsync(args, ct),
                 _ => await GetStatusAsync(args, ct),
             };
@@ -91,9 +97,9 @@ public sealed class WorkflowStatusTool : IAgentTool
         return JsonSerializer.Serialize(new { workflows, count = workflows.Count }, s_json);
     }
 
-    private string ListCatalog()
+    private async Task<string> ListCatalogAsync(CancellationToken ct)
     {
-        var catalog = _queryService.ListWorkflowCatalog();
+        var catalog = await _queryService.ListWorkflowCatalogAsync(ct);
         var items = catalog.Select(c => new
         {
             name = c.Name, description = c.Description, category = c.Category,
@@ -102,13 +108,13 @@ public sealed class WorkflowStatusTool : IAgentTool
         return JsonSerializer.Serialize(new { workflows = items, count = items.Length }, s_json);
     }
 
-    private string GetDetail(ToolArgs args)
+    private async Task<string> GetDetailAsync(ToolArgs args, CancellationToken ct)
     {
         var name = args.Str("workflow_name");
         if (string.IsNullOrWhiteSpace(name))
             return """{"error":"'workflow_name' is required for 'detail' action"}""";
 
-        var detail = _queryService.GetWorkflowDetail(name);
+        var detail = await _queryService.GetWorkflowDetailAsync(name, ct);
         if (detail == null)
             return JsonSerializer.Serialize(new { error = $"Workflow '{name}' not found" });
 
@@ -121,19 +127,22 @@ public sealed class WorkflowStatusTool : IAgentTool
         }, s_json);
     }
 
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     private async Task<string> GetStatusAsync(ToolArgs args, CancellationToken ct)
     {
-        var actorId = args.Str("actor_id");
-        if (string.IsNullOrWhiteSpace(actorId))
-            return """{"error":"'actor_id' is required for 'status' action. Use action='list' to find available workflows."}""";
+        var workflowRunId = args.Str("workflow_run_id");
+        if (string.IsNullOrWhiteSpace(workflowRunId))
+            return """{"error":"'workflow_run_id' is required for 'status' action. Use action='list' to find available workflows."}""";
 
-        var report = await _queryService.GetActorReportAsync(actorId, ct);
+        var report = await _queryService.GetWorkflowRunReportArtifactAsync(workflowRunId, ct);
         if (report == null)
-            return JsonSerializer.Serialize(new { error = $"No workflow run found for actor '{actorId}'" });
+            return JsonSerializer.Serialize(new { error = $"No workflow run found for '{workflowRunId}'" });
 
         return JsonSerializer.Serialize(new
         {
-            actor_id = report.RootActorId, workflow_name = report.WorkflowName,
+            workflow_run_id = report.RootActorId, workflow_name = report.WorkflowName,
             status = report.CompletionStatus.ToString(), state_version = report.StateVersion,
             started_at = report.StartedAt, ended_at = report.EndedAt,
             duration_ms = report.DurationMs, success = report.Success,
@@ -155,18 +164,21 @@ public sealed class WorkflowStatusTool : IAgentTool
         }, s_json);
     }
 
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     private async Task<string> GetTimelineAsync(ToolArgs args, CancellationToken ct)
     {
-        var actorId = args.Str("actor_id");
-        if (string.IsNullOrWhiteSpace(actorId))
-            return """{"error":"'actor_id' is required for 'timeline' action"}""";
+        var workflowRunId = args.Str("workflow_run_id");
+        if (string.IsNullOrWhiteSpace(workflowRunId))
+            return """{"error":"'workflow_run_id' is required for 'timeline' action"}""";
 
         var take = Math.Clamp(args.Int("take") ?? _options.MaxTimelineItems, 1, 200);
-        var timeline = await _queryService.ListActorTimelineAsync(actorId, take, ct);
+        var timeline = await _queryService.ListWorkflowRunTimelineExportAsync(workflowRunId, take, ct);
 
         return JsonSerializer.Serialize(new
         {
-            actor_id = actorId,
+            workflow_run_id = workflowRunId,
             events = timeline.Select(t => new
             {
                 t.Timestamp, t.Stage, t.Message,
@@ -180,4 +192,5 @@ public sealed class WorkflowStatusTool : IAgentTool
 
     private static string? Truncate(string? s, int max) =>
         string.IsNullOrWhiteSpace(s) ? null : s.Length <= max ? s : s[..max] + "...";
+
 }

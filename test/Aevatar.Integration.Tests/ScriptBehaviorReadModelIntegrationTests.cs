@@ -2,6 +2,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
@@ -37,8 +38,7 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "integration-script",
             scriptRevision: revision,
-            sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
-            sourceHash: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorHash,
+            scriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource),
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
         definition.ActorId.Should().Be(definitionActorId);
@@ -51,10 +51,10 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
             CancellationToken.None);
         resolvedRuntimeActorId.Should().Be(runtimeActorId);
 
-        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);
+        var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, CancellationToken.None);
         lease.Should().NotBeNull();
         await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-        await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
 
         try
         {
@@ -91,7 +91,7 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
         }
         finally
         {
-            await projectionPort.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+            await projectionPort.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
             await projectionPort.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
         }
     }

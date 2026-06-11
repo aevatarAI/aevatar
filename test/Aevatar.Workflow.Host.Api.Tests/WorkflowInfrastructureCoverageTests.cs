@@ -1,21 +1,39 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Configuration;
 using Aevatar.Hosting;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Hosting.DependencyInjection;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.Capabilities;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
+using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Workflows;
+using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -24,6 +42,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class WorkflowInfrastructureCoverageTests
 {
     [Fact]
@@ -47,8 +66,11 @@ public sealed class WorkflowInfrastructureCoverageTests
         provider.GetRequiredService<IWorkflowRunReportExportPort>()
             .Should().BeOfType<FileSystemWorkflowRunReportExporter>();
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowRunActorPort) &&
+            x.ServiceType == typeof(WorkflowRunActorPort) &&
             x.ImplementationType == typeof(WorkflowRunActorPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowDefinitionProvisioningPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowRunProvisioningPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowDefinitionParser));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowDefinitionResolver) &&
             x.ImplementationType == typeof(RegistryWorkflowDefinitionResolver));
@@ -69,88 +91,110 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().Contain(x => x.ServiceType == typeof(FileBackedWorkflowCatalogPort));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowCatalogPort));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowCapabilitiesPort));
+        services.Should().Contain(x => x.ImplementationFactory != null &&
+            x.ServiceType == typeof(IWorkflowCatalogPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
-
-        using var provider = services.BuildServiceProvider();
-        var catalogPort = provider.GetRequiredService<IWorkflowCatalogPort>();
-        var capabilitiesPort = provider.GetRequiredService<IWorkflowCapabilitiesPort>();
-        catalogPort.Should().BeOfType<FileBackedWorkflowCatalogPort>();
-        capabilitiesPort.Should().BeOfType<FileBackedWorkflowCatalogPort>();
-        catalogPort.Should().BeSameAs(capabilitiesPort);
     }
 
     [Fact]
-    public void AddWorkflowCapabilityBundle_ShouldValidateBuilder_AndRegisterCapability()
+    public void AddWorkflowCapabilityServices_ShouldRegisterRealtimeEntryPointWithoutGenericBypass()
     {
-        Action act = () => WorkflowCapabilityHostBuilderExtensions.AddWorkflowCapabilityBundle(null!);
-        act.Should().Throw<ArgumentNullException>();
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
 
+        services.AddWorkflowCapability(configuration);
+
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowChatRunInteractionPort));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+        services.Should().Contain(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
+    }
+
+    [Fact]
+    public void MapWorkflowCapabilityEndpoints_WhenScheduleDependenciesAreMissing_ShouldSkipScheduleRoutes()
+    {
         var builder = WebApplication.CreateBuilder();
-        var returned = builder.AddWorkflowCapabilityBundle();
+        builder.Services.AddLogging();
+        builder.Services.AddWorkflowCapability(new ConfigurationBuilder().Build());
+        var app = builder.Build();
 
-        returned.Should().BeSameAs(builder);
-        builder.Services
-            .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
-            .Select(x => x.ImplementationInstance)
-            .OfType<AevatarCapabilityRegistration>()
+        app.MapWorkflowCapabilityEndpoints();
+
+        ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
             .Should()
-            .Contain(x => x.Name == "workflow-bundle");
+            .NotContain(route => route != null && route.Contains("workflow-schedules", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void FileBackedWorkflowCatalogPort_ShouldReturnCatalogAndDetail()
+    public void MapWorkflowCapabilityEndpoints_WhenScheduleDependenciesAreRegistered_ShouldMapScheduleRoutes()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), "aevatar-workflow-catalog-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempDir);
-        try
-        {
-            var yamlPath = Path.Combine(tempDir, "repo_install.yaml");
-            File.WriteAllText(yamlPath, """
-            name: repo_install
-            description: Bootstrap runtime.
-            roles:
-              - id: operator
-                name: Operator
-                system_prompt: ""
-            steps:
-              - id: bootstrap
-                type: assign
-                parameters:
-                  target: result
-                  value: "ok"
-            """);
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddLogging();
+        builder.Services.AddGAgentServiceCapability(new ConfigurationBuilder().Build());
+        var app = builder.Build();
 
-            var options = new WorkflowDefinitionFileSourceOptions();
-            options.WorkflowDirectories.Add(tempDir);
+        app.MapWorkflowCapabilityEndpoints();
 
-            var registry = new WorkflowDefinitionCatalog();
-            registry.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
-            registry.Register("repo_install", File.ReadAllText(yamlPath));
+        ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .Should()
+            .Contain(route => route != null && route.Contains("workflow-schedules", StringComparison.Ordinal));
+    }
 
-            var port = new FileBackedWorkflowCatalogPort(registry, Options.Create(options));
+    [Fact]
+    public void AddScheduledDispatchCapability_ShouldSupplyWorkflowScheduleDependenciesWithoutFullCapability()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IActorRuntime, RecordingActorRuntime>();
+        services.AddSingleton<IActorDispatchPort, RecordingActorDispatchPort>();
+        services.AddSingleton<IScriptRuntimeCommandPort, RecordingScriptRuntimeCommandPort>();
+        services.AddSingleton<IWorkflowRunProvisioningPort, RecordingWorkflowRunProvisioningPort>();
 
-            var catalog = port.ListWorkflowCatalog();
-            catalog.Should().Contain(item => item.Name == "repo_install" && item.Source == "file");
-            catalog.Should().Contain(item => item.Name == "direct" && item.Source == "builtin");
+        services.AddScheduledDispatchCapability(new ConfigurationBuilder().Build());
+        services.AddWorkflowCapability(new ConfigurationBuilder().Build());
 
-            var detail = port.GetWorkflowDetail("repo_install");
-            detail.Should().NotBeNull();
-            detail!.Catalog.Name.Should().Be("repo_install");
-            detail.Catalog.RequiresLlmProvider.Should().BeFalse();
-            detail.Definition.Description.Should().Be("Bootstrap runtime.");
-            detail.Definition.Steps.Should().ContainSingle(step => step.Id == "bootstrap");
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+        provider.GetRequiredService<IWorkflowScheduleApplicationService>().Should().NotBeNull();
+        provider.GetRequiredService<IScheduledServiceInvocationDispatchPort>().Should().NotBeNull();
+        provider.GetRequiredService<IServiceInvocationPort>().Should().NotBeNull();
+        services.Should().NotContain(x => x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType != null &&
+            x.ImplementationType.Name.Contains("GAgentServiceDemo", StringComparison.Ordinal));
+    }
 
-            var capabilities = port.GetCapabilities();
-            capabilities.SchemaVersion.Should().Be("capabilities.v1");
-            capabilities.Workflows.Should().Contain(item => item.Name == "repo_install");
-            capabilities.Primitives.Should().Contain(item => item.Name == "assign");
-        }
-        finally
-        {
-            TryDeleteDirectory(tempDir);
-        }
+    [Fact]
+    public async Task FileBackedWorkflowCatalogPort_ShouldMaterializeStartupDefinitions()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new FileBackedWorkflowCatalogPort(
+            runtime,
+            dispatch,
+            NullLogger<FileBackedWorkflowCatalogPort>.Instance);
+
+        await port.MaterializeAsync(
+        [
+            new WorkflowDefinitionRegistration(
+                "repo_install",
+                "name: repo_install",
+                "workflow-definition:repo_install",
+                "repo"),
+        ]);
+
+        runtime.Created.Should().ContainSingle(x => x.ActorId == "workflow-definition:repo_install" && x.AgentType == typeof(Aevatar.Workflow.Core.WorkflowGAgent));
+        dispatch.Envelopes.Should().ContainSingle();
+        var request = dispatch.Envelopes[0].Envelope.Payload!.Unpack<Aevatar.Workflow.Abstractions.BindWorkflowDefinitionEvent>();
+        request.WorkflowName.Should().Be("repo_install");
+        request.WorkflowYaml.Should().Be("name: repo_install");
+        request.SourceKind.Should().Be("repo");
     }
 
     [Fact]
@@ -168,7 +212,8 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         services.AddWorkflowCapability(configuration);
 
-        services.Should().Contain(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowChatRunInteractionPort));
+        services.Should().NotContain(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
         services.Should().Contain(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowExecutionQueryApplicationService));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowActorBindingReader));
@@ -195,11 +240,11 @@ public sealed class WorkflowInfrastructureCoverageTests
         options.DuplicatePolicy.Should().Be(WorkflowDefinitionDuplicatePolicy.Override);
         options.WorkflowDirectories.Should().Contain(AevatarPaths.RepoRootWorkflows);
         options.WorkflowDirectories.Should().NotContain(
-            Path.Combine(AevatarPaths.RepoRoot, "demos", "Aevatar.Demos.Workflow", "workflows"));
+            Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
     }
 
     [Fact]
-    public void AddWorkflowCapabilityServices_ShouldNotLoadDemoWorkflowDirectoryIntoGenericHost()
+    public void AddWorkflowCapabilityServices_ShouldNotLoadRemovedRepositoryExamplesIntoGenericHost()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -218,7 +263,7 @@ public sealed class WorkflowInfrastructureCoverageTests
             NullLogger.Instance,
             options.DuplicatePolicy);
 
-        registry.GetYaml("simple_qa").Should().NotBeNull();
+        registry.GetYaml("direct").Should().NotBeNull();
         registry.GetYaml("demo_template").Should().BeNull();
     }
 
@@ -306,6 +351,10 @@ public sealed class WorkflowInfrastructureCoverageTests
             var service = new WorkflowDefinitionBootstrapHostedService(
                 registry,
                 new WorkflowDefinitionFileLoader(),
+                new FileBackedWorkflowCatalogPort(
+                    new RecordingActorRuntime(),
+                    new RecordingActorDispatchPort(),
+                    NullLogger<FileBackedWorkflowCatalogPort>.Instance),
                 Options.Create(options),
                 NullLogger<WorkflowDefinitionBootstrapHostedService>.Instance);
 
@@ -325,6 +374,154 @@ public sealed class WorkflowInfrastructureCoverageTests
         }
     }
 
+    [Fact]
+    public async Task WorkflowInfrastructureCapabilitiesProvider_ShouldComposePrimitiveConnectorAndWorkflowCapabilities()
+    {
+        var tempHome = Path.Combine(Path.GetTempPath(), "wf-capabilities-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempHome);
+        var previousHome = Environment.GetEnvironmentVariable(AevatarPaths.HomeEnv);
+        Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, tempHome);
+        try
+        {
+            await File.WriteAllTextAsync(
+                AevatarPaths.ConnectorsJson,
+                """
+                {
+                  "connectors": [
+                    {
+                      "name": "http_news",
+                      "type": " HTTP ",
+                      "enabled": true,
+                      "timeoutMs": 5000,
+                      "retry": 2,
+                      "http": {
+                        "allowedInputKeys": [" query ", "query", "", "limit"],
+                        "allowedMethods": ["POST", "get", "GET"]
+                      }
+                    },
+                    {
+                      "name": "cli_runner",
+                      "type": "cli",
+                      "enabled": true,
+                      "cli": {
+                        "allowedInputKeys": ["prompt"],
+                        "allowedOperations": ["run", "RUN"],
+                        "fixedArguments": [" --json ", "--json", ""]
+                      }
+                    },
+                    {
+                      "name": "mcp_tools",
+                      "type": "mcp",
+                      "enabled": true,
+                      "mcp": {
+                        "allowedInputKeys": ["topic"],
+                        "allowedTools": ["search", ""],
+                        "defaultTool": "search"
+                      }
+                    },
+                    {
+                      "name": "custom_sink",
+                      "type": "custom",
+                      "enabled": true
+                    }
+                  ]
+                }
+                """);
+            var updatedAt = DateTimeOffset.Parse("2026-03-17T12:00:00+00:00");
+            var catalogPort = new WorkflowCatalogReadModelQueryPort(
+                new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>
+                {
+                    Items =
+                    [
+                        new WorkflowCatalogCurrentStateDocument
+                        {
+                            Id = "alpha",
+                            WorkflowName = "alpha",
+                            Source = "builtin",
+                            UpdatedAt = updatedAt,
+                            StateVersion = 7,
+                            Primitives = ["assign"],
+                        },
+                    ],
+                },
+                new WorkflowCatalogReadModelMapper());
+            var provider = new WorkflowInfrastructureCapabilitiesProvider(
+                [new CustomModulePack()],
+                catalogPort,
+                new WorkflowCatalogReadModelMapper());
+
+            var document = await provider.GetCapabilitiesAsync(CancellationToken.None);
+
+            document.GeneratedAtUtc.Should().BeAfter(DateTimeOffset.MinValue);
+            document.ProjectionWatermark.Should().BeOnOrAfter(updatedAt);
+            document.Workflows.Should().ContainSingle(workflow =>
+                workflow.Name == "alpha" &&
+                workflow.AuthorityStateVersion == 7);
+            var primitiveNames = document.Primitives.Select(primitive => primitive.Name).ToList();
+            primitiveNames.Should().Contain("connector_call");
+            primitiveNames.Should().Contain("llm_call");
+            primitiveNames.Should().Contain("tool_call");
+            document.Primitives.Should().Contain(primitive =>
+                primitive.Name == "custom_assign" &&
+                primitive.Aliases.Contains("custom_assign") &&
+                primitive.RuntimeModule == nameof(CustomAssignModule));
+            typeof(WorkflowPrimitiveCapability)
+                .GetProperty("ClosedWorldBlocked")
+                .Should().BeNull();
+            document.Connectors.Select(connector => connector.Name)
+                .Should().Equal("cli_runner", "custom_sink", "http_news", "mcp_tools");
+            document.Connectors.Single(connector => connector.Name == "http_news")
+                .AllowedInputKeys.Should().Equal("limit", "query");
+            document.Connectors.Single(connector => connector.Name == "http_news")
+                .AllowedOperations.Should().Equal("get", "POST");
+            document.Connectors.Single(connector => connector.Name == "cli_runner")
+                .FixedArguments.Should().Equal("--json");
+            document.Connectors.Single(connector => connector.Name == "mcp_tools")
+                .AllowedOperations.Should().Equal("search");
+            document.Connectors.Single(connector => connector.Name == "custom_sink")
+                .AllowedOperations.Should().BeEmpty();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, previousHome);
+            TryDeleteDirectory(tempHome);
+        }
+    }
+
+    [Fact]
+    public void WorkflowProjectionTransportProto_ShouldNotExposeStartupCapabilityArtifactMessages()
+    {
+        // Refactor (iter161-cluster-001 #1257-first):
+        //   Old pattern: proto kept WorkflowCapabilitiesStartupArtifact and capability entry messages as unused typed artifact surface.
+        //   New principle: no persisted capability artifact exists until a durable consumer contract is designed.
+        var messageNames = WorkflowCatalogCurrentStateDocument.Descriptor.File.MessageTypes
+            .Select(message => message.Name);
+
+        messageNames.Should().NotContain([
+            "WorkflowCapabilitiesStartupArtifact",
+            "WorkflowPrimitiveCapabilityReadModel",
+            "WorkflowPrimitiveParameterCapabilityReadModel",
+            "WorkflowConnectorCapabilityReadModel"
+        ]);
+    }
+
+    [Fact]
+    public async Task WorkflowInfrastructureCapabilitiesProvider_ShouldHonorCancellation()
+    {
+        var provider = new WorkflowInfrastructureCapabilitiesProvider(
+            [],
+            new WorkflowCatalogReadModelQueryPort(
+                new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>(),
+                new WorkflowCatalogReadModelMapper()),
+            new WorkflowCatalogReadModelMapper());
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var act = async () => await provider.GetCapabilitiesAsync(cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
     private sealed class FakeReportExporter : IWorkflowRunReportExportPort
     {
         public Task ExportAsync(WorkflowRunReport report, CancellationToken ct = default)
@@ -333,6 +530,133 @@ public sealed class WorkflowInfrastructureCoverageTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        public List<(string ActorId, Type AgentType)> Created { get; } = [];
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            CreateAsync(typeof(TAgent), id, ct);
+
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = id ?? Guid.NewGuid().ToString("N");
+            Created.Add((actorId, agentType));
+            return Task.FromResult<IActor>(new RecordingActor(actorId));
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Envelopes { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Envelopes.Add((actorId, envelope));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed class RecordingScriptRuntimeCommandPort : IScriptRuntimeCommandPort
+    {
+        public Task RunRuntimeAsync(
+            string runtimeActorId,
+            string runId,
+            Google.Protobuf.WellKnownTypes.Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingWorkflowRunProvisioningPort : IWorkflowRunProvisioningPort
+    {
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(
+            WorkflowDefinitionBinding definition,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new WorkflowRunCreationReceipt("workflow-run-1", "definition-1", []));
+        }
+
+        public Task DestroyAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingActor : IActor
+    {
+        public RecordingActor(string id)
+        {
+            Id = id;
+        }
+
+        public string Id { get; }
+        public IAgent Agent => throw new NotSupportedException();
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>
+        where TReadModel : class, IProjectionReadModel
+    {
+        public IReadOnlyList<TReadModel> Items { get; init; } = [];
+
+        public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default)
+        {
+            _ = key;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<TReadModel?>(null);
+        }
+
+        public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            _ = query;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new ProjectionDocumentQueryResult<TReadModel>
+            {
+                Items = Items,
+            });
+        }
+    }
+
+    private sealed class CustomModulePack : IWorkflowModulePack
+    {
+        public string Name => "custom";
+        public IReadOnlyList<WorkflowModuleRegistration> Modules =>
+        [
+            WorkflowModuleRegistration.Create<CustomAssignModule>("custom_assign", "   "),
+        ];
+        public IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanders => [];
+        public IReadOnlyList<IWorkflowModuleConfigurator> Configurators => [];
+    }
+
+    private sealed class CustomAssignModule : IEventModule<IWorkflowExecutionContext>
+    {
+        public string Name => "custom_assign";
+        public int Priority => 0;
+        public bool CanHandle(EventEnvelope envelope) => false;
+        public Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct) =>
+            Task.CompletedTask;
     }
 
     private static WorkflowRunReport BuildReport()

@@ -31,7 +31,17 @@ public sealed class WorkflowHumanInteractionProjectorTests
                     Content = "Please review the summary.",
                     DeliveryTargetId = "agent-delivery-1",
                     TimeoutSeconds = 90,
-                    Metadata = { ["source"] = "workflow-test" },
+                    VariableName = "approval_note",
+                    Secure = true,
+                    RedactedOutput = "[captured]",
+                    Metadata =
+                    {
+                        ["source"] = "workflow-test",
+                        ["variable"] = "legacy_variable",
+                        ["secure"] = "false",
+                        ["input_mode"] = "password",
+                        ["redacted_output"] = "[legacy]",
+                    },
                 }),
             },
             CancellationToken.None);
@@ -47,6 +57,50 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.request.Options.Should().Equal("approve", "reject");
         call.request.TimeoutSeconds.Should().Be(90);
         call.request.Annotations.Should().ContainKey("source").WhoseValue.Should().Be("workflow-test");
+        call.request.Annotations.Should().ContainKey("variable").WhoseValue.Should().Be("approval_note");
+        call.request.Annotations.Should().ContainKey("secure").WhoseValue.Should().Be("true");
+        call.request.Annotations.Should().ContainKey("redacted_output").WhoseValue.Should().Be("[captured]");
+        call.request.Annotations.Should().NotContainKey("input_mode");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreLegacySecureInputMetadataReservedKeys()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanInteractionProjector(port);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            new EventEnvelope
+            {
+                Id = "evt-human-legacy-secure",
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-interaction-test"),
+                Payload = Any.Pack(new WorkflowSuspendedEvent
+                {
+                    RunId = "run-legacy",
+                    StepId = "secure-legacy",
+                    SuspensionType = "secure_input",
+                    Prompt = "Need secret",
+                    DeliveryTargetId = "agent-delivery-legacy",
+                    Metadata =
+                    {
+                        ["source"] = "legacy-test",
+                        ["variable"] = "api_key",
+                        ["secure"] = "true",
+                        ["input_mode"] = "password",
+                        ["redacted_output"] = "[legacy captured]",
+                    },
+                }),
+            },
+            CancellationToken.None);
+
+        port.Calls.Should().ContainSingle();
+        var annotations = port.Calls[0].request.Annotations;
+        annotations.Should().ContainKey("source").WhoseValue.Should().Be("legacy-test");
+        annotations.Should().NotContainKey("variable");
+        annotations.Should().NotContainKey("secure");
+        annotations.Should().NotContainKey("redacted_output");
+        annotations.Should().NotContainKey("input_mode");
     }
 
     [Fact]
@@ -67,6 +121,39 @@ public sealed class WorkflowHumanInteractionProjectorTests
                     StepId = "input-1",
                     SuspensionType = "human_input",
                     Prompt = "Need extra details",
+                }),
+            },
+            CancellationToken.None);
+
+        port.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotDeliverActionableRequest_ForToolApprovalSuspension()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanInteractionProjector(port);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            new EventEnvelope
+            {
+                Id = "evt-tool-approval",
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-interaction-test"),
+                Payload = Any.Pack(new WorkflowSuspendedEvent
+                {
+                    RunId = "run-tool",
+                    StepId = "step-tool",
+                    SuspensionType = "tool_approval",
+                    DeliveryTargetId = "agent-delivery-tool",
+                    ToolApproval = new WorkflowToolApprovalSuspension
+                    {
+                        ExecutionId = "exec-tool",
+                        ToolName = "dangerous_tool",
+                        ToolCallId = "call-tool",
+                        ApprovalRequestId = "approval-tool",
+                        ArgumentsJson = "{}",
+                    },
                 }),
             },
             CancellationToken.None);

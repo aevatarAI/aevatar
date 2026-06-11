@@ -198,51 +198,56 @@ public class ToolApprovalMiddlewareTests
             ArgumentsJson = "{}",
         };
 
-        await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+        var nextExecuted = false;
+        await middleware.InvokeAsync(ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
 
+        nextExecuted.Should().BeFalse();
         ctx.Terminate.Should().BeTrue();
         ctx.Result.Should().Contain("\"approval_required\":true");
         ctx.Result.Should().Contain("\"request_id\":\"");
+        ctx.PendingApproval.Should().NotBeNull();
+        ctx.PendingApproval!.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        ctx.PendingApproval.ToolCallId.Should().Be("tc-8");
+        ctx.PendingApproval.ToolName.Should().Be("danger");
+        ctx.PendingApproval.ArgumentsJson.Should().Be("{}");
+        ctx.PendingApproval.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        ctx.PendingApproval.IsReadOnly.Should().BeFalse();
+        ctx.PendingApproval.IsDestructive.Should().BeTrue();
     }
 
     [Fact]
-    public async Task ConsecutiveDenialsEventuallyBlockExecution()
+    public async Task RequestScopedDenialCountBlocksExecutionWithoutCallingHandler()
+    {
+        var handler = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
+        var middleware = new ToolApprovalMiddleware(handler);
+
+        var ctx = NewContext("danger", "tc-9");
+        ctx.Items[ToolApprovalMiddleware.DenialCountItemKey] = 3;
+
+        await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+
+        ctx.Terminate.Should().BeTrue();
+        ctx.Result.Should().Contain("has been denied 3 times");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DenialCount_IsReturnedOnCurrentRequestContextOnly()
     {
         var handler = new ScriptedApprovalHandler(
             ToolApprovalResult.Denied("first"),
-            ToolApprovalResult.Denied("second"),
-            ToolApprovalResult.Denied("third"));
-        var middleware = new ToolApprovalMiddleware(handler);
-
-        var ctx1 = NewContext("danger", "tc-9");
-        await middleware.InvokeAsync(ctx1, () => Task.CompletedTask);
-        var ctx2 = NewContext("danger", "tc-10");
-        await middleware.InvokeAsync(ctx2, () => Task.CompletedTask);
-        var ctx3 = NewContext("danger", "tc-11");
-        await middleware.InvokeAsync(ctx3, () => Task.CompletedTask);
-        var ctx4 = NewContext("danger", "tc-12");
-        await middleware.InvokeAsync(ctx4, () => Task.CompletedTask);
-
-        ctx3.Result.Should().Contain("execution denied");
-        ctx3.Terminate.Should().BeTrue();
-        ctx4.Terminate.Should().BeTrue();
-        ctx4.Result.Should().Contain("has been denied 3 times");
-        handler.Requests.Should().HaveCount(3);
-    }
-
-    [Fact]
-    public async Task ApprovalResetAfterApprovedAllowsNextAttempt()
-    {
-        var handler = new ScriptedApprovalHandler(
-            ToolApprovalResult.Denied(),
-            ToolApprovalResult.Denied(),
             ToolApprovalResult.Approved(),
-            ToolApprovalResult.Denied("after"));
+            ToolApprovalResult.Denied("fresh"));
 
         var middleware = new ToolApprovalMiddleware(handler);
 
-        await middleware.InvokeAsync(NewContext("danger", "tc-13"), () => Task.CompletedTask);
-        await middleware.InvokeAsync(NewContext("danger", "tc-14"), () => Task.CompletedTask);
+        var denied = NewContext("danger", "tc-13");
+        await middleware.InvokeAsync(denied, () => Task.CompletedTask);
+        denied.Items[ToolApprovalMiddleware.DenialCountItemKey].Should().Be(1);
 
         var nextExecuted = false;
         await middleware.InvokeAsync(NewContext("danger", "tc-15"), () =>
@@ -252,14 +257,16 @@ public class ToolApprovalMiddlewareTests
         });
 
         var final = NewContext("danger", "tc-16");
+        final.Items[ToolApprovalMiddleware.DenialCountItemKey] = 0;
         await middleware.InvokeAsync(final, () => Task.CompletedTask);
 
         nextExecuted.Should().BeTrue();
+        final.Items[ToolApprovalMiddleware.DenialCountItemKey].Should().Be(1);
         final.Terminate.Should().BeTrue();
         final.Result.Should().Contain("execution denied");
-        final.Result.Should().Contain("after");
+        final.Result.Should().Contain("fresh");
         final.Result.Should().NotContain("Automatic block");
-        handler.Requests.Should().HaveCount(4);
+        handler.Requests.Should().HaveCount(3);
     }
 
     private static ToolCallContext NewContext(string toolName, string callId) => new()

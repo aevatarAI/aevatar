@@ -19,44 +19,52 @@ public class OpenAIRealtimeProviderIntegrationTests
         var responseDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var audioReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        provider.OnEvent = (evt, ct) =>
-        {
-            _ = ct;
-            switch (evt.EventCase)
-            {
-                case VoiceProviderEvent.EventOneofCase.ResponseStarted:
-                    responseStarted.TrySetResult();
-                    break;
-                case VoiceProviderEvent.EventOneofCase.AudioReceived:
-                    if (!evt.AudioReceived.Pcm16.IsEmpty)
-                        audioReceived.TrySetResult();
-                    break;
-                case VoiceProviderEvent.EventOneofCase.ResponseDone:
-                    responseDone.TrySetResult();
-                    break;
-                case VoiceProviderEvent.EventOneofCase.Error:
-                    audioReceived.TrySetException(
-                        new InvalidOperationException($"{evt.Error.ErrorCode}:{evt.Error.ErrorMessage}"));
-                    break;
-            }
-
-            return Task.CompletedTask;
-        };
-
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-        await provider.ConnectAsync(new VoiceProviderConfig
-        {
-            ProviderName = "openai",
-            ApiKey = apiKey,
-            Model = model.Trim(),
-        }, cts.Token);
-        await provider.UpdateSessionAsync(new VoiceSessionConfig
+        var session = await provider.ConnectAsync(
+            new VoiceProviderSessionKey("lease-1", "host-1", "transport-1", 1),
+            new VoiceProviderConfig
+            {
+                ProviderName = "openai",
+                ApiKey = apiKey,
+                Model = model.Trim(),
+            },
+            (key, evt, ct) =>
+            {
+                _ = key;
+                _ = ct;
+                switch (evt.EventCase)
+                {
+                    case VoiceProviderEvent.EventOneofCase.ResponseStarted:
+                        responseStarted.TrySetResult();
+                        break;
+                    case VoiceProviderEvent.EventOneofCase.AudioReceived:
+                        if (!evt.AudioReceived.Pcm16.IsEmpty)
+                            audioReceived.TrySetResult();
+                        break;
+                    case VoiceProviderEvent.EventOneofCase.ResponseDone:
+                        responseDone.TrySetResult();
+                        break;
+                    case VoiceProviderEvent.EventOneofCase.Error:
+                        audioReceived.TrySetException(
+                            new InvalidOperationException($"{evt.Error.ErrorCode}:{evt.Error.ErrorMessage}"));
+                        break;
+                }
+
+                return Task.CompletedTask;
+            },
+            cts.Token);
+        await session.UpdateSessionAsync(new VoiceSessionConfig
         {
             Voice = "alloy",
             Instructions = "You are a concise assistant. Reply briefly and speak naturally.",
             SampleRateHz = 24000,
         }, cts.Token);
-        await provider.InjectUserTextAsync("Say exactly: phase two ok.", cts.Token);
+        await session.InjectEventAsync(new VoiceConversationEventInjection
+        {
+            EnvelopeId = "evt-1",
+            EventType = "type.googleapis.com/google.protobuf.StringValue",
+            PayloadJson = """{"instruction":"Say exactly: phase two ok."}""",
+        }, cts.Token);
 
         await responseStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cts.Token);
         await audioReceived.Task.WaitAsync(TimeSpan.FromSeconds(60), cts.Token);

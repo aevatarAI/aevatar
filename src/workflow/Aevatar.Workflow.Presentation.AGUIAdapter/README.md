@@ -1,6 +1,6 @@
 # Aevatar.Workflow.Presentation.AGUIAdapter
 
-工作流运行时 envelope 到 AGUI 协议的适配层。将内部 `EventEnvelope` 转换为 AG-UI 协议事件，再映射为领域中立的 `WorkflowRunEvent`，写入 run event sink 供上层消费。
+工作流运行时 envelope 到 workflow run-event stream 的适配层。将内部 `EventEnvelope` 转换为领域中立的 `WorkflowRunEventEnvelope`，写入 run event sink 供上层消费。
 
 语义边界：
 
@@ -13,42 +13,45 @@
 Aevatar.Workflow.Presentation.AGUIAdapter/
 ├── DependencyInjection/
 │   └── ServiceCollectionExtensions.cs          # AddWorkflowExecutionAGUIAdapter()
-├── EventEnvelopeToAGUIEventMapper.cs           # EventEnvelope -> AGUIEvent（handler chain）
-├── AGUIEventToWorkflowRunEventMapper.cs        # AGUIEvent -> WorkflowRunEvent
-└── WorkflowExecutionAGUIEventProjector.cs      # Projection 分支：写入 run event sink
+├── EventEnvelopeToWorkflowRunEventMapper.cs    # EventEnvelope -> WorkflowRunEventEnvelope（handler chain）
+└── WorkflowExecutionRunEventProjector.cs       # Projection 分支：写入 run event sink
 ```
 
 ## 映射链路
 
 ```
 EventEnvelope
-  -> IEventEnvelopeToAGUIEventMapper (handler chain，一对多)
-     -> AGUIEvent[]
-        -> AGUIEventToWorkflowRunEventMapper (一对一)
-           -> WorkflowRunEvent
-              -> IEventSink<WorkflowRunEvent>.PushAsync
+  -> IEventEnvelopeToWorkflowRunEventMapper (handler chain，一对多)
+     -> WorkflowRunEventEnvelope[]
+        -> IEventSink<WorkflowRunEventEnvelope>.PushAsync
 ```
 
 ## Handler Chain
 
-`EventEnvelopeToAGUIEventMapper` 持有一组 `IAGUIEventEnvelopeMappingHandler`，按 `Order` 排序，依次尝试映射。每个 handler 专注一种事件类型：
+`EventEnvelopeToWorkflowRunEventMapper` 持有一组 `IWorkflowRunEventEnvelopeMappingHandler`，按 `Order` 排序，依次尝试映射。每个 handler 专注一种事件类型：
 
-| Handler | Order | 处理事件 | 输出 AGUI 事件 |
+| Handler | Order | 处理事件 | 输出 run-event |
 |---------|-------|----------|---------------|
-| `StartWorkflowAGUIEventEnvelopeMappingHandler` | 0 | `StartWorkflowEvent` | `RunStartedEvent` |
-| `StepRequestAGUIEventEnvelopeMappingHandler` | 10 | `StepRequestEvent` | `StepStartedEvent` + `CustomEvent` |
-| `StepCompletedAGUIEventEnvelopeMappingHandler` | 20 | `StepCompletedEvent` | `StepFinishedEvent` |
-| `AITextStreamAGUIEventEnvelopeMappingHandler` | 30 | `TextMessageStart/Content/End/ChatResponse` | `TextMessageStart/Content/EndEvent` |
-| `WorkflowCompletedAGUIEventEnvelopeMappingHandler` | 40 | `WorkflowCompletedEvent` | `RunFinishedEvent` 或 `RunErrorEvent` |
-| `ToolCallAGUIEventEnvelopeMappingHandler` | 50 | `ToolCallEvent`/`ToolResultEvent` | `ToolCallStart/EndEvent` |
+| `WorkflowRunExecutionStartedEnvelopeMappingHandler` | -10 | `WorkflowRunExecutionStartedEvent` | runtime bookkeeping，不输出 |
+| `StartWorkflowRunEventEnvelopeMappingHandler` | 0 | `StartWorkflowEvent` | `RunStarted` |
+| `StepRequestRunEventEnvelopeMappingHandler` | 10 | `StepRequestEvent` | `StepStarted` + `Custom` |
+| `StepCompletedRunEventEnvelopeMappingHandler` | 20 | `StepCompletedEvent` | `StepFinished` + `Custom` |
+| `AITextStreamRunEventEnvelopeMappingHandler` | 30 | `TextMessageStart/Content/End`、`ChatResponse`、`MediaContentEvent` | `TextMessageStart/Content/End` 或 `Custom` |
+| `AIReasoningRunEventEnvelopeMappingHandler` | 35 | `ReasoningContentEvent` | `Custom` |
+| `WorkflowCompletedRunEventEnvelopeMappingHandler` | 40 | `WorkflowCompletedEvent` | `RunFinished` 或 `RunError` |
+| `WorkflowStoppedRunEventEnvelopeMappingHandler` | 45 | `WorkflowStoppedEvent` | `RunFinished` 或 `RunError` |
+| `ToolCallRunEventEnvelopeMappingHandler` | 50 | `ToolCallEvent`/`ToolResultEvent` | `ToolCallStart/End` |
+| `WorkflowSuspendedRunEventEnvelopeMappingHandler` | 60 | `WorkflowSuspendedEvent` | `Custom` |
+| `WorkflowWaitingSignalRunEventEnvelopeMappingHandler` | 70 | `WorkflowWaitingSignalEvent` | `Custom` |
+| `WorkflowSignalBufferedRunEventEnvelopeMappingHandler` | 80 | `WorkflowSignalBufferedEvent` | `Custom` |
 
-## WorkflowExecutionAGUIEventProjector
+## WorkflowExecutionRunEventProjector
 
-作为 Projection Pipeline 的一个分支，实现 `IProjectionProjector`。职责：
+作为 Projection Pipeline 的一个分支，继承 `ProjectionSessionEventProjectorBase<WorkflowExecutionProjectionContext, WorkflowRunEventEnvelope>`。职责：
 
-1. 收到 `EventEnvelope` 后调用 mapper 转换为 AGUI 事件
-2. 再经 `AGUIEventToWorkflowRunEventMapper` 转为 `WorkflowRunEvent`
-3. 写入 run event sink
+1. 收到 `EventEnvelope` 后调用 mapper 转换为 `WorkflowRunEventEnvelope`
+2. 使用 projection session command id 作为优先路由键，缺失时回退到 `EventEnvelope.Propagation.CorrelationId`
+3. 通过 `ProjectionSessionEventHub<WorkflowRunEventEnvelope>` 写入 run event stream
 
 容错策略：
 - `EventSinkBackpressureException`：丢弃当前事件，保持 sink 连接
@@ -56,10 +59,10 @@ EventEnvelope
 
 ## OCP 扩展
 
-新增 AGUI 事件映射：
+新增 workflow run-event 映射：
 
-1. 实现 `IAGUIEventEnvelopeMappingHandler`，设定 `Order`
-2. DI 注册：`services.TryAddEnumerable(ServiceDescriptor.Singleton<IAGUIEventEnvelopeMappingHandler, MyHandler>())`
+1. 实现 `IWorkflowRunEventEnvelopeMappingHandler`，设定 `Order`
+2. DI 注册：`services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowRunEventEnvelopeMappingHandler, MyHandler>())`
 
 无需修改核心 mapper 或 projector。
 
@@ -70,12 +73,12 @@ services.AddWorkflowExecutionAGUIAdapter();
 ```
 
 注册内容：
-- `IEventEnvelopeToAGUIEventMapper`（组合 mapper）
-- 6 个默认 handler（`StartWorkflow`/`StepRequest`/`StepCompleted`/`AITextStream`/`WorkflowCompleted`/`ToolCall`）
+- `IEventEnvelopeToWorkflowRunEventMapper`（组合 mapper）
+- 默认 workflow run-event handler（`WorkflowRunExecutionStarted`/`StartWorkflow`/`StepRequest`/`StepCompleted`/`AITextStream`/`AIReasoning`/`WorkflowCompleted`/`WorkflowStopped`/`ToolCall`/`WorkflowSuspended`/`WorkflowWaitingSignal`/`WorkflowSignalBuffered`）
 
 ## 分层边界
 
-- 依赖 `Aevatar.Presentation.AGUI`（AGUI 协议定义）与 `Aevatar.Workflow.Projection`（投影上下文）
+- 依赖 `Aevatar.Workflow.Projection`（投影上下文）与 `Aevatar.Workflow.Application.Abstractions`（run-event 契约）
 - 不承载 Host endpoint 逻辑
 - 不包含应用层用例编排
 - 不直接依赖 `Aevatar.Workflow.Application`
@@ -86,6 +89,5 @@ services.AddWorkflowExecutionAGUIAdapter();
 - `Aevatar.CQRS.Projection.Abstractions`
 - `Aevatar.Workflow.Projection`
 - `Aevatar.Foundation.Abstractions`
-- `Aevatar.Presentation.AGUI`
 - `Aevatar.Workflow.Core`
 - `Microsoft.Extensions.DependencyInjection.Abstractions`

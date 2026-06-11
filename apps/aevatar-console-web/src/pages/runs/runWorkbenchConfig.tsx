@@ -14,6 +14,12 @@ import {
 import type { RecentRunEntry } from "@/shared/runs/recentRuns";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type { RunTransport } from "./runEventPresentation";
+import {
+  ConsoleMessage,
+  formatConsoleMessage,
+  t,
+  type ConsoleMessageDescriptor,
+} from "@/shared/i18n/messages";
 
 export type RunFormValues = {
   prompt: string;
@@ -39,10 +45,10 @@ export type SignalFormValues = {
 
 export type RunPreset = {
   key: string;
-  title: string;
+  title: ConsoleMessageDescriptor;
   routeName: string;
   prompt: string;
-  description: string;
+  description: ConsoleMessageDescriptor;
   tags: string[];
 };
 
@@ -99,6 +105,22 @@ export type SelectedRouteRecord = {
   description: string;
 };
 
+export type RunReadinessStatus = "ready" | "required" | "context";
+
+export type RunReadinessItem = {
+  key: "workspace" | "route" | "endpoint";
+  label: string;
+  value: string;
+  status: RunReadinessStatus;
+  helper: string;
+};
+
+export type RunReadinessSummary = {
+  ready: boolean;
+  blockingReason?: string;
+  items: RunReadinessItem[];
+};
+
 export type WaitingSignalRecord = {
   signalName: string;
   stepId: string;
@@ -113,6 +135,155 @@ export type HumanInputRecord = {
   prompt: string;
   timeoutSeconds: number;
 };
+
+const runSummaryColumnMessages = {
+  activeSteps: {
+    id: "pages.runs.runworkbenchconfig.active.steps",
+    defaultMessage: "Active steps",
+  },
+  currentFocus: {
+    id: "pages.runs.runworkbenchconfig.current.focus",
+    defaultMessage: "Current focus",
+  },
+  lastEvent: {
+    id: "pages.runs.runworkbenchconfig.last.event",
+    defaultMessage: "Last event",
+  },
+} satisfies Record<string, ConsoleMessageDescriptor>;
+
+const waitingSignalColumnMessages = {
+  signalName: {
+    id: "pages.runs.runworkbenchconfig.signal.name",
+    defaultMessage: "Signal name",
+  },
+} satisfies Record<string, ConsoleMessageDescriptor>;
+
+const runWorkbenchConfigMessages = {
+  actions: {
+    id: "pages.runs.runworkbenchconfig.actions",
+    defaultMessage: "Actions",
+  },
+  actor: {
+    id: "pages.runs.runworkbenchconfig.actor",
+    defaultMessage: "Actor",
+  },
+  approval: {
+    id: "pages.runs.runworkbenchconfig.approval",
+    defaultMessage: "Approval",
+  },
+  command: {
+    id: "pages.runs.runworkbenchconfig.command",
+    defaultMessage: "Command",
+  },
+  completed: {
+    id: "pages.runs.runworkbenchconfig.completed",
+    defaultMessage: "Completed",
+  },
+  description: {
+    id: "pages.runs.runworkbenchconfig.description",
+    defaultMessage: "Description",
+  },
+  endpoint: {
+    id: "pages.runs.runworkbenchconfig.endpoint",
+    defaultMessage: "Endpoint",
+  },
+  error: {
+    id: "pages.runs.runworkbenchconfig.error",
+    defaultMessage: "Error",
+  },
+  finished: {
+    id: "pages.runs.runworkbenchconfig.finished",
+    defaultMessage: "Finished",
+  },
+  group: {
+    id: "pages.runs.runworkbenchconfig.group",
+    defaultMessage: "Group",
+  },
+  humanInput: {
+    id: "pages.runs.runworkbenchconfig.human.input",
+    defaultMessage: "Human input",
+  },
+  idle: {
+    id: "pages.runs.runworkbenchconfig.idle",
+    defaultMessage: "Idle",
+  },
+  legacyWebsocket: {
+    id: "pages.runs.runworkbenchconfig.legacy.websocket",
+    defaultMessage: "Legacy WebSocket",
+  },
+  optional: {
+    id: "pages.runs.runworkbenchconfig.optional",
+    defaultMessage: "Optional",
+  },
+  preview: {
+    id: "pages.runs.runworkbenchconfig.preview",
+    defaultMessage: "Preview",
+  },
+  prompt: {
+    id: "pages.runs.runworkbenchconfig.prompt",
+    defaultMessage: "Prompt",
+  },
+  recorded: {
+    id: "pages.runs.runworkbenchconfig.recorded",
+    defaultMessage: "Recorded",
+  },
+  required: {
+    id: "pages.runs.runworkbenchconfig.required",
+    defaultMessage: "Required",
+  },
+  route: {
+    id: "pages.runs.runworkbenchconfig.route",
+    defaultMessage: "Route",
+  },
+  run: {
+    id: "pages.runs.runworkbenchconfig.run",
+    defaultMessage: "Run",
+  },
+  running: {
+    id: "pages.runs.runworkbenchconfig.running",
+    defaultMessage: "Running",
+  },
+  runId: {
+    id: "pages.runs.runworkbenchconfig.run.id",
+    defaultMessage: "Run ID",
+  },
+  serviceSse: {
+    id: "pages.runs.runworkbenchconfig.service.sse",
+    defaultMessage: "Service SSE",
+  },
+  source: {
+    id: "pages.runs.runworkbenchconfig.source",
+    defaultMessage: "Source",
+  },
+  status: {
+    id: "pages.runs.runworkbenchconfig.status",
+    defaultMessage: "Status",
+  },
+  step: {
+    id: "pages.runs.runworkbenchconfig.step",
+    defaultMessage: "Step",
+  },
+  suspension: {
+    id: "pages.runs.runworkbenchconfig.suspension",
+    defaultMessage: "Suspension",
+  },
+  timeout: {
+    id: "pages.runs.runworkbenchconfig.timeout",
+    defaultMessage: "Timeout",
+  },
+  transport: {
+    id: "pages.runs.runworkbenchconfig.transport",
+    defaultMessage: "Transport",
+  },
+  unknown: {
+    id: "pages.runs.runworkbenchconfig.unknown",
+    defaultMessage: "Unknown",
+  },
+  waitSignal: {
+    id: "pages.runs.runworkbenchconfig.wait.signal",
+    defaultMessage: "Wait signal",
+  },
+} satisfies Record<string, ConsoleMessageDescriptor>;
 
 export type ConsoleViewKey = "timeline" | "messages" | "events";
 
@@ -131,80 +302,118 @@ const composerRailComfortBreakpoint = 1360;
 export const builtInPresets: RunPreset[] = [
   {
     key: "direct",
-    title: "Direct chat",
+    title: {
+      id: "pages.runs.runworkbenchconfig.direct.chat",
+      defaultMessage: "Direct chat",
+    },
     routeName: "direct",
     prompt:
       "Summarize what this chat bundle can do and produce a concise execution result.",
-    description:
-      "Baseline direct chat bundle for quick validation of the chat stream.",
+    description: {
+      id: "pages.runs.runworkbenchconfig.baseline.direct.chat.bundle.for",
+      defaultMessage:
+        "Baseline direct chat bundle for quick validation of the chat stream.",
+    },
     tags: ["baseline", "llm"],
   },
   {
     key: "human-input",
-    title: "Human input triage",
+    title: {
+      id: "pages.runs.runworkbenchconfig.human.input.triage",
+      defaultMessage: "Human input triage",
+    },
     routeName: "human_input_manual_triage",
     prompt:
       "A production incident needs manual classification before the run can continue.",
-    description: "Use this to verify human input prompts and resume flow.",
+    description: {
+      id: "pages.runs.runworkbenchconfig.use.this.to.verify.human",
+      defaultMessage: "Use this to verify human input prompts and resume flow.",
+    },
     tags: ["human_input", "resume"],
   },
   {
     key: "human-approval",
-    title: "Human approval gate",
+    title: {
+      id: "pages.runs.runworkbenchconfig.human.approval.gate",
+      defaultMessage: "Human approval gate",
+    },
     routeName: "human_approval_release_gate",
     prompt:
       "Prepare a release summary that requires explicit human approval before rollout.",
-    description: "Use this to verify approval flow and moderation checkpoints.",
+    description: {
+      id: "pages.runs.runworkbenchconfig.use.this.to.verify.approval",
+      defaultMessage: "Use this to verify approval flow and moderation checkpoints.",
+    },
     tags: ["human_approval", "approval"],
   },
   {
     key: "wait-signal",
-    title: "Wait signal",
+    title: {
+      id: "pages.runs.runworkbenchconfig.wait.signal",
+      defaultMessage: "Wait signal",
+    },
     routeName: "wait_signal_manual_success",
     prompt: "Wait for an external readiness signal before completing the run.",
-    description:
-      "Use this to verify waiting_signal and manual signal delivery.",
+    description: {
+      id: "pages.runs.runworkbenchconfig.use.this.to.verify.waiting",
+      defaultMessage:
+        "Use this to verify waiting_signal and manual signal delivery.",
+    },
     tags: ["wait_signal", "signal"],
   },
 ];
 
 export const runStatusValueEnum = {
-  idle: { text: "Idle", status: "Default" },
-  running: { text: "Running", status: "Processing" },
-  finished: { text: "Finished", status: "Success" },
-  error: { text: "Error", status: "Error" },
-  unknown: { text: "Unknown", status: "Default" },
+  idle: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.idle} />, status: "Default" },
+  running: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.running} />, status: "Processing" },
+  finished: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.finished} />, status: "Success" },
+  error: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.error} />, status: "Error" },
+  unknown: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.unknown} />, status: "Default" },
 } as const;
 
 const transportValueEnum = {
-  sse: { text: "Service SSE", status: "Processing" },
-  ws: { text: "Legacy WebSocket", status: "Default" },
+  sse: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.serviceSse} />, status: "Processing" },
+  ws: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.legacyWebsocket} />, status: "Default" },
 } as const;
 
 const runFocusValueEnum = {
-  idle: { text: "Idle", status: "Default" },
-  running: { text: "Running", status: "Processing" },
-  human_input: { text: "Human input", status: "Warning" },
-  human_approval: { text: "Approval", status: "Warning" },
-  wait_signal: { text: "Wait signal", status: "Warning" },
-  finished: { text: "Finished", status: "Success" },
-  error: { text: "Error", status: "Error" },
+  idle: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.idle} />, status: "Default" },
+  running: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.running} />, status: "Processing" },
+  human_input: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.humanInput} />, status: "Warning" },
+  human_approval: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.approval} />, status: "Warning" },
+  wait_signal: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.waitSignal} />, status: "Warning" },
+  finished: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.finished} />, status: "Success" },
+  error: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.error} />, status: "Error" },
 } as const;
+
+export function getRunStatusLabel(status: RunStatusValue): string {
+  const runStatusMessages: Record<RunStatusValue, ConsoleMessageDescriptor> = {
+    error: runWorkbenchConfigMessages.error,
+    finished: runWorkbenchConfigMessages.finished,
+    idle: runWorkbenchConfigMessages.idle,
+    running: runWorkbenchConfigMessages.running,
+    unknown: runWorkbenchConfigMessages.unknown,
+  };
+
+  return formatConsoleMessage(
+    runStatusMessages[status] ?? runWorkbenchConfigMessages.unknown,
+  );
+}
 
 export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
   {
-    title: "Transport",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.transport} />,
     dataIndex: "transport",
     valueType: "status" as any,
     valueEnum: transportValueEnum,
   },
   {
-    title: "Endpoint",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.endpoint} />,
     dataIndex: "endpointId",
     render: (_, record) => record.endpointId || "chat",
   },
   {
-    title: "Route",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.route} />,
     dataIndex: "routeName",
     render: (_, record) =>
       formatRunRouteLabel(
@@ -214,7 +423,7 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
       ),
   },
   {
-    title: "Actor",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.actor} />,
     dataIndex: "actorId",
     render: (_, record) =>
       record.actorId ? (
@@ -224,7 +433,7 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
       ),
   },
   {
-    title: "Command",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.command} />,
     dataIndex: "commandId",
     render: (_, record) =>
       record.commandId ? (
@@ -234,7 +443,7 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
       ),
   },
   {
-    title: "RunId",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.runId} />,
     dataIndex: "runId",
     render: (_, record) =>
       record.runId ? (
@@ -244,20 +453,20 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
       ),
   },
   {
-    title: "Current focus",
+    title: <ConsoleMessage descriptor={runSummaryColumnMessages.currentFocus} />,
     dataIndex: "focusStatus",
     valueType: "status" as any,
     valueEnum: runFocusValueEnum,
     render: (_, record) => <Tag color="processing">{record.focusLabel}</Tag>,
   },
   {
-    title: "Last event",
+    title: <ConsoleMessage descriptor={runSummaryColumnMessages.lastEvent} />,
     dataIndex: "lastEventAt",
     valueType: "dateTime",
     render: (_, record) => record.lastEventAt || "n/a",
   },
   {
-    title: "Active steps",
+    title: <ConsoleMessage descriptor={runSummaryColumnMessages.activeSteps} />,
     dataIndex: "activeSteps",
     render: (_, record) =>
       record.activeSteps.length > 0 ? (
@@ -269,34 +478,34 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
           ))}
         </Space>
       ) : (
-        <Tag>None</Tag>
+        <Tag>{t("pages.runs.runworkbenchconfig.none", "None")}</Tag>
       ),
   },
 ];
 
 export const humanInputColumns: ProDescriptionsItemProps<HumanInputRecord>[] = [
   {
-    title: "Step",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.step} />,
     dataIndex: "stepId",
     render: (_, record) => record.stepId || "n/a",
   },
   {
-    title: "Run",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.run} />,
     dataIndex: "runId",
     render: (_, record) => record.runId || "n/a",
   },
   {
-    title: "Suspension",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.suspension} />,
     dataIndex: "suspensionType",
     render: (_, record) => record.suspensionType || "n/a",
   },
   {
-    title: "Timeout",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.timeout} />,
     dataIndex: "timeoutSeconds",
     valueType: "digit",
   },
   {
-    title: "Prompt",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.prompt} />,
     dataIndex: "prompt",
     render: (_, record) => record.prompt || "n/a",
   },
@@ -312,11 +521,11 @@ export const routeDescriptionColumns: ProDescriptionsItemProps<SelectedRouteReco
       ),
     },
     {
-      title: "Group",
+      title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.group} />,
       dataIndex: "groupLabel",
     },
     {
-      title: "Source",
+      title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.source} />,
       dataIndex: "sourceLabel",
     },
     {
@@ -324,12 +533,12 @@ export const routeDescriptionColumns: ProDescriptionsItemProps<SelectedRouteReco
       dataIndex: "llmStatus",
       valueType: "status" as any,
       valueEnum: {
-        processing: { text: "Required", status: "Processing" },
-        success: { text: "Optional", status: "Success" },
+        processing: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.required} />, status: "Processing" },
+        success: { text: <ConsoleMessage descriptor={runWorkbenchConfigMessages.optional} />, status: "Success" },
       },
     },
     {
-      title: "Description",
+      title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.description} />,
       dataIndex: "description",
     },
   ];
@@ -337,21 +546,21 @@ export const routeDescriptionColumns: ProDescriptionsItemProps<SelectedRouteReco
 export const waitingSignalColumns: ProDescriptionsItemProps<WaitingSignalRecord>[] =
   [
     {
-      title: "Signal name",
+      title: <ConsoleMessage descriptor={waitingSignalColumnMessages.signalName} />,
       dataIndex: "signalName",
     },
     {
-      title: "Step",
+      title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.step} />,
       dataIndex: "stepId",
       render: (_, record) => record.stepId || "n/a",
     },
     {
-      title: "Run",
+      title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.run} />,
       dataIndex: "runId",
       render: (_, record) => record.runId || "n/a",
     },
     {
-      title: "Prompt",
+      title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.prompt} />,
       dataIndex: "prompt",
       render: (_, record) => record.prompt || "n/a",
     },
@@ -545,7 +754,7 @@ export const workbenchConsoleScrollStyle = {
 
 export const recentRunColumns: ProColumns<RecentRunTableRow>[] = [
   {
-    title: "Route",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.route} />,
     dataIndex: "routeName",
     ellipsis: true,
     render: (_, record) =>
@@ -556,52 +765,52 @@ export const recentRunColumns: ProColumns<RecentRunTableRow>[] = [
       ),
   },
   {
-    title: "Endpoint",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.endpoint} />,
     dataIndex: "endpointId",
     ellipsis: true,
     render: (_, record) =>
       resolveRunEndpointId(record.endpointKind, record.endpointId),
   },
   {
-    title: "Status",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.status} />,
     dataIndex: "statusValue",
     width: 120,
     valueType: "status" as any,
     valueEnum: runStatusValueEnum,
   },
   {
-    title: "Recorded",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.recorded} />,
     dataIndex: "recordedAt",
     width: 220,
     valueType: "dateTime",
     render: (_, record) => formatDateTime(record.recordedAt),
   },
   {
-    title: "RunId",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.runId} />,
     dataIndex: "runId",
     width: 180,
     render: (_, record) => record.runId || "n/a",
   },
   {
-    title: "Preview",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.preview} />,
     dataIndex: "lastMessagePreview",
     ellipsis: true,
     render: (_, record) =>
-      record.lastMessagePreview || record.prompt || "No preview recorded.",
+      record.lastMessagePreview ||
+      record.prompt ||
+      t("pages.runs.runworkbenchconfig.no.preview.recorded", "No preview recorded."),
   },
   {
-    title: "Actions",
+    title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.actions} />,
     valueType: "option",
     width: 160,
     render: (_, record) => [
       <Space key={`${record.id}-actions`}>
         <Button type="link" onClick={() => record.onRestore?.()}>
-          Restore
-        </Button>
+          {t("pages.runs.runworkbenchconfig.restore", "Restore")}</Button>
         {record.actorId ? (
           <Button type="link" onClick={() => record.onOpenActor?.()}>
-            Actor
-          </Button>
+            {t("pages.runs.runworkbenchconfig.actor", "Actor")}</Button>
         ) : null}
       </Space>,
     ],
@@ -636,6 +845,80 @@ export function formatRunRouteLabel(
     normalizedRouteName !== normalizedEndpointId
     ? `${normalizedEndpointId} · ${normalizedRouteName}`
     : normalizedEndpointId;
+}
+
+export function buildRunReadinessSummary({
+  endpointLabel,
+  routeLabel,
+  scopeId,
+}: {
+  endpointLabel?: string | null;
+  routeLabel?: string | null;
+  scopeId?: string | null;
+}): RunReadinessSummary {
+  const normalizedScopeId = trimOptional(scopeId);
+  const normalizedRouteLabel = trimOptional(routeLabel) ?? "Workspace default";
+  const normalizedEndpointLabel = trimOptional(endpointLabel) ?? "chat";
+  const ready = Boolean(normalizedScopeId);
+
+  return {
+    ready,
+    blockingReason: ready
+      ? undefined
+      : "Workspace is required before the prompt can be sent.",
+    items: [
+      {
+        key: "workspace",
+        label: "Workspace",
+        value: normalizedScopeId ?? "Required",
+        status: normalizedScopeId ? "ready" : "required",
+        helper: normalizedScopeId
+          ? "Run requests are scoped to this workspace."
+          : "Add a workspace ID to unlock Send.",
+      },
+      {
+        key: "route",
+        label: "Route",
+        value: normalizedRouteLabel,
+        status: "context",
+        helper:
+          normalizedRouteLabel === "Workspace default"
+            ? "No route override; the workspace default binding will be used."
+            : "The prompt will target this chat route.",
+      },
+      {
+        key: "endpoint",
+        label: "Endpoint",
+        value: normalizedEndpointLabel,
+        status: "context",
+        helper: "Advanced endpoint and payload controls stay available below.",
+      },
+    ],
+  };
+}
+
+export function describeRunReturnTarget(returnTo?: string | null): string {
+  const normalized = trimOptional(returnTo);
+  if (!normalized) {
+    return t("pages.runs.runworkbenchconfig.copy", "Back to advanced team editing");
+  }
+
+  const pathname = normalized.split("#")[0].split("?")[0];
+  if (pathname === "/teams" || pathname.startsWith("/teams/")) {
+    return t("pages.runs.runworkbenchconfig.copy.2", "Back to advanced team editing");
+  }
+
+  switch (pathname) {
+    case "/runtime/workflows":
+      return t("pages.runs.runworkbenchconfig.workflow.library", "Back to Workflow Library");
+    case "/studio":
+      return t("pages.runs.runworkbenchconfig.studio", "Back to Studio");
+    case "/runtime/explorer":
+    case "/runtime/explorer/detail":
+      return t("pages.runs.runworkbenchconfig.actor.explorer", "Back to Actor Explorer");
+    default:
+      return t("pages.runs.runworkbenchconfig.copy.3", "Back to previous page");
+  }
 }
 
 export function formatElapsedDuration(totalMilliseconds: number): string {

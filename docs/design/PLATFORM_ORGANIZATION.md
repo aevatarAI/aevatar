@@ -132,44 +132,36 @@ script scope 能力也不是一个 IDE，而是正式 definition/catalog/promoti
 
 这些逻辑是 authoring domain，不是 `GAgentService` 的 runtime domain。
 
-#### 1.5.2 workspace 与本地文件语义
+#### 1.5.2 workspace actor 语义
 
-`Studio` 负责：
+`Studio` 的 workspace 事实由 `StudioWorkspaceGAgent` 持有：
 
-- workflow directory 管理
-- workflow 文件读写
-- 本地 layout 文件
-- 本地 workspace settings
+- workspace settings
+- workspace directory bookmark / projection namespace
+- workflow draft YAML
+- typed workflow layout
 
 见：
 
+- `src/workflow/Aevatar.Workflow.Studio/Workspace/StudioWorkspaceGAgent.cs`
 - `src/Aevatar.Studio.Application/Studio/Services/WorkspaceService.cs`
-- `src/Aevatar.Studio.Infrastructure/Storage/FileStudioWorkspaceStore.cs`
+- `src/Aevatar.Studio.Projection/Projectors/StudioWorkspaceCurrentStateProjector.cs`
 
-这类文件系统语义天然属于 product workspace，不属于 service capability 内核。
+本地文件与 JSON 只作为显式 import/export 或边界协议，不再作为 workspace 事实源。
 
-#### 1.5.3 execution panel 聚合态
+#### 1.5.3 execution panel readmodel 语义
 
-`Studio` 的 `ExecutionService` 管理的是 UI 面板自己的执行记录：
+`Studio` 的 `ExecutionService` 现在是 service-run / workflow control 的兼容 adapter：
 
-- 启动执行时先写 `StoredExecutionRecord`
-- 后续通过 HTTP 调 runtime
-- 本地保存 frames、resume/stop 记录
+- 启动执行通过 `IServiceInvocationPort` 返回 accepted receipt
+- 列表与详情读取 `IServiceRunQueryPort`
+- resume/stop 走 workflow command dispatch
 
 见：
 
 - `src/Aevatar.Studio.Application/Studio/Services/ExecutionService.cs`
 
-这不是 runtime 分布式权威状态，而是 Studio UI 聚合态。若把它放进 `GAgentService`，会制造"UI 记录 == 业务事实"的误导。
-
-现有架构文档也已明确：
-
-- published workflow 列表、workflow binding、studio catalog、execution panel 状态来自不同事实源
-- `ExecutionService + IStudioWorkspaceStore` 只是 Studio execution 面板自己的本地聚合态
-
-见：
-
-- `docs/architecture/2026-03-18-aevatar-console-studio-integration-architecture.md`
+`ExecutionService` 不再持有本地 execution JSON / SSE frame shadow store；执行事实由 service-run / workflow actor 与其 readmodel 表达。
 
 #### 1.5.4 connectors / roles / settings 是 Studio authoring 配置
 
@@ -1516,7 +1508,7 @@ run 创建后，继续复用现有查询端点：
 继续复用现有 workflow projection/live pipeline：
 
 - `POST /api/chat` 本身就是 SSE
-- `WorkflowRunCommandTargetBinder` 会在 dispatch 前挂好 projection session 与 live sink
+- `WorkflowRunObservationLifecycle` 会在 dispatch 前挂好 projection session 与 live sink
 - `WorkflowExecutionRunEventProjector` 会把 committed workflow events 投影成 `WorkflowRunEventEnvelope`
 
 #### 4.6.2 这次补的增强

@@ -1,8 +1,10 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
+// Refactor (iter149/issue1132): Old pattern: provisioning could prepare a command then wait on handled-dispatch for actor handling.  New principle: provisioning uses accepted-only typed dispatch and returns the stable actor id receipt.
 public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisioningPort
 {
     private readonly ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
@@ -49,14 +51,13 @@ public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisionin
         var resolvedRevision = string.IsNullOrWhiteSpace(scriptRevision)
             ? definitionSnapshot.Revision
             : scriptRevision;
-        var result = await _dispatchService.DispatchAsync(
-            new ProvisionScriptRuntimeCommand(
-                definitionActorId,
-                resolvedRevision,
-                runtimeActorId,
-                definitionSnapshot,
-                scopeId),
-            ct);
+        var command = new ProvisionScriptRuntimeCommand(
+            definitionActorId,
+            resolvedRevision,
+            runtimeActorId,
+            definitionSnapshot,
+            scopeId);
+        var result = await _dispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime provisioning dispatch failed.");
 

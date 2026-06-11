@@ -1,6 +1,8 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -13,15 +15,41 @@ public sealed record NyxIdSessionRefreshResult(
     int? ExpiresIn = null,
     string? Detail = null);
 
+// Refactor (iter1535/cluster-issue-1535):
+//   Old pattern: NyxID relay update failures collapsed to Detail/EditUnsupported strings.
+//   New principle: the external adapter boundary normalizes failure kind and raw diagnostics once.
 public sealed record NyxIdChannelRelayReplyResult(
     bool Succeeded,
     string? MessageId = null,
     string? PlatformMessageId = null,
     string? Detail = null,
-    bool EditUnsupported = false);
+    bool EditUnsupported = false,
+    FailureKind FailureKind = FailureKind.Unspecified,
+    TimeSpan? RetryAfter = null,
+    int HttpStatus = 0,
+    string? RawErrorKey = null,
+    int RawErrorCode = 0)
+{
+    public static NyxIdChannelRelayReplyResult FailedUpdateValidation(string detail) =>
+        new(
+            false,
+            Detail: detail,
+            FailureKind: FailureKind.PermanentAdapterError,
+            RawErrorKey: detail);
+}
+
+// Refactor (iter1535/cluster-issue-1535):
+//   Old pattern: each caller parsed NyxID error JSON enough to build its own string.
+//   New principle: one adapter-boundary envelope feeds typed classification and retry diagnostics.
+internal sealed record NyxIdApiErrorEnvelope(
+    string Detail,
+    int? HttpStatus,
+    string? RawErrorKey,
+    int? RawErrorCode,
+    TimeSpan? RetryAfter);
 
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
-public sealed class NyxIdApiClient
+public sealed class NyxIdApiClient : IDisposable
 {
     /// <summary>
     /// Default <c>User-Agent</c> injected on every call to <see cref="ProxyRequestAsync"/>
@@ -39,6 +67,7 @@ public sealed class NyxIdApiClient
     private readonly HttpClient _http;
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
+    private readonly bool _ownsHttpClient;
 
     public NyxIdApiClient(
         NyxIdToolOptions options,
@@ -46,7 +75,11 @@ public sealed class NyxIdApiClient
         ILogger<NyxIdApiClient>? logger = null)
     {
         _options = options;
+        // Refactor (iter10/cluster-019):
+        // Old: singleton DI registration could construct and permanently pin a raw HttpClient.
+        // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
         _http = httpClient ?? new HttpClient();
+        _ownsHttpClient = httpClient is null;
         _logger = logger ?? NullLogger<NyxIdApiClient>.Instance;
     }
 
@@ -172,6 +205,22 @@ public sealed class NyxIdApiClient
         return await SendAsync(request, ct);
     }
 
+    // ─── SSH ───
+
+    /// <summary>
+    /// Executes a shell command on a remote SSH host through NyxID's SSH gateway.
+    /// </summary>
+    /// <param name="serviceIdOrSlug">NyxID service identifier or slug for an SSH-typed service (endpoint registered as <c>ssh://host:port</c>).</param>
+    /// <param name="body">JSON body matching NyxID's <c>SshExecRequest</c>: <c>{ command, principal, timeout_secs }</c>.</param>
+    /// <remarks>
+    /// Mirrors <c>POST /api/v1/ssh/{service_id}/exec</c>. NyxID enforces a 1 MB output cap, a max 300s
+    /// timeout, an 8192-char command length, and a built-in dangerous-command filter. Non-SSH services
+    /// reject this route, so callers must filter to SSH-typed slugs before invoking (the agent tool
+    /// surfaces this in its description so the LLM does not call HTTP-typed services here).
+    /// </remarks>
+    public Task<string> SshExecAsync(string token, string serviceIdOrSlug, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/ssh/{Uri.EscapeDataString(serviceIdOrSlug)}/exec", body, ct);
+
     // ─── API Keys ───
 
     public Task<string> ListApiKeysAsync(string token, CancellationToken ct) =>
@@ -245,7 +294,7 @@ public sealed class NyxIdApiClient
     // ─── Proxy (additions) ───
 
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/proxy/services?per_page=100", ct);
+        GetAsync(token, NyxIdLlmCatalogRoutes.ProxyServicesPath, ct);
 
     // ─── API Keys (additions) ───
 
@@ -268,6 +317,12 @@ public sealed class NyxIdApiClient
 
     public Task<string> GetApprovalAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}", ct);
+
+    // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
+    //   Old pattern: approval status reads were hidden inside a blocking remote handler loop.
+    //   New principle: status reads are single-shot calls driven by actor self-continuation events.
+    public Task<string> GetApprovalStatusAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}/status", ct);
 
     public Task<string> ListApprovalGrantsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/approvals/grants", ct);
@@ -331,8 +386,32 @@ public sealed class NyxIdApiClient
 
     // ─── LLM ───
 
-    public Task<string> GetLlmStatusAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/llm/status", ct);
+    public async Task<string> GetLlmServicesAsync(string token, CancellationToken ct)
+    {
+        var response = await GetAsync(token, "/api/v1/llm/services", ct).ConfigureAwait(false);
+        return TryParseErrorStatus(response, out var status) && status == 404
+            ? await GetAsync(token, "/api/v1/llm/status", ct).ConfigureAwait(false)
+            : response;
+    }
+
+    public Task<string> ProvisionLlmServiceAsync(string token, string provisionEndpointId, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(provisionEndpointId);
+        var candidate = provisionEndpointId.Trim();
+        if (string.IsNullOrWhiteSpace(candidate) ||
+            candidate.Contains("..", StringComparison.Ordinal) ||
+            candidate.Contains("://", StringComparison.Ordinal) ||
+            candidate.Contains("//", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Provision endpoint id must be a relative NyxID LLM service endpoint id.", nameof(provisionEndpointId));
+        }
+
+        var normalized = candidate.Trim('/');
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new ArgumentException("Provision endpoint id must be a relative NyxID LLM service endpoint id.", nameof(provisionEndpointId));
+
+        return PostAsync(token, $"/api/v1/llm/services/{Uri.EscapeDataString(normalized)}", "{}", ct);
+    }
 
     // ─── Providers ───
 
@@ -548,9 +627,13 @@ public sealed class NyxIdApiClient
     /// by a prior send call.
     /// </param>
     /// <remarks>
-    /// Callers must treat <see cref="NyxIdChannelRelayReplyResult.EditUnsupported"/> as a terminal
-    /// signal and stop issuing edits against this message for the remainder of the turn.
+    /// Callers must treat <see cref="NyxIdChannelRelayReplyResult.FailureKind"/> as the authoritative
+    /// control-flow classification. <see cref="NyxIdChannelRelayReplyResult.EditUnsupported"/> is a
+    /// compatibility signal for platforms that explicitly reject message edits.
     /// </remarks>
+    // Refactor (iter1535/cluster-issue-1535):
+    //   Old pattern: update callers treated all failed edits as strings or generic retry cases.
+    //   New principle: update response parsing emits one typed result for continuation policy.
     public async Task<NyxIdChannelRelayReplyResult> UpdateChannelRelayReplyAsync(
         string token,
         string platformMessageId,
@@ -560,11 +643,11 @@ public sealed class NyxIdApiClient
         ArgumentNullException.ThrowIfNull(body);
 
         if (string.IsNullOrWhiteSpace(token))
-            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token");
+            return NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_access_token");
         if (string.IsNullOrWhiteSpace(platformMessageId))
-            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_platform_message_id");
+            return NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_platform_message_id");
         if (string.IsNullOrWhiteSpace(body.Text) && body.Metadata?.Card is null)
-            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_payload");
+            return NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_reply_payload");
 
         var response = await PostAsync(
             token,
@@ -576,15 +659,18 @@ public sealed class NyxIdApiClient
             }),
             ct);
 
-        if (TryParseErrorEnvelope(response, out var errorDetail))
+        if (TryParseStructuredErrorEnvelope(response, out var error))
         {
-            var editUnsupported =
-                errorDetail.Contains("edit_unsupported", StringComparison.Ordinal) ||
-                errorDetail.Contains("nyx_status=501", StringComparison.Ordinal);
+            var editUnsupported = IsEditUnsupported(error);
             return new NyxIdChannelRelayReplyResult(
                 false,
-                Detail: errorDetail,
-                EditUnsupported: editUnsupported);
+                Detail: error.Detail,
+                EditUnsupported: editUnsupported,
+                FailureKind: ClassifyUpdateFailure(error),
+                RetryAfter: error.RetryAfter,
+                HttpStatus: error.HttpStatus ?? 0,
+                RawErrorKey: error.RawErrorKey,
+                RawErrorCode: error.RawErrorCode ?? 0);
         }
 
         try
@@ -603,7 +689,10 @@ public sealed class NyxIdApiClient
         catch (JsonException ex)
         {
             _logger.LogWarning(ex, "Nyx channel relay reply update returned invalid JSON");
-            return new NyxIdChannelRelayReplyResult(false, Detail: "invalid_channel_relay_reply_update_response");
+            return new NyxIdChannelRelayReplyResult(
+                false,
+                Detail: "invalid_channel_relay_reply_update_response",
+                FailureKind: FailureKind.PermanentAdapterError);
         }
     }
 
@@ -618,7 +707,7 @@ public sealed class NyxIdApiClient
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return Task.FromResult(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text"));
+            return Task.FromResult(NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_reply_text"));
 
         return UpdateChannelRelayReplyAsync(token, platformMessageId, new ChannelRelayReplyBody(text), ct);
     }
@@ -707,10 +796,23 @@ public sealed class NyxIdApiClient
                 _logger.LogWarning(
                     "NyxID API request failed: {Method} {Url} -> {Status}",
                     request.Method, request.RequestUri, (int)response.StatusCode);
-                return $"{{\"error\": true, \"status\": {(int)response.StatusCode}, \"body\": {EscapeJsonString(content)}}}";
+                var retryAfter = response.Headers.RetryAfter?.Delta;
+                var retryAfterJson = retryAfter.HasValue
+                    ? $", \"retry_after_seconds\": {(int)Math.Ceiling(retryAfter.Value.TotalSeconds)}"
+                    : string.Empty;
+                return $"{{\"error\": true, \"status\": {(int)response.StatusCode}, \"body\": {EscapeJsonString(content)}{retryAfterJson}}}";
             }
 
             return content;
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is a control-flow signal, not an HTTP failure. Wrapping it as
+            // {"error":true,"message":"A task was canceled."} would swallow per-call hard
+            // timeouts that callers (e.g. NyxIdSshExecTool) install on top of the LLM run's
+            // CT. Let the exception bubble so callers can map their own cancellation source
+            // to a clearer error payload (PR #562 SSH timeout incident, 2026-05-08).
+            throw;
         }
         catch (Exception ex)
         {
@@ -724,10 +826,22 @@ public sealed class NyxIdApiClient
 
     private static bool TryParseErrorEnvelope(string response, out string detail)
     {
+        if (TryParseStructuredErrorEnvelope(response, out var error))
+        {
+            detail = error.Detail;
+            return true;
+        }
+
         detail = string.Empty;
+        return false;
+    }
+
+    private static bool TryParseStructuredErrorEnvelope(string response, out NyxIdApiErrorEnvelope error)
+    {
+        error = new NyxIdApiErrorEnvelope(string.Empty, null, null, null, null);
         if (string.IsNullOrWhiteSpace(response))
         {
-            detail = "empty_response";
+            error = new NyxIdApiErrorEnvelope("empty_response", null, null, null, null);
             return true;
         }
 
@@ -741,10 +855,7 @@ public sealed class NyxIdApiClient
                 return false;
             }
 
-            var status = root.TryGetProperty("status", out var statusProp) &&
-                         statusProp.ValueKind == JsonValueKind.Number
-                ? statusProp.GetInt32()
-                : (int?)null;
+            var status = TryGetInt(root, "status");
             var body = root.TryGetProperty("body", out var bodyProp) &&
                        bodyProp.ValueKind == JsonValueKind.String
                 ? bodyProp.GetString()
@@ -754,15 +865,142 @@ public sealed class NyxIdApiClient
                 ? messageProp.GetString()
                 : null;
 
-            detail = $"nyx_status={status?.ToString() ?? "unknown"}" +
+            var rawErrorKey = TryGetString(root, "error_key") ?? TryGetString(root, "error");
+            var rawErrorCode = TryGetInt(root, "error_code");
+            var retryAfter = TryGetRetryAfter(root);
+            TryMergeBodyError(body, ref rawErrorKey, ref rawErrorCode, ref retryAfter);
+
+            var detail = $"nyx_status={status?.ToString() ?? "unknown"}" +
                      (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}") +
                      (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
+            error = new NyxIdApiErrorEnvelope(detail, status, rawErrorKey, rawErrorCode, retryAfter);
             return true;
         }
         catch (JsonException)
         {
-            detail = $"invalid_error_envelope response_length={response.Length}";
+            error = new NyxIdApiErrorEnvelope(
+                $"invalid_error_envelope response_length={response.Length}",
+                null,
+                "invalid_error_envelope",
+                null,
+                null);
             return true;
         }
+    }
+
+    private static void TryMergeBodyError(
+        string? body,
+        ref string? rawErrorKey,
+        ref int? rawErrorCode,
+        ref TimeSpan? retryAfter)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return;
+
+        try
+        {
+            using var bodyDocument = JsonDocument.Parse(body);
+            var bodyRoot = bodyDocument.RootElement;
+            rawErrorKey ??= TryGetString(bodyRoot, "error") ?? TryGetString(bodyRoot, "code");
+            rawErrorCode ??= TryGetInt(bodyRoot, "error_code");
+            retryAfter ??= TryGetRetryAfter(bodyRoot);
+        }
+        catch (JsonException)
+        {
+            rawErrorKey ??= "malformed_error_body";
+        }
+    }
+
+    private static string? TryGetString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String
+            ? prop.GetString()
+            : null;
+
+    private static int? TryGetInt(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.Number &&
+        prop.TryGetInt32(out var value)
+            ? value
+            : null;
+
+    private static TimeSpan? TryGetRetryAfter(JsonElement root)
+    {
+        var seconds = TryGetInt(root, "retry_after_seconds") ?? TryGetInt(root, "retry_after");
+        if (seconds is > 0)
+            return TimeSpan.FromSeconds(seconds.Value);
+
+        var milliseconds = TryGetInt(root, "retry_after_ms");
+        return milliseconds is > 0 ? TimeSpan.FromMilliseconds(milliseconds.Value) : null;
+    }
+
+    private static bool IsEditUnsupported(NyxIdApiErrorEnvelope error) =>
+        string.Equals(error.RawErrorKey, "edit_unsupported", StringComparison.OrdinalIgnoreCase) ||
+        error.HttpStatus == 501;
+
+    // Refactor (iter1535/cluster-issue-1535):
+    //   Old pattern: actor continuation policy searched raw error summaries.
+    //   New principle: the NyxID adapter maps known external error keys to channel FailureKind.
+    private static FailureKind ClassifyUpdateFailure(NyxIdApiErrorEnvelope error)
+    {
+        if (IsEditUnsupported(error))
+            return FailureKind.PermanentAdapterError;
+
+        if (string.Equals(error.RawErrorKey, "platform_unavailable", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "channel_platform_unavailable", StringComparison.OrdinalIgnoreCase))
+        {
+            return FailureKind.PlatformUnavailable;
+        }
+
+        if (error.HttpStatus is 429 or >= 500)
+            return FailureKind.TransientAdapterError;
+
+        if (string.Equals(error.RawErrorKey, "rate_limited", StringComparison.OrdinalIgnoreCase))
+            return FailureKind.TransientAdapterError;
+
+        if (string.Equals(error.RawErrorKey, "validation_error", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "authentication_failed", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "unauthorized", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "forbidden", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "missing_access_token", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "missing_platform_message_id", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "missing_reply_payload", StringComparison.OrdinalIgnoreCase) ||
+            error.HttpStatus is 400 or 401 or 403 or 404 or 422)
+        {
+            return FailureKind.PermanentAdapterError;
+        }
+
+        return FailureKind.PermanentAdapterError;
+    }
+
+    private static bool TryParseErrorStatus(string response, out int status)
+    {
+        status = 0;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("error", out var errorProp) ||
+                errorProp.ValueKind != JsonValueKind.True ||
+                !root.TryGetProperty("status", out var statusProp) ||
+                statusProp.ValueKind != JsonValueKind.Number)
+            {
+                return false;
+            }
+
+            status = statusProp.GetInt32();
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_ownsHttpClient)
+            _http.Dispose();
     }
 }

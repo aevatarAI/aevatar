@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import React from 'react';
 import { StudioExecutionPage } from './StudioWorkbenchSections';
 
@@ -126,6 +127,14 @@ function createBaseProps(overrides = {}) {
 }
 
 describe('StudioExecutionPage', () => {
+  beforeEach(() => {
+    setLocale('zh-CN', false);
+  });
+
+  afterEach(() => {
+    setLocale('en-US', false);
+  });
+
   it('renders the current execution runtime chrome', () => {
     render(
       React.createElement(
@@ -152,15 +161,13 @@ describe('StudioExecutionPage', () => {
       ),
     );
 
-    expect(screen.getByText('Run Compare')).toBeInTheDocument();
-    expect(screen.getByText('Health & Trust')).toBeInTheDocument();
-    expect(screen.getByText('Member Snapshot')).toBeInTheDocument();
-    expect(screen.getByText('Human Escalation Playback')).toBeInTheDocument();
+    expect(screen.getByText('运行比较')).toBeInTheDocument();
+    expect(screen.getByText('人工回放')).toBeInTheDocument();
+    expect(screen.getByText('观察事实')).toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '重新运行' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /停\s*止/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '停止运行' })).toBeInTheDocument();
     expect(screen.getByText('执行日志')).toBeInTheDocument();
-    expect(screen.getByLabelText('选择测试运行')).toBeInTheDocument();
+    expect(screen.getByLabelText('选择运行记录')).toBeInTheDocument();
     expect(screen.getByText('Graph canvas')).toBeInTheDocument();
   });
 
@@ -178,7 +185,7 @@ describe('StudioExecutionPage', () => {
     expect(screen.getAllByText('Actor ID').length).toBeGreaterThan(0);
     expect(screen.getAllByText('actor-1').length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy Actor ID.' }));
+    fireEvent.click(screen.getByRole('button', { name: '复制 Actor ID。' }));
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('actor-1');
@@ -279,7 +286,7 @@ describe('StudioExecutionPage', () => {
     );
 
     expect(
-      screen.getByText('Script members do not expose a workflow graph.'),
+      screen.getByText('脚本成员不公开 Workflow 图。'),
     ).toBeInTheDocument();
     expect(screen.queryByText('Graph canvas')).toBeNull();
     expect(screen.getByText('执行日志')).toBeInTheDocument();

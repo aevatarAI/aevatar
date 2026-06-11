@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -56,6 +57,7 @@ public sealed class ScriptReadModelProjectorInitializationTests
         InMemoryProjectionDocumentStore<ScriptReadModelDocument> dispatcher) =>
         new(
             dispatcher,
+            StubScriptProjectionPayloadMaterializer.WithReadModel(new SimpleTextReadModel()),
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)));
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock

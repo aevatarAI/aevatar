@@ -4,1978 +4,45 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Authoring.Lark;
-using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
-using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class AgentBuilderToolTests
 {
     [Fact]
-    public async Task ExecuteAsync_ListTemplates_ReturnsDailyReportTemplate()
-    {
-        var services = new ServiceCollection();
-        services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
-        services.AddSingleton(Substitute.For<IActorRuntime>());
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
-
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"list_templates"}""");
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("templates").EnumerateArray()
-                .Any(static x => x.GetProperty("name").GetString() == "daily_report")
-                .Should().BeTrue();
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public void TryBuildDailyReportSpec_SkillContent_PinsStructuredSectionSchema_AndOmitWhenEmptyRule()
-    {
-        // Pinning test for issue #423: the daily prompt is treated as a fetch-and-summarize
-        // SPEC, not a freeform brief. This test fails fast on copy edits that would silently
-        // regress the multi-section schema, the per-section line budgets, the "omit empty
-        // section" rule, or the "no measurable activity" empty-day fallback.
-        var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
-            githubUsername: "alice",
-            repositories: null,
-            out var spec,
-            out var error);
-
-        ok.Should().BeTrue();
-        error.Should().BeNull();
-        spec.Should().NotBeNull();
-
-        var skillContent = spec!.SkillContent;
-
-        // All nine section slots must be pinned in order — the section position itself is
-        // load-bearing for the LLM's emission order, even when section 7 (Trend) is optional
-        // and section 9 (Source health) is conditional. Skipping any number here would let
-        // copy edits silently drop or reorder a section.
-        skillContent.Should().Contain("# Output sections");
-        skillContent.Should().Contain("1. Title");
-        skillContent.Should().Contain("2. Shipped");
-        skillContent.Should().Contain("3. In flight");
-        skillContent.Should().Contain("4. Reviews");
-        skillContent.Should().Contain("5. Issues");
-        skillContent.Should().Contain("6. CI");
-        skillContent.Should().Contain("7. Trend");
-        skillContent.Should().Contain("8. Blockers");
-        skillContent.Should().Contain("9. Source health");
-
-        // Empty-handling rules — the bug we're guarding against is the LLM padding sections
-        // with "no activity in this area" boilerplate when sources are silent.
-        skillContent.Should().Contain("OMIT THE SECTION ENTIRELY");
-        skillContent.Should().Contain("No measurable activity in the last 24h.");
-        skillContent.Should().Contain("Do not invent activity.");
-
-        // Section ordering must be unambiguous when both §8 Blockers and §9 Source health are
-        // present (eanzhao P2 review of PR #458, second pass): the previous "always last"
-        // qualifier on §8 conflicted with "Source health at the very bottom after Blockers".
-        // Promote §9 to a real schema slot and pin §8 as position-locked at slot 8 with §9
-        // as the only section permitted below.
-        skillContent.Should().Contain("Position-locked at slot 8");
-        skillContent.Should().Contain("the only section that may sit below it is the §9 Source health footer");
-        // The empty-day fallback must explicitly forbid both §8 Blockers AND §9 Source health
-        // emission, so a weaker model cannot synthesize a footer onto a genuine empty day.
-        skillContent.Should().Contain("do NOT emit Blockers or Source health");
-
-        // Source-health distinction (eanzhao P1 review of PR #458, refs issue #439):
-        // collapsing 4xx/5xx/error-shaped tool results into "zero data" silently masks
-        // revoked OAuth grants and proxy outages as healthy empty-day reports. Pin the
-        // 2xx-empty vs source-failure distinction AND the rule that the empty-day fallback
-        // only applies when every source returned 2xx, so a copy edit cannot regress this
-        // back to the original "4xx/5xx/empty → treat as zero" wording.
-        skillContent.Should().Contain("2xx with an empty list");
-        skillContent.Should().Contain("Source health:");
-        skillContent.Should().Contain("ONLY valid when EVERY source returned 2xx");
-        skillContent.Should().NotContain("4xx, 5xx, or empty, treat that source as zero");
-
-        // Substitution-variable documentation must be present and tied to the actual
-        // username; otherwise the LLM may emit literal `{username}` placeholders in URLs.
-        skillContent.Should().Contain("`{username}` → `alice`");
-        skillContent.Should().Contain("`{iso_date}` → start of the 24h window");
-
-        // Username substitution must remain intact (other tests check it under the saved-user
-        // / derived-user paths; this assertion guards the no-args path).
-        skillContent.Should().Contain("Primary GitHub username: alice");
-
-        // No-repo mode must include a commit query (Shipped section claims to cover commits)
-        // and must explicitly skip the CI section (no global Actions run endpoint exists).
-        skillContent.Should().Contain("/search/commits?q=author:{username}+author-date:>={iso_date}");
-        skillContent.Should().Contain("CI section is omitted in no-repo mode");
-    }
-
-    [Fact]
-    public void TryBuildDailyReportSpec_RepoAllowlist_SwitchesToPerRepoQueryGuidance()
-    {
-        // Per issue #423: when `repositories=` is provided, the prompt must steer the LLM toward
-        // per-repo searches and explicitly refuse the collapsed-allowlist global query. PR #458
-        // review further required: shipped PRs must filter by author + merge time (search-API
-        // form, not /pulls?state=closed which is keyed on update time and ignores author),
-        // commit shipping must have its own source, repo-scoped issues must include the
-        // commenter case, and the CI query must not embed a {default_branch} placeholder.
-        var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
-            githubUsername: "alice",
-            repositories: "acme/api, acme/web",
-            out var spec,
-            out var error);
-
-        ok.Should().BeTrue();
-        error.Should().BeNull();
-        spec.Should().NotBeNull();
-
-        var skillContent = spec!.SkillContent;
-        skillContent.Should().Contain("Repository scope: acme/api, acme/web");
-        skillContent.Should().Contain("Repository allowlist provided");
-        skillContent.Should().Contain("do NOT collapse into one global query");
-
-        // Shipped PRs in repo mode: search-API form keyed on author + merge time. The previous
-        // /repos/{owner}/{repo}/pulls?state=closed shape (a) returned closed-but-unmerged PRs
-        // and (b) had no reliable pagination across active repos — codex P1 + eanzhao inline
-        // both flagged this. Guard against regression.
-        skillContent.Should().Contain("/search/issues?q=repo:{owner}/{repo}+author:{username}+is:pr+is:merged+merged:>={iso_date}");
-        skillContent.Should().NotContain("/repos/{owner}/{repo}/pulls?state=closed");
-
-        // Shipped commits in repo mode (Shipped section schema includes commits).
-        skillContent.Should().Contain("/search/commits?q=repo:{owner}/{repo}+author:{username}+author-date:>={iso_date}");
-
-        // Issues commented on in repo mode (codex P2: schema says "opened, closed, or
-        // commented on" but author-only query drops the commenter case).
-        skillContent.Should().Contain("/search/issues?q=repo:{owner}/{repo}+commenter:{username}+is:issue+updated:>={iso_date}");
-
-        // CI query must NOT embed a {default_branch} placeholder (the LLM has no way to fill
-        // it without an extra round-trip and a literal `{default_branch}` would land in the
-        // outbound URL). Filter conclusion + created_at client-side instead.
-        skillContent.Should().NotContain("{default_branch}");
-        skillContent.Should().Contain("/repos/{owner}/{repo}/actions/runs?per_page=10");
-
-        // The execution prompt is what the runner sends per-trigger; it must echo the
-        // per-repo constraint so the LLM sees it on every run, not only at agent-create time.
-        spec.ExecutionPrompt.Should().Contain("acme/api, acme/web");
-        spec.ExecutionPrompt.Should().Contain("one pass per repo");
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_RejectsGroupChats()
-    {
-        var services = new ServiceCollection();
-        services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
-        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
-        services.AddSingleton(Substitute.For<IWorkflowAgentCommandPort>());
-        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
-
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "group",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "github_username": "alice",
-                  "schedule_cron": "0 9 * * *"
-                }
-                """);
-
-            result.Should().Contain("private chat");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DispatchesInitializeAndImmediateTrigger()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-1",
-                AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {
-                  "provider_id":"provider-github",
-                  "provider_name":"GitHub",
-                  "provider_slug":"github",
-                  "provider_type":"oauth2",
-                  "status":"active",
-                  "connected_at":"2026-04-15T00:00:00Z"
-                }
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"full-key-1"}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "agent_id": "skill-runner-1",
-                  "github_username": "alice",
-                  "repositories": "aevatarAI/aevatar",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC",
-                  "run_immediately": true
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
-            doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-1");
-            doc.RootElement.GetProperty("api_key_id").GetString().Should().Be("key-1");
-            doc.RootElement.GetProperty("github_username").GetString().Should().Be("alice");
-            doc.RootElement.GetProperty("run_immediately_requested").GetBoolean().Should().BeTrue();
-            doc.RootElement.GetProperty("github_username_preference_saved").GetBoolean().Should().BeFalse();
-
-            await skillRunnerPort.Received(1).InitializeAsync(
-                "skill-runner-1",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
-                    c.TemplateName == "daily_report" &&
-                    c.ScopeId == "scope-1" &&
-                    c.OutboundConfig.ConversationId == "oc_chat_1" &&
-                    c.OutboundConfig.NyxProviderSlug == "api-lark-bot" &&
-                    c.OutboundConfig.NyxApiKey == "full-key-1" &&
-                    c.OutboundConfig.ApiKeyId == "key-1" &&
-                    c.OutboundConfig.OwnerNyxUserId == "user-1" &&
-                    // p2p inbound without LarkUnionId in the request context falls back to the
-                    // sender open_id. Lark accepts this only when the relay-side and outbound
-                    // apps match; cross-app deployments must populate LarkUnionId at ingress
-                    // (see test below) to avoid `code:99992361 open_id cross app` rejections.
-                    c.OutboundConfig.LarkReceiveId == "ou_user_1" &&
-                    c.OutboundConfig.LarkReceiveIdType == "open_id"),
-                true,
-                Arg.Any<CancellationToken>());
-
-            var apiKeyRequest = handler.Requests.Should()
-                .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
-                .Subject;
-            using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
-            apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
-                .Select(static item => item.GetString())
-                .Should()
-                .BeEquivalentTo(["svc-github", "svc-lark"]);
-            // PR #418 review (4175529548): NyxID's `allow_all_services` defaults to `true`
-            // (api_keys.rs:105) and proxy enforcement only fires when `!allow_all_services`
-            // (proxy.rs:1030). Pin that the field is *present* and `false` so the resolved
-            // `allowed_service_ids` actually constrains the key's reach.
-            apiKeyDoc.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_PinsLarkChatId_When_RelayPropagatesIt()
-    {
-        // The new outbound priority pins (chat_id, "chat_id") whenever the relay surfaces
-        // ChannelMetadataKeys.LarkChatId — chat_id is the literal DM thread, no user-id
-        // translation is needed. This is the integration counterpart of
-        // LarkConversationTargetsTests.BuildFromInbound_ShouldPreferLarkChatId_ForP2pDirectMessages
-        // and is what survives both `99992361 open_id cross app` (PR #403/409) and
-        // `99992364 user id cross tenant` (PR after #409) failure modes in production.
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-union-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-union-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-union-1",
-                AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {
-                  "provider_id":"provider-github",
-                  "provider_name":"GitHub",
-                  "provider_slug":"github",
-                  "provider_type":"oauth2",
-                  "status":"active",
-                  "connected_at":"2026-04-15T00:00:00Z"
-                }
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-union-1","full_key":"full-key-union-1"}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_dm_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            [ChannelMetadataKeys.LarkUnionId] = "on_user_1",
-            [ChannelMetadataKeys.LarkChatId] = "oc_dm_chat_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "agent_id": "skill-runner-union-1",
-                  "github_username": "alice",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
-
-            await skillRunnerPort.Received(1).InitializeAsync(
-                "skill-runner-union-1",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
-                    c.OutboundConfig.LarkReceiveId == "oc_dm_chat_1" &&
-                    c.OutboundConfig.LarkReceiveIdType == "chat_id"),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubProxyDeniedForNewKey()
-    {
-        // Issue aevatarAI/aevatar#411 + #417: the create flow preflights GitHub proxy access
-        // with the freshly minted agent API key. Originally (#411) the failure mode this caught
-        // was misdiagnosed as a missing api-key→GitHub binding; #417 fixed that root cause by
-        // populating `allowed_service_ids` with per-user `UserService.id`s instead of catalog
-        // ids. The probe is retained because GitHub OAuth grants can still be revoked outside
-        // our control (user clicks "Revoke access" at GitHub, scopes downgraded, account
-        // temp-banned). Surfacing the 401/403 at create-time avoids persisting an agent that
-        // would produce empty output on every scheduled run.
-        //
-        // Pinned in this test: the structured `github_proxy_access_denied` error is returned
-        // (no actor invocation), AND the freshly minted api-key IS revoked so retries don't
-        // accumulate orphan proxy-scoped keys (codex review PR #418 r3141846175).
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {
-                  "provider_id":"provider-github",
-                  "provider_name":"GitHub",
-                  "provider_slug":"github",
-                  "provider_type":"oauth2",
-                  "status":"active",
-                  "connected_at":"2026-04-15T00:00:00Z"
-                }
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-403","full_key":"full-key-403"}""");
-        // The preflight: `NyxIdApiClient.SendAsync` wraps any HTTP non-2xx as
-        // `{"error": true, "status": <http>, "body": "<raw downstream body>"}` (NyxIdApiClient.cs:680).
-        // Reviewer (PR #412 r3141699476) caught that the previous handler shape used `"code"`
-        // but real production uses `"status"` — mirror the actual envelope so the parser is
-        // exercised against what runtime delivers, not a synthetic shape.
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
-            """{"error": true, "status": 403, "body": "{\"message\":\"Bad credentials\",\"documentation_url\":\"https://docs.github.com/rest\"}"}""");
-        // Codex review (PR #418 r3141846175): retries of `/daily` mint a new api-key on every
-        // run. Without best-effort revoke on preflight failure, the user's NyxID account would
-        // accumulate one orphan proxy-scoped key per failed retry. Stub the DELETE so the test
-        // can verify the revoke fires.
-        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-403", """{"deleted":true}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "agent_id": "skill-runner-github-403",
-                  "github_username": "alice",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("error").GetString().Should().Be("github_proxy_access_denied");
-            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(403);
-            // The hint should point users at re-authorizing the GitHub provider at NyxID, not
-            // at api-key bindings (which used to be the misdiagnosis under #411 — see #417).
-            // Match case-insensitively so future hint copy edits (capitalization, punctuation)
-            // don't require flipping this assertion in lockstep — the *intent* of the assertion
-            // is "hint mentions re-authorization", not "hint matches one specific prefix".
-            doc.RootElement.GetProperty("hint").GetString()!.ToLowerInvariant().Should().Contain("re-authorize");
-
-            // The port must NOT be invoked — preflight aborts BEFORE the lifecycle
-            // dispatch so we don't leave a broken agent in the catalog.
-            await skillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
-
-            // Codex review (PR #418 r3141846175): even though the api-key carries the right
-            // `allowed_service_ids` under #417, the create flow mints a *new* key per run.
-            // Without best-effort revoke on preflight failure, every failed `/daily` retry
-            // would orphan one proxy-scoped key in the user's NyxID account. Pin that the
-            // DELETE fires so we don't regress on this cleanup.
-            handler.Requests.Should().Contain(r =>
-                r.Method == HttpMethod.Delete &&
-                r.Path == "/api/v1/api-keys/key-403");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_LogsFallbackBreadcrumb_When_LarkUnionIdMissing()
-    {
-        // Reviewer (PR #409 r3141562097): when the relay does not surface LarkUnionId at agent
-        // creation, BuildFromInbound returns (ou_*, open_id, FellBack=true). The flag itself is
-        // not persisted on OutboundConfig (typed receive id/type only), so a downstream
-        // LarkConversationTargets.Resolve() at SkillRunner send time sees populated typed fields
-        // and reports FellBack=false — meaning the cross-app risk is invisible to operators
-        // unless the agent-create site logs it once. Pin the LogDebug breadcrumb so the
-        // observability promised in the PR description actually fires in production.
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-fallback-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-fallback-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-fallback-1",
-                AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {
-                  "provider_id":"provider-github",
-                  "provider_name":"GitHub",
-                  "provider_slug":"github",
-                  "provider_type":"oauth2",
-                  "status":"active",
-                  "connected_at":"2026-04-15T00:00:00Z"
-                }
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-fallback-1","full_key":"full-key-fallback-1"}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-
-        var logger = new ListLogger<AgentBuilderTool>();
-        var tool = new AgentBuilderTool(services.BuildServiceProvider(), logger);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            // Deliberately NO LarkUnionId / LarkChatId — this is the cross-app risky path.
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "agent_id": "skill-runner-fallback-1",
-                  "github_username": "alice",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
-
-            // The breadcrumb must capture enough context to correlate with downstream Lark
-            // `99992361` rejections: agent_id, the missing typed fields, and the chosen receive
-            // type. Otherwise operators get no signal and the silent-default bug class re-opens.
-            var fallback = logger.Entries.Should().ContainSingle(entry =>
-                entry.Level == LogLevel.Debug &&
-                entry.Message.Contains("Agent builder fell back to legacy delivery target inference") &&
-                entry.Message.Contains("skill-runner-fallback-1") &&
-                entry.Message.Contains("hasUnionId=False") &&
-                entry.Message.Contains("hasLarkChatId=False") &&
-                entry.Message.Contains("hasSenderId=True") &&
-                entry.Message.Contains("resolvedReceiveIdType=open_id")).Subject;
-            fallback.Message.Should().Contain("99992361");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_DoesNotLogFallback_When_LarkUnionIdPresent()
-    {
-        // Counterpart to the breadcrumb test: when the relay surfaces union_id, the typed
-        // delivery target is cross-app safe and we must NOT spam Debug logs on every successful
-        // ingress (otherwise the breadcrumb signal becomes useless noise once /agents traffic
-        // ramps up).
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-no-fallback-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-no-fallback-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-no-fallback-1",
-                AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {
-                  "provider_id":"provider-github",
-                  "provider_slug":"github",
-                  "provider_type":"oauth2",
-                  "status":"active",
-                  "connected_at":"2026-04-15T00:00:00Z"
-                }
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-no-fallback-1","full_key":"full-key-no-fallback-1"}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-
-        var logger = new ListLogger<AgentBuilderTool>();
-        var tool = new AgentBuilderTool(services.BuildServiceProvider(), logger);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            [ChannelMetadataKeys.LarkUnionId] = "on_user_1",
-            [ChannelMetadataKeys.LarkChatId] = "oc_chat_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "agent_id": "skill-runner-no-fallback-1",
-                  "github_username": "alice",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            logger.Entries.Should().NotContain(entry =>
-                entry.Message.Contains("fell back to legacy delivery target inference"));
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_UsesSavedGithubUsernamePreference_WhenArgumentMissing()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-pref-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-pref-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-pref-1",
-                AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        // Issue #436 PR #438 review: pin that the no-username `/daily` relay path reads the
-        // saved github_username from the per-end-user composite scope, not the bot's
-        // RegistrationScopeId. Without sender_id + platform set in the metadata this test
-        // would silently keep passing if the read accidentally drifted back to `configScopeId`.
-        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-1:lark:ou_alice", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new StudioUserConfig(string.Empty, GithubUsername: "saved-user")));
-        // Bot scope alone must NOT resolve a saved username: if the read regressed back to
-        // `configScopeId`, the prompt assertion below would still pass because both stubs
-        // would return "saved-user". Stub the bot-scope key with a sentinel so the assertion
-        // fails loudly on regression.
-        userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new StudioUserConfig(string.Empty, GithubUsername: "WRONG-bot-scope-leak")));
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {
-                  "provider_id":"provider-github",
-                  "provider_name":"GitHub",
-                  "provider_slug":"github",
-                  "provider_type":"oauth2",
-                  "status":"active"
-                }
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-pref-1","full_key":"full-key-pref-1"}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(userConfigQueryPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.Platform] = "lark",
-            [ChannelMetadataKeys.SenderId] = "ou_alice",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "agent_id": "skill-runner-pref-1",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
-
-            await skillRunnerPort.Received(1).InitializeAsync(
-                "skill-runner-pref-1",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
-                    c.SkillContent.Contains("Primary GitHub username: saved-user", StringComparison.Ordinal) &&
-                    c.ExecutionPrompt.Contains("saved-user", StringComparison.Ordinal)),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
-
-            // Direct evidence the per-end-user scope is what reaches the query port.
-            await userConfigQueryPort.Received(1)
-                .GetAsync("scope-1:lark:ou_alice", Arg.Any<CancellationToken>());
-            await userConfigQueryPort.DidNotReceive()
-                .GetAsync("scope-1", Arg.Any<CancellationToken>());
-
-            handler.Requests.Should().NotContain(x => x.Path == "/api/v1/proxy/s/api-github/user");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_DerivesGithubUsername_FromNyxProxy_WhenArgumentAndPreferenceMissing()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-derived-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-derived-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-derived-1",
-                AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new StudioUserConfig(string.Empty)));
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {
-                  "provider_id":"provider-github",
-                  "provider_name":"GitHub",
-                  "provider_slug":"github",
-                  "provider_type":"oauth2",
-                  "status":"active"
-                }
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/user", """{"login":"derived-user"}""");
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-derived-1","full_key":"full-key-derived-1"}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(userConfigQueryPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "agent_id": "skill-runner-derived-1",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
-
-            await skillRunnerPort.Received(1).InitializeAsync(
-                "skill-runner-derived-1",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
-                    c.SkillContent.Contains("Primary GitHub username: derived-user", StringComparison.Ordinal) &&
-                    c.ExecutionPrompt.Contains("derived-user", StringComparison.Ordinal)),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
-
-            handler.Requests.Should().Contain(x => x.Path == "/api/v1/proxy/s/api-github/user");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsCredentialsRequired_WhenUsernameCannotBeResolved()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new StudioUserConfig(string.Empty)));
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """{"tokens":[]}""");
-        handler.Add(HttpMethod.Get, "/api/v1/catalog/api-github", """
-            {
-              "slug":"api-github",
-              "provider_config_id":"provider-github",
-              "provider_type":"oauth2",
-              "credential_mode":"user",
-              "documentation_url":"https://docs.github.com/en/apps/oauth-apps"
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/credentials", """
-            {
-              "provider_config_id":"provider-github",
-              "has_credentials":true
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/connect/oauth", """
-            {
-              "authorization_url":"https://github.example.com/oauth/start"
-            }
-            """);
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(userConfigQueryPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("credentials_required");
-            doc.RootElement.GetProperty("authorization_url").GetString().Should().Be("https://github.example.com/oauth/start");
-            doc.RootElement.GetProperty("note").GetString().Should().Contain("run /daily again");
-
-            await skillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_SavesGithubUsernamePreference_WhenRequested()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-save-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-save-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-save-1",
-                AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var userConfigCommandService = Substitute.For<IUserConfigCommandService>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {
-                  "provider_id":"provider-github",
-                  "provider_name":"GitHub",
-                  "provider_slug":"github",
-                  "provider_type":"oauth2",
-                  "status":"active"
-                }
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-save-1","full_key":"full-key-save-1"}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(userConfigCommandService);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.Platform] = "lark",
-            [ChannelMetadataKeys.SenderId] = "ou_alice",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "agent_id": "skill-runner-save-1",
-                  "github_username": "alice",
-                  "save_github_username_preference": true,
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
-            doc.RootElement.GetProperty("github_username").GetString().Should().Be("alice");
-            doc.RootElement.GetProperty("github_username_preference_saved").GetBoolean().Should().BeTrue();
-            doc.RootElement.GetProperty("run_immediately_requested").GetBoolean().Should().BeFalse();
-
-            // Issue #436: the bot's RegistrationScopeId is shared across all Lark users using
-            // one bot, so the saved github_username must land in a per-end-user actor
-            // (`{bot}:{platform}:{sender}`), not the bot scope alone. SkillRunner.ScopeId
-            // (asserted elsewhere) keeps the bot scope for downstream NyxID-tenant tools.
-            await userConfigCommandService.Received(1)
-                .SaveGithubUsernameAsync("scope-1:lark:ou_alice", "alice", Arg.Any<CancellationToken>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RequiredProxyServices_AreMissing()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {
-                  "provider_id":"provider-github",
-                  "provider_name":"GitHub",
-                  "provider_slug":"github",
-                  "provider_type":"oauth2",
-                  "status":"active",
-                  "connected_at":"2026-04-15T00:00:00Z"
-                }
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "github_username": "alice",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            // #417: when a required slug has no UserService row, surface a structured
-            // `service_not_connected` error naming the slug (was: free-text "Missing required
-            // Nyx proxy services" wrapped in `{error: "..."}`). The lifecycle dispatch
-            // must NOT fire and no api-key request should fire.
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("error").GetString().Should().Be("service_not_connected");
-            doc.RootElement.GetProperty("slug").GetString().Should().Be("api-github");
-            doc.RootElement.GetProperty("hint").GetString().Should().Contain("api-github");
-            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
-            await skillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RequiredSlug_IsInactive()
-    {
-        // #417: when the user has a UserService row for the required slug but it's marked
-        // `is_active: false`, surface `service_inactive` rather than persisting an api-key
-        // that NyxID's enforcement will reject at proxy time.
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github","slug":"api-github","is_active":false,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "github_username": "alice",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("error").GetString().Should().Be("service_inactive");
-            doc.RootElement.GetProperty("slug").GetString().Should().Be("api-github");
-            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_OrgSharedSlug_IsViewerOnly()
-    {
-        // #417: when the only matching UserService row is org-shared with `allowed: false`
-        // (org viewer role), don't bind it as a proxy target — NyxID would reject the proxy
-        // call later as `org_role_insufficient`. Surface `service_org_viewer_only` so the
-        // user knows to ask an admin or connect a personal credential.
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"org","org_id":"org-1","role":"viewer","allowed":false}},
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "github_username": "alice",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("error").GetString().Should().Be("service_org_viewer_only");
-            doc.RootElement.GetProperty("slug").GetString().Should().Be("api-github");
-            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_AllowedServiceIds_AreUserServiceIds_NotCatalogIds()
-    {
-        // #417 regression pin. The bug: backend used `GET /proxy/services` (catalog list) and
-        // populated the new api-key's `allowed_service_ids` with `DownstreamService.id` (catalog
-        // UUIDs). NyxID's proxy enforcement (proxy.rs:1030) compares against `UserService.id`
-        // (per-user instance UUIDs). The mismatch was silently accepted on api-key create and
-        // 403'd on every proxy call. The fix routes through `/user-services`, returning per-user
-        // ids. Stub a response where the per-user `id` is *distinct from* `catalog_service_id`
-        // and pin that the api-key payload carries the per-user `id` value.
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-id-pin", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-id-pin", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-id-pin",
-                AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"user-svc-github-instance","slug":"api-github","catalog_service_id":"catalog-github","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"user-svc-lark-instance","slug":"api-lark-bot","catalog_service_id":"catalog-lark","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-id-pin","full_key":"full-key-id-pin"}""");
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
-            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "agent_id": "skill-runner-id-pin",
-                  "github_username": "alice",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
-
-            var apiKeyRequest = handler.Requests.Should()
-                .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
-                .Subject;
-            using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
-            var allowed = apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
-                .Select(static item => item.GetString())
-                .ToArray();
-            allowed.Should().BeEquivalentTo(["user-svc-github-instance", "user-svc-lark-instance"]);
-            allowed.Should().NotContain("catalog-github").And.NotContain("catalog-lark");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_PicksEligibleRow_When_DuplicateSlugRowsExist()
-    {
-        // Codex review (PR #418 r3141846173): a user with mixed bindings can have multiple
-        // UserService rows for the same slug — e.g. an org-shared `allowed:false` row and a
-        // personal active row. NyxID does not guarantee any ordering, so the resolver must
-        // pick the *eligible* row regardless of position. Pin the case where the ineligible
-        // row arrives first; the resolver must still produce the personal id and succeed.
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-dup", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-dup", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-dup",
-                AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
-            {
-              "tokens": [
-                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
-              ]
-            }
-            """);
-        // Two rows for `api-github` (ineligible org-viewer first, eligible personal second) and
-        // two rows for `api-lark-bot` (inactive first, active second). The resolver must pick
-        // the eligible rows in both cases, not the first-seen ones.
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-github-org","slug":"api-github","is_active":true,"credential_source":{"type":"org","org_id":"org-1","role":"viewer","allowed":false}},
-                {"id":"svc-github-personal","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark-stale","slug":"api-lark-bot","is_active":false,"credential_source":{"type":"personal"}},
-                {"id":"svc-lark-active","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-dup","full_key":"full-key-dup"}""");
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
-            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "agent_id": "skill-runner-dup",
-                  "github_username": "alice",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
-
-            var apiKeyRequest = handler.Requests.Should()
-                .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
-                .Subject;
-            using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
-            var allowed = apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
-                .Select(static item => item.GetString())
-                .ToArray();
-            allowed.Should().BeEquivalentTo(["svc-github-personal", "svc-lark-active"]);
-            allowed.Should().NotContain("svc-github-org").And.NotContain("svc-lark-stale");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsOAuthRequirementBeforeCreatingAgent()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """{"tokens":[]}""");
-        handler.Add(HttpMethod.Get, "/api/v1/catalog/api-github", """
-            {
-              "slug":"api-github",
-              "provider_config_id":"provider-github",
-              "provider_type":"oauth2",
-              "credential_mode":"user",
-              "documentation_url":"https://docs.github.com/en/apps/oauth-apps"
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/credentials", """
-            {
-              "provider_config_id":"provider-github",
-              "has_credentials":true
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/connect/oauth", """
-            {
-              "authorization_url":"https://github.example.com/oauth/start"
-            }
-            """);
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "github_username": "alice",
-                  "repositories": "aevatarAI/aevatar",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC",
-                  "run_immediately": true
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("oauth_required");
-            doc.RootElement.GetProperty("provider").GetString().Should().Be("GitHub");
-            doc.RootElement.GetProperty("provider_id").GetString().Should().Be("provider-github");
-            doc.RootElement.GetProperty("authorization_url").GetString().Should().Be("https://github.example.com/oauth/start");
-
-            await skillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
-            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsCredentialsRequirementBeforeOAuth()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """{"tokens":[]}""");
-        handler.Add(HttpMethod.Get, "/api/v1/catalog/api-github", """
-            {
-              "slug":"api-github",
-              "provider_config_id":"provider-github",
-              "provider_type":"oauth2",
-              "credential_mode":"user",
-              "documentation_url":"https://docs.github.com/en/apps/oauth-apps"
-            }
-            """);
-        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/credentials", """
-            {
-              "provider_config_id":"provider-github",
-              "has_credentials":false
-            }
-            """);
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "daily_report",
-                  "github_username": "alice",
-                  "repositories": "aevatarAI/aevatar",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC",
-                  "run_immediately": true
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("credentials_required");
-            doc.RootElement.GetProperty("provider").GetString().Should().Be("GitHub");
-            doc.RootElement.GetProperty("provider_id").GetString().Should().Be("provider-github");
-            doc.RootElement.GetProperty("documentation_url").GetString().Should().Be("https://docs.github.com/en/apps/oauth-apps");
-
-            handler.Requests.Should().NotContain(x => x.Path == "/api/v1/providers/provider-github/connect/oauth");
-            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
-            await skillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_SocialMedia_UpsertsWorkflowAndInitializesWorkflowAgent()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "workflow-agent-1",
-                AgentType = WorkflowAgentDefaults.AgentType,
-                TemplateName = WorkflowAgentDefaults.TemplateName,
-                Status = WorkflowAgentDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
-        workflowCommandPort.UpsertAsync(Arg.Any<ScopeWorkflowUpsertRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new ScopeWorkflowUpsertResult(
-                new ScopeWorkflowSummary(
-                    "scope-1",
-                    "social-media-workflow-agent-1",
-                    "Social Media Approval workflow-agent-1",
-                    "service-key",
-                    "social_media_workflow_agent_1",
-                    "workflow-actor-1",
-                    "rev-1",
-                    "deploy-1",
-                    "active",
-                    DateTimeOffset.UtcNow),
-                "rev-1",
-                    "workflow-actor-prefix",
-                    "workflow-actor-1")));
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        // Issue #216: social_media now requires both api-lark-bot (delivery) AND api-twitter
-        // (publish) so the agent api-key carries both entitlements. The api-twitter slug entry
-        // is what gates `service_not_connected` at create time; without it the user gets a
-        // structured error pointing them at NyxID's connect-twitter flow.
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-twitter","slug":"api-twitter","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-2","full_key":"full-key-2"}""");
-        // Twitter preflight (#216 mirror of #418 GitHub preflight): GET /users/me with the
-        // freshly minted key must succeed before the workflow gets upserted. NyxID forwards
-        // the Twitter v2 user payload verbatim on success (no `error` envelope).
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-twitter/users/me",
-            """{"data":{"id":"123456","name":"Alice","username":"alice"}}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(workflowCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "social_media",
-                  "agent_id": "workflow-agent-1",
-                  "topic": "Launch update for the new workflow feature",
-                  "audience": "Developers",
-                  "style": "Confident and concise",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC",
-                  "run_immediately": true
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
-            doc.RootElement.GetProperty("agent_id").GetString().Should().Be("workflow-agent-1");
-            doc.RootElement.GetProperty("agent_type").GetString().Should().Be(WorkflowAgentDefaults.AgentType);
-            doc.RootElement.GetProperty("workflow_id").GetString().Should().Be("social-media-workflow-agent-1");
-            doc.RootElement.GetProperty("api_key_id").GetString().Should().Be("key-2");
-
-            await workflowCommandPort.Received(1).UpsertAsync(
-                Arg.Is<ScopeWorkflowUpsertRequest>(request =>
-                    request.ScopeId == "scope-1" &&
-                    request.WorkflowId == "social-media-workflow-agent-1" &&
-                    request.WorkflowYaml.Contains("provider: nyxid", StringComparison.Ordinal) &&
-                    request.WorkflowYaml.Contains("type: human_approval", StringComparison.Ordinal) &&
-                    request.WorkflowYaml.Contains("delivery_target_id: \"workflow-agent-1\"", StringComparison.Ordinal)),
-                Arg.Any<CancellationToken>());
-
-            await workflowAgentPort.Received(1).InitializeAsync(
-                "workflow-agent-1",
-                Arg.Is<InitializeWorkflowAgentCommand>(c =>
-                    c.WorkflowActorId == "workflow-actor-1" &&
-                    c.ConversationId == "oc_chat_1" &&
-                    c.NyxApiKey == "full-key-2" &&
-                    c.ApiKeyId == "key-2" &&
-                    // Mirror of the daily_report p2p assertion: BuildFromInbound must pin the
-                    // sender open_id at delivery-target creation time so FeishuCardHumanInteraction
-                    // Port reads it through the catalog projection without re-deriving the type.
-                    c.LarkReceiveId == "ou_user_1" &&
-                    c.LarkReceiveIdType == "open_id"),
-                false,
-                Arg.Any<CancellationToken>());
-
-            await workflowAgentPort.Received(1).TriggerAsync(
-                "workflow-agent-1",
-                "create_agent",
-                null,
-                Arg.Any<CancellationToken>());
-
-            var apiKeyRequest = handler.Requests.Should()
-                .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
-                .Subject;
-            using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
-            // Issue #216: api-key now carries both `svc-lark` (approval delivery) and
-            // `svc-twitter` (publish). Order is irrelevant — `BeEquivalentTo` ignores it.
-            apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
-                .Select(static item => item.GetString())
-                .Should()
-                .BeEquivalentTo(["svc-lark", "svc-twitter"]);
-            // PR #418 review (4175529548): NyxID's `allow_all_services` defaults to `true`
-            // (api_keys.rs:105) and proxy enforcement only fires when `!allow_all_services`
-            // (proxy.rs:1030). Pin that the field is *present* and `false` so the resolved
-            // `allowed_service_ids` actually constrains the key's reach.
-            apiKeyDoc.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
-
-            // Workflow YAML must now route the approval `true` branch to the new
-            // `publish_to_twitter` step instead of straight to `done` — the publish step is
-            // what fulfills issue #216's "approve → publish to X" path. PR #461 review fix:
-            // also pin `on_error: skip` so a Twitter-side rejection (401/403/429/5xx) advances
-            // the run to `done` instead of terminating the entire workflow as failed; the
-            // module already surfaces categorized errors to Lark independently.
-            await workflowCommandPort.Received(1).UpsertAsync(
-                Arg.Is<ScopeWorkflowUpsertRequest>(request =>
-                    request.WorkflowYaml.Contains("type: twitter_publish", StringComparison.Ordinal) &&
-                    request.WorkflowYaml.Contains("publish_provider_slug: \"api-twitter\"", StringComparison.Ordinal) &&
-                    request.WorkflowYaml.Contains("\"true\": publish_to_twitter", StringComparison.Ordinal) &&
-                    request.WorkflowYaml.Contains("strategy: skip", StringComparison.Ordinal)),
-                Arg.Any<CancellationToken>());
-
-            // Twitter preflight must fire with the freshly minted api-key against /users/me
-            // before the workflow is upserted (mirror of GitHub preflight in #418).
-            handler.Requests.Should().Contain(r =>
-                r.Method == HttpMethod.Get &&
-                r.Path == "/api/v1/proxy/s/api-twitter/users/me");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
     public async Task ExecuteAsync_DeleteAgent_DisablesActor_RevokesApiKey_AndTombstonesRegistry()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+                Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "summary",
                     ApiKeyId = "key-1",
-                    OwnerNyxUserId = "user-1",
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
                 }),
-                Task.FromResult<UserAgentCatalogEntry?>(null));
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(Array.Empty<UserAgentCatalogEntry>()));
+                Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
+        //   New principle: Stub returns Task.CompletedTask; test asserts dispatch happened at the tool boundary.
         catalogCommandPort.TombstoneAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Observed)));
+            .Returns(Task.CompletedTask);
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-1", """{"ok":true}""");
@@ -1987,15 +54,18 @@ public sealed class AgentBuilderToolTests
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -2007,10 +77,13 @@ public sealed class AgentBuilderToolTests
                 """);
 
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("revoked_api_key_id").GetString().Should().Be("key-1");
             doc.RootElement.GetProperty("agents").GetArrayLength().Should().Be(0);
-            doc.RootElement.GetProperty("delete_notice").GetString().Should().Contain("Deleted agent");
+            doc.RootElement.GetProperty("delete_notice").GetString().Should().Contain("Delete submitted");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("propagating")
+                .And.Contain("/agents");
 
             await skillRunnerPort.Received(1).DisableAsync(
                 "skill-runner-1",
@@ -2027,46 +100,37 @@ public sealed class AgentBuilderToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
     [Fact]
-    public async Task ExecuteAsync_DeleteAgent_ReturnsAcceptedWithPropagatingHint_WhenTombstoneDoesNotReflectWithinBudget()
+    public async Task ExecuteAsync_DeleteAgent_ReturnsAcceptedWithPropagatingHint()
     {
-        // Production bug class: with the old 5 s polling budget, /delete-agent
-        // routinely returned "accepted" + "tombstone is not yet reflected" while
-        // the document was still visible to /agents minutes later. This guard
-        // proves that when the read model legitimately stays behind, the user-
-        // facing payload now nudges the user to retry rather than implying the
-        // delete might not have landed at all.
+        // Refactor (iter4/cluster-009):
+        //   Old pattern: Delete relied on command-port polling to decide whether to claim immediate deletion.
+        //   New principle: Delete returns accepted and points confirmation to the explicit /agents query path.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetAsync("skill-runner-stuck", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+        queryPort.GetForCallerAsync("skill-runner-stuck", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-stuck",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "summary",
                 ApiKeyId = "key-stuck",
-                OwnerNyxUserId = "user-1",
+                OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
             }));
-        // Read-model lags forever in this test: GetStateVersionAsync keeps
-        // returning the same version (the projector never advances past it),
-        // and GetAsync keeps surfacing the entry.
-        queryPort.GetStateVersionAsync("skill-runner-stuck", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(7L));
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(
-                [new UserAgentCatalogEntry { AgentId = "skill-runner-stuck", OwnerNyxUserId = "user-1" }]));
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+                [new UserAgentCatalogReadModelEntry { AgentId = "skill-runner-stuck", OwnerScope = OwnerScope.ForNyxIdNative("user-1") }]));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        // Tombstone is dispatched but the projection has not yet caught up; the
-        // port surfaces an Accepted outcome and the tool reports the propagating
-        // notice so the user knows to re-check /agents.
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
+        //   New principle: Stub returns Task.CompletedTask; test asserts accepted copy plus source/query guard behavior.
         catalogCommandPort.TombstoneAsync("skill-runner-stuck", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
+            .Returns(Task.CompletedTask);
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-stuck", """{"ok":true}""");
@@ -2077,24 +141,18 @@ public sealed class AgentBuilderToolTests
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
-        // Inject a shrunk wait budget per-instance (3 attempts × 1 ms) so the
-        // not-reflected branch fires in <100 ms instead of the production
-        // 15 s. Per-instance state replaces the earlier mutable-static
-        // approach (codex review r3141706856) so concurrent test classes
-        // that exercise other AgentBuilderTool paths cannot be poisoned by
-        // shrunk values leaking through process-global state.
-        var tool = new AgentBuilderTool(
-            services.BuildServiceProvider(),
-            projectionWaitAttempts: 3,
-            projectionWaitDelayMilliseconds: 1);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -2119,10 +177,15 @@ public sealed class AgentBuilderToolTests
             await catalogCommandPort.Received(1).TombstoneAsync(
                 "skill-runner-stuck",
                 Arg.Any<CancellationToken>());
+
+            await queryPort.DidNotReceive().GetStateVersionForCallerAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -2130,35 +193,32 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_RunAgent_DispatchesManualTrigger()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "summary",
             }));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -2171,6 +231,9 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-1");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("accepted for dispatch")
+                .And.Contain("/agent-status");
 
             await skillRunnerPort.Received(1).TriggerAsync(
                 "skill-runner-1",
@@ -2179,44 +242,185 @@ public sealed class AgentBuilderToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
     [Fact]
-    public async Task ExecuteAsync_RunAgent_RejectsDisabledAgent()
+    public async Task ExecuteAsync_AgentStatus_JoinsPerIdCatalogAndExecutionAtToolBoundary()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+        queryPort.GetForCallerAsync("skill-runner-join", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-join",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                Status = string.Empty,
+                ErrorCount = 0,
+                CatalogAuthorityStateVersion = 7,
+                CatalogLastEventId = "catalog-7",
+            }));
+
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        executionQueryPort.GetAsync("skill-runner-join", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SkillRunnerExecutionDocument?>(new SkillRunnerExecutionDocument
+            {
+                Id = "skill-runner-join",
+                StateVersion = 3,
+                LastEventId = "runner-3",
+                Status = SkillRunnerDefaults.StatusError,
+                ErrorCount = 2,
+                LastError = "tool failed",
+            }));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "agent_status",
+                  "agent_id": "skill-runner-join"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-join");
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusError);
+            doc.RootElement.GetProperty("error_count").GetInt32().Should().Be(2);
+            doc.RootElement.GetProperty("last_error").GetString().Should().Be("tool failed");
+
+            await queryPort.Received(1).GetForCallerAsync(
+                "skill-runner-join",
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await executionQueryPort.Received(1).GetAsync(
+                "skill-runner-join",
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ListAgents_JoinsCatalogAndExecutionAtToolBoundary()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+            [
+                new UserAgentCatalogReadModelEntry
+                {
+                    AgentId = "skill-runner-list",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "summary",
+                },
+            ]));
+
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        executionQueryPort.QueryByAgentIdsAsync(
+                Arg.Is<IReadOnlyCollection<string>>(ids => ids.Contains("skill-runner-list")),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyDictionary<string, SkillRunnerExecutionDocument>>(
+                new Dictionary<string, SkillRunnerExecutionDocument>(StringComparer.Ordinal)
+                {
+                    ["skill-runner-list"] = new()
+                    {
+                        Id = "skill-runner-list",
+                        StateVersion = 4,
+                        LastEventId = "runner-4",
+                        Status = SkillRunnerDefaults.StatusRunning,
+                        ErrorCount = 1,
+                    },
+                }));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list_agents"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            var agent = doc.RootElement.GetProperty("agents").EnumerateArray().Should().ContainSingle().Subject;
+            agent.GetProperty("agent_id").GetString().Should().Be("skill-runner-list");
+            agent.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
+            agent.GetProperty("error_count").GetInt32().Should().Be(1);
+
+            await queryPort.Received(1).QueryByCallerAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await executionQueryPort.Received(1).QueryByAgentIdsAsync(
+                Arg.Is<IReadOnlyCollection<string>>(ids => ids.Contains("skill-runner-list")),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RunAgent_DispatchesEvenWhenPresentationStatusIsDisabled()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "summary",
                 Status = SkillRunnerDefaults.StatusDisabled,
             }));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -2226,332 +430,122 @@ public sealed class AgentBuilderToolTests
                 }
                 """);
 
-            result.Should().Contain("is disabled");
-            await skillRunnerPort.DidNotReceive().TriggerAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<CancellationToken>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_RunAgent_DispatchesWorkflowTrigger()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "workflow-agent-1",
-                AgentType = WorkflowAgentDefaults.AgentType,
-                TemplateName = WorkflowAgentDefaults.TemplateName,
-                Status = WorkflowAgentDefaults.StatusRunning,
-            }));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "run_agent",
-                  "agent_id": "workflow-agent-1",
-                  "revision_feedback": "Need stronger hook"
-                }
-                """);
-
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            doc.RootElement.GetProperty("agent_id").GetString().Should().Be("workflow-agent-1");
-            doc.RootElement.GetProperty("note").GetString().Should().Contain("revision feedback");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("accepted for dispatch")
+                .And.Contain("/agent-status");
 
-            await workflowAgentPort.Received(1).TriggerAsync(
-                "workflow-agent-1",
+            await skillRunnerPort.Received(1).TriggerAsync(
+                "skill-runner-1",
                 "run_agent",
-                "Need stronger hook",
                 Arg.Any<CancellationToken>());
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
     [Fact]
-    public async Task ExecuteAsync_DisableAgent_ReturnsStatusFast_WhenProjectionAdvancesOnFirstPoll()
+    public async Task ExecuteAsync_DisableAgent_DispatchesDisableAndReturnsAcceptedWithoutPolling()
     {
-        // Pins the new version+status dual-gate fast-exit contract: when the
-        // caller-captured baseline is X and the read model advances to X+1
-        // with status==expected on the very first post-dispatch poll, the
-        // wait helper must exit immediately (<1 s) instead of running the
-        // full 15 s budget. This guards against two regressions:
-        //
-        //  1. Re-introducing a status-only check (codex P3 in this PR's
-        //     thread): would accept a stale replica that already happens to
-        //     hold the expected historical status, returning before the
-        //     dispatch is actually materialized.
-        //
-        //  2. Re-introducing the *helper-side* baseline capture (codex P2 in
-        //     PR #413's first review pass): would capture versionBefore
-        //     after dispatch, so a fast projection that already advanced
-        //     the version would make versionAfter == versionBefore on every
-        //     poll and burn the full budget.
-        //
-        // Both regressions make this test fail (case 1 by accepting before
-        // the dispatch, case 2 by deadlocking past the 1 s ceiling).
+        // Refactor (iter1/cluster-002):
+        //   Old pattern: Captured readmodel version, dispatched lifecycle, then delayed-looped for projected status.
+        //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetAsync("skill-runner-fast", Arg.Any<CancellationToken>())
-            .Returns(
-                // RequireManagedAgentAsync's existence check sees the pre-disable status.
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "skill-runner-fast",
-                    AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusRunning,
-                }),
-                // Wait helper's first poll sees the materialized disable.
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "skill-runner-fast",
-                    AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusDisabled,
-                }));
-        // Caller's pre-dispatch baseline read returns 42; helper's post-
-        // dispatch poll sees 43 (the projection materialized the disable on
-        // the very next state event). Both checks pass on the first iteration.
-        queryPort.GetStateVersionAsync("skill-runner-fast", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(42L),
-                Task.FromResult<long?>(43L));
+        queryPort.GetForCallerAsync("skill-runner-fast", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-fast",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "disable_agent",
                   "agent_id": "skill-runner-fast"
                 }
                 """);
-            stopwatch.Stop();
 
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
-            // 1 s ceiling: any regression that prevents a dual-gate first-poll
-            // exit would burn the full ProjectionWaitAttempts ×
-            // ProjectionWaitDelayMilliseconds budget (15 s by default).
-            stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1));
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_DisableAgent_KeepsWaitingWhenStatusMatchesButVersionStale()
-    {
-        // Stale-replica defense: a read replica can surface a historically
-        // expected status (e.g., a previous disable→enable→disable cycle
-        // left the entry's last-projected status as Disabled in some replica)
-        // while the current actor has not yet processed *this* dispatch.
-        // Status-only polling would accept this replica and return prematurely
-        // before the dispatch materializes. The dual gate keeps waiting
-        // until version advances.
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetAsync("skill-runner-stale", Arg.Any<CancellationToken>())
-            .Returns(
-                // RequireManagedAgentAsync sees the canonical Running state
-                // because that is what the caller observed when issuing the
-                // disable. (A different replica surfaces stale Disabled below.)
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "skill-runner-stale",
-                    AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusRunning,
-                }),
-                // Helper's terminal fallback (after budget exhausts) returns
-                // a stale-but-expected-looking Disabled. With status-only
-                // polling the wait would have returned this entry on the
-                // first iteration. With the dual gate the version stays at
-                // baseline, so the version check short-circuits before the
-                // status check is even reached.
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "skill-runner-stale",
-                    AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusDisabled,
-                }));
-        // Caller baseline = 7; replica's view never advances past 7. Helper
-        // must keep iterating; we shrink the budget so the test finishes fast.
-        queryPort.GetStateVersionAsync("skill-runner-stale", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(7L));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
-        // Shrunk budget so the version-stale path finishes in <100 ms.
-        var tool = new AgentBuilderTool(
-            services.BuildServiceProvider(),
-            projectionWaitAttempts: 3,
-            projectionWaitDelayMilliseconds: 1);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "disable_agent",
-                  "agent_id": "skill-runner-stale"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-
-            // Path-level assertion: the helper exhausted the injected
-            // 3-attempt budget instead of returning on the first status
-            // match: 1 caller baseline + 3 helper iterations = 4 calls.
-            // With status-only polling the helper would have returned on
-            // iteration 0 without ever calling GetStateVersionAsync, so
-            // total would be 1. Tightly coupled to the injected budget by
-            // design — that is what pins the contract.
-            await queryPort.Received(4).GetStateVersionAsync("skill-runner-stale", Arg.Any<CancellationToken>());
-
-            // Outcome-level assertion: when the dual gate never passes, the
-            // user-facing payload must NOT claim success. The wait helper
-            // returns Confirmed=false (no un-gated GetAsync fallback), and
-            // DisableAgentAsync surfaces the pre-dispatch entry plus an
-            // honest "submitted / propagating" note. A regression that
-            // re-introduces the un-gated final read OR drops the
-            // confirmed/unconfirmed branching makes this test fail by
-            // surfacing "Scheduling paused" + status=Disabled despite the
-            // dual gate having been violated.
             doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
             var note = doc.RootElement.GetProperty("note").GetString();
-            note.Should().Contain("Disable submitted")
+            note.Should().Contain("Disable accepted")
+                .And.Contain("propagating")
                 .And.Contain("/agent-status")
                 .And.NotContain("Scheduling paused");
+
+            await skillRunnerPort.Received(1).DisableAsync(
+                "skill-runner-fast",
+                "disable_agent",
+                Arg.Any<CancellationToken>());
+            await queryPort.DidNotReceive().GetStateVersionForCallerAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
     [Fact]
-    public async Task ExecuteAsync_DisableAgent_DispatchesDisableAndReturnsStatus()
+    public async Task ExecuteAsync_DisableAgent_DispatchesEvenWhenPresentationStatusIsDisabled()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "skill-runner-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusRunning,
-                    ScheduleCron = "0 9 * * *",
-                    ScheduleTimezone = "UTC",
-                }),
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "skill-runner-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusDisabled,
-                    ScheduleCron = "0 9 * * *",
-                    ScheduleTimezone = "UTC",
-                }));
-        // Caller's pre-dispatch baseline read returns 5; helper's post-dispatch
-        // poll sees 6, satisfying the new version+status dual gate.
-        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(5L),
-                Task.FromResult<long?>(6L));
+        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                Status = SkillRunnerDefaults.StatusDisabled,
+                ScheduleCron = "0 9 * * *",
+                ScheduleTimezone = "UTC",
+            }));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -2563,7 +557,9 @@ public sealed class AgentBuilderToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
-            doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling paused");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("Disable accepted")
+                .And.Contain("/agent-status");
 
             await skillRunnerPort.Received(1).DisableAsync(
                 "skill-runner-1",
@@ -2572,62 +568,46 @@ public sealed class AgentBuilderToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
     [Fact]
-    public async Task ExecuteAsync_EnableAgent_DispatchesEnableAndReturnsStatus()
+    public async Task ExecuteAsync_EnableAgent_DispatchesEnableAndReturnsAcceptedWithoutPolling()
     {
+        // Refactor (iter1/cluster-002):
+        //   Old pattern: Captured readmodel version, dispatched lifecycle, then delayed-looped for projected status.
+        //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "skill-runner-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusDisabled,
-                    ScheduleCron = "0 9 * * *",
-                    ScheduleTimezone = "UTC",
-                }),
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "skill-runner-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusRunning,
-                    ScheduleCron = "0 9 * * *",
-                    ScheduleTimezone = "UTC",
-                }));
-        // Caller's pre-dispatch baseline read returns 5; helper's post-dispatch
-        // poll sees 6, satisfying the new version+status dual gate.
-        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(5L),
-                Task.FromResult<long?>(6L));
+        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                Status = SkillRunnerDefaults.StatusDisabled,
+                ScheduleCron = "0 9 * * *",
+                ScheduleTimezone = "UTC",
+            }));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -2638,471 +618,226 @@ public sealed class AgentBuilderToolTests
                 """);
 
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
-            doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling resumed");
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
+            var note = doc.RootElement.GetProperty("note").GetString();
+            note.Should().Contain("Enable accepted")
+                .And.Contain("propagating")
+                .And.Contain("/agent-status")
+                .And.NotContain("Scheduling resumed");
 
             await skillRunnerPort.Received(1).EnableAsync(
                 "skill-runner-1",
                 "enable_agent",
                 Arg.Any<CancellationToken>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_DisableAgent_DispatchesWorkflowDisableAndReturnsStatus()
-    {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "workflow-agent-1",
-                    AgentType = WorkflowAgentDefaults.AgentType,
-                    TemplateName = WorkflowAgentDefaults.TemplateName,
-                    Status = WorkflowAgentDefaults.StatusRunning,
-                    ScheduleCron = "0 9 * * *",
-                    ScheduleTimezone = "UTC",
-                }),
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "workflow-agent-1",
-                    AgentType = WorkflowAgentDefaults.AgentType,
-                    TemplateName = WorkflowAgentDefaults.TemplateName,
-                    Status = WorkflowAgentDefaults.StatusDisabled,
-                    ScheduleCron = "0 9 * * *",
-                    ScheduleTimezone = "UTC",
-                }));
-        // Caller's pre-dispatch baseline read returns 5; helper's post-dispatch
-        // poll sees 6, satisfying the new version+status dual gate.
-        queryPort.GetStateVersionAsync("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(5L),
-                Task.FromResult<long?>(6L));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "disable_agent",
-                  "agent_id": "workflow-agent-1"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be(WorkflowAgentDefaults.StatusDisabled);
-            doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling paused");
-
-            await workflowAgentPort.Received(1).DisableAsync(
-                "workflow-agent-1",
-                "disable_agent",
+            await queryPort.DidNotReceive().GetStateVersionForCallerAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
                 Arg.Any<CancellationToken>());
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_SocialMedia_FailsClosed_When_TwitterProxyReturns401()
+    public async Task ExecuteAsync_LifecycleCommands_DoNotReadExecutionStatusForAdmission()
     {
-        // Issue aevatarAI/aevatar#216: social_media now publishes approved drafts to Twitter via
-        // NyxID's api-twitter proxy. Mirror of the GitHub preflight (#418): probe /users/me with
-        // the freshly minted api-key; if NyxID has no OAuth grant for the user (401), abort
-        // creation, return a structured `twitter_oauth_required` error, and best-effort revoke
-        // the orphan key so retries don't accumulate.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
-              "services": [
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-twitter","slug":"api-twitter","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-401","full_key":"full-key-401"}""");
-        // 401 from /users/me through NyxID — common when the user has not connected Twitter
-        // yet at NyxID, or when the OAuth grant was revoked at x.com/settings.
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-twitter/users/me",
-            """{"error": true, "status": 401, "body": "{\"title\":\"Unauthorized\",\"detail\":\"Authenticating with OAuth 2.0 Application-Only is forbidden for this endpoint.\"}"}""");
-        // Pin the orphan-key revocation: per #418's pattern, every preflight failure must
-        // best-effort delete the api-key so retries don't pile up keys in the user's account.
-        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-401", """{"deleted":true}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(workflowCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "social_media",
-                  "agent_id": "workflow-agent-twitter-401",
-                  "topic": "Launch update",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("error").GetString().Should().Be("twitter_oauth_required");
-            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(401);
-            doc.RootElement.GetProperty("hint").GetString()!.ToLowerInvariant().Should().Contain("re-authorize");
-
-            // Workflow upsert and agent init must NOT have run — preflight aborts before that.
-            await workflowCommandPort.DidNotReceiveWithAnyArgs().UpsertAsync(default!, default);
-            await workflowAgentPort.DidNotReceiveWithAnyArgs().InitializeAsync(default!, default!, default);
-
-            // Orphan-key revocation fires (mirror of #418 r3141846175 for daily_report).
-            handler.Requests.Should().Contain(r =>
-                r.Method == HttpMethod.Delete &&
-                r.Path == "/api/v1/api-keys/key-401");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_SocialMedia_FailsClosed_When_TwitterProxyReturns403()
-    {
-        // 403 here means "the OAuth token reached Twitter but tweet.write was not in scope".
-        // Default NyxID seed includes tweet.write (provider_service.rs:405-450), so a 403 in
-        // production typically means a regression on the seed side or the bound token was
-        // issued before tweet.write was added — surface this as `twitter_proxy_access_denied`
-        // (distinct from 401) so the user-facing hint can steer ops vs the user.
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null));
-
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-twitter","slug":"api-twitter","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-403","full_key":"full-key-403"}""");
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-twitter/users/me",
-            """{"error": true, "status": 403, "body": "{\"title\":\"Forbidden\",\"detail\":\"Your client app is not configured with the appropriate oauth2 app permissions.\"}"}""");
-        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-403", """{"deleted":true}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(workflowCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "social_media",
-                  "agent_id": "workflow-agent-twitter-403",
-                  "topic": "Launch update",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("error").GetString().Should().Be("twitter_proxy_access_denied");
-            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(403);
-            doc.RootElement.GetProperty("hint").GetString()!.ToLowerInvariant().Should().Contain("tweet.write");
-
-            await workflowCommandPort.DidNotReceiveWithAnyArgs().UpsertAsync(default!, default);
-            await workflowAgentPort.DidNotReceiveWithAnyArgs().InitializeAsync(default!, default!, default);
-            handler.Requests.Should().Contain(r =>
-                r.Method == HttpMethod.Delete &&
-                r.Path == "/api/v1/api-keys/key-403");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_SocialMedia_FailsClosed_When_TwitterServiceNotConnected()
-    {
-        // The flip side of the preflight: if api-twitter is not present in user-services at all,
-        // the existing ResolveProxyServiceIdsAsync path returns `service_not_connected` BEFORE
-        // we mint the api-key. This is the "user has not added Twitter at NyxID at all" signal.
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        // Notice: no api-twitter row.
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(workflowCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            ["scope_id"] = "scope-1",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "social_media",
-                  "agent_id": "workflow-agent-no-twitter",
-                  "topic": "Launch update",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC"
-                }
-                """);
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("error").GetString().Should().Be("service_not_connected");
-            doc.RootElement.GetProperty("slug").GetString().Should().Be("api-twitter");
-            // Critical invariant: no api-key was ever minted because the slug check failed up
-            // front. Catching this here matters because the daily_report tests already pin the
-            // same invariant for api-github — keep parity.
-            handler.Requests.Should().NotContain(r =>
-                r.Method == HttpMethod.Post && r.Path == "/api/v1/api-keys");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_CreateAgent_SocialMedia_PreflightProbesConfiguredPublishSlug_NotHardcodedApiTwitter()
-    {
-        // PR #461 review (commit d9f6df81 follow-up): when a caller passes a custom
-        // `publish_provider_slug` (e.g. a tenant-staged Twitter mirror like `api-x-staging`),
-        // the preflight must validate THAT slug — not the hardcoded `"api-twitter"` default.
-        // Otherwise we mint a key for the custom slug, generate workflow YAML pointing at the
-        // custom slug, but green-light the create flow against an unrelated proxy (or 404 on
-        // the unmocked default route). Pin that the GET probe lands on the configured slug's
-        // path so this regresses loudly if anyone reverts to a literal "api-twitter".
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null));
-        queryPort.GetAsync("workflow-agent-custom-slug", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "workflow-agent-custom-slug",
-                AgentType = WorkflowAgentDefaults.AgentType,
-                TemplateName = WorkflowAgentDefaults.TemplateName,
-                Status = WorkflowAgentDefaults.StatusRunning,
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                Status = string.Empty,
             }));
 
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
-        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-
-        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
-        workflowCommandPort.UpsertAsync(Arg.Any<ScopeWorkflowUpsertRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new ScopeWorkflowUpsertResult(
-                new ScopeWorkflowSummary(
-                    "scope-1",
-                    "social-media-workflow-agent-custom-slug",
-                    "Social Media Approval workflow-agent-custom-slug",
-                    "service-key",
-                    "social_media_workflow_agent_custom_slug",
-                    "workflow-actor-1",
-                    "rev-1",
-                    "deploy-1",
-                    "active",
-                    DateTimeOffset.UtcNow),
-                "rev-1",
-                "workflow-actor-prefix",
-                "workflow-actor-1")));
-
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
-            {
-              "services": [
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}},
-                {"id":"svc-x-staging","slug":"api-x-staging","is_active":true,"credential_source":{"type":"personal"}}
-              ]
-            }
-            """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-custom","full_key":"full-key-custom"}""");
-        // Mock ONLY the configured slug's preflight path. The default `api-twitter` path
-        // is intentionally NOT mocked — RoutingJsonHandler returns 404 for unknown routes,
-        // which would land in the preflight's "non-401/403 → success" branch and silently
-        // green-light the create. The successful response below proves we hit the right slug.
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-x-staging/users/me",
-            """{"data":{"id":"123456","name":"Alice","username":"alice"}}""");
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
         services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowAgentPort);
-        services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(workflowCommandPort);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
-            [ChannelMetadataKeys.SenderId] = "ou_user_1",
-            ["scope_id"] = "scope-1",
-        };
+        });
         try
         {
-            var result = await tool.ExecuteAsync("""
-                {
-                  "action": "create_agent",
-                  "template": "social_media",
-                  "agent_id": "workflow-agent-custom-slug",
-                  "topic": "Launch update",
-                  "schedule_cron": "0 9 * * *",
-                  "schedule_timezone": "UTC",
-                  "publish_provider_slug": "api-x-staging"
-                }
-                """);
+            await tool.ExecuteAsync("""{"action":"run_agent","agent_id":"skill-runner-1"}""");
+            await tool.ExecuteAsync("""{"action":"disable_agent","agent_id":"skill-runner-1"}""");
+            await tool.ExecuteAsync("""{"action":"enable_agent","agent_id":"skill-runner-1"}""");
 
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().BeOneOf("created", "accepted");
-
-            // The preflight must fire against the configured slug, NOT the default api-twitter.
-            handler.Requests.Should().Contain(r =>
-                r.Method == HttpMethod.Get &&
-                r.Path == "/api/v1/proxy/s/api-x-staging/users/me");
-            handler.Requests.Should().NotContain(r =>
-                r.Method == HttpMethod.Get &&
-                r.Path == "/api/v1/proxy/s/api-twitter/users/me");
-
-            // Workflow YAML must reference the custom slug end-to-end (not just at preflight).
-            await workflowCommandPort.Received(1).UpsertAsync(
-                Arg.Is<ScopeWorkflowUpsertRequest>(request =>
-                    request.WorkflowYaml.Contains("publish_provider_slug: \"api-x-staging\"", StringComparison.Ordinal)),
+            await executionQueryPort.DidNotReceive().GetAsync(
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>());
+            await executionQueryPort.DidNotReceive().QueryByAgentIdsAsync(
+                Arg.Any<IReadOnlyCollection<string>>(),
                 Arg.Any<CancellationToken>());
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public void Constructor_Requires_Typed_Dependencies()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        var nyxClientFactory = Substitute.For<INyxIdApiClientFactory>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+
+        var missingQuery = () => new AgentBuilderTool(null!, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingExecutionQuery = () => new AgentBuilderTool(queryPort, null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingNyxFactory = () => new AgentBuilderTool(queryPort, executionQueryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSkillRunner = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
+        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
+        var missingCallerScope = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
+        var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSourceNyxFactory = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
+        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
+        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
+
+        missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
+        missingNyxFactory.Should().Throw<ArgumentNullException>().WithParameterName("nyxClientFactory");
+        missingSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
+        missingCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
+        missingCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
+        missingSourceQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingSourceExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
+        missingSourceNyxFactory.Should().Throw<ArgumentNullException>().WithParameterName("nyxClientFactory");
+        missingSourceSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
+        missingSourceCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
+        missingSourceCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReturnsStructuredError_WhenCallerScopeUnavailable()
+    {
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(null));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list_agents"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("caller_scope_unavailable");
+            doc.RootElement.GetProperty("hint").GetString().Should().Contain("Re-authenticate");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
         }
     }
 
     [Fact]
     public async Task ToolSource_Always_ReturnsTool()
     {
-        var source = new AgentBuilderToolSource(new ServiceCollection().BuildServiceProvider());
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(new RoutingJsonHandler()) { BaseAddress = new Uri("https://nyx.example.com") });
+        var nyxClientFactory = new TestNyxIdApiClientFactory(nyxClient);
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
+
+        var source = new AgentBuilderToolSource(
+            queryPort,
+            Substitute.For<ISkillRunnerExecutionQueryPort>(),
+            nyxClientFactory,
+            skillRunnerPort,
+            catalogCommandPort,
+            callerScopeResolver);
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().ContainSingle();
         tools[0].Name.Should().Be("agent_builder");
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tools[0].ExecuteAsync("""{"action":"list_agents"}""");
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("total").GetInt32().Should().Be(0);
+
+            await queryPort.Received(1).QueryByCallerAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    private static AgentBuilderTool CreateTool(IServiceCollection services)
+    {
+        var provider = services.BuildServiceProvider();
+        return new AgentBuilderTool(
+            provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
+            provider.GetService<ISkillRunnerExecutionQueryPort>() ?? Substitute.For<ISkillRunnerExecutionQueryPort>(),
+            provider.GetRequiredService<INyxIdApiClientFactory>(),
+            provider.GetRequiredService<ISkillRunnerCommandPort>(),
+            provider.GetRequiredService<IUserAgentCatalogCommandPort>(),
+            provider.GetRequiredService<ICallerScopeResolver>(),
+            provider.GetService<ILogger<AgentBuilderTool>>());
+    }
+
+    private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
+    {
+        private readonly NyxIdApiClient _client;
+
+        public TestNyxIdApiClientFactory(NyxIdApiClient? client = null)
+        {
+            _client = client ?? new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(new RoutingJsonHandler())
+                {
+                    BaseAddress = new Uri("https://nyx.example.com"),
+                });
+        }
+
+        public NyxIdApiClient CreateClient() => _client;
     }
 
     private sealed class RoutingJsonHandler : HttpMessageHandler
@@ -3141,77 +876,4 @@ public sealed class AgentBuilderToolTests
 
     private sealed record RecordedRequest(HttpMethod Method, string Path, string? Body);
 
-    private sealed class StubUserConfigQueryPort : IUserConfigQueryPort
-    {
-        private readonly StudioUserConfig _config;
-
-        public StubUserConfigQueryPort(StudioUserConfig config)
-        {
-            _config = config;
-        }
-
-        public Task<StudioUserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(_config);
-
-        public Task<StudioUserConfig> GetAsync(string scopeId, CancellationToken ct = default) => Task.FromResult(_config);
-    }
-
-    private sealed class RecordingUserConfigCommandService : IUserConfigCommandService
-    {
-        public string? SavedScopeId { get; private set; }
-        public StudioUserConfig? SavedConfig { get; private set; }
-        public string? SavedGithubUsername { get; private set; }
-
-        public Task SaveAsync(StudioUserConfig config, CancellationToken ct = default)
-        {
-            SavedConfig = config;
-            return Task.CompletedTask;
-        }
-
-        public Task SaveAsync(string scopeId, StudioUserConfig config, CancellationToken ct = default)
-        {
-            SavedScopeId = scopeId;
-            return SaveAsync(config, ct);
-        }
-
-        public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default)
-        {
-            SavedScopeId = scopeId;
-            SavedGithubUsername = githubUsername;
-            return Task.CompletedTask;
-        }
-    }
-
-    /// <summary>
-    /// Minimal in-memory <see cref="ILogger{T}"/> that records each log call so tests can assert
-    /// on level + formatted message. Avoids a full Microsoft.Extensions.Logging.Testing dependency
-    /// for a single observability assertion.
-    /// </summary>
-    private sealed class ListLogger<T> : ILogger<T>
-    {
-        public List<LogEntry> Entries { get; } = new();
-
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-        {
-            ArgumentNullException.ThrowIfNull(formatter);
-            Entries.Add(new LogEntry(logLevel, formatter(state, exception)));
-        }
-
-        public sealed record LogEntry(LogLevel Level, string Message);
-
-        private sealed class NullScope : IDisposable
-        {
-            public static readonly NullScope Instance = new();
-
-            public void Dispose() { }
-        }
-    }
 }

@@ -1,7 +1,6 @@
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.Voice;
-using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.LLMProviders.NyxId;
@@ -19,16 +18,24 @@ using Aevatar.AI.Infrastructure.Local.Adapters;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Integration.AI;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.MiniCPM;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.OpenAI;
+using Aevatar.Foundation.VoicePresence.Projection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -47,7 +54,12 @@ public sealed class AevatarAIFeatureOptions
     public bool EnableMCPTools { get; set; }
     public bool EnableSkills { get; set; }
     public bool EnableOrnnSkills { get; set; }
-    public string? OrnnBaseUrl { get; set; }
+    /// <summary>
+    /// Optional override for the NyxID-bound slug pointing at the Ornn skill API. Defaults to
+    /// chrono-ornn's canonical <c>"ornn"</c> when null/empty. Override only if the deployment's
+    /// NyxID catalog uses a different slug (e.g. organisations that re-registered the service).
+    /// </summary>
+    public string? OrnnNyxIdSlug { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
     public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
@@ -59,6 +71,7 @@ public sealed class AevatarAIFeatureOptions
     public string? ServiceInvokeTenantId { get; set; }
     public string? ServiceInvokeAppId { get; set; }
     public string? ServiceInvokeNamespace { get; set; }
+    public bool BypassServiceInvokeApproval { get; set; }
     public bool EnableWebTools { get; set; }
     public string? WebSearchNyxIdSlug { get; set; }
     public string? WebSearchApiBaseUrl { get; set; }
@@ -81,7 +94,8 @@ public static class ServiceCollectionExtensions
         var options = new AevatarAIFeatureOptions();
         configure?.Invoke(options);
 
-        services.TryAddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.TryAddSingleton<IRoleAgentTypeResolver, WorkflowRoleGAgentTypeResolver>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
@@ -137,13 +151,51 @@ public static class ServiceCollectionExtensions
         if (registrations.Count == 0)
             return;
 
-        services.TryAddSingleton<InProcessActorVoicePresenceSessionResolver>();
-        services.TryAddSingleton<RemoteActorVoicePresenceSessionResolver>();
-        services.TryAddSingleton<IVoicePresenceSessionResolver, CompositeVoicePresenceSessionResolver>();
+        services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
+        services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
+        services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, NoOpVoicePresenceTransportAttachmentPort>();
+        services.TryAddSingleton<IVoiceVolatileMediaStreamPort, FailClosedVoiceVolatileMediaStreamPort>();
+        services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
+        services.AddVoicePresenceCapabilityProjection();
+        services.AddVoicePresenceCapabilityProjectionStore(configuration);
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
         foreach (var registration in registrations)
             services.AddSingleton(registration);
+    }
+
+    private static IServiceCollection AddVoicePresenceCapabilityProjectionStore(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var documentProvider = ProjectionDocumentProviderConfiguration.Resolve(configuration, "VoicePresence");
+
+        if (HasAnyVoicePresenceCapabilityReader(services))
+            return services;
+
+        if (documentProvider.ElasticsearchEnabled)
+        {
+            services.AddElasticsearchDocumentProjectionStore<VoicePresenceCapabilityReadModel, string>(
+                optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<VoicePresenceCapabilityReadModel>>().Metadata,
+                keySelector: static readModel => readModel.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<VoicePresenceCapabilityReadModel, string>(
+                keySelector: static readModel => readModel.Id,
+                keyFormatter: static key => key,
+                defaultSortSelector: static readModel => readModel.UpdatedAt);
+        }
+
+        return services;
+    }
+
+    private static bool HasAnyVoicePresenceCapabilityReader(IServiceCollection services)
+    {
+        return services.Any(x =>
+            x.ServiceType == typeof(IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>));
     }
 
     private static List<VoicePresenceModuleRegistration> BuildVoicePresenceModuleRegistrations(
@@ -882,16 +934,24 @@ public static class ServiceCollectionExtensions
             o.TenantId = options.ServiceInvokeTenantId;
             o.AppId = options.ServiceInvokeAppId;
             o.Namespace = options.ServiceInvokeNamespace;
+            o.BypassInvokeApproval = options.BypassServiceInvokeApproval;
             o.EnableDynamicScopeResolution = true;
         });
     }
 
     private static void RegisterOrnnSkills(IServiceCollection services, AevatarAIFeatureOptions options)
     {
-        if (string.IsNullOrWhiteSpace(options.OrnnBaseUrl))
-            return;
-
-        services.AddOrnnSkills(o => o.BaseUrl = options.OrnnBaseUrl);
+        // EnableOrnnSkills is the only gate. OrnnSkillClient routes through NyxID's proxy
+        // (slug defaults to chrono-ornn's canonical "ornn") so the upstream Ornn URL is
+        // not a configuration concern at this layer — NyxIdToolOptions.BaseUrl already
+        // supplies the NyxID host, and NyxID resolves the Ornn backend from the catalog
+        // entry matching the slug. Deployments override the slug only when their NyxID
+        // catalog re-registered the service under a non-default name.
+        services.AddOrnnSkills(o =>
+        {
+            if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
+                o.NyxIdSlug = options.OrnnNyxIdSlug;
+        });
     }
 
     private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)

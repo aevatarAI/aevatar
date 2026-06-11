@@ -1,19 +1,31 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.AI.ToolProviders.AgentCatalog;
 
 public sealed class AgentDeliveryTargetToolSource : IAgentToolSource
 {
-    private readonly IServiceProvider _serviceProvider;
+    // Refactor (iter83/cluster-083-agent-tool-source-root-provider-locator):
+    //   Old pattern: tool source captures root IServiceProvider; tools resolve business ports via service locator in ExecuteAsync
+    //   New principle: tool source + tools constructor-inject typed contracts; no root provider lookup
+    private readonly IUserAgentCatalogQueryPort _queryPort;
+    private readonly IUserAgentCatalogCommandPort _commandPort;
+    private readonly ICallerScopeResolver _callerScopeResolver;
 
-    public AgentDeliveryTargetToolSource(IServiceProvider serviceProvider)
+    public AgentDeliveryTargetToolSource(
+        IUserAgentCatalogQueryPort queryPort,
+        IUserAgentCatalogCommandPort commandPort,
+        ICallerScopeResolver callerScopeResolver)
     {
-        _serviceProvider = serviceProvider;
+        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+        _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
+        _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        IReadOnlyList<IAgentTool> tools = [new AgentDeliveryTargetTool(_serviceProvider)];
+        ct.ThrowIfCancellationRequested();
+        IReadOnlyList<IAgentTool> tools = [new AgentDeliveryTargetTool(_queryPort, _commandPort, _callerScopeResolver)];
         return Task.FromResult(tools);
     }
 }

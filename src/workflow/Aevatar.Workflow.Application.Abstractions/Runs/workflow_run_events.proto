@@ -183,6 +183,18 @@ message WorkflowHumanInputRequestCustomPayload {
   repeated string options = 8;
   string content = 9;
   string delivery_target_id = 10;
+  bool secure = 11;
+  string redacted_output = 12;
+}
+
+message WorkflowToolApprovalSuspensionCustomPayload {
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string tool_name = 4;
+  string tool_call_id = 5;
+  string approval_request_id = 6;
+  string arguments_json = 7;
 }
 
 message WorkflowHumanInputResponseCustomPayload {

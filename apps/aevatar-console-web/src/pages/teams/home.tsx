@@ -1,14 +1,14 @@
 import {
   AppstoreOutlined,
   BarsOutlined,
-  MoreOutlined,
+  EditOutlined,
   PlusOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   Alert,
   Button,
-  Dropdown,
   Empty,
   Space,
   Tooltip,
@@ -17,61 +17,84 @@ import {
 } from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { servicesApi } from "@/shared/api/servicesApi";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import {
   buildTeamDetailHref,
+  buildTeamStudioHref,
 } from "@/shared/navigation/teamRoutes";
-import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import {
   formatStudioMemberLifecycleStage,
   type StudioMemberSummary,
+  type StudioTeamSummary,
 } from "@/shared/studio/models";
-import {
-  buildStudioRoute,
-  buildStudioWorkflowWorkspaceRoute,
-} from "@/shared/studio/navigation";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
-  AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
 import { describeError } from "@/shared/ui/errorText";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
-import ScopeQueryCard from "../scopes/components/ScopeQueryCard";
 import {
   buildScopeHref,
-  normalizeScopeDraft,
   readScopeQueryDraft,
-  type ScopeQueryDraft,
 } from "../scopes/components/scopeQuery";
+import type { WorkflowOperationalAttention } from "./workflowOperationalUnits";
 import {
-  WORKFLOW_RUNTIME_GUARDRAIL,
-  type WorkflowOperationalAttention,
-} from "./workflowOperationalUnits";
+  clearSyncedPendingTeamRosterSummaries,
+  mergePendingTeamRosterSummaries,
+} from "./pendingTeamRoster";
+import { t } from "@/shared/i18n/messages";
 
 const scopeServiceAppId = "default";
-const scopeServiceNamespace = "default";
 const compactTeamRosterThreshold = 6;
 
+type TeamOperationalAttention = Exclude<
+  WorkflowOperationalAttention,
+  "runtime-unresolved"
+>;
+
 type MemberRosterPreview = {
-  readonly attention: WorkflowOperationalAttention;
+  readonly attention: TeamOperationalAttention;
   readonly attentionDetail: string;
-  readonly detailHref: string;
-  readonly entryLabel: string;
   readonly latestRun: ScopeServiceRunSummary | null;
   readonly memberId: string;
-  readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
-  readonly primaryActionLabel: string;
   readonly serviceId: string;
   readonly serviceLabel: string;
   readonly title: string;
   readonly updatedAt: string | null;
+};
+
+type TeamRosterPreview = {
+  readonly attention: TeamOperationalAttention;
+  readonly attentionDetail: string;
+  readonly detailHref: string;
+  readonly latestRun: ScopeServiceRunSummary | null;
+  readonly membersHref: string;
+  readonly memberQuickAction: TeamMemberQuickAction;
+  readonly memberPreviewLabel: string;
+  readonly memberPreviewTooltip?: string;
+  readonly serviceLabel: string;
+  readonly serviceTooltip?: string;
+  readonly team: StudioTeamSummary;
+  readonly teamId: string;
+  readonly title: string;
+  readonly updatedAt: string | null;
+};
+
+type TeamMemberQuickActionKind =
+  | "create-member"
+  | "edit-entry-member"
+  | "edit-member"
+  | "manage-members";
+
+type TeamMemberQuickAction = {
+  readonly href: string;
+  readonly kind: TeamMemberQuickActionKind;
+  readonly label: string;
 };
 
 function trimOptional(value: string | null | undefined): string {
@@ -100,25 +123,28 @@ function pickMeaningfulLabel(
   return "";
 }
 
+// Refactor (v1/issue1444-first):
+//   Old: workflow run status labels leaked raw runtime terms directly into the teams UI.
+//   New: run status mapping keeps UI display labels stable while preserving the underlying status semantics.
 function formatRunStatusLabel(status: string | null | undefined): string {
   switch (trimOptional(status).toLowerCase()) {
     case "waiting":
     case "waiting_approval":
     case "waiting_signal":
-      return "待关注";
+      return t("pages.teams.home.copy", "Needs attention");
     case "failed":
     case "error":
-      return "异常";
+      return t("pages.teams.home.copy.2", "Abnormal");
     case "completed":
-      return "稳定";
+      return t("pages.teams.home.copy.3", "Completed");
     default:
-      return trimOptional(status) || "未知";
+      return trimOptional(status) || t("pages.teams.home.copy.4", "Unknown");
   }
 }
 
 function formatOperationalStatusLabel(
   status: string | null | undefined,
-  attention: WorkflowOperationalAttention,
+  attention: TeamOperationalAttention,
 ): string {
   const normalizedStatus = trimOptional(status);
   if (normalizedStatus) {
@@ -127,46 +153,44 @@ function formatOperationalStatusLabel(
 
   switch (attention) {
     case "healthy":
-      return "运行中";
+      return t("pages.teams.home.copy.5", "Running");
     case "waiting":
-      return "待关注";
+      return t("pages.teams.home.copy.6", "Needs attention");
     case "failed":
-      return "异常";
+      return t("pages.teams.home.copy.7", "Abnormal");
     case "draft":
-      return "草稿中";
+      return t("pages.teams.home.copy.8", "Drafting");
     case "no-bound-service":
-      return "待绑定";
+      return t("pages.teams.home.copy.9", "Waiting for bind");
     case "no-recent-runs":
-      return "待运行";
-    case "runtime-unresolved":
-      return "待确认";
+      return t("pages.teams.home.copy.10", "Waiting to run");
     default:
-      return "未知";
+      return t("pages.teams.home.copy.11", "Unknown");
   }
 }
 
-function formatAttentionLabel(attention: WorkflowOperationalAttention): string {
+function formatAttentionLabel(attention: TeamOperationalAttention): string {
   switch (attention) {
     case "failed":
-      return "待处理";
+      return t("pages.teams.home.copy.12", "Pending");
     case "waiting":
-      return "待关注";
+      return t("pages.teams.home.copy.13", "Needs attention");
     case "healthy":
-      return "运行中";
+      return t("pages.teams.home.copy.14", "Running");
     case "draft":
-      return "草稿中";
+      return t("pages.teams.home.copy.15", "Drafting");
     case "no-bound-service":
-      return "待绑定";
+      return t("pages.teams.home.copy.16", "Waiting for bind");
     case "no-recent-runs":
-      return "待运行";
+      return t("pages.teams.home.copy.17", "Waiting to run");
     default:
-      return "待确认";
+      return t("pages.teams.home.copy.18", "Waiting for confirmation");
   }
 }
 
 function resolveAttentionPillStyle(
   token: ReturnType<typeof theme.useToken>["token"],
-  attention: WorkflowOperationalAttention,
+  attention: TeamOperationalAttention,
 ): React.CSSProperties {
   switch (attention) {
     case "healthy":
@@ -277,13 +301,6 @@ function isFailedRun(run: ScopeServiceRunSummary | null | undefined): boolean {
   );
 }
 
-function stopEvent<T extends (...args: any[]) => void>(handler: T): T {
-  return ((event: React.MouseEvent<HTMLElement>) => {
-    event.stopPropagation();
-    handler();
-  }) as T;
-}
-
 const SummaryStatCard: React.FC<{
   readonly accent?: boolean;
   readonly label: string;
@@ -327,33 +344,75 @@ const SummaryStatCard: React.FC<{
   );
 };
 
-const TeamFact: React.FC<{
-  readonly label: string;
-  readonly value: React.ReactNode;
-}> = ({ label, value }) => (
+const TeamTitle: React.FC<{
+  readonly level: 3 | 4;
+  readonly title: string;
+}> = ({ level, title }) => (
   <div
     style={{
-      display: "flex",
-      flexDirection: "column",
-      gap: 4,
       minWidth: 0,
     }}
+    title={title}
   >
-    <Typography.Text
-      strong
+    <Typography.Title
+      level={level}
       style={{
-        fontSize: 16,
         margin: 0,
-        overflowWrap: "anywhere",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
       }}
     >
-      {value}
-    </Typography.Text>
-    <Typography.Text style={{ fontSize: 13 }} type="secondary">
-      {label}
-    </Typography.Text>
+      {title}
+    </Typography.Title>
   </div>
 );
+
+const TeamFact: React.FC<{
+  readonly label: string;
+  readonly tooltip?: string;
+  readonly value: React.ReactNode;
+}> = ({ label, tooltip, value }) => {
+  const { token } = theme.useToken();
+  const renderedValue = (
+    <span
+      style={{
+        color: token.colorText,
+        display: "block",
+        fontSize: 16,
+        fontWeight: 600,
+        margin: 0,
+        minWidth: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+      title={typeof value === "string" ? tooltip || value : undefined}
+    >
+      {value}
+    </span>
+  );
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        minWidth: 0,
+      }}
+    >
+      {typeof value === "string" && (tooltip || value) ? (
+        <Tooltip title={tooltip || value}>{renderedValue}</Tooltip>
+      ) : (
+        renderedValue
+      )}
+      <Typography.Text style={{ fontSize: 13 }} type="secondary">
+        {label}
+      </Typography.Text>
+    </div>
+  );
+};
 
 function compareMembers(
   left: StudioMemberSummary,
@@ -366,6 +425,43 @@ function compareMembers(
   }
 
   return right.memberId.localeCompare(left.memberId);
+}
+
+function compareTeams(
+  left: StudioTeamSummary,
+  right: StudioTeamSummary,
+): number {
+  const rightTime = parseTimestamp(right.updatedAt);
+  const leftTime = parseTimestamp(left.updatedAt);
+  if (rightTime !== leftTime) {
+    return rightTime - leftTime;
+  }
+
+  return right.teamId.localeCompare(left.teamId);
+}
+
+function groupMembersByTeamId(
+  members: readonly StudioMemberSummary[],
+): Map<string, StudioMemberSummary[]> {
+  const result = new Map<string, StudioMemberSummary[]>();
+  members.forEach((member) => {
+    const teamId = trimOptional(member.teamId);
+    if (!teamId) {
+      return;
+    }
+
+    const existing = result.get(teamId);
+    if (existing) {
+      existing.push(member);
+    } else {
+      result.set(teamId, [member]);
+    }
+  });
+
+  result.forEach((teamMembers) => {
+    teamMembers.sort(compareMembers);
+  });
+  return result;
 }
 
 function resolveMemberPreviewService(input: {
@@ -384,34 +480,12 @@ function resolveMemberPreviewService(input: {
   );
 }
 
-function resolveRuntimeUnavailable(input: {
-  readonly memberId: string;
-  readonly runtimeAvailableByMemberId?: ReadonlySet<string>;
-  readonly runtimeGuardrailedMemberIds?: ReadonlySet<string>;
-}): boolean {
-  const memberId = trimOptional(input.memberId);
-  if (!memberId) {
-    return false;
-  }
-
-  if (input.runtimeGuardrailedMemberIds?.has(memberId)) {
-    return true;
-  }
-
-  if (!input.runtimeAvailableByMemberId) {
-    return false;
-  }
-
-  return !input.runtimeAvailableByMemberId.has(memberId);
-}
-
 function buildMemberRosterPreview(input: {
-  readonly guardrailedMemberIds?: ReadonlySet<string>;
   readonly member: StudioMemberSummary;
   readonly runsByMemberId: Readonly<Record<string, readonly ScopeServiceRunSummary[]>>;
-  readonly runtimeAvailableByMemberId?: ReadonlySet<string>;
   readonly scopeId: string;
   readonly services: readonly ServiceCatalogSnapshot[];
+  readonly teamId?: string | null;
 }): MemberRosterPreview {
   const matchedService = resolveMemberPreviewService({
     member: input.member,
@@ -421,99 +495,43 @@ function buildMemberRosterPreview(input: {
   const serviceId =
     trimOptional(input.member.publishedServiceId) ||
     trimOptional(matchedService?.serviceId);
-  const runtimeRelevant = Boolean(
-    serviceId || trimOptional(input.member.lastBoundRevisionId),
-  );
-  const runtimeUnavailable =
-    runtimeRelevant &&
-    resolveRuntimeUnavailable({
-      memberId,
-      runtimeAvailableByMemberId: input.runtimeAvailableByMemberId,
-      runtimeGuardrailedMemberIds: input.guardrailedMemberIds,
-    });
-  const runs =
-    memberId && !runtimeUnavailable ? input.runsByMemberId[memberId] ?? [] : [];
+  const runs = memberId ? input.runsByMemberId[memberId] ?? [] : [];
   const latestRun = runs.slice().sort(compareRuns)[0] ?? null;
-  const entryLabel = pickMeaningfulLabel(input.member.memberId, input.member.displayName) || "未命名成员";
   const serviceLabel =
     pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
-    (trimOptional(input.member.lastBoundRevisionId) ? "已绑定待确认" : "未绑定");
-  const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || "未命名成员";
-  const studioHref = buildStudioWorkflowWorkspaceRoute({
-    scopeId: input.scopeId,
-    memberId,
-  });
+    (trimOptional(input.member.lastBoundRevisionId) ? t("pages.teams.home.copy.19", "Bound, awaiting confirmation") : t("pages.teams.home.copy.20", "Unbound"));
+  const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || t("pages.teams.home.copy.21", "Unnamed member");
 
-  let attention: WorkflowOperationalAttention = "draft";
-  let attentionDetail = `当前成员还处于 ${formatStudioMemberLifecycleStage(input.member.lifecycleStage)} 阶段。`;
+  let attention: TeamOperationalAttention = "draft";
+  let attentionDetail = t("pages.teams.home.copy.22", "The current member is still in the {value1} stage.", { value1: formatStudioMemberLifecycleStage(input.member.lifecycleStage) });
 
-  if (runtimeUnavailable) {
-    attention = "runtime-unresolved";
-    attentionDetail = "当前成员已经存在绑定事实，但本页暂时没有拿到它的运行信号。";
-  } else if (latestRun && isFailedRun(latestRun)) {
+  if (latestRun && isFailedRun(latestRun)) {
     attention = "failed";
     attentionDetail =
-      trimOptional(latestRun.lastError) || "最近一次成员运行处于异常状态。";
+      trimOptional(latestRun.lastError) || t("pages.teams.home.copy.23", "The latest member run is abnormal.");
   } else if (latestRun && isWaitingRun(latestRun)) {
     attention = "waiting";
     attentionDetail =
-      trimOptional(latestRun.lastError) || "最近一次成员运行正在等待人工或外部信号。";
+      trimOptional(latestRun.lastError) || t("pages.teams.home.copy.24", "The latest member run is waiting for a human or external signal.");
   } else if (latestRun && isSuccessfulRun(latestRun)) {
     attention = "healthy";
-    attentionDetail = "最近一次成员运行正常，可继续进入详情查看。";
+    attentionDetail = t("pages.teams.home.copy.25", "The latest member run is healthy; open details to continue.");
   } else if (serviceId || matchedService) {
     attention = "no-recent-runs";
-    attentionDetail = "当前成员已经形成绑定，但还没有可见的运行信号。";
+    attentionDetail = t("pages.teams.home.copy.26", "The member has been bound to a service. Next: open team details and test the team to generate the first visible run.");
   } else if (
     trimOptional(input.member.lastBoundRevisionId) ||
     input.member.lifecycleStage === "bind_ready"
   ) {
     attention = "no-bound-service";
-    attentionDetail = "当前成员已经准备好绑定，但还没有稳定的可调用入口。";
+    attentionDetail = t("pages.teams.home.copy.27", "The current member is ready to bind, but it does not have a stable member invoke entry yet.");
   }
-
-  const detailHref = serviceId
-    ? buildTeamDetailHref({
-        memberId,
-        runId: latestRun?.runId || undefined,
-        scopeId: input.scopeId,
-        serviceId: serviceId || undefined,
-      })
-    : studioHref;
-  const runtimeHref =
-    serviceId.length > 0
-      ? buildRuntimeRunsHref({
-          actorId:
-            latestRun?.actorId ||
-            matchedService?.primaryActorId ||
-            undefined,
-          scopeId: input.scopeId,
-          serviceId,
-        })
-      : "";
-  const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
-  if (runtimeHref) {
-    moreActions.push({
-      key: "runtime",
-      label: "查看运行",
-      onClick: () => history.push(runtimeHref),
-    });
-  }
-  moreActions.push({
-    key: "builder",
-    label: "进入 Studio",
-    onClick: () => history.push(studioHref),
-  });
 
   return {
     attention,
     attentionDetail,
-    detailHref,
-    entryLabel,
     latestRun,
     memberId,
-    moreActions,
-    primaryActionLabel: serviceId ? "查看团队" : "打开 Studio",
     serviceId,
     serviceLabel,
     title,
@@ -525,65 +543,278 @@ function buildMemberRosterPreview(input: {
   };
 }
 
-const MoreActionsButton: React.FC<{
-  readonly actions: Array<{ key: string; label: string; onClick: () => void }>;
-}> = ({ actions }) => (
-  <Dropdown
-    menu={{
-      items: actions.map((action) => ({
-        key: action.key,
-        label: action.label,
-      })),
-      onClick: ({ key, domEvent }) => {
-        domEvent.stopPropagation();
-        const matchedAction = actions.find((action) => action.key === key);
-        if (!matchedAction) {
-          return;
+function buildTeamRosterPreview(input: {
+  readonly members: readonly StudioMemberSummary[];
+  readonly runsByMemberId: Readonly<Record<string, readonly ScopeServiceRunSummary[]>>;
+  readonly scopeId: string;
+  readonly services: readonly ServiceCatalogSnapshot[];
+  readonly team: StudioTeamSummary;
+}): TeamRosterPreview {
+  const memberPreviews = input.members.map((member) =>
+    buildMemberRosterPreview({
+      member,
+      runsByMemberId: input.runsByMemberId,
+      scopeId: input.scopeId,
+      services: input.services,
+      teamId: input.team.teamId,
+    }),
+  );
+  const sortedMembers = [...input.members].sort(compareMembers);
+  const latestRun =
+    memberPreviews
+      .map((preview) => preview.latestRun)
+      .filter((run): run is ScopeServiceRunSummary => Boolean(run))
+      .sort(compareRuns)[0] ?? null;
+  const statusRank: Record<TeamOperationalAttention, number> = {
+    failed: 0,
+    waiting: 1,
+    "no-bound-service": 2,
+    "no-recent-runs": 3,
+    draft: 4,
+    healthy: 5,
+  };
+  const mostImportantMemberPreview = memberPreviews
+    .slice()
+    .sort(
+      (left, right) =>
+        statusRank[left.attention] - statusRank[right.attention] ||
+        parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt) ||
+        right.memberId.localeCompare(left.memberId),
+    )[0];
+  const memberCount =
+    input.team.memberCount > 0 ? input.team.memberCount : input.members.length;
+  const teamHomeHref = buildScopeHref("/teams", { scopeId: input.scopeId });
+  const entryMemberId = trimOptional(input.team.entryMemberId);
+  const preferredEditMemberId =
+    entryMemberId ||
+    (memberCount === 1 && input.members.length === 1
+      ? trimOptional(input.members[0]?.memberId)
+      : "");
+  const memberQuickAction: TeamMemberQuickAction = entryMemberId
+    ? {
+        href: buildTeamStudioHref({
+          memberId: entryMemberId,
+          mode: "edit-member",
+          returnTo: teamHomeHref,
+          scopeId: input.scopeId,
+          teamId: input.team.teamId,
+        }),
+        kind: "edit-entry-member",
+        label: t("teams.home.actions.editEntryMember", "Edit entry member"),
+      }
+    : preferredEditMemberId
+      ? {
+          href: buildTeamStudioHref({
+            memberId: preferredEditMemberId,
+            mode: "edit-member",
+            returnTo: teamHomeHref,
+            scopeId: input.scopeId,
+            teamId: input.team.teamId,
+          }),
+          kind: "edit-member",
+          label: t("teams.home.actions.editMember", "Edit member"),
         }
+      : memberCount === 0
+        ? {
+            href: buildTeamStudioHref({
+              mode: "create-member",
+              returnTo: teamHomeHref,
+              scopeId: input.scopeId,
+              teamId: input.team.teamId,
+            }),
+            kind: "create-member",
+            label: t("teams.home.actions.createMember", "Create member"),
+          }
+        : {
+            href: buildTeamDetailHref({
+              scopeId: input.scopeId,
+              tab: "members",
+              teamId: input.team.teamId,
+            }),
+            kind: "manage-members",
+            label: t("teams.home.actions.manageMembers", "Manage members"),
+          };
+  const firstMemberLabel = pickMeaningfulLabel(
+    sortedMembers[0]?.displayName,
+    sortedMembers[0]?.memberId,
+  );
+  const memberPreviewLabel =
+    memberCount > 0
+      ? firstMemberLabel
+        ? memberCount > 1
+          ? t("pages.teams.home.copy.28", "{value1} and {value2} other members", { value1: firstMemberLabel, value2: memberCount })
+          : firstMemberLabel
+        : t("pages.teams.home.copy.29", "{value1} members", { value1: memberCount })
+      : t("pages.teams.home.copy.30", "No members yet");
+  const serviceLabels = memberPreviews
+    .map((preview) => preview.serviceLabel)
+    .filter((label) => label && label !== t("pages.teams.home.copy.31", "Unbound"));
+  const uniqueServiceLabels = Array.from(new Set(serviceLabels));
+  const memberPreviewTooltip =
+    sortedMembers.length > 0
+      ? sortedMembers
+          .map((member) =>
+            pickMeaningfulLabel(member.displayName, member.memberId) || t("pages.teams.home.copy.32", "Unnamed member"),
+          )
+          .join(" / ")
+      : undefined;
+  const serviceTooltip =
+    uniqueServiceLabels.length > 0 ? uniqueServiceLabels.join(" / ") : undefined;
+  const primaryMemberPreview =
+    memberPreviews.find((preview) => preview.serviceId) ?? memberPreviews[0] ?? null;
+  const detailHref = buildTeamDetailHref({
+    memberId: primaryMemberPreview?.memberId || undefined,
+    runId: latestRun?.runId || undefined,
+    scopeId: input.scopeId,
+    serviceId: primaryMemberPreview?.serviceId || undefined,
+    teamId: input.team.teamId,
+  });
+  const membersHref = buildTeamDetailHref({
+    scopeId: input.scopeId,
+    tab: "members",
+    teamId: input.team.teamId,
+  });
 
-        matchedAction.onClick();
-      },
-    }}
-    trigger={["click"]}
-  >
-    <Button
-      icon={<MoreOutlined />}
-      onClick={(event) => event.stopPropagation()}
-      size="large"
+  let attention: TeamOperationalAttention =
+    mostImportantMemberPreview?.attention ?? "draft";
+  let attentionDetail = t("pages.teams.home.team", "This team has no members yet. Next: add an entry member, then test the team.");
+  if (input.team.lifecycleStage === "archived") {
+    attention = "draft";
+    attentionDetail = t("pages.teams.home.team.roster", "This team has been archived; the list keeps only its backend roster fact.");
+  } else if (mostImportantMemberPreview) {
+    attentionDetail = mostImportantMemberPreview.attentionDetail;
+  }
+
+  return {
+    attention,
+    attentionDetail,
+    detailHref,
+    latestRun,
+    membersHref,
+    memberQuickAction,
+    memberPreviewLabel,
+    memberPreviewTooltip,
+    serviceLabel:
+      uniqueServiceLabels.length > 0
+        ? uniqueServiceLabels.slice(0, 2).join(" / ")
+        : t("pages.teams.home.copy.33", "No bound service yet"),
+    serviceTooltip,
+    team: input.team,
+    teamId: input.team.teamId,
+    title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || t("pages.teams.home.team.2", "Unnamed team"),
+    updatedAt:
+      latestRun?.lastUpdatedAt ||
+      mostImportantMemberPreview?.updatedAt ||
+      input.team.updatedAt ||
+      null,
+  };
+}
+
+function renderMemberQuickActionIcon(
+  kind: TeamMemberQuickActionKind,
+): React.ReactNode {
+  switch (kind) {
+    case "create-member":
+      return <PlusOutlined />;
+    case "manage-members":
+      return <BarsOutlined />;
+    case "edit-entry-member":
+    case "edit-member":
+    default:
+      return <EditOutlined />;
+  }
+}
+
+const TeamRosterActionGroup: React.FC<{
+  readonly large?: boolean;
+  readonly preview: TeamRosterPreview;
+}> = ({ large = false, preview }) => {
+  const buttonSize = large ? "large" : "middle";
+  const { token } = theme.useToken();
+  const showViewMembersAction =
+    preview.memberQuickAction.href !== preview.membersHref;
+  const buttonStyle: React.CSSProperties = {
+    borderRadius: 999,
+    fontWeight: 600,
+    paddingInline: large ? 12 : 10,
+  };
+  const renderSeparator = () => (
+    <span
+      aria-hidden="true"
+      style={{
+        alignSelf: "center",
+        background: token.colorBorderSecondary,
+        display: "inline-block",
+        height: large ? 18 : 16,
+        width: 1,
+      }}
+    />
+  );
+
+  return (
+    <Space
+      separator={renderSeparator()}
+      size={large ? 4 : 2}
+      style={{
+        background: token.colorFillQuaternary,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 999,
+        padding: large ? 4 : 3,
+        width: "fit-content",
+      }}
+      wrap
     >
-      更多
-    </Button>
-  </Dropdown>
-);
+      <Button
+        icon={renderMemberQuickActionIcon(preview.memberQuickAction.kind)}
+        onClick={() => history.push(preview.memberQuickAction.href)}
+        size={buttonSize}
+        style={buttonStyle}
+        type="text"
+      >
+        {preview.memberQuickAction.label}
+      </Button>
+      <Button
+        icon={<TeamOutlined />}
+        onClick={() => history.push(preview.detailHref)}
+        size={buttonSize}
+        style={buttonStyle}
+        type="text"
+      >
+        {t("teams.home.actions.viewTeam", "View team")}
+      </Button>
+      {showViewMembersAction ? (
+        <Button
+          icon={<BarsOutlined />}
+          onClick={() => history.push(preview.membersHref)}
+          size={buttonSize}
+          style={buttonStyle}
+          type="text"
+        >
+          {t("teams.home.actions.viewMembers", "View members")}
+        </Button>
+      ) : null}
+    </Space>
+  );
+};
 
-const MemberRosterCard: React.FC<{
-  readonly preview: MemberRosterPreview;
+const TeamRosterCard: React.FC<{
+  readonly preview: TeamRosterPreview;
 }> = ({ preview }) => {
   const { token } = theme.useToken();
 
   return (
-    <div
-      onClick={() => history.push(preview.detailHref)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          history.push(preview.detailHref);
-        }
-      }}
-      role="button"
+    <article
       style={{
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: 24,
         boxShadow: token.boxShadowTertiary,
-        cursor: "pointer",
         display: "flex",
         flexDirection: "column",
         gap: 14,
         minWidth: 0,
         padding: 18,
       }}
-      tabIndex={0}
     >
       <div
         style={{
@@ -594,16 +825,9 @@ const MemberRosterCard: React.FC<{
         }}
       >
         <div style={{ minWidth: 0 }}>
-          <Typography.Title
-            level={3}
-            style={{
-              fontSize: 22,
-              margin: 0,
-              overflowWrap: "anywhere",
-            }}
-          >
-            {preview.title}
-          </Typography.Title>
+          <div style={{ fontSize: 22 }}>
+            <TeamTitle level={3} title={preview.title} />
+          </div>
           <Typography.Paragraph
             ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
             style={{
@@ -633,12 +857,15 @@ const MemberRosterCard: React.FC<{
       </div>
 
       <Typography.Text
+        title={preview.teamId}
+        ellipsis={{ tooltip: preview.teamId }}
         style={{
           color: token.colorTextSecondary,
-          fontSize: 13,
+          display: "block",
+          fontSize: 12,
         }}
       >
-        成员标识：{preview.entryLabel}
+        {t("pages.teams.home.id", "ID：")}{preview.teamId}
       </Typography.Text>
 
       <div
@@ -651,145 +878,163 @@ const MemberRosterCard: React.FC<{
         }}
       >
         <TeamFact
-          label="当前状态"
+          label={t("pages.teams.home.copy.34", "Current status")}
           value={formatOperationalStatusLabel(
             preview.latestRun?.completionStatus,
             preview.attention,
           )}
         />
         <TeamFact
-          label="最近更新"
+          label={t("pages.teams.home.copy.35", "Latest update")}
           value={formatShortTime(preview.updatedAt)}
         />
-        <TeamFact label="关联服务" value={preview.serviceLabel} />
       </div>
 
-      <Space wrap>
-        <Button
-          onClick={stopEvent(() => history.push(preview.detailHref))}
-          size="large"
-          type="primary"
-        >
-          {preview.primaryActionLabel}
-        </Button>
-        <MoreActionsButton actions={preview.moreActions} />
-      </Space>
-    </div>
+      <div
+        style={{
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          display: "grid",
+          gap: 14,
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          paddingTop: 14,
+        }}
+      >
+        <TeamFact
+          label={t("pages.teams.home.team.3", "Team members")}
+          tooltip={preview.memberPreviewTooltip}
+          value={preview.memberPreviewLabel}
+        />
+        <TeamFact
+          label={t("pages.teams.home.copy.36", "Related service")}
+          tooltip={preview.serviceTooltip}
+          value={preview.serviceLabel}
+        />
+      </div>
+
+      <TeamRosterActionGroup large preview={preview} />
+    </article>
   );
 };
 
-const MemberRosterRow: React.FC<{
-  readonly preview: MemberRosterPreview;
+const TeamRosterRow: React.FC<{
+  readonly preview: TeamRosterPreview;
 }> = ({ preview }) => {
   const { token } = theme.useToken();
 
   return (
-    <div
-      onClick={() => history.push(preview.detailHref)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          history.push(preview.detailHref);
-        }
-      }}
-      role="button"
+    <article
+      className="teams-home-roster-row"
       style={{
-        alignItems: "center",
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: 20,
         boxShadow: token.boxShadowTertiary,
-        cursor: "pointer",
-        display: "grid",
-        gap: 16,
-        gridTemplateColumns: "minmax(0, 1.8fr) repeat(3, minmax(88px, 120px)) auto",
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
         minWidth: 0,
         padding: 16,
       }}
-      tabIndex={0}
     >
-      <div style={{ minWidth: 0 }}>
-        <Space size={[8, 8]} wrap style={{ marginBottom: 6 }}>
-          <Typography.Title
-            level={4}
+      <div
+        style={{
+          alignItems: "flex-start",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 12,
+          justifyContent: "space-between",
+        }}
+      >
+        <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+          <Space size={[8, 8]} wrap style={{ marginBottom: 6 }}>
+            <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+              <TeamTitle level={4} title={preview.title} />
+            </div>
+            <span
+              style={{
+                ...resolveAttentionPillStyle(token, preview.attention),
+                borderRadius: 999,
+                display: "inline-flex",
+                fontSize: 12,
+                fontWeight: 600,
+                lineHeight: 1,
+                padding: "7px 10px",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {formatAttentionLabel(preview.attention)}
+            </span>
+          </Space>
+          <Typography.Paragraph
+            ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
             style={{
-              margin: 0,
-              overflowWrap: "anywhere",
+              color: token.colorTextSecondary,
+              fontSize: 13,
+              marginBottom: 0,
+              marginTop: 0,
             }}
           >
-            {preview.title}
-          </Typography.Title>
-          <span
+            {preview.attentionDetail}
+          </Typography.Paragraph>
+          <Typography.Text
+            title={preview.teamId}
+            ellipsis={{ tooltip: preview.teamId }}
             style={{
-              ...resolveAttentionPillStyle(token, preview.attention),
-              borderRadius: 999,
-              display: "inline-flex",
+              color: token.colorTextSecondary,
+              display: "block",
               fontSize: 12,
-              fontWeight: 600,
-              lineHeight: 1,
-              padding: "7px 10px",
-              whiteSpace: "nowrap",
+              marginTop: 4,
             }}
           >
-            {formatAttentionLabel(preview.attention)}
-          </span>
-        </Space>
-        <Typography.Paragraph
-          ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
-          style={{
-            color: token.colorTextSecondary,
-            fontSize: 13,
-            marginBottom: 0,
-            marginTop: 0,
-          }}
-        >
-          {preview.attentionDetail}
-        </Typography.Paragraph>
-        <Typography.Text
-          style={{
-            color: token.colorTextSecondary,
-            fontSize: 13,
-          }}
-        >
-          成员标识：{preview.entryLabel}
-        </Typography.Text>
+            {t("pages.teams.home.id.2", "ID：")}{preview.teamId}
+          </Typography.Text>
+        </div>
+
+        <div className="teams-home-roster-row-actions">
+          <TeamRosterActionGroup preview={preview} />
+        </div>
       </div>
 
-      <TeamFact
-        label="状态"
-        value={formatOperationalStatusLabel(
-          preview.latestRun?.completionStatus,
-          preview.attention,
-        )}
-      />
-      <TeamFact label="更新" value={formatShortTime(preview.updatedAt)} />
-      <TeamFact label="服务" value={preview.serviceLabel} />
-
-      <Space wrap>
-        <Button
-          onClick={stopEvent(() => history.push(preview.detailHref))}
-          type="primary"
-        >
-          {preview.primaryActionLabel}
-        </Button>
-        <MoreActionsButton actions={preview.moreActions} />
-      </Space>
-    </div>
+      <div
+        style={{
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          display: "grid",
+          gap: 14,
+          gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+          paddingTop: 14,
+        }}
+      >
+        <TeamFact
+          label={t("pages.teams.home.copy.39", "Status")}
+          value={formatOperationalStatusLabel(
+            preview.latestRun?.completionStatus,
+            preview.attention,
+          )}
+        />
+        <TeamFact label={t("pages.teams.home.copy.40", "Update")} value={formatShortTime(preview.updatedAt)} />
+        <TeamFact
+          label={t("pages.teams.home.copy.41", "Members")}
+          tooltip={preview.memberPreviewTooltip}
+          value={preview.memberPreviewLabel}
+        />
+        <TeamFact
+          label={t("pages.teams.home.copy.42", "Service")}
+          tooltip={preview.serviceTooltip}
+          value={preview.serviceLabel}
+        />
+      </div>
+    </article>
   );
 };
 
 const TeamsHomePage: React.FC = () => {
   const { token } = theme.useToken();
-  const [draft, setDraft] = React.useState<ScopeQueryDraft>(() =>
-    readScopeQueryDraft(),
-  );
-  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(() =>
-    readScopeQueryDraft(),
+  const [routeScopeId, setRouteScopeId] = React.useState(
+    () => readScopeQueryDraft().scopeId.trim(),
   );
   const [manualRosterView, setManualRosterView] = React.useState<
     "cards" | "list" | null
   >(null);
-  const [showScopePicker, setShowScopePicker] = React.useState(false);
 
   const authSessionQuery = useQuery({
     queryKey: ["scopes", "auth-session"],
@@ -811,6 +1056,10 @@ const TeamsHomePage: React.FC = () => {
     () => resolveStudioScopeContext(authSessionQuery.data) ?? locallyResolvedScope,
     [authSessionQuery.data, locallyResolvedScope],
   );
+  const serverResolvedScope = React.useMemo(
+    () => resolveStudioScopeContext(authSessionQuery.data),
+    [authSessionQuery.data],
+  );
   const authSessionIssue = React.useMemo(() => {
     if (!authSessionQuery.isError) {
       return "";
@@ -818,7 +1067,7 @@ const TeamsHomePage: React.FC = () => {
 
     return describeError(
       authSessionQuery.error,
-      "登录状态暂时不可用，请刷新后重试。",
+      t("pages.teams.home.copy.43", "Login status is temporarily unavailable. Refresh and try again."),
     );
   }, [authSessionQuery.error, authSessionQuery.isError]);
 
@@ -827,45 +1076,78 @@ const TeamsHomePage: React.FC = () => {
       return;
     }
 
-    setDraft((currentDraft) =>
-      currentDraft.scopeId.trim()
-        ? currentDraft
-        : { scopeId: resolvedScope.scopeId },
-    );
-    setActiveDraft((currentDraft) =>
-      currentDraft.scopeId.trim()
-        ? currentDraft
-        : { scopeId: resolvedScope.scopeId },
+    setRouteScopeId((currentScopeId) =>
+      currentScopeId.trim() ? currentScopeId : resolvedScope.scopeId,
     );
   }, [resolvedScope?.scopeId]);
 
-  const scopeId = activeDraft.scopeId.trim();
+  const scopeId = routeScopeId || resolvedScope?.scopeId?.trim() || "";
+  const queryScopeId =
+    serverResolvedScope?.scopeId?.trim() === scopeId ? scopeId : "";
+  const canLoadRoster = queryScopeId.length > 0;
 
   React.useEffect(() => {
-    history.replace(buildScopeHref("/teams", activeDraft));
-  }, [activeDraft]);
+    if (!scopeId) {
+      return;
+    }
+
+    const nextPath = buildScopeHref("/teams", { scopeId });
+    const currentPath =
+      typeof window === "undefined"
+        ? ""
+        : `${window.location.pathname}${window.location.search}`;
+    if (nextPath !== currentPath) {
+      history.replace(nextPath);
+    }
+  }, [scopeId]);
 
   const membersQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryKey: ["teams", "members", scopeId],
-    queryFn: () => studioApi.listMembers(scopeId),
+    enabled: canLoadRoster,
+    queryKey: ["teams", "members", queryScopeId],
+    queryFn: () => studioApi.listMembers(queryScopeId),
+    retry: false,
+  });
+  const teamsQuery = useQuery({
+    enabled: canLoadRoster,
+    queryKey: ["teams", "roster", queryScopeId],
+    queryFn: () => studioApi.listTeams(queryScopeId),
     retry: false,
   });
   const servicesQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryKey: ["teams", "services", scopeId],
+    enabled: canLoadRoster,
+    queryKey: ["teams", "services", queryScopeId],
     queryFn: () =>
-      servicesApi.listServices({
-        tenantId: scopeId,
+      scopeRuntimeApi.listServices(queryScopeId, {
         appId: scopeServiceAppId,
-        namespace: scopeServiceNamespace,
-    }),
+      }),
     retry: false,
   });
 
   const studioMembers = React.useMemo(
     () => [...(membersQuery.data?.members ?? [])].sort(compareMembers),
     [membersQuery.data?.members],
+  );
+  React.useEffect(() => {
+    if (teamsQuery.isSuccess) {
+      clearSyncedPendingTeamRosterSummaries(
+        scopeId,
+        teamsQuery.data?.teams ?? [],
+      );
+    }
+  }, [scopeId, teamsQuery.data?.teams, teamsQuery.isSuccess]);
+  const studioTeams = React.useMemo(
+    () =>
+      [
+        ...mergePendingTeamRosterSummaries(
+          scopeId,
+          teamsQuery.data?.teams ?? [],
+        ),
+      ].sort(compareTeams),
+    [scopeId, teamsQuery.data?.teams],
+  );
+  const membersByTeamId = React.useMemo(
+    () => groupMembersByTeamId(studioMembers),
+    [studioMembers],
   );
   const runtimeTrackableMembers = React.useMemo(
     () =>
@@ -876,104 +1158,65 @@ const TeamsHomePage: React.FC = () => {
       ),
     [studioMembers],
   );
-  const runtimeSampleMembers = React.useMemo(
-    () => runtimeTrackableMembers.slice(0, WORKFLOW_RUNTIME_GUARDRAIL),
-    [runtimeTrackableMembers],
-  );
-  const guardrailedMemberIds = React.useMemo(
-    () =>
-      new Set(
-        runtimeTrackableMembers
-          .slice(WORKFLOW_RUNTIME_GUARDRAIL)
-          .map((member) => trimOptional(member.memberId))
-          .filter(Boolean),
-      ),
-    [runtimeTrackableMembers],
-  );
   const memberRunQueries = useQueries({
-    queries: runtimeSampleMembers.map((member) => ({
-      enabled: scopeId.length > 0 && membersQuery.isSuccess,
-      queryKey: ["teams", "member-runs", scopeId, member.memberId],
+    queries: runtimeTrackableMembers.map((member) => ({
+      enabled: canLoadRoster && membersQuery.isSuccess,
+      queryKey: ["teams", "member-runs", queryScopeId, member.memberId],
       queryFn: () =>
-        scopeRuntimeApi.listMemberRuns(scopeId, member.memberId, {
+        scopeRuntimeApi.listMemberRuns(queryScopeId, member.memberId, {
           take: 12,
         }),
       retry: false,
     })),
   });
-  const runtimeAvailableByMemberId = React.useMemo(() => {
-    const available = new Set<string>();
-    memberRunQueries.forEach((query, index) => {
-      if (query.isSuccess) {
-        available.add(trimOptional(runtimeSampleMembers[index]?.memberId));
-      }
-    });
-    return available;
-  }, [memberRunQueries, runtimeSampleMembers]);
   const runsByMemberId = React.useMemo(
     () =>
       Object.fromEntries(
-        runtimeSampleMembers.map((member, index) => [
+        runtimeTrackableMembers.map((member, index) => [
           trimOptional(member.memberId),
           memberRunQueries[index]?.data?.runs ?? [],
         ]),
-      ) as Record<string, readonly any[]>,
-    [memberRunQueries, runtimeSampleMembers],
+      ) as Record<string, readonly ScopeServiceRunSummary[]>,
+    [memberRunQueries, runtimeTrackableMembers],
   );
-  const memberPreviews = React.useMemo(
+  const teamPreviews = React.useMemo(
     () =>
-      studioMembers.map((member) =>
-        buildMemberRosterPreview({
-          guardrailedMemberIds,
-          member,
+      studioTeams.map((team) =>
+        buildTeamRosterPreview({
+          members: membersByTeamId.get(team.teamId) ?? [],
           runsByMemberId,
-          runtimeAvailableByMemberId,
           scopeId,
           services: servicesQuery.data ?? [],
+          team,
         }),
       ),
     [
-      guardrailedMemberIds,
+      membersByTeamId,
       runsByMemberId,
-      runtimeAvailableByMemberId,
+      queryScopeId,
       scopeId,
       servicesQuery.data,
-      studioMembers,
+      studioTeams,
     ],
   );
-  const membersPendingBindingCount = React.useMemo(
-    () =>
-      studioMembers.filter(
-        (member) =>
-          !trimOptional(member.publishedServiceId) ||
-          !trimOptional(member.lastBoundRevisionId),
-      ).length,
-    [studioMembers],
-  );
-  const visibleTeamCount = memberPreviews.length;
+  const visibleTeamCount = teamPreviews.length;
+  const actionableTeamCount = teamPreviews.filter(
+    (preview) => preview.attention !== "healthy",
+  ).length;
+  const healthyTeamCount = teamPreviews.filter(
+    (preview) => preview.attention === "healthy",
+  ).length;
   const resolvedRosterView =
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
   const useCompactRoster = resolvedRosterView === "list";
-  const healthyTeamCount = memberPreviews.filter(
-    (preview) => preview.attention === "healthy",
-  ).length;
-  const attentionTeamCount = memberPreviews.filter(
-    (preview) => preview.attention !== "healthy",
-  ).length;
   const emptyRosterHint =
-    scopeId.length > 0
-      ? "当前 Scope 下还没有创建任何 member。进入 Studio 创建成员后，这里会按成员逐个展示。"
-      : "先导入一个 Scope，首页才能渲染出这组成员卡片。";
+    canLoadRoster
+      ? t("pages.teams.home.team.ai", "This account has not created any teams yet. Your AI team list will appear here after you create one.")
+      : t("pages.teams.home.copy.44", "The current login status has not resolved an available team scope. Refresh and try again.");
   const partialIssues = [
-    servicesQuery.isError ? "服务目录暂时不可见。" : null,
-    membersQuery.isError ? "当前 Scope 的成员清单暂时不可见。" : null,
-    ...memberRunQueries.map((query) =>
-      query.isError ? "部分成员运行信号暂时不可见。" : null,
-    ),
-    guardrailedMemberIds.size > 0
-      ? `当前首页只采样前 ${WORKFLOW_RUNTIME_GUARDRAIL} 个已绑定成员的运行信号。`
-      : null,
+    membersQuery.isError ? t("pages.teams.home.copy.45", "The member list for the current workspace is temporarily unavailable.") : null,
+    teamsQuery.isError ? t("pages.teams.home.team.roster.2", "The team roster for the current workspace is temporarily unavailable.") : null,
   ].filter((issue): issue is string => Boolean(issue));
 
   const titleNode = (
@@ -984,19 +1227,16 @@ const TeamsHomePage: React.FC = () => {
           fontSize: 14,
         }}
       >
-        Aevatar / Teams
-      </Typography.Text>
+        {t("pages.teams.home.aevatar.teams", "Aevatar / Teams")}</Typography.Text>
       <Typography.Title
         level={1}
         style={{
           margin: 0,
         }}
       >
-        我的 AI 团队
-      </Typography.Title>
+        {t("pages.teams.home.ai", "My AI teams")}</Typography.Title>
     </div>
   );
-  const canCancelScopePicker = showScopePicker && scopeId.length > 0;
 
   return (
     <AevatarPageShell
@@ -1005,23 +1245,12 @@ const TeamsHomePage: React.FC = () => {
           <Button
             icon={<PlusOutlined />}
             onClick={() =>
-              history.push(
-                buildStudioRoute({
-                  scopeId:
-                    scopeId ||
-                    readScopeQueryDraft().scopeId ||
-                    resolvedScope?.scopeId ||
-                    localScopeId,
-                  tab: "studio",
-                  intent: "create-member",
-                }),
-              )
+              history.push(buildScopeHref("/teams/new", { scopeId }))
             }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >
-            组建新团队
-          </Button>
+            {t("pages.teams.home.copy.46", "Create team")}</Button>
         </Space>
       }
       layoutMode="document"
@@ -1034,117 +1263,19 @@ const TeamsHomePage: React.FC = () => {
           gap: 20,
         }}
       >
-        {(showScopePicker || !scopeId) && (
-          <AevatarPanel
-            extra={
-              canCancelScopePicker ? (
-                <Button
-                  onClick={() => {
-                    setDraft(normalizeScopeDraft(activeDraft));
-                    setShowScopePicker(false);
-                  }}
-                >
-                  取消
-                </Button>
-              ) : null
-            }
-            title="Scope 上下文"
-            titleHelp="这一步只负责锁定你当前要查看的 Scope，不把它抢成首页主角。"
-          >
-            <ScopeQueryCard
-              activeScopeId={scopeId}
-              draft={draft}
-              loadLabel="导入团队视图"
-              onChange={setDraft}
-              onLoad={() => {
-                const nextDraft = normalizeScopeDraft(draft);
-                setDraft(nextDraft);
-                setActiveDraft(nextDraft);
-                setShowScopePicker(false);
-              }}
-              onReset={() => {
-                const nextDraft = normalizeScopeDraft({
-                  scopeId: resolvedScope?.scopeId ?? "",
-                });
-                setDraft(nextDraft);
-                setActiveDraft(nextDraft);
-              }}
-              onUseResolvedScope={() => {
-                if (!resolvedScope?.scopeId) {
-                  return;
-                }
-
-                const nextDraft = normalizeScopeDraft({
-                  scopeId: resolvedScope.scopeId,
-                });
-                setDraft(nextDraft);
-                setActiveDraft(nextDraft);
-                setShowScopePicker(false);
-              }}
-              resetDisabled={
-                normalizeScopeDraft(draft).scopeId ===
-                  (resolvedScope?.scopeId?.trim() ?? "") &&
-                scopeId === (resolvedScope?.scopeId?.trim() ?? "")
-              }
-              resolvedScopeId={resolvedScope?.scopeId}
-              resolvedScopeSource={resolvedScope?.scopeSource}
-            />
-          </AevatarPanel>
-        )}
-
-        {scopeId && !showScopePicker ? (
-          <div
-            style={{
-              alignItems: "flex-start",
-              background: token.colorBgContainer,
-              border: `1px solid ${token.colorBorderSecondary}`,
-              borderRadius: 22,
-              boxShadow: token.boxShadowTertiary,
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 16,
-              justifyContent: "space-between",
-              padding: 18,
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 6,
-                minWidth: 0,
-              }}
-            >
-              <Typography.Text type="secondary">当前 Scope</Typography.Text>
-              <Typography.Text
-                strong
-                style={{
-                  fontSize: 16,
-                  overflowWrap: "anywhere",
-                }}
-              >
-                {scopeId}
-              </Typography.Text>
-              <Typography.Text type="secondary">
-                首页按这个 Scope 汇总成员本身的绑定与运行状态，Scope 只做上下文，不再直接当团队名展示。
-              </Typography.Text>
-            </div>
-          </div>
-        ) : null}
-
         {!scopeId ? (
           <Alert
             showIcon
-            title="先导入一个 Scope，首页才能渲染出这组成员卡片。"
+            title={t("pages.teams.home.copy.47", "The current login status has not resolved an available team scope. Refresh and try again.")}
             type="info"
           />
         ) : null}
 
-        {partialIssues.length > 0 ? (
+        {canLoadRoster && partialIssues.length > 0 ? (
           <Alert
             description={partialIssues.join(" ")}
             showIcon
-            title="部分团队信号暂时不可见"
+            title={t("pages.teams.home.copy.48", "Some team signals are temporarily unavailable")}
             type="warning"
           />
         ) : null}
@@ -1153,20 +1284,20 @@ const TeamsHomePage: React.FC = () => {
           <Alert
             description={
               resolvedScope?.scopeId
-                ? `${authSessionIssue} 当前已回退到本地会话里的 Scope ${resolvedScope.scopeId}。`
+                ? t("pages.teams.home.copy.49", "{value1} continued loading teams with local login information.", { value1: authSessionIssue })
                 : authSessionIssue
             }
             showIcon
             title={
               resolvedScope?.scopeId
-                ? "当前登录态校验失败，已回退到本地 Scope"
-                : "当前登录态校验失败"
+                ? t("pages.teams.home.copy.50", "Current login verification failed; local login information was used")
+                : t("pages.teams.home.copy.51", "Current login verification failed")
             }
             type="warning"
           />
         ) : null}
 
-        {scopeId ? (
+        {canLoadRoster ? (
           <>
             <div
               style={{
@@ -1175,44 +1306,20 @@ const TeamsHomePage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard accent label="团队成员" value={visibleTeamCount} />
-              <SummaryStatCard label="运行正常" value={healthyTeamCount} />
-              <SummaryStatCard label="需要处理" value={attentionTeamCount} />
+              <SummaryStatCard accent label={t("pages.teams.home.ai.team", "Total AI teams")} value={visibleTeamCount} />
+              <SummaryStatCard label={t("pages.teams.home.team.4", "Teams needing action")} value={actionableTeamCount} />
+              <SummaryStatCard label={t("pages.teams.home.copy.52", "Stable runs exist")} value={healthyTeamCount} />
             </div>
 
-            {membersPendingBindingCount > 0 ? (
-              <Alert
-                action={
-                  <Button
-                    onClick={() =>
-                      history.push(
-                        buildStudioWorkflowWorkspaceRoute({
-                          scopeId,
-                        }),
-                      )
-                    }
-                    size="small"
-                    type="primary"
-                  >
-                    打开 Studio
-                  </Button>
-                }
-                description={`其中 ${membersPendingBindingCount} 个成员还没有完成独立绑定，或还没有形成稳定的可调用入口。`}
-                showIcon
-                title="还有成员待整理"
-                type="info"
-              />
-            ) : null}
-
-            {membersQuery.isLoading ? (
-              <AevatarInspectorEmpty description="正在整理当前 Scope 的成员清单。" />
-            ) : membersQuery.isError ? (
+            {teamsQuery.isLoading ? (
+              <AevatarInspectorEmpty description={t("pages.teams.home.copy.53", "Reading the team list.")} />
+            ) : teamsQuery.isError ? (
               <Alert
                 showIcon
-                title="当前 Scope 的成员清单暂时无法加载。"
+                title={t("pages.teams.home.copy.54", "The team list cannot be loaded right now.")}
                 type="error"
               />
-            ) : memberPreviews.length > 0 ? (
+            ) : teamPreviews.length > 0 ? (
               <>
                 <div
                   style={{
@@ -1236,27 +1343,27 @@ const TeamsHomePage: React.FC = () => {
                         margin: 0,
                       }}
                     >
-                      团队成员
-                    </Typography.Title>
+                      {t("pages.teams.home.copy.55", "Team list")}</Typography.Title>
                     <Typography.Text type="secondary">
-                      当前 Scope 下已经登记的成员，以及它们各自的绑定和运行状态。
-                    </Typography.Text>
+                      {t("pages.teams.home.team.5", "Aggregate members and recent run signals by team, prioritizing abnormal or attention-needed items.")}</Typography.Text>
                   </div>
                   {visibleTeamCount > 1 ? (
                     <Space.Compact>
-                      <Tooltip title="卡片视图">
+                      <Tooltip title={t("pages.teams.home.copy.56", "Card view")}>
                         <Button
-                          aria-label="切换到卡片视图"
+                          aria-label={t("pages.teams.home.copy.57", "Switch to card view")}
                           icon={<AppstoreOutlined />}
                           onClick={() => setManualRosterView("cards")}
+                          style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "cards" ? "primary" : "default"}
                         />
                       </Tooltip>
-                      <Tooltip title="列表视图">
+                      <Tooltip title={t("pages.teams.home.copy.58", "List view")}>
                         <Button
-                          aria-label="切换到列表视图"
+                          aria-label={t("pages.teams.home.copy.59", "Switch to list view")}
                           icon={<BarsOutlined />}
                           onClick={() => setManualRosterView("list")}
+                          style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "list" ? "primary" : "default"}
                         />
                       </Tooltip>
@@ -1264,31 +1371,41 @@ const TeamsHomePage: React.FC = () => {
                   ) : null}
                 </div>
                 {useCompactRoster ? (
-                  <div
-                    aria-label="团队紧凑视图"
+                  <ul
+                    aria-label={t("pages.teams.home.copy.60", "Team compact view")}
                     style={{
                       display: "flex",
                       flexDirection: "column",
                       gap: 14,
+                      listStyle: "none",
+                      margin: 0,
+                      padding: 0,
                     }}
                   >
-                    {memberPreviews.map((preview) => (
-                      <MemberRosterRow key={preview.memberId} preview={preview} />
+                    {teamPreviews.map((preview) => (
+                      <li key={preview.teamId}>
+                        <TeamRosterRow preview={preview} />
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 ) : (
-                  <div
-                    aria-label="团队卡片视图"
+                  <ul
+                    aria-label={t("pages.teams.home.copy.61", "Team card view")}
                     style={{
                       display: "grid",
                       gap: 16,
                       gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+                      listStyle: "none",
+                      margin: 0,
+                      padding: 0,
                     }}
                   >
-                    {memberPreviews.map((preview) => (
-                      <MemberRosterCard key={preview.memberId} preview={preview} />
+                    {teamPreviews.map((preview) => (
+                      <li key={preview.teamId}>
+                        <TeamRosterCard preview={preview} />
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 )}
               </>
             ) : (
@@ -1298,16 +1415,11 @@ const TeamsHomePage: React.FC = () => {
               >
                 <Button
                   onClick={() =>
-                    history.push(
-                      buildStudioWorkflowWorkspaceRoute({
-                        scopeId,
-                      }),
-                    )
+                    history.push(buildScopeHref("/teams/new", { scopeId }))
                   }
                   type="primary"
                 >
-                  打开 Studio
-                </Button>
+                  {t("pages.teams.home.copy.62", "Create team")}</Button>
               </Empty>
             )}
 

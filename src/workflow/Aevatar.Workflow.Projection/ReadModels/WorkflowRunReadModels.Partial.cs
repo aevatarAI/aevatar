@@ -14,7 +14,7 @@ public enum WorkflowExecutionProjectionScope
 
 public enum WorkflowExecutionTopologySource
 {
-    RuntimeSnapshot = 0,
+    CommittedProjection = 0,
 }
 
 public enum WorkflowExecutionCompletionStatus
@@ -168,46 +168,6 @@ public sealed partial class WorkflowExecutionCurrentStateDocument : IProjectionR
     {
         get => SuccessWrapper;
         set => SuccessWrapper = value;
-    }
-}
-
-public sealed partial class WorkflowRunTimelineDocument : IProjectionReadModel<WorkflowRunTimelineDocument>
-{
-    public string ActorId => RootActorId;
-
-    public DateTimeOffset UpdatedAt
-    {
-        get => UpdatedAtUtcValue == null ? default : UpdatedAtUtcValue.ToDateTimeOffset();
-        set => UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
-    }
-
-    public IList<WorkflowExecutionTimelineEvent> Timeline
-    {
-        get => TimelineEntries;
-        set => WorkflowExecutionReadModelCollections.ReplaceCollection(TimelineEntries, value);
-    }
-}
-
-public sealed partial class WorkflowRunGraphArtifactDocument : IProjectionReadModel<WorkflowRunGraphArtifactDocument>
-{
-    public string ActorId => RootActorId;
-
-    public DateTimeOffset UpdatedAt
-    {
-        get => UpdatedAtUtcValue == null ? default : UpdatedAtUtcValue.ToDateTimeOffset();
-        set => UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
-    }
-
-    public IList<WorkflowExecutionTopologyEdge> Topology
-    {
-        get => TopologyEntries;
-        set => WorkflowExecutionReadModelCollections.ReplaceCollection(TopologyEntries, value);
-    }
-
-    public IList<WorkflowExecutionStepTrace> Steps
-    {
-        get => StepEntries;
-        set => WorkflowExecutionReadModelCollections.ReplaceCollection(StepEntries, value);
     }
 }
 

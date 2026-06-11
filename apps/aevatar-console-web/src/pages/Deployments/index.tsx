@@ -5,12 +5,8 @@ import {
   RollbackOutlined,
   SendOutlined,
   StopOutlined,
-} from "@ant-design/icons";
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+} from '@ant-design/icons';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Button,
@@ -26,20 +22,24 @@ import {
   Tooltip,
   Typography,
   theme,
-} from "antd";
-import type { ColumnsType } from "antd/es/table";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+} from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   readServiceQueryDraft,
   trimServiceQuery,
   type ServiceQueryDraft,
-} from "@/pages/services/components/serviceQuery";
-import { servicesApi } from "@/shared/api/servicesApi";
-import { formatDateTime } from "@/shared/datetime/dateTime";
-import { history } from "@/shared/navigation/history";
-import { buildPlatformDeploymentsHref } from "@/shared/navigation/platformRoutes";
-import { resolveStudioScopeContext } from "@/shared/scope/context";
-import { studioApi } from "@/shared/studio/api";
+} from '@/pages/services/components/serviceQuery';
+import { servicesApi } from '@/shared/api/servicesApi';
+import { formatDateTime } from '@/shared/datetime/dateTime';
+import { history } from '@/shared/navigation/history';
+import { buildPlatformDeploymentsHref } from '@/shared/navigation/platformRoutes';
+import {
+  invalidateServiceResourceQueries,
+  serviceResourceQueryKeys,
+} from '@/shared/query/serviceResourceQueryKeys';
+import { resolveStudioScopeContext } from '@/shared/scope/context';
+import { studioApi } from '@/shared/studio/api';
 import type {
   ServiceCatalogSnapshot,
   ServiceDeploymentSnapshot,
@@ -49,17 +49,18 @@ import type {
   ServiceServingTargetInput,
   ServiceServingTargetSnapshot,
   ServiceTrafficEndpointSnapshot,
-} from "@/shared/models/services";
+} from '@/shared/models/services';
 import {
   AevatarContextDrawer,
   AevatarInspectorEmpty,
-} from "@/shared/ui/aevatarPageShells";
+} from '@/shared/ui/aevatarPageShells';
 import {
   AevatarCompactTag,
   AevatarCompactText,
   aevatarMonoFontFamily,
   truncateMiddle,
-} from "@/shared/ui/compactText";
+} from '@/shared/ui/compactText';
+import InventoryReadinessState from '@/shared/ui/InventoryReadinessState';
 import {
   aevatarDrawerBodyStyle,
   aevatarDrawerScrollStyle,
@@ -70,22 +71,65 @@ import {
   resolveAevatarMetricVisual,
   type AevatarStatusDomain,
   type AevatarThemeSurfaceToken,
-} from "@/shared/ui/aevatarWorkbench";
-import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
+} from '@/shared/ui/aevatarWorkbench';
+import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
 import {
   cardStackStyle,
-  codeBlockStyle,
   summaryFieldLabelStyle,
   summaryMetricValueStyle,
-} from "@/shared/ui/proComponents";
+} from '@/shared/ui/proComponents';
+import {
+  buildDeploymentReleaseHandoff,
+  type DeploymentReleaseHandoff,
+  type DeploymentReleaseHandoffAction,
+} from './releaseHandoff';
+import {
+  buildDeploymentReleaseEvidenceSnapshot,
+  type DeploymentReleaseEvidenceSnapshot,
+  type DeploymentReleaseEvidenceStatus,
+} from './releaseEvidence';
+import { buildDeploymentDeactivateAvailability } from './deploymentActionAvailability';
+import {
+  buildRolloutActionAvailability,
+  type RolloutControlAction,
+} from './releaseActionAvailability';
+import { buildServingTargetPlanStatus } from './servingTargetPlan';
+import {
+  formatConsoleMessage,
+  t,
+  type ConsoleMessageDescriptor,
+} from '@/shared/i18n/messages';
 
-type DeploymentWorkbenchView =
-  | "catalog"
-  | "serving"
-  | "rollout"
-  | "traffic";
+type DeploymentWorkbenchView = 'catalog' | 'serving' | 'rollout' | 'traffic';
 
-type DeploymentDrawerTab = "candidate" | "weights" | "control";
+type DeploymentDrawerTab = 'candidate' | 'weights' | 'control';
+
+type RolloutControlDefinition = {
+  action: RolloutControlAction;
+  danger?: boolean;
+  icon: React.ReactNode;
+  label: ConsoleMessageDescriptor;
+  primary?: boolean;
+};
+
+const servingStateOptions = [
+  {
+    label: 'Active',
+    value: 'active',
+  },
+  {
+    label: 'Paused',
+    value: 'paused',
+  },
+  {
+    label: 'Draining',
+    value: 'draining',
+  },
+  {
+    label: 'Disabled',
+    value: 'disabled',
+  },
+];
 
 type DeploymentDrawerState = {
   open: boolean;
@@ -97,24 +141,24 @@ type DeploymentInspectorState =
       open: false;
     }
   | {
-      kind: "serving";
+      kind: 'serving';
       key: string;
       open: true;
     }
   | {
-      kind: "traffic";
+      kind: 'traffic';
       key: string;
       open: true;
     }
   | {
-      kind: "deployment";
+      kind: 'deployment';
       key: string;
       open: true;
     };
 
 type DeploymentNotice = {
   message: string;
-  tone: "error" | "info" | "success" | "warning";
+  tone: 'error' | 'info' | 'success' | 'warning';
 };
 
 type DeploymentTrafficRow = {
@@ -122,27 +166,27 @@ type DeploymentTrafficRow = {
   key: string;
   splitSummary: string;
   targetCount: number;
-  targets: ReadonlyArray<ServiceTrafficEndpointSnapshot["targets"][number]>;
+  targets: ReadonlyArray<ServiceTrafficEndpointSnapshot['targets'][number]>;
 };
 
-const defaultScopeServiceAppId = "default";
-const defaultScopeServiceNamespace = "default";
+const defaultScopeServiceAppId = 'default';
+const defaultScopeServiceNamespace = 'default';
 const tableHeaderCellStyle: React.CSSProperties = {
-  background: "var(--ant-color-fill-alter)",
-  borderBottom: "1px solid var(--ant-color-border-secondary)",
-  color: "var(--ant-color-text-secondary)",
+  background: 'var(--ant-color-fill-alter)',
+  borderBottom: '1px solid var(--ant-color-border-secondary)',
+  color: 'var(--ant-color-text-secondary)',
   fontSize: 11,
   fontWeight: 700,
   letterSpacing: 0.24,
-  padding: "12px 14px",
-  textAlign: "left",
-  textTransform: "uppercase",
-  whiteSpace: "nowrap",
+  padding: '12px 14px',
+  textAlign: 'left',
+  textTransform: 'uppercase',
+  whiteSpace: 'nowrap',
 };
 const tableCellStyle: React.CSSProperties = {
-  borderBottom: "1px solid var(--ant-color-border-secondary)",
-  padding: "12px 14px",
-  verticalAlign: "top",
+  borderBottom: '1px solid var(--ant-color-border-secondary)',
+  padding: '12px 14px',
+  verticalAlign: 'top',
 };
 const compactHintTagStyle: React.CSSProperties = {
   borderRadius: 999,
@@ -150,13 +194,49 @@ const compactHintTagStyle: React.CSSProperties = {
   marginInlineEnd: 0,
 };
 const compactMonoValueStyle: React.CSSProperties = {
-  color: "var(--ant-color-text-secondary)",
+  color: 'var(--ant-color-text-secondary)',
   fontFamily: aevatarMonoFontFamily,
   fontSize: 10.5,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 };
+const rolloutControlDefinitions: RolloutControlDefinition[] = [
+  {
+    action: 'advance',
+    icon: <SendOutlined />,
+    label: {
+      defaultMessage: 'Advance rollout',
+      id: 'pages.deployments.index.rollout.controls.advance',
+    },
+    primary: true,
+  },
+  {
+    action: 'pause',
+    icon: <PauseCircleOutlined />,
+    label: {
+      defaultMessage: 'Pause',
+      id: 'pages.deployments.index.rollout.controls.pause',
+    },
+  },
+  {
+    action: 'resume',
+    icon: <ReloadOutlined />,
+    label: {
+      defaultMessage: 'Resume',
+      id: 'pages.deployments.index.rollout.controls.resume',
+    },
+  },
+  {
+    action: 'rollback',
+    danger: true,
+    icon: <RollbackOutlined />,
+    label: {
+      defaultMessage: 'Rollback rollout',
+      id: 'pages.deployments.index.rollout.controls.rollback',
+    },
+  },
+];
 
 function buildScopePreview(
   tenantId: string,
@@ -166,15 +246,38 @@ function buildScopePreview(
   return `${truncateMiddle(tenantId)}/${appId}/${namespace}`;
 }
 
+function formatDeploymentScopeLabel(query: ServiceIdentityQuery): string {
+  const segments = [
+    query.tenantId?.trim() || t("pages.deployments.index.no.team.set.up.2", "No team set up"),
+    query.appId?.trim() || t("pages.deployments.index.app.not.set.up.2", "App not set up"),
+    query.namespace?.trim() || t("pages.deployments.index.namespace.not.set.2", "namespace not set"),
+  ];
+  const resultWindow = query.take && query.take > 0 ? query.take : 200;
+
+  return t("pages.deployments.index.items.2", "{value1} · {value2} items", { value1: segments.join(' / '), value2: resultWindow });
+}
+
+function isSameDeploymentScope(
+  left: ServiceIdentityQuery,
+  right: ServiceIdentityQuery,
+): boolean {
+  return (
+    (left.tenantId?.trim() ?? '') === (right.tenantId?.trim() ?? '') &&
+    (left.appId?.trim() ?? '') === (right.appId?.trim() ?? '') &&
+    (left.namespace?.trim() ?? '') === (right.namespace?.trim() ?? '') &&
+    (left.take ?? 200) === (right.take ?? 200)
+  );
+}
+
 const CompactIdentifierText: React.FC<{
   color?: string;
-  maxWidth?: React.CSSProperties["maxWidth"];
+  maxWidth?: React.CSSProperties['maxWidth'];
   singleLine?: boolean;
   strong?: boolean;
   value: string;
 }> = ({
   color,
-  maxWidth = "100%",
+  maxWidth = '100%',
   singleLine = false,
   strong = false,
   value,
@@ -205,7 +308,7 @@ const CompactIdentifierTag: React.FC<{
 const CompactLabelText: React.FC<{
   color?: string;
   maxChars?: number;
-  maxWidth?: React.CSSProperties["maxWidth"];
+  maxWidth?: React.CSSProperties['maxWidth'];
   strong?: boolean;
   value: string;
 }> = ({ color, maxChars = 20, maxWidth = 112, strong = false, value }) => {
@@ -223,22 +326,23 @@ const CompactLabelText: React.FC<{
 };
 
 function readSelectedServiceId(): string {
-  if (typeof window === "undefined") {
-    return "";
+  if (typeof window === 'undefined') {
+    return '';
   }
 
   return (
-    new URLSearchParams(window.location.search).get("serviceId")?.trim() ?? ""
+    new URLSearchParams(window.location.search).get('serviceId')?.trim() ?? ''
   );
 }
 
 function readSelectedDeploymentId(): string {
-  if (typeof window === "undefined") {
-    return "";
+  if (typeof window === 'undefined') {
+    return '';
   }
 
   return (
-    new URLSearchParams(window.location.search).get("deploymentId")?.trim() ?? ""
+    new URLSearchParams(window.location.search).get('deploymentId')?.trim() ??
+    ''
   );
 }
 
@@ -248,35 +352,35 @@ function buildRevisionSummary(
   if (!revision) {
     return [
       {
-        label: "版本",
-        value: "暂无",
+        label: t("pages.deployments.index.version.3", "Version"),
+        value: t("pages.deployments.index.none.yet.9", "None yet"),
       },
     ];
   }
 
   return [
     {
-      label: "版本",
+      label: t("pages.deployments.index.version.4", "Version"),
       value: revision.revisionId,
     },
     {
-      label: "状态",
-      value: formatAevatarStatusLabel(revision.status || "unknown"),
+      label: t("pages.deployments.index.state.5", "state"),
+      value: formatAevatarStatusLabel(revision.status || 'unknown'),
     },
     {
-      label: "入口数",
+      label: t("pages.deployments.index.number.of.entrances.2", "Number of entrances"),
       value: String(revision.endpoints.length),
     },
     {
-      label: "制品",
-      value: revision.artifactHash || "n/a",
+      label: t("pages.deployments.index.products.2", "Products"),
+      value: revision.artifactHash || 'n/a',
     },
     {
-      label: "准备完成",
+      label: t("pages.deployments.index.ready.to.complete.2", "Ready to complete"),
       value: formatDateTime(revision.preparedAt),
     },
     {
-      label: "已发布",
+      label: t("pages.deployments.index.published.2", "Published"),
       value: formatDateTime(revision.publishedAt),
     },
   ];
@@ -287,14 +391,14 @@ function pickPreferredCandidateRevision(
   activeRevisionId: string,
 ): string {
   if (!revisions.length) {
-    return "";
+    return '';
   }
 
   return (
     revisions.find((revision) => revision.revisionId !== activeRevisionId)
       ?.revisionId ??
     revisions[0]?.revisionId ??
-    ""
+    ''
   );
 }
 
@@ -307,7 +411,7 @@ function buildTrafficRows(
     splitSummary:
       endpoint.targets
         .map((target) => `${target.revisionId} ${target.allocationWeight}%`)
-        .join(" · ") || "暂无流量目标",
+        .join(' · ') || t("pages.deployments.index.no.traffic.target.yet.2", "No traffic target yet"),
     targetCount: endpoint.targets.length,
     targets: endpoint.targets,
   }));
@@ -320,26 +424,26 @@ function buildServingTargetKey(target: ServiceServingTargetSnapshot): string {
 function describeTargets(
   targets:
     | ReadonlyArray<ServiceServingTargetSnapshot>
-    | ReadonlyArray<ServiceTrafficEndpointSnapshot["targets"][number]>,
+    | ReadonlyArray<ServiceTrafficEndpointSnapshot['targets'][number]>,
 ): string {
   if (!targets.length) {
-    return "暂无";
+    return t("pages.deployments.index.none.yet.10", "None yet");
   }
 
   return targets
     .map(
       (target) =>
         `${target.revisionId} · ${target.allocationWeight}% · ${formatAevatarStatusLabel(
-          target.servingState || "unknown",
+          target.servingState || 'unknown',
         )}`,
     )
-    .join(" / ");
+    .join(' / ');
 }
 
 const DeploymentStatusTag: React.FC<{
   domain?: AevatarStatusDomain;
   status: string;
-}> = ({ domain = "governance", status }) => {
+}> = ({ domain = 'governance', status }) => {
   const { token } = theme.useToken();
 
   return (
@@ -357,9 +461,9 @@ const DeploymentStatusTag: React.FC<{
 
 const MetricCard: React.FC<{
   label: string;
-  tone?: "default" | "info" | "success" | "warning";
+  tone?: 'default' | 'info' | 'success' | 'warning';
   value: string;
-}> = ({ label, tone = "default", value }) => {
+}> = ({ label, tone = 'default', value }) => {
   const { token } = theme.useToken();
   const visual = resolveAevatarMetricVisual(
     token as AevatarThemeSurfaceToken,
@@ -402,18 +506,18 @@ const WorkbenchSection: React.FC<{
     <div
       style={{
         ...buildAevatarPanelStyle(surfaceToken),
-        display: "flex",
-        flexDirection: "column",
+        display: 'flex',
+        flexDirection: 'column',
         gap: 16,
         padding: 18,
       }}
     >
       <div
         style={{
-          alignItems: "flex-start",
-          display: "flex",
+          alignItems: 'flex-start',
+          display: 'flex',
           gap: 12,
-          justifyContent: "space-between",
+          justifyContent: 'space-between',
         }}
       >
         <Typography.Text
@@ -439,19 +543,21 @@ const DetailFieldCard: React.FC<{
   const { token } = theme.useToken();
   const surfaceToken = token as AevatarThemeSurfaceToken;
   const primitiveValue =
-    typeof value === "string" || typeof value === "number" ? String(value) : null;
+    typeof value === 'string' || typeof value === 'number'
+      ? String(value)
+      : null;
 
   return (
     <div
       style={{
-        background: "rgba(248, 250, 252, 0.92)",
+        background: 'rgba(248, 250, 252, 0.92)',
         border: `1px solid ${surfaceToken.colorBorderSecondary}`,
         borderRadius: 14,
-        display: "flex",
-        flexDirection: "column",
+        display: 'flex',
+        flexDirection: 'column',
         gap: 8,
         minWidth: 0,
-        padding: "14px 16px",
+        padding: '14px 16px',
       }}
     >
       <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
@@ -462,16 +568,16 @@ const DetailFieldCard: React.FC<{
           fontWeight: 600,
           lineHeight: 1.5,
           minWidth: 0,
-          overflowWrap: "anywhere",
+          overflowWrap: 'anywhere',
         }}
       >
         {primitiveValue ? (
           <Typography.Text
             strong
             style={{
-              color: "inherit",
-              fontSize: "inherit",
-              lineHeight: "inherit",
+              color: 'inherit',
+              fontSize: 'inherit',
+              lineHeight: 'inherit',
             }}
           >
             {primitiveValue}
@@ -486,12 +592,20 @@ const DetailFieldCard: React.FC<{
 
 const DeploymentsScopeCard: React.FC<{
   draft: ServiceQueryDraft;
+  draftScopeLabel: string;
+  isDirty: boolean;
+  isLoading?: boolean;
+  loadedScopeLabel: string;
   onChange: (draft: ServiceQueryDraft) => void;
   onLoad: () => void;
   onReset: () => void;
   scopeLabel: string;
 }> = ({
   draft,
+  draftScopeLabel,
+  isDirty,
+  isLoading = false,
+  loadedScopeLabel,
   onChange,
   onLoad,
   onReset,
@@ -500,64 +614,68 @@ const DeploymentsScopeCard: React.FC<{
   <div
     style={{
       background:
-        "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.92) 100%)",
-      border: "1px solid var(--ant-color-border-secondary)",
+        'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.92) 100%)',
+      border: '1px solid var(--ant-color-border-secondary)',
       borderRadius: 14,
-      boxShadow: "0 12px 28px rgba(15, 23, 42, 0.04)",
-      display: "flex",
-      flexDirection: "column",
+      boxShadow: '0 12px 28px rgba(15, 23, 42, 0.04)',
+      display: 'flex',
+      flexDirection: 'column',
       gap: 12,
       padding: 16,
     }}
   >
     <div
       style={{
-        alignItems: "center",
-        display: "grid",
+        alignItems: 'center',
+        display: 'flex',
+        flexWrap: 'wrap',
         gap: 12,
-        gridTemplateColumns: "minmax(0, 1fr) auto",
+        justifyContent: 'space-between',
       }}
     >
-      <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+      <Space
+        orientation="vertical"
+        size={2}
+        style={{ flex: '1 1 160px', minWidth: 160 }}
+      >
         <span
           style={{
-            color: "var(--ant-color-primary)",
+            color: 'var(--ant-color-primary)',
             fontSize: 11,
             fontWeight: 700,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
           }}
         >
-          部署范围
-        </span>
+          {t("pages.deployments.index.deployment.scope.2", "deployment scope")}</span>
         <span
           style={{
-            color: "var(--ant-color-text)",
+            color: 'var(--ant-color-text)',
             fontSize: 16,
             fontWeight: 700,
             lineHeight: 1.2,
           }}
         >
-          团队 / 应用 / 命名空间
-        </span>
+          {t("pages.deployments.index.team.application.namespace.2", "team/Application/Namespace")}</span>
       </Space>
       <Tooltip title={scopeLabel}>
         <div
           style={{
-            alignItems: "center",
-            background: "rgba(24, 144, 255, 0.06)",
-            border: "1px solid rgba(24, 144, 255, 0.12)",
+            alignItems: 'center',
+            background: 'rgba(24, 144, 255, 0.06)',
+            border: '1px solid rgba(24, 144, 255, 0.12)',
             borderRadius: 999,
-            color: "var(--ant-color-primary)",
-            display: "inline-flex",
+            color: 'var(--ant-color-primary)',
+            display: 'inline-flex',
+            flex: '0 1 auto',
             fontSize: 12,
             fontWeight: 600,
+            maxWidth: '100%',
             minHeight: 30,
-            maxWidth: "100%",
-            padding: "0 12px",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            overflowWrap: 'anywhere',
+            padding: '0 12px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
           }}
         >
           {scopeLabel}
@@ -567,17 +685,22 @@ const DeploymentsScopeCard: React.FC<{
 
     <div
       style={{
-        display: "grid",
+        display: 'grid',
         gap: 12,
-        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
       }}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <span style={{ color: "var(--ant-color-text-secondary)", fontSize: 12, fontWeight: 600 }}>
-          团队
-        </span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <span
+          style={{
+            color: 'var(--ant-color-text-secondary)',
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          {t("pages.deployments.index.team.2", "team")}</span>
         <Input
-          placeholder="团队 ID"
+          placeholder={t("pages.deployments.index.team.id.2", "team ID")}
           value={draft.tenantId}
           onChange={(event) =>
             onChange({
@@ -588,12 +711,17 @@ const DeploymentsScopeCard: React.FC<{
         />
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <span style={{ color: "var(--ant-color-text-secondary)", fontSize: 12, fontWeight: 600 }}>
-          应用
-        </span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <span
+          style={{
+            color: 'var(--ant-color-text-secondary)',
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          {t("pages.deployments.index.application.2", "application")}</span>
         <Input
-          placeholder="应用 ID"
+          placeholder={t("pages.deployments.index.application.id.2", "Application ID")}
           value={draft.appId}
           onChange={(event) =>
             onChange({
@@ -604,12 +732,17 @@ const DeploymentsScopeCard: React.FC<{
         />
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <span style={{ color: "var(--ant-color-text-secondary)", fontSize: 12, fontWeight: 600 }}>
-          命名空间
-        </span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <span
+          style={{
+            color: 'var(--ant-color-text-secondary)',
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          {t("pages.deployments.index.namespace.3", "namespace")}</span>
         <Input
-          placeholder="命名空间"
+          placeholder={t("pages.deployments.index.namespace.4", "namespace")}
           value={draft.namespace}
           onChange={(event) =>
             onChange({
@@ -619,36 +752,50 @@ const DeploymentsScopeCard: React.FC<{
           }
         />
       </div>
-
     </div>
+
+    {isDirty ? (
+      <Alert
+        description={t("pages.deployments.index.the.current.service.metrics.2", "The current service metrics and lists are still from the loaded scope: {value1}. The draft range is: {value2}.", { value1: loadedScopeLabel, value2: draftScopeLabel })}
+        message={t("pages.deployments.index.range.edited.but.not.2", "Range edited but not loaded yet")}
+        showIcon
+        type="warning"
+      />
+    ) : (
+      <Alert
+        description={t("pages.deployments.index.the.service.metrics.and.2", "The service metrics and list below are based on this loaded range: {value1}.", { value1: loadedScopeLabel })}
+        message={t("pages.deployments.index.loaded.range.is.locked.2", "Loaded range is locked")}
+        showIcon
+        type="info"
+      />
+    )}
 
     <div
       style={{
-        alignItems: "center",
-        display: "flex",
-        flexWrap: "wrap",
+        alignItems: 'center',
+        display: 'flex',
+        flexWrap: 'wrap',
         gap: 10,
-        justifyContent: "space-between",
+        justifyContent: 'space-between',
       }}
     >
       <div
         style={{
-          alignItems: "center",
-          display: "flex",
+          alignItems: 'center',
+          display: 'flex',
           gap: 8,
         }}
       >
         <span
           style={{
-            color: "var(--ant-color-text-secondary)",
+            color: 'var(--ant-color-text-secondary)',
             fontSize: 11,
             fontWeight: 600,
-            textTransform: "uppercase",
-            letterSpacing: "0.04em",
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
           }}
         >
-          结果窗口
-        </span>
+          {t("pages.deployments.index.results.window.2", "results window")}</span>
         <InputNumber
           controls={false}
           min={1}
@@ -666,11 +813,15 @@ const DeploymentsScopeCard: React.FC<{
       </div>
 
       <Space size={8}>
-        <Button size="small" onClick={onReset}>
-          重置
-        </Button>
-        <Button size="small" type="primary" onClick={onLoad}>
-          加载发布列表
+        <Button aria-label={t("pages.deployments.index.reset.2", "reset")} size="small" onClick={onReset}>
+          {t("pages.deployments.index.reset.3", "reset")}</Button>
+        <Button
+          loading={isLoading}
+          size="small"
+          type="primary"
+          onClick={onLoad}
+        >
+          {isDirty ? t("pages.deployments.index.load.range.changes.2", "Load range changes") : t("pages.deployments.index.load.release.list.2", "Load release list")}
         </Button>
       </Space>
     </div>
@@ -687,11 +838,11 @@ const RevisionSummaryCard: React.FC<{
   return (
     <div
       style={{
-        background: "rgba(248, 250, 252, 0.92)",
+        background: 'rgba(248, 250, 252, 0.92)',
         border: `1px solid ${surfaceToken.colorBorderSecondary}`,
         borderRadius: 14,
-        display: "flex",
-        flexDirection: "column",
+        display: 'flex',
+        flexDirection: 'column',
         gap: 12,
         padding: 14,
       }}
@@ -707,9 +858,9 @@ const RevisionSummaryCard: React.FC<{
           </Space>
           <div
             style={{
-              display: "grid",
+              display: 'grid',
               gap: 10,
-              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
             }}
           >
             {buildRevisionSummary(revision).map((item) => (
@@ -723,8 +874,7 @@ const RevisionSummaryCard: React.FC<{
         </>
       ) : (
         <Typography.Text style={{ color: surfaceToken.colorTextSecondary }}>
-          暂无版本信息
-        </Typography.Text>
+          {t("pages.deployments.index.no.version.information.yet.2", "No version information yet")}</Typography.Text>
       )}
     </div>
   );
@@ -740,11 +890,11 @@ const TargetGroupCard: React.FC<{
   return (
     <div
       style={{
-        background: "rgba(248, 250, 252, 0.92)",
+        background: 'rgba(248, 250, 252, 0.92)',
         border: `1px solid ${surfaceToken.colorBorderSecondary}`,
         borderRadius: 14,
-        display: "flex",
-        flexDirection: "column",
+        display: 'flex',
+        flexDirection: 'column',
         gap: 12,
         padding: 14,
       }}
@@ -758,8 +908,8 @@ const TargetGroupCard: React.FC<{
             key={`${label}-${target.deploymentId}-${target.revisionId}`}
             style={{
               borderTop: `1px solid ${surfaceToken.colorBorderSecondary}`,
-              display: "flex",
-              flexDirection: "column",
+              display: 'flex',
+              flexDirection: 'column',
               gap: 8,
               paddingTop: 12,
             }}
@@ -767,7 +917,7 @@ const TargetGroupCard: React.FC<{
             <Space wrap size={[8, 8]}>
               <CompactIdentifierTag value={target.revisionId} />
               <CompactIdentifierTag value={target.deploymentId} />
-              <DeploymentStatusTag status={target.servingState || "unknown"} />
+              <DeploymentStatusTag status={target.servingState || 'unknown'} />
               <Tag>{target.allocationWeight}%</Tag>
             </Space>
             <div style={{ color: surfaceToken.colorTextSecondary }}>
@@ -777,16 +927,15 @@ const TargetGroupCard: React.FC<{
                   value={target.primaryActorId}
                 />
               ) : (
-                "暂无 Actor"
-              )}{" "}
-              · {target.enabledEndpointIds.join(", ") || "所有入口"}
+                t("pages.deployments.index.no.actor.yet.2", "No actor yet")
+              )}{' '}
+              · {target.enabledEndpointIds.join(', ') || t("pages.deployments.index.all.entrances.5", "All entrances")}
             </div>
           </div>
         ))
       ) : (
         <Typography.Text style={{ color: surfaceToken.colorTextSecondary }}>
-          暂无目标
-        </Typography.Text>
+          {t("pages.deployments.index.no.target.yet.2", "No target yet")}</Typography.Text>
       )}
     </div>
   );
@@ -803,8 +952,8 @@ const DrawerSection: React.FC<{
     <div
       style={{
         ...buildAevatarPanelStyle(surfaceToken),
-        display: "flex",
-        flexDirection: "column",
+        display: 'flex',
+        flexDirection: 'column',
         gap: 14,
         padding: 18,
       }}
@@ -817,6 +966,156 @@ const DrawerSection: React.FC<{
       </Typography.Text>
       {children}
     </div>
+  );
+};
+
+const ReleaseHandoffPanel: React.FC<{
+  evidence: DeploymentReleaseEvidenceSnapshot;
+  handoff: DeploymentReleaseHandoff;
+  onClose: () => void;
+  onOpenEvidence: () => void;
+}> = ({ evidence, handoff, onClose, onOpenEvidence }) => {
+  const { token } = theme.useToken();
+  const surfaceToken = token as AevatarThemeSurfaceToken;
+  const statusCopy: Record<
+    DeploymentReleaseEvidenceStatus,
+    {
+      color: string;
+      label: string;
+    }
+  > = {
+    observed: {
+      color: 'green',
+      label: t("pages.deployments.index.observed", "Observed"),
+    },
+    pending: {
+      color: 'gold',
+      label: t("pages.deployments.index.to.be.seen", "To be seen"),
+    },
+    review: {
+      color: 'blue',
+      label: t("pages.deployments.index.need.to.check", "Need to check"),
+    },
+  };
+
+  return (
+    <section
+      aria-label={t("pages.deployments.index.release.action.handoff", "release action handoff")}
+      style={{
+        background: 'rgba(255, 251, 230, 0.72)',
+        border: `1px solid ${surfaceToken.colorWarningBorder}`,
+        borderRadius: surfaceToken.borderRadiusLG,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          alignItems: 'flex-start',
+          display: 'flex',
+          gap: 12,
+          justifyContent: 'space-between',
+        }}
+      >
+        <Space orientation="vertical" size={4}>
+          <Space wrap size={[8, 8]}>
+            <Tag color="gold" style={compactHintTagStyle}>
+              {handoff.pendingLabel}
+            </Tag>
+            <Tag color="blue" style={compactHintTagStyle}>
+              {handoff.evidenceViewLabel}
+            </Tag>
+          </Space>
+          <Typography.Text
+            strong
+            style={{
+              color: surfaceToken.colorTextHeading,
+              fontSize: 15,
+            }}
+          >
+            {handoff.title}
+          </Typography.Text>
+          <Typography.Text style={{ color: surfaceToken.colorTextSecondary }}>
+            {handoff.evidenceDescription}
+          </Typography.Text>
+          <Typography.Text strong style={{ color: surfaceToken.colorText }}>
+            {evidence.summary}
+          </Typography.Text>
+        </Space>
+        <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
+          <Button size="small" onClick={onOpenEvidence}>
+            {t("pages.deployments.index.check", "Check")}{handoff.evidenceViewLabel}{t("pages.deployments.index.evidence", "evidence")}</Button>
+          <Button size="small" type="text" onClick={onClose}>
+            {t("pages.deployments.index.closure", "closure")}</Button>
+        </Space>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gap: 8,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+        }}
+      >
+        {handoff.summaryItems.map((item) => (
+          <div
+            key={`${handoff.id}-${item.label}`}
+            style={{
+              background: surfaceToken.colorBgContainer,
+              border: `1px solid ${surfaceToken.colorBorderSecondary}`,
+              borderRadius: surfaceToken.borderRadius,
+              minWidth: 0,
+              padding: '10px 12px',
+            }}
+          >
+            <Typography.Text style={summaryFieldLabelStyle}>
+              {item.label}
+            </Typography.Text>
+            <div style={{ marginTop: 4, minWidth: 0 }}>
+              <CompactIdentifierText
+                color={surfaceToken.colorText}
+                maxWidth="100%"
+                singleLine
+                value={item.value}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {evidence.checks.map((check) => (
+          <div
+            key={`${handoff.id}-${check.key}`}
+            style={{
+              alignItems: 'flex-start',
+              display: 'grid',
+              gap: 8,
+              gridTemplateColumns: 'auto minmax(0, 1fr)',
+            }}
+          >
+            <Tag
+              color={statusCopy[check.status].color}
+              style={compactHintTagStyle}
+            >
+              {statusCopy[check.status].label}
+            </Tag>
+            <Space orientation="vertical" size={2} style={{ minWidth: 0 }}>
+              <Typography.Text strong style={{ color: surfaceToken.colorText }}>
+                {check.label}
+              </Typography.Text>
+              <Typography.Text
+                style={{ color: surfaceToken.colorTextSecondary }}
+              >
+                {check.detail}
+              </Typography.Text>
+            </Space>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 };
 
@@ -837,24 +1136,26 @@ const DeploymentsPage: React.FC = () => {
   const [selectedDeploymentId, setSelectedDeploymentId] = useState(() =>
     readSelectedDeploymentId(),
   );
-  const [view, setView] = useState<DeploymentWorkbenchView>("catalog");
+  const [view, setView] = useState<DeploymentWorkbenchView>('catalog');
   const [drawerState, setDrawerState] = useState<DeploymentDrawerState>({
     open: false,
-    tab: "candidate",
+    tab: 'candidate',
   });
   const [inspectorState, setInspectorState] =
     useState<DeploymentInspectorState>({
       open: false,
     });
-  const [drawerReason, setDrawerReason] = useState("");
+  const [drawerReason, setDrawerReason] = useState('');
   const [editableTargets, setEditableTargets] = useState<
     ServiceServingTargetInput[]
   >([]);
-  const [candidateRevisionId, setCandidateRevisionId] = useState("");
+  const [candidateRevisionId, setCandidateRevisionId] = useState('');
   const [notice, setNotice] = useState<DeploymentNotice | null>(null);
+  const [releaseHandoff, setReleaseHandoff] =
+    useState<DeploymentReleaseHandoff | null>(null);
 
   const authSessionQuery = useQuery({
-    queryKey: ["deployments", "auth-session"],
+    queryKey: ['deployments', 'auth-session'],
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
@@ -885,44 +1186,46 @@ const DeploymentsPage: React.FC = () => {
 
   const servicesQuery = useQuery({
     queryFn: () => servicesApi.listServices(query),
-    queryKey: ["deployments", "services", query],
+    queryKey: serviceResourceQueryKeys.list(query),
   });
 
   const serviceDetailQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getService(selectedServiceId, query),
-    queryKey: ["deployments", "service", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.detail(query, selectedServiceId),
   });
   const revisionsQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getRevisions(selectedServiceId, query),
-    queryKey: ["deployments", "revisions", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.revisions(query, selectedServiceId),
   });
   const deploymentsQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getDeployments(selectedServiceId, query),
-    queryKey: ["deployments", "catalog", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.deployments(query, selectedServiceId),
   });
   const servingQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getServingSet(selectedServiceId, query),
-    queryKey: ["deployments", "serving", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.serving(query, selectedServiceId),
   });
   const rolloutQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getRollout(selectedServiceId, query),
-    queryKey: ["deployments", "rollout", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.rollout(query, selectedServiceId),
   });
   const trafficQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getTraffic(selectedServiceId, query),
-    queryKey: ["deployments", "traffic", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.traffic(query, selectedServiceId),
   });
 
   const selectedService = useMemo(
     () =>
       serviceDetailQuery.data ??
-      servicesQuery.data?.find((service) => service.serviceId === selectedServiceId) ??
+      servicesQuery.data?.find(
+        (service) => service.serviceId === selectedServiceId,
+      ) ??
       null,
     [selectedServiceId, serviceDetailQuery.data, servicesQuery.data],
   );
@@ -935,10 +1238,10 @@ const DeploymentsPage: React.FC = () => {
     const services = servicesQuery.data ?? [];
     if (!services.length) {
       if (selectedServiceId) {
-        setSelectedServiceId("");
+        setSelectedServiceId('');
       }
       if (selectedDeploymentId) {
-        setSelectedDeploymentId("");
+        setSelectedDeploymentId('');
       }
       return;
     }
@@ -951,9 +1254,9 @@ const DeploymentsPage: React.FC = () => {
       return;
     }
 
-    setSelectedServiceId("");
+    setSelectedServiceId('');
     if (selectedDeploymentId) {
-      setSelectedDeploymentId("");
+      setSelectedDeploymentId('');
     }
   }, [selectedDeploymentId, selectedServiceId, servicesQuery.data]);
 
@@ -978,7 +1281,7 @@ const DeploymentsPage: React.FC = () => {
     const deployments = deploymentsQuery.data?.deployments ?? [];
     if (!selectedServiceId.trim()) {
       if (selectedDeploymentId) {
-        setSelectedDeploymentId("");
+        setSelectedDeploymentId('');
       }
       return;
     }
@@ -995,7 +1298,7 @@ const DeploymentsPage: React.FC = () => {
       return;
     }
 
-    setSelectedDeploymentId("");
+    setSelectedDeploymentId('');
   }, [
     deploymentsQuery.data?.deployments,
     selectedDeploymentId,
@@ -1016,7 +1319,7 @@ const DeploymentsPage: React.FC = () => {
   const activeRevisionId =
     serviceDetailQuery.data?.activeServingRevisionId ||
     serviceDetailQuery.data?.defaultServingRevisionId ||
-    "";
+    '';
 
   useEffect(() => {
     const revisions = revisionsQuery.data?.revisions ?? [];
@@ -1046,18 +1349,22 @@ const DeploymentsPage: React.FC = () => {
 
   const activeDeployment = useMemo(() => {
     const deployments = deploymentsQuery.data?.deployments ?? [];
-    const currentDeploymentId = serviceDetailQuery.data?.deploymentId?.trim() ?? "";
+    const currentDeploymentId =
+      serviceDetailQuery.data?.deploymentId?.trim() ?? '';
 
     return (
       deployments.find(
         (deployment) => deployment.deploymentId === currentDeploymentId,
       ) ??
       deployments.find((deployment) =>
-        deployment.status.toLowerCase().includes("active"),
+        deployment.status.toLowerCase().includes('active'),
       ) ??
       null
     );
-  }, [deploymentsQuery.data?.deployments, serviceDetailQuery.data?.deploymentId]);
+  }, [
+    deploymentsQuery.data?.deployments,
+    serviceDetailQuery.data?.deploymentId,
+  ]);
 
   const focusDeployment = selectedDeployment ?? activeDeployment;
 
@@ -1096,7 +1403,7 @@ const DeploymentsPage: React.FC = () => {
   );
 
   const selectedServingTarget = useMemo(() => {
-    if (!inspectorState.open || inspectorState.kind !== "serving") {
+    if (!inspectorState.open || inspectorState.kind !== 'serving') {
       return null;
     }
 
@@ -1108,7 +1415,7 @@ const DeploymentsPage: React.FC = () => {
   }, [inspectorState, servingQuery.data?.targets]);
 
   const selectedTrafficRow = useMemo(() => {
-    if (!inspectorState.open || inspectorState.kind !== "traffic") {
+    if (!inspectorState.open || inspectorState.kind !== 'traffic') {
       return null;
     }
 
@@ -1116,7 +1423,7 @@ const DeploymentsPage: React.FC = () => {
   }, [inspectorState, trafficRows]);
 
   const inspectedDeployment = useMemo(() => {
-    if (!inspectorState.open || inspectorState.kind !== "deployment") {
+    if (!inspectorState.open || inspectorState.kind !== 'deployment') {
       return null;
     }
 
@@ -1127,6 +1434,21 @@ const DeploymentsPage: React.FC = () => {
     );
   }, [deploymentsQuery.data?.deployments, inspectorState]);
 
+  const draftScopeLabel = useMemo(
+    () => formatDeploymentScopeLabel(trimServiceQuery(draft)),
+    [draft],
+  );
+
+  const loadedScopeLabel = useMemo(
+    () => formatDeploymentScopeLabel(query),
+    [query],
+  );
+
+  const isScopeDirty = useMemo(
+    () => !isSameDeploymentScope(trimServiceQuery(draft), query),
+    [draft, query],
+  );
+
   const currentScopeLabel = useMemo(() => {
     const segments = [
       query.tenantId?.trim() ?? draft.tenantId.trim(),
@@ -1135,8 +1457,8 @@ const DeploymentsPage: React.FC = () => {
     ].filter(Boolean);
 
     return segments.length > 0
-      ? `当前范围 ${segments.join(" / ")}`
-      : "尚未锁定服务范围";
+      ? t("pages.deployments.index.current.scope.2", "Current scope {value1}", { value1: segments.join(' / ') })
+      : t("pages.deployments.index.the.service.scope.has.2", "The service scope has not been locked yet");
   }, [draft.appId, draft.namespace, draft.tenantId, query]);
 
   const deploymentDigest = useMemo(
@@ -1149,7 +1471,7 @@ const DeploymentsPage: React.FC = () => {
       stage:
         currentStage && rolloutQuery.data
           ? `${currentStage.stageIndex + 1}/${rolloutQuery.data.stages.length}`
-          : "无活动 rollout",
+          : t("pages.deployments.index.no.activity.rollout.2", "No activity rollout"),
       targets: servingQuery.data?.targets.length ?? 0,
     }),
     [
@@ -1177,17 +1499,66 @@ const DeploymentsPage: React.FC = () => {
     }),
     [servicesQuery.data],
   );
+  const deploymentInventoryReady =
+    servicesQuery.data !== undefined && !servicesQuery.error;
+
+  const releaseEvidence = useMemo(
+    () =>
+      releaseHandoff
+        ? buildDeploymentReleaseEvidenceSnapshot({
+            deployments: deploymentsQuery.data?.deployments ?? [],
+            handoff: releaseHandoff,
+            rollout: rolloutQuery.data,
+            serving: servingQuery.data,
+            traffic: trafficQuery.data,
+          })
+        : null,
+    [
+      deploymentsQuery.data?.deployments,
+      releaseHandoff,
+      rolloutQuery.data,
+      servingQuery.data,
+      trafficQuery.data,
+    ],
+  );
+  const servingTargetPlanStatus = useMemo(
+    () => buildServingTargetPlanStatus(editableTargets),
+    [editableTargets],
+  );
+  const rolloutActionAvailability = useMemo(
+    () => buildRolloutActionAvailability(rolloutQuery.data),
+    [rolloutQuery.data],
+  );
+  const servingEntryAvailability = useMemo(() => {
+    const targetCount = servingQuery.data?.targets.length ?? 0;
+
+    return {
+      enabled: targetCount > 0,
+      reason:
+        targetCount > 0
+          ? t("pages.deployments.index.after.traffic.weighting.is", "After traffic weighting is turned on, the weight total and serving status will be verified before submission.")
+          : t("pages.deployments.index.there.are.currently.no.3", "There are currently no serving targets and traffic adjustment cannot be submitted."),
+    };
+  }, [servingQuery.data?.targets.length]);
+  const rolloutControlEntryAvailability = useMemo(() => {
+    const enabled = Object.values(rolloutActionAvailability).some(
+      (availability) => availability.enabled,
+    );
+
+    return {
+      enabled,
+      reason: enabled
+        ? t("pages.deployments.index.after.release.control.is", "After release control is turned on, only actions allowed by the current rollout life cycle will be retained.")
+        : rolloutActionAvailability.advance.reason,
+    };
+  }, [rolloutActionAvailability]);
+  const deploymentDeactivateAvailability = useMemo(
+    () => buildDeploymentDeactivateAvailability(inspectedDeployment),
+    [inspectedDeployment],
+  );
 
   const invalidateDetailQueries = useCallback(async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["deployments", "service"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "revisions"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "catalog"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "serving"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "rollout"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "traffic"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "services"] }),
-    ]);
+    await invalidateServiceResourceQueries(queryClient);
   }, [queryClient]);
 
   const openDrawer = useCallback((tab: DeploymentDrawerTab) => {
@@ -1199,7 +1570,7 @@ const DeploymentsPage: React.FC = () => {
 
   const openInspector = useCallback(
     (state: Exclude<DeploymentInspectorState, { open: false }>) => {
-      if (state.kind === "deployment") {
+      if (state.kind === 'deployment') {
         setSelectedDeploymentId(state.key);
       }
       setInspectorState(state);
@@ -1207,10 +1578,61 @@ const DeploymentsPage: React.FC = () => {
     [],
   );
 
+  const recordReleaseHandoff = useCallback(
+    (
+      action: DeploymentReleaseHandoffAction,
+      receipt: Parameters<typeof buildDeploymentReleaseHandoff>[0]['receipt'],
+      options: {
+        deploymentId?: string;
+      } = {},
+    ) => {
+      const handoff = buildDeploymentReleaseHandoff({
+        action,
+        activeRevisionId,
+        candidateRevisionId:
+          action === 'deploy-candidate' ? candidateRevisionId : undefined,
+        createdAt: new Date().toISOString(),
+        deploymentId:
+          options.deploymentId ||
+          focusDeployment?.deploymentId ||
+          selectedDeploymentId ||
+          undefined,
+        endpointCount: trafficRows.length,
+        receipt,
+        rolloutId: rolloutQuery.data?.rolloutId,
+        rolloutStageLabel:
+          currentStage && rolloutQuery.data
+            ? `${currentStage.stageIndex + 1}/${rolloutQuery.data.stages.length}`
+            : undefined,
+        serviceId: selectedServiceId,
+        targetCount:
+          servingQuery.data?.targets.length ?? editableTargets.length,
+      });
+
+      setReleaseHandoff(handoff);
+      setNotice({
+        message: handoff.noticeMessage,
+        tone: handoff.noticeTone,
+      });
+    },
+    [
+      activeRevisionId,
+      candidateRevisionId,
+      currentStage,
+      editableTargets.length,
+      focusDeployment?.deploymentId,
+      rolloutQuery.data,
+      selectedDeploymentId,
+      selectedServiceId,
+      servingQuery.data?.targets.length,
+      trafficRows.length,
+    ],
+  );
+
   const deployMutation = useMutation({
     mutationFn: () => {
       if (!candidateRevisionId.trim()) {
-        throw new Error("请先选择候选版本。");
+        throw new Error(t("pages.deployments.index.please.select.release.candidate.2", "Please select a release candidate first."));
       }
 
       return servicesApi.deployRevision(selectedServiceId, {
@@ -1219,62 +1641,68 @@ const DeploymentsPage: React.FC = () => {
       });
     },
     onError: (error: Error) => {
+      setReleaseHandoff(null);
       setNotice({
-        message: error.message || "发布候选版本失败。",
-        tone: "error",
+        message: error.message || t("pages.deployments.index.release.candidate.failed.2", "Release candidate failed."),
+        tone: 'error',
       });
     },
-    onSuccess: async () => {
-      setNotice({
-        message: "候选版本已提交到发布控制面。",
-        tone: "success",
-      });
+    onSuccess: async (receipt) => {
+      recordReleaseHandoff('deploy-candidate', receipt);
       await invalidateDetailQueries();
     },
   });
 
   const weightsMutation = useMutation({
-    mutationFn: () =>
-      servicesApi.replaceServingTargets(selectedServiceId, {
+    mutationFn: () => {
+      if (!servingTargetPlanStatus.enabled) {
+        throw new Error(servingTargetPlanStatus.reason);
+      }
+
+      return servicesApi.replaceServingTargets(selectedServiceId, {
         ...query,
         reason: drawerReason,
         rolloutId: rolloutQuery.data?.rolloutId,
         targets: editableTargets,
-      }),
-    onError: (error: Error) => {
-      setNotice({
-        message: error.message || "应用 serving targets 失败。",
-        tone: "error",
       });
     },
-    onSuccess: async () => {
+    onError: (error: Error) => {
+      setReleaseHandoff(null);
       setNotice({
-        message: "新的 serving targets 已提交。",
-        tone: "success",
+        message: error.message || t("pages.deployments.index.failed.to.apply.serving.2", "Failed to apply serving targets."),
+        tone: 'error',
       });
+    },
+    onSuccess: async (receipt) => {
+      recordReleaseHandoff('replace-serving-targets', receipt);
       await invalidateDetailQueries();
     },
   });
 
   const rolloutMutation = useMutation({
-    mutationFn: async (kind: "advance" | "pause" | "resume" | "rollback") => {
-      const rolloutId = rolloutQuery.data?.rolloutId;
-      if (!rolloutId) {
-        throw new Error("当前服务没有活动 rollout。");
+    mutationFn: async (kind: 'advance' | 'pause' | 'resume' | 'rollback') => {
+      const availability = rolloutActionAvailability[kind];
+      if (!availability.enabled) {
+        throw new Error(availability.reason);
       }
 
-      if (kind === "advance") {
+      const rolloutId = rolloutQuery.data?.rolloutId;
+      if (!rolloutId) {
+        throw new Error(t("pages.deployments.index.there.is.no.active.2", "There is no active rollout for the current service."));
+      }
+
+      if (kind === 'advance') {
         return servicesApi.advanceRollout(selectedServiceId, rolloutId, query);
       }
 
-      if (kind === "pause") {
+      if (kind === 'pause') {
         return servicesApi.pauseRollout(selectedServiceId, rolloutId, {
           ...query,
           reason: drawerReason,
         });
       }
 
-      if (kind === "resume") {
+      if (kind === 'resume') {
         return servicesApi.resumeRollout(selectedServiceId, rolloutId, query);
       }
 
@@ -1284,16 +1712,23 @@ const DeploymentsPage: React.FC = () => {
       });
     },
     onError: (error: Error) => {
+      setReleaseHandoff(null);
       setNotice({
-        message: error.message || "发布控制动作提交失败。",
-        tone: "error",
+        message: error.message || t("pages.deployments.index.release.control.action.submission.2", "Release control action submission failed."),
+        tone: 'error',
       });
     },
-    onSuccess: async () => {
-      setNotice({
-        message: "发布控制动作已提交。",
-        tone: "success",
-      });
+    onSuccess: async (receipt, kind) => {
+      const actionByKind: Record<
+        RolloutControlAction,
+        DeploymentReleaseHandoffAction
+      > = {
+        advance: 'advance-rollout',
+        pause: 'pause-rollout',
+        resume: 'resume-rollout',
+        rollback: 'rollback-rollout',
+      };
+      recordReleaseHandoff(actionByKind[kind], receipt);
       await invalidateDetailQueries();
     },
   });
@@ -1301,7 +1736,14 @@ const DeploymentsPage: React.FC = () => {
   const deactivateMutation = useMutation({
     mutationFn: (deploymentId: string) => {
       if (!deploymentId.trim()) {
-        throw new Error("请选择 deployment。");
+        throw new Error(t("pages.deployments.index.please.select.deployment.2", "Please select a deployment."));
+      }
+      const deployment = deploymentsQuery.data?.deployments.find(
+        (item) => item.deploymentId === deploymentId,
+      );
+      const availability = buildDeploymentDeactivateAvailability(deployment);
+      if (!availability.enabled) {
+        throw new Error(availability.reason);
       }
 
       return servicesApi.deactivateDeployment(
@@ -1311,31 +1753,34 @@ const DeploymentsPage: React.FC = () => {
       );
     },
     onError: (error: Error) => {
+      setReleaseHandoff(null);
       setNotice({
-        message: error.message || "停用 deployment 失败。",
-        tone: "error",
+        message: error.message || t("pages.deployments.index.deactivating.the.deployment.failed.2", "Deactivating the deployment failed."),
+        tone: 'error',
       });
     },
-    onSuccess: async () => {
-      setNotice({
-        message: "停用 deployment 的请求已提交。",
-        tone: "warning",
+    onSuccess: async (receipt, deploymentId) => {
+      recordReleaseHandoff('deactivate-deployment', receipt, {
+        deploymentId,
       });
       await invalidateDetailQueries();
     },
   });
 
-  const servingColumns = useMemo<
-    ColumnsType<ServiceServingTargetSnapshot>
-  >(
+  const servingColumns = useMemo<ColumnsType<ServiceServingTargetSnapshot>>(
     () => [
       {
-        dataIndex: "revisionId",
-        key: "revisionId",
-        title: "Revision",
+        dataIndex: 'revisionId',
+        key: 'revisionId',
+        title: 'Revision',
         render: (value: string, record) => (
           <Space orientation="vertical" size={4}>
-            <CompactIdentifierText maxWidth={220} singleLine strong value={value} />
+            <CompactIdentifierText
+              maxWidth={220}
+              singleLine
+              strong
+              value={value}
+            />
             {record.deploymentId ? (
               <CompactIdentifierText
                 color="var(--ant-color-text-secondary)"
@@ -1344,135 +1789,135 @@ const DeploymentsPage: React.FC = () => {
                 value={record.deploymentId}
               />
             ) : (
-              <Typography.Text type="secondary">未绑定 deployment</Typography.Text>
+              <Typography.Text type="secondary">
+                {t("pages.deployments.index.unbound.deployment.2", "Unbound deployment")}</Typography.Text>
             )}
           </Space>
         ),
       },
       {
-        dataIndex: "primaryActorId",
-        key: "primaryActorId",
-        title: "主 Actor",
+        dataIndex: 'primaryActorId',
+        key: 'primaryActorId',
+        title: t("pages.deployments.index.main.actor.6", "Main actor"),
         render: (value: string) =>
-          value ? <CompactIdentifierText maxWidth={160} singleLine value={value} /> : "暂无",
+          value ? (
+            <CompactIdentifierText maxWidth={160} singleLine value={value} />
+          ) : (
+            t("pages.deployments.index.none.yet.11", "None yet")
+          ),
       },
       {
-        dataIndex: "allocationWeight",
-        key: "allocationWeight",
-        title: "权重",
+        dataIndex: 'allocationWeight',
+        key: 'allocationWeight',
+        title: t("pages.deployments.index.weight.3", "weight"),
         render: (value: number) => `${value}%`,
       },
       {
-        dataIndex: "servingState",
-        key: "servingState",
-        title: "Serving 状态",
-        render: (value: string) => <DeploymentStatusTag status={value || "unknown"} />,
+        dataIndex: 'servingState',
+        key: 'servingState',
+        title: t("pages.deployments.index.serving.status.4", "serving status"),
+        render: (value: string) => (
+          <DeploymentStatusTag status={value || 'unknown'} />
+        ),
       },
       {
-        dataIndex: "enabledEndpointIds",
-        key: "enabledEndpointIds",
-        title: "入口",
+        dataIndex: 'enabledEndpointIds',
+        key: 'enabledEndpointIds',
+        title: t("pages.deployments.index.entrance.5", "Entrance"),
         render: (value: readonly string[]) =>
-          value.length > 0 ? value.join(", ") : "所有入口",
+          value.length > 0 ? value.join(', ') : t("pages.deployments.index.all.entrances.6", "All entrances"),
       },
       {
-        key: "actions",
-        title: "操作",
+        key: 'actions',
+        title: t("pages.deployments.index.operate.5", "operate"),
         render: (_, record) => (
           <Button
             size="small"
             onClick={() =>
               openInspector({
-                kind: "serving",
+                kind: 'serving',
                 key: buildServingTargetKey(record),
                 open: true,
               })
             }
           >
-            查看详情
-          </Button>
+            {t("pages.deployments.index.check.the.details.4", "check the details")}</Button>
         ),
       },
     ],
     [openInspector],
   );
 
-  const rolloutColumns = useMemo<
-    ColumnsType<ServiceRolloutStageSnapshot>
-  >(
-    () => [
+  const rolloutColumns: ColumnsType<ServiceRolloutStageSnapshot> = [
       {
-        dataIndex: "stageIndex",
-        key: "stageIndex",
-        title: "Stage",
+        dataIndex: 'stageIndex',
+        key: 'stageIndex',
+        title: 'Stage',
         render: (value: number) => `Stage ${value + 1}`,
       },
       {
-        dataIndex: "stageId",
-        key: "stageId",
-        title: "标识",
+        dataIndex: 'stageId',
+        key: 'stageId',
+        title: t("pages.deployments.index.logo.2", "logo"),
       },
       {
-        dataIndex: "targets",
-        key: "targets",
-        title: "目标分配",
+        dataIndex: 'targets',
+        key: 'targets',
+        title: t("pages.deployments.index.target.allocation.2", "target allocation"),
         render: (targets: readonly ServiceServingTargetSnapshot[]) =>
           describeTargets(targets),
       },
-    ],
-    [],
-  );
+  ];
 
   const trafficColumns = useMemo<ColumnsType<DeploymentTrafficRow>>(
     () => [
       {
-        dataIndex: "endpointId",
-        key: "endpointId",
-        title: "Endpoint",
+        dataIndex: 'endpointId',
+        key: 'endpointId',
+        title: 'Endpoint',
         render: (value: string) => (
           <CompactIdentifierText maxWidth={180} singleLine value={value} />
         ),
       },
       {
-        dataIndex: "targetCount",
-        key: "targetCount",
-        title: "目标数",
+        dataIndex: 'targetCount',
+        key: 'targetCount',
+        title: t("pages.deployments.index.number.of.targets.3", "number of targets"),
       },
       {
-        dataIndex: "splitSummary",
-        key: "splitSummary",
-        title: "流量分配",
+        dataIndex: 'splitSummary',
+        key: 'splitSummary',
+        title: t("pages.deployments.index.traffic.distribution.2", "traffic distribution"),
       },
       {
-        dataIndex: "targets",
-        key: "states",
-        title: "Serving 状态",
-        render: (targets: DeploymentTrafficRow["targets"]) => (
+        dataIndex: 'targets',
+        key: 'states',
+        title: t("pages.deployments.index.serving.status.5", "serving status"),
+        render: (targets: DeploymentTrafficRow['targets']) => (
           <Space wrap size={[8, 8]}>
             {targets.map((target) => (
               <Tag key={`${target.deploymentId}-${target.revisionId}`}>
-                {formatAevatarStatusLabel(target.servingState || "unknown")}
+                {formatAevatarStatusLabel(target.servingState || 'unknown')}
               </Tag>
             ))}
           </Space>
         ),
       },
       {
-        key: "actions",
-        title: "操作",
+        key: 'actions',
+        title: t("pages.deployments.index.operate.6", "operate"),
         render: (_, record) => (
           <Button
             size="small"
             onClick={() =>
               openInspector({
-                kind: "traffic",
+                kind: 'traffic',
                 key: record.key,
                 open: true,
               })
             }
           >
-            查看详情
-          </Button>
+            {t("pages.deployments.index.check.the.details.5", "check the details")}</Button>
         ),
       },
     ],
@@ -1484,13 +1929,18 @@ const DeploymentsPage: React.FC = () => {
   >(
     () => [
       {
-        dataIndex: "deploymentId",
-        key: "deploymentId",
-        title: "Deployment",
+        dataIndex: 'deploymentId',
+        key: 'deploymentId',
+        title: 'Deployment',
         width: 220,
         render: (value: string, record) => (
           <Space orientation="vertical" size={2}>
-            <CompactIdentifierText maxWidth={180} singleLine strong value={value} />
+            <CompactIdentifierText
+              maxWidth={180}
+              singleLine
+              strong
+              value={value}
+            />
             <CompactIdentifierText
               color="var(--ant-color-text-secondary)"
               maxWidth={180}
@@ -1501,67 +1951,74 @@ const DeploymentsPage: React.FC = () => {
         ),
       },
       {
-        dataIndex: "primaryActorId",
-        key: "primaryActorId",
-        title: "主 Actor",
+        dataIndex: 'primaryActorId',
+        key: 'primaryActorId',
+        title: t("pages.deployments.index.main.actor.7", "Main actor"),
         width: 150,
         render: (value: string) =>
           value ? (
             <CompactIdentifierText maxWidth={116} singleLine value={value} />
           ) : (
-            "暂无"
+            t("pages.deployments.index.none.yet.12", "None yet")
           ),
       },
       {
-        dataIndex: "status",
-        key: "status",
-        title: "状态",
+        dataIndex: 'status',
+        key: 'status',
+        title: t("pages.deployments.index.state.6", "state"),
         width: 104,
-        render: (value: string) => <DeploymentStatusTag status={value || "unknown"} />,
+        render: (value: string) => (
+          <DeploymentStatusTag status={value || 'unknown'} />
+        ),
       },
       {
-        dataIndex: "activatedAt",
-        key: "activatedAt",
-        title: "激活时间",
+        dataIndex: 'activatedAt',
+        key: 'activatedAt',
+        title: t("pages.deployments.index.activation.time.3", "activation time"),
         width: 148,
         render: (value: string | null) => (
           <Typography.Text
-            style={{ color: surfaceToken.colorTextSecondary, whiteSpace: "nowrap" }}
+            style={{
+              color: surfaceToken.colorTextSecondary,
+              whiteSpace: 'nowrap',
+            }}
           >
             {formatDateTime(value)}
           </Typography.Text>
         ),
       },
       {
-        dataIndex: "updatedAt",
-        key: "updatedAt",
-        title: "最近更新",
+        dataIndex: 'updatedAt',
+        key: 'updatedAt',
+        title: t("pages.deployments.index.latest.updates.5", "Latest updates"),
         width: 148,
         render: (value: string) => (
           <Typography.Text
-            style={{ color: surfaceToken.colorTextSecondary, whiteSpace: "nowrap" }}
+            style={{
+              color: surfaceToken.colorTextSecondary,
+              whiteSpace: 'nowrap',
+            }}
           >
             {formatDateTime(value)}
           </Typography.Text>
         ),
       },
       {
-        key: "actions",
-        title: "操作",
+        key: 'actions',
+        title: t("pages.deployments.index.operate.7", "operate"),
         width: 104,
         render: (_, record) => (
           <Button
             size="small"
             onClick={() =>
               openInspector({
-                kind: "deployment",
+                kind: 'deployment',
                 key: record.deploymentId,
                 open: true,
               })
             }
           >
-            查看详情
-          </Button>
+            {t("pages.deployments.index.check.the.details.6", "check the details")}</Button>
         ),
       },
     ],
@@ -1570,24 +2027,27 @@ const DeploymentsPage: React.FC = () => {
 
   const handleDraftChange = useCallback((nextDraft: ServiceQueryDraft) => {
     setDraft(nextDraft);
-    setSelectedServiceId("");
-    setSelectedDeploymentId("");
+    setSelectedServiceId('');
+    setSelectedDeploymentId('');
+    setReleaseHandoff(null);
   }, []);
 
   const openServiceWorkbench = useCallback(
-    (service: Pick<ServiceCatalogSnapshot, "deploymentId" | "serviceId">) => {
+    (service: Pick<ServiceCatalogSnapshot, 'deploymentId' | 'serviceId'>) => {
       setSelectedServiceId(service.serviceId);
-      setSelectedDeploymentId(service.deploymentId || "");
+      setSelectedDeploymentId(service.deploymentId || '');
       setInspectorState({ open: false });
-      setView("catalog");
+      setReleaseHandoff(null);
+      setView('catalog');
     },
     [],
   );
 
   const closeServiceWorkbench = useCallback(() => {
-    setSelectedServiceId("");
-    setSelectedDeploymentId("");
+    setSelectedServiceId('');
+    setSelectedDeploymentId('');
     setInspectorState({ open: false });
+    setReleaseHandoff(null);
     setDrawerState((current) => ({
       ...current,
       open: false,
@@ -1595,34 +2055,44 @@ const DeploymentsPage: React.FC = () => {
   }, []);
 
   const handleReset = useCallback(() => {
-    const nextDraft = resolvedScope?.scopeId?.trim()
+    const nextDraft = isScopeDirty
       ? {
-          ...readServiceQueryDraft(""),
-          appId: defaultScopeServiceAppId,
-          namespace: defaultScopeServiceNamespace,
-          tenantId: resolvedScope.scopeId.trim(),
+          appId: query.appId?.trim() ?? '',
+          namespace: query.namespace?.trim() ?? '',
+          take: query.take && query.take > 0 ? query.take : 200,
+          tenantId: query.tenantId?.trim() ?? '',
         }
-      : readServiceQueryDraft("");
+      : resolvedScope?.scopeId?.trim()
+        ? {
+            ...readServiceQueryDraft(''),
+            appId: defaultScopeServiceAppId,
+            namespace: defaultScopeServiceNamespace,
+            tenantId: resolvedScope.scopeId.trim(),
+          }
+        : readServiceQueryDraft('');
     setDraft(nextDraft);
-    setQuery(trimServiceQuery(nextDraft));
-    setSelectedServiceId("");
-    setSelectedDeploymentId("");
-    setCandidateRevisionId("");
-    setDrawerReason("");
-    setView("catalog");
-  }, [resolvedScope?.scopeId]);
+    if (!isScopeDirty) {
+      setQuery(trimServiceQuery(nextDraft));
+    }
+    setSelectedServiceId('');
+    setSelectedDeploymentId('');
+    setCandidateRevisionId('');
+    setDrawerReason('');
+    setReleaseHandoff(null);
+    setView('catalog');
+  }, [isScopeDirty, query, resolvedScope?.scopeId]);
 
   const drawerSubtitle = selectedService
     ? `${selectedService.tenantId}/${selectedService.appId}/${selectedService.namespace}`
-    : "发布工作区";
+    : t("pages.deployments.index.publish.workspace.3", "Publish workspace");
 
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
-      description="Deployments 是 Platform 的发布工作台，聚焦当前 serving、rollout 进度和流量分配。"
+      description={t("pages.deployments.index.deployments.is.platform.release.2", "Deployments is Platform's release workbench, focusing on current serving, rollout progress and traffic distribution.")}
       title="Deployments"
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {notice ? (
           <Alert
             closable
@@ -1635,6 +2105,10 @@ const DeploymentsPage: React.FC = () => {
 
         <DeploymentsScopeCard
           draft={draft}
+          draftScopeLabel={draftScopeLabel}
+          isDirty={isScopeDirty}
+          isLoading={servicesQuery.isFetching}
+          loadedScopeLabel={loadedScopeLabel}
           onChange={handleDraftChange}
           onLoad={() => setQuery(trimServiceQuery(draft))}
           onReset={handleReset}
@@ -1643,104 +2117,146 @@ const DeploymentsPage: React.FC = () => {
 
         <div
           style={{
-            display: "grid",
+            display: 'grid',
             gap: 12,
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
           }}
         >
           <MetricCard
-            label="可见服务"
+            label={t("pages.deployments.index.visible.services.2", "Visible services")}
             tone="info"
-            value={String(visibleServiceDigest.services)}
+            value={
+              deploymentInventoryReady
+                ? String(visibleServiceDigest.services)
+                : '—'
+            }
           />
           <MetricCard
-            label="已挂 Serving"
+            label={t("pages.deployments.index.serving.has.been.suspended.2", "serving has been suspended")}
             tone="success"
-            value={String(visibleServiceDigest.servingServices)}
+            value={
+              deploymentInventoryReady
+                ? String(visibleServiceDigest.servingServices)
+                : '—'
+            }
           />
           <MetricCard
-            label="待挂 Serving"
+            label={t("pages.deployments.index.waiting.serving.2", "Waiting serving")}
             tone="warning"
-            value={String(visibleServiceDigest.waitingServices)}
+            value={
+              deploymentInventoryReady
+                ? String(visibleServiceDigest.waitingServices)
+                : '—'
+            }
           />
           <MetricCard
-            label="有入口服务"
-            value={String(visibleServiceDigest.endpointServices)}
+            label={t("pages.deployments.index.there.is.entrance.service.2", "There is entrance service")}
+            value={
+              deploymentInventoryReady
+                ? String(visibleServiceDigest.endpointServices)
+                : '—'
+            }
           />
         </div>
 
         <div
           style={{
             ...buildAevatarPanelStyle(surfaceToken),
-            display: "flex",
-            flexDirection: "column",
+            display: 'flex',
+            flexDirection: 'column',
             gap: 16,
             padding: 18,
           }}
         >
           <div
             style={{
-              alignItems: "flex-start",
-              display: "flex",
+              alignItems: 'flex-start',
+              display: 'flex',
               gap: 16,
-              justifyContent: "space-between",
+              justifyContent: 'space-between',
             }}
           >
             <Space orientation="vertical" size={4}>
               <span
                 style={{
-                  color: "var(--ant-color-primary)",
+                  color: 'var(--ant-color-primary)',
                   fontSize: 12,
                   fontWeight: 700,
-                  letterSpacing: "0.08em",
-                  textTransform: "uppercase",
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
                 }}
               >
-                发布服务列表
-              </span>
+                {t("pages.deployments.index.publish.service.list.2", "Publish service list")}</span>
               <Typography.Text
                 strong
                 style={{ color: surfaceToken.colorTextHeading, fontSize: 22 }}
               >
-                先从服务列表锁定发布对象
-              </Typography.Text>
-              <Typography.Text style={{ color: surfaceToken.colorTextSecondary }}>
-                扫描 serving、deployment 和入口规模，再进入某个服务的发布详情。
-              </Typography.Text>
+                {t("pages.deployments.index.first.lock.the.publishing.2", "First lock the publishing object from the service list")}</Typography.Text>
+              <Typography.Text
+                style={{ color: surfaceToken.colorTextSecondary }}
+              >
+                {t("pages.deployments.index.scan.the.serving.deployment.2", "Scan the serving, deployment and entry scale, and then enter the release details of a service.")}</Typography.Text>
+              <Space wrap size={[8, 8]}>
+                <Tag color={isScopeDirty ? 'gold' : 'blue'}>
+                  {isScopeDirty ? t("pages.deployments.index.show.last.loaded.range.2", "Show last loaded range") : t("pages.deployments.index.show.loaded.range.2", "Show loaded range")}
+                </Tag>
+                <Typography.Text
+                  style={{ color: surfaceToken.colorTextSecondary }}
+                >
+                  {loadedScopeLabel}
+                </Typography.Text>
+              </Space>
             </Space>
           </div>
 
-          {servicesQuery.error ? (
-            <Alert
-              message={
+          {servicesQuery.isLoading ? (
+            <InventoryReadinessState
+              description={t("pages.deployments.index.the.publishing.object.list", "The publishing object list is still loading, and the current scope will not be misjudged as empty before returning.")}
+              kind="loading"
+              title={t("pages.deployments.index.loading.publishing.service", "Loading publishing service")}
+            />
+          ) : servicesQuery.error ? (
+            <InventoryReadinessState
+              action={{
+                label: t("pages.deployments.index.retry.publishing.list", "Retry publishing list"),
+                onClick: () => {
+                  void servicesQuery.refetch();
+                },
+              }}
+              description={
                 servicesQuery.error instanceof Error
                   ? servicesQuery.error.message
-                  : "加载服务发布列表失败。"
+                  : t("pages.deployments.index.failed.to.load.service.2", "Failed to load service publishing list, please try again.")
               }
-              showIcon
-              type="error"
+              kind="error"
+              title={t("pages.deployments.index.publishing.service.list.is", "Publishing service list is currently unavailable")}
             />
-          ) : null}
-
-          {servicesQuery.data?.length ? (
-            <div style={{ overflowX: "auto" }}>
+          ) : servicesQuery.data?.length ? (
+            <div style={{ overflowX: 'auto' }}>
               <table
                 style={{
                   background: surfaceToken.colorBgContainer,
-                  borderCollapse: "separate",
+                  borderCollapse: 'separate',
                   borderSpacing: 0,
-                  width: "100%",
+                  width: '100%',
                 }}
               >
                 <thead>
                   <tr>
-                    {["状态", "服务", "范围", "当前 Serving", "当前 Deployment", "入口", "最近更新", "操作"].map(
-                      (label) => (
-                        <th key={label} style={tableHeaderCellStyle}>
-                          {label}
-                        </th>
-                      ),
-                    )}
+                    {[
+                      t("pages.deployments.index.state.7", "state"),
+                      t("pages.deployments.index.serve.2", "Serve"),
+                      t("pages.deployments.index.scope.2", "scope"),
+                      t("pages.deployments.index.current.serving.2", "Current serving"),
+                      t("pages.deployments.index.current.deployment.3", "Current deployment"),
+                      t("pages.deployments.index.entrance.6", "Entrance"),
+                      t("pages.deployments.index.latest.updates.6", "Latest updates"),
+                      t("pages.deployments.index.operate.8", "operate"),
+                    ].map((label) => (
+                      <th key={label} style={tableHeaderCellStyle}>
+                        {label}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -1754,12 +2270,12 @@ const DeploymentsPage: React.FC = () => {
                           background: selected
                             ? surfaceToken.colorPrimaryBg
                             : surfaceToken.colorBgContainer,
-                          cursor: "pointer",
+                          cursor: 'pointer',
                         }}
                       >
                         <td style={tableCellStyle}>
                           <DeploymentStatusTag
-                            status={service.deploymentStatus || "pending"}
+                            status={service.deploymentStatus || 'pending'}
                           />
                         </td>
                         <td
@@ -1769,7 +2285,13 @@ const DeploymentsPage: React.FC = () => {
                             width: 136,
                           }}
                         >
-                          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 4,
+                            }}
+                          >
                             <CompactLabelText
                               maxWidth={120}
                               strong
@@ -1818,10 +2340,12 @@ const DeploymentsPage: React.FC = () => {
                             />
                           ) : (
                             <Typography.Text
-                              style={{ color: surfaceToken.colorText, fontWeight: 600 }}
+                              style={{
+                                color: surfaceToken.colorText,
+                                fontWeight: 600,
+                              }}
                             >
-                              未发布
-                            </Typography.Text>
+                              {t("pages.deployments.index.unpublished.2", "Unpublished")}</Typography.Text>
                           )}
                         </td>
                         <td style={tableCellStyle}>
@@ -1833,20 +2357,23 @@ const DeploymentsPage: React.FC = () => {
                             />
                           ) : (
                             <Tag color="default" style={compactHintTagStyle}>
-                              未挂 Serving
-                            </Tag>
+                              {t("pages.deployments.index.not.hung.serving.3", "Not hung serving")}</Tag>
                           )}
                         </td>
                         <td style={tableCellStyle}>
                           <Tag
-                            color={service.endpoints.length > 0 ? "cyan" : "default"}
+                            color={
+                              service.endpoints.length > 0 ? 'cyan' : 'default'
+                            }
                             style={compactHintTagStyle}
                           >
                             {service.endpoints.length}
                           </Tag>
                         </td>
-                        <td style={{ ...tableCellStyle, whiteSpace: "nowrap" }}>
-                          <Typography.Text style={{ color: surfaceToken.colorTextSecondary }}>
+                        <td style={{ ...tableCellStyle, whiteSpace: 'nowrap' }}>
+                          <Typography.Text
+                            style={{ color: surfaceToken.colorTextSecondary }}
+                          >
                             {formatDateTime(service.updatedAt)}
                           </Typography.Text>
                         </td>
@@ -1858,8 +2385,7 @@ const DeploymentsPage: React.FC = () => {
                               openServiceWorkbench(service);
                             }}
                           >
-                            查看发布详情
-                          </Button>
+                            {t("pages.deployments.index.view.release.details.2", "View release details")}</Button>
                         </td>
                       </tr>
                     );
@@ -1868,10 +2394,11 @@ const DeploymentsPage: React.FC = () => {
               </table>
             </div>
           ) : (
-            <Empty
-              description="当前范围没有服务"
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              style={{ padding: 24 }}
+            <InventoryReadinessState
+              action={{ label: t("pages.deployments.index.adjust.release.scope", "Adjust release scope"), onClick: handleReset }}
+              description={t("pages.deployments.index.there.are.currently.no.4", "There are currently no publishable services under team, App and Namespace. You can reload after adjusting the range.")}
+              kind="empty"
+              title={t("pages.deployments.index.there.are.no.services.2", "There are no services in the current scope")}
             />
           )}
         </div>
@@ -1883,46 +2410,79 @@ const DeploymentsPage: React.FC = () => {
             <Space wrap size={[8, 8]}>
               <Button
                 icon={<SendOutlined />}
-                onClick={() => openDrawer("candidate")}
+                onClick={() => openDrawer('candidate')}
                 type="primary"
               >
-                部署候选版本
-              </Button>
-              <Button
-                icon={<PercentageOutlined />}
-                onClick={() => openDrawer("weights")}
-              >
-                调整流量
-              </Button>
-              <Button
-                icon={<RollbackOutlined />}
-                onClick={() => openDrawer("control")}
-              >
-                发布控制
-              </Button>
+                {t("pages.deployments.index.deploy.release.candidate.3", "Deploy a release candidate")}</Button>
+              <Tooltip title={servingEntryAvailability.reason}>
+                <span>
+                  <Button
+                    disabled={!servingEntryAvailability.enabled}
+                    icon={<PercentageOutlined />}
+                    onClick={() => openDrawer('weights')}
+                  >
+                    {servingEntryAvailability.enabled
+                      ? t("pages.deployments.index.adjust.flow.6", "Adjust flow")
+                      : t("pages.deployments.index.view.traffic.status", "View traffic status")}
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={rolloutControlEntryAvailability.reason}>
+                <span>
+                  <Button
+                    disabled={!rolloutControlEntryAvailability.enabled}
+                    icon={<RollbackOutlined />}
+                    onClick={() => openDrawer('control')}
+                  >
+                    {rolloutControlEntryAvailability.enabled
+                      ? t("pages.deployments.index.release.control.5", "Release control")
+                      : t("pages.deployments.index.no.activity.control", "No activity control")}
+                  </Button>
+                </span>
+              </Tooltip>
             </Space>
           ) : null
         }
         onClose={closeServiceWorkbench}
         open={Boolean(selectedServiceId)}
         subtitle={drawerSubtitle}
-        title={selectedService?.displayName || selectedServiceId || "Deployment Service"}
+        title={
+          selectedService?.displayName ||
+          selectedServiceId ||
+          'Deployment Service'
+        }
         width={1080}
       >
         {serviceDetailQuery.isLoading && !selectedService ? (
-          <AevatarInspectorEmpty description="正在加载发布详情" title="Loading deployment" />
+          <AevatarInspectorEmpty
+            description={t("pages.deployments.index.loading.release.details.2", "Loading release details")}
+            title={t("pages.deployments.index.loading.deployment.2", "Loading deployment")}
+          />
         ) : !selectedService ? (
-          <AevatarInspectorEmpty description="选择一个服务" />
+          <AevatarInspectorEmpty description={t("pages.deployments.index.choose.service.2", "Choose a service")} />
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <WorkbenchSection title="发布摘要">
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {releaseHandoff && releaseEvidence ? (
+              <ReleaseHandoffPanel
+                evidence={releaseEvidence}
+                handoff={releaseHandoff}
+                onClose={() => setReleaseHandoff(null)}
+                onOpenEvidence={() => setView(releaseHandoff.evidenceView)}
+              />
+            ) : null}
+
+            <WorkbenchSection title={t("pages.deployments.index.release.summary.2", "Release summary")}>
+              <div
+                style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
+              >
                 <Space wrap size={[8, 8]}>
                   <DeploymentStatusTag
-                    status={selectedService.deploymentStatus || "pending"}
+                    status={selectedService.deploymentStatus || 'pending'}
                   />
                   {focusDeployment?.deploymentId ? (
-                    <CompactIdentifierTag value={focusDeployment.deploymentId} />
+                    <CompactIdentifierTag
+                      value={focusDeployment.deploymentId}
+                    />
                   ) : null}
                   {rolloutQuery.data?.rolloutId ? (
                     <CompactIdentifierTag
@@ -1931,32 +2491,37 @@ const DeploymentsPage: React.FC = () => {
                     />
                   ) : null}
                   <Tag
-                    color={selectedService.endpoints.length > 0 ? "cyan" : "default"}
+                    color={
+                      selectedService.endpoints.length > 0 ? 'cyan' : 'default'
+                    }
                     style={compactHintTagStyle}
                   >
-                    {selectedService.endpoints.length} 个入口
-                  </Tag>
+                    {selectedService.endpoints.length} {t("pages.deployments.index.entrance.7", "entrance")}</Tag>
                 </Space>
 
                 <div
                   style={{
-                    display: "grid",
+                    display: 'grid',
                     gap: 10,
-                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
                   }}
                 >
                   <DetailFieldCard
-                    label="当前 serving"
+                    label={t("pages.deployments.index.currently.serving.2", "currently serving")}
                     value={
                       activeRevisionId ? (
-                        <CompactIdentifierText maxWidth="100%" singleLine value={activeRevisionId} />
+                        <CompactIdentifierText
+                          maxWidth="100%"
+                          singleLine
+                          value={activeRevisionId}
+                        />
                       ) : (
-                        "暂无 serving 版本"
+                        t("pages.deployments.index.no.serving.version.yet.2", "No serving version yet")
                       )
                     }
                   />
                   <DetailFieldCard
-                    label="当前 deployment"
+                    label={t("pages.deployments.index.current.deployment.4", "current deployment")}
                     value={
                       focusDeployment?.deploymentId ? (
                         <CompactIdentifierText
@@ -1965,12 +2530,12 @@ const DeploymentsPage: React.FC = () => {
                           value={focusDeployment.deploymentId}
                         />
                       ) : (
-                        "未挂 Serving"
+                        t("pages.deployments.index.not.hung.serving.4", "Not hung serving")
                       )
                     }
                   />
                   <DetailFieldCard
-                    label="主 Actor"
+                    label={t("pages.deployments.index.main.actor.8", "Main actor")}
                     value={
                       selectedService.primaryActorId ? (
                         <CompactIdentifierText
@@ -1979,46 +2544,46 @@ const DeploymentsPage: React.FC = () => {
                           value={selectedService.primaryActorId}
                         />
                       ) : (
-                        "未声明"
+                        t("pages.deployments.index.not.declared.2", "Not declared")
                       )
                     }
                   />
                   <DetailFieldCard
-                    label="最近同步"
+                    label={t("pages.deployments.index.recently.synced.2", "Recently synced")}
                     value={
                       formatDateTime(
                         rolloutQuery.data?.updatedAt ||
                           trafficQuery.data?.updatedAt ||
                           deploymentsQuery.data?.updatedAt ||
                           selectedService.updatedAt,
-                      ) || "待同步"
+                      ) || t("pages.deployments.index.to.be.synchronized.2", "To be synchronized")
                     }
                   />
                 </div>
 
                 <div
                   style={{
-                    display: "grid",
+                    display: 'grid',
                     gap: 10,
-                    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
                   }}
                 >
                   <MetricCard
-                    label="Serving 目标"
+                    label={t("pages.deployments.index.serving.goals.2", "serving goals")}
                     tone="info"
                     value={String(deploymentDigest.targets)}
                   />
                   <MetricCard
-                    label="入口流量"
+                    label={t("pages.deployments.index.inlet.traffic.3", "Inlet traffic")}
                     tone="success"
                     value={String(deploymentDigest.endpoints)}
                   />
                   <MetricCard
-                    label="Deployment 数"
+                    label={t("pages.deployments.index.deployment.number.2", "deployment number")}
                     value={String(deploymentDigest.deployments)}
                   />
                   <MetricCard
-                    label="当前 Stage"
+                    label={t("pages.deployments.index.current.stage.5", "Current Stage")}
                     tone="warning"
                     value={deploymentDigest.stage}
                   />
@@ -2026,27 +2591,27 @@ const DeploymentsPage: React.FC = () => {
               </div>
             </WorkbenchSection>
 
-            <WorkbenchSection title="发布工作区">
+            <WorkbenchSection title={t("pages.deployments.index.publish.workspace.4", "Publish workspace")}>
               <Tabs
                 activeKey={view}
                 items={[
                   {
-                    key: "catalog",
-                    label: "部署目录",
+                    key: 'catalog',
+                    label: t("pages.deployments.index.deployment.directory.2", "deployment directory"),
                     children: (
-                      <WorkbenchSection title="Deployment Catalog">
+                      <WorkbenchSection title={t("pages.deployments.index.deployment.catalog.2", "Deployment Catalog")}>
                         <Table<ServiceDeploymentSnapshot>
                           columns={drawerDeploymentColumns}
                           dataSource={deploymentsQuery.data?.deployments ?? []}
-                          locale={{ emptyText: "当前没有 deployment catalog" }}
+                          locale={{ emptyText: t("pages.deployments.index.there.is.currently.no.4", "There is currently no deployment catalog") }}
                           onRow={(record) => ({
                             onClick: () =>
                               openInspector({
-                                kind: "deployment",
+                                kind: 'deployment',
                                 key: record.deploymentId,
                                 open: true,
                               }),
-                            style: { cursor: "pointer" },
+                            style: { cursor: 'pointer' },
                           })}
                           pagination={false}
                           rowKey={(record) => record.deploymentId}
@@ -2058,40 +2623,49 @@ const DeploymentsPage: React.FC = () => {
                     ),
                   },
                   {
-                    key: "serving",
-                    label: "Serving",
+                    key: 'serving',
+                    label: 'Serving',
                     children: (
                       <WorkbenchSection
-                        title="Serving Targets"
+                        title={t("pages.deployments.index.serving.targets.2", "Serving Targets")}
                         extra={
                           <Space wrap size={[8, 8]}>
-                            <Tag>Generation {servingQuery.data?.generation ?? 0}</Tag>
+                            <Tag>
+                              {t("pages.deployments.index.generation.3", "Generation")}{servingQuery.data?.generation ?? 0}
+                            </Tag>
                             {servingQuery.data?.activeRolloutId ? (
                               <Tag color="blue">
                                 {servingQuery.data.activeRolloutId}
                               </Tag>
                             ) : null}
-                            <Button
-                              icon={<PercentageOutlined />}
-                              onClick={() => openDrawer("weights")}
-                            >
-                              调整流量
-                            </Button>
+                            <Tooltip title={servingEntryAvailability.reason}>
+                              <span>
+                                <Button
+                                  disabled={!servingEntryAvailability.enabled}
+                                  icon={<PercentageOutlined />}
+                                  onClick={() => openDrawer('weights')}
+                                >
+                                  {servingEntryAvailability.enabled
+                                    ? t("pages.deployments.index.adjust.flow.7", "Adjust flow")
+                                    : t("pages.deployments.index.view.traffic.status.2", "View traffic status")}
+                                </Button>
+                              </span>
+                            </Tooltip>
                           </Space>
                         }
                       >
                         <Table<ServiceServingTargetSnapshot>
                           columns={servingColumns}
                           dataSource={servingQuery.data?.targets ?? []}
-                          locale={{ emptyText: "当前没有 serving targets" }}
+                          locale={{ emptyText: t("pages.deployments.index.there.are.currently.no.5", "There are currently no serving targets") }}
                           onRow={(record) => ({
                             onClick: () =>
                               openInspector({
-                                kind: "serving",
+                                kind: 'serving',
                                 key: buildServingTargetKey(record),
                                 open: true,
                               }),
-                            style: { cursor: "pointer" },
+                            style: { cursor: 'pointer' },
                           })}
                           pagination={false}
                           rowKey={buildServingTargetKey}
@@ -2101,11 +2675,11 @@ const DeploymentsPage: React.FC = () => {
                     ),
                   },
                   {
-                    key: "traffic",
-                    label: "Traffic",
+                    key: 'traffic',
+                    label: 'Traffic',
                     children: (
                       <WorkbenchSection
-                        title="入口流量"
+                        title={t("pages.deployments.index.inlet.traffic.4", "Inlet traffic")}
                         extra={
                           <Space wrap size={[8, 8]}>
                             {trafficQuery.data?.activeRolloutId ? (
@@ -2114,28 +2688,37 @@ const DeploymentsPage: React.FC = () => {
                                 value={trafficQuery.data.activeRolloutId}
                               />
                             ) : null}
-                            <Tag>Generation {trafficQuery.data?.generation ?? 0}</Tag>
-                            <Button
-                              icon={<PercentageOutlined />}
-                              onClick={() => openDrawer("weights")}
-                            >
-                              调整流量
-                            </Button>
+                            <Tag>
+                              {t("pages.deployments.index.generation.4", "Generation")}{trafficQuery.data?.generation ?? 0}
+                            </Tag>
+                            <Tooltip title={servingEntryAvailability.reason}>
+                              <span>
+                                <Button
+                                  disabled={!servingEntryAvailability.enabled}
+                                  icon={<PercentageOutlined />}
+                                  onClick={() => openDrawer('weights')}
+                                >
+                                  {servingEntryAvailability.enabled
+                                    ? t("pages.deployments.index.adjust.flow.8", "Adjust flow")
+                                    : t("pages.deployments.index.view.traffic.status.3", "View traffic status")}
+                                </Button>
+                              </span>
+                            </Tooltip>
                           </Space>
                         }
                       >
                         <Table<DeploymentTrafficRow>
                           columns={trafficColumns}
                           dataSource={trafficRows}
-                          locale={{ emptyText: "当前没有 traffic view" }}
+                          locale={{ emptyText: t("pages.deployments.index.there.is.currently.no.5", "There is currently no traffic view") }}
                           onRow={(record) => ({
                             onClick: () =>
                               openInspector({
-                                kind: "traffic",
+                                kind: 'traffic',
                                 key: record.key,
                                 open: true,
                               }),
-                            style: { cursor: "pointer" },
+                            style: { cursor: 'pointer' },
                           })}
                           pagination={false}
                           rowKey="key"
@@ -2145,63 +2728,74 @@ const DeploymentsPage: React.FC = () => {
                     ),
                   },
                   {
-                    key: "rollout",
-                    label: "Rollout",
+                    key: 'rollout',
+                    label: 'Rollout',
                     children: rolloutQuery.data ? (
                       <div style={cardStackStyle}>
                         <WorkbenchSection
-                          title="Rollout 概况"
+                          title={t("pages.deployments.index.rollout.overview.2", "rollout Overview")}
                           extra={
                             <Space wrap size={[8, 8]}>
-                              <DeploymentStatusTag status={rolloutQuery.data.status} />
-                              <CompactIdentifierTag value={rolloutQuery.data.rolloutId} />
+                              <DeploymentStatusTag
+                                status={rolloutQuery.data.status}
+                              />
+                              <CompactIdentifierTag
+                                value={rolloutQuery.data.rolloutId}
+                              />
                               <Button
                                 icon={<RollbackOutlined />}
-                                onClick={() => openDrawer("control")}
+                                onClick={() => openDrawer('control')}
                               >
-                                发布控制
-                              </Button>
+                                {t("pages.deployments.index.release.control.6", "Release control")}</Button>
                             </Space>
                           }
                         >
                           <div
                             style={{
-                              display: "grid",
+                              display: 'grid',
                               gap: 12,
-                              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                              gridTemplateColumns:
+                                'repeat(auto-fit, minmax(220px, 1fr))',
                             }}
                           >
                             <DetailFieldCard
                               label="Rollout"
-                              value={rolloutQuery.data.displayName || rolloutQuery.data.rolloutId}
-                            />
-                            <DetailFieldCard
-                              label="当前 Stage"
                               value={
-                                currentStage
-                                  ? `${currentStage.stageIndex + 1} / ${rolloutQuery.data.stages.length}`
-                                  : "暂无"
+                                rolloutQuery.data.displayName ||
+                                rolloutQuery.data.rolloutId
                               }
                             />
                             <DetailFieldCard
-                              label="开始时间"
-                              value={formatDateTime(rolloutQuery.data.startedAt)}
+                              label={t("pages.deployments.index.current.stage.6", "Current Stage")}
+                              value={
+                                currentStage
+                                  ? `${currentStage.stageIndex + 1} / ${rolloutQuery.data.stages.length}`
+                                  : t("pages.deployments.index.none.yet.13", "None yet")
+                              }
                             />
                             <DetailFieldCard
-                              label="最近更新"
-                              value={formatDateTime(rolloutQuery.data.updatedAt)}
+                              label={t("pages.deployments.index.start.time.2", "start time")}
+                              value={formatDateTime(
+                                rolloutQuery.data.startedAt,
+                              )}
+                            />
+                            <DetailFieldCard
+                              label={t("pages.deployments.index.latest.updates.7", "Latest updates")}
+                              value={formatDateTime(
+                                rolloutQuery.data.updatedAt,
+                              )}
                             />
                           </div>
                         </WorkbenchSection>
 
                         <div
                           style={{
-                            display: "grid",
+                            display: 'grid',
                             gap: 16,
-                            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
                           }}
                         >
-                          <WorkbenchSection title="阶段计划">
+                          <WorkbenchSection title={t("pages.deployments.index.stage.plan.2", "stage plan")}>
                             <Table<ServiceRolloutStageSnapshot>
                               columns={rolloutColumns}
                               dataSource={rolloutQuery.data.stages}
@@ -2210,12 +2804,13 @@ const DeploymentsPage: React.FC = () => {
                               size="middle"
                             />
                           </WorkbenchSection>
-                          <WorkbenchSection title="基线与当前 Stage">
+                          <WorkbenchSection title={t("pages.deployments.index.baseline.and.current.stage.2", "Baseline and current stage")}>
                             <div
                               style={{
-                                display: "grid",
+                                display: 'grid',
                                 gap: 12,
-                                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                                gridTemplateColumns:
+                                  'repeat(2, minmax(0, 1fr))',
                               }}
                             >
                               <TargetGroupCard
@@ -2223,7 +2818,7 @@ const DeploymentsPage: React.FC = () => {
                                 targets={rolloutQuery.data.baselineTargets}
                               />
                               <TargetGroupCard
-                                label="Current Stage"
+                                label={t("pages.deployments.index.current.stage.7", "Current Stage")}
                                 targets={
                                   currentStage?.targets ??
                                   servingQuery.data?.targets ??
@@ -2237,7 +2832,7 @@ const DeploymentsPage: React.FC = () => {
                     ) : (
                       <WorkbenchSection title="Rollout">
                         <Empty
-                          description="当前没有活动 rollout"
+                          description={t("pages.deployments.index.there.is.currently.no.6", "There is currently no active rollout")}
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
                         />
                       </WorkbenchSection>
@@ -2254,11 +2849,11 @@ const DeploymentsPage: React.FC = () => {
       <Drawer
         open={drawerState.open}
         size="large"
-        title="发布控制"
+        title={t("pages.deployments.index.release.control.7", "Release control")}
         styles={{
           body: aevatarDrawerBodyStyle,
           wrapper: {
-            maxWidth: "94vw",
+            maxWidth: '94vw',
             width: 1040,
           },
         }}
@@ -2280,7 +2875,7 @@ const DeploymentsPage: React.FC = () => {
           >
             <Space wrap size={[8, 8]}>
               <DeploymentStatusTag
-                status={serviceDetailQuery.data?.deploymentStatus || "pending"}
+                status={serviceDetailQuery.data?.deploymentStatus || 'pending'}
               />
               {rolloutQuery.data?.rolloutId ? (
                 <CompactIdentifierTag
@@ -2302,27 +2897,37 @@ const DeploymentsPage: React.FC = () => {
             items={[
               {
                 children: (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 16,
+                    }}
+                  >
                     <div
                       style={{
-                        display: "grid",
+                        display: 'grid',
                         gap: 12,
                         gridTemplateColumns:
-                          "minmax(260px, 320px) repeat(auto-fit, minmax(220px, 1fr))",
+                          'minmax(260px, 320px) repeat(auto-fit, minmax(220px, 1fr))',
                       }}
                     >
-                      <WorkbenchSection title="候选版本">
-                        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
+                      <WorkbenchSection title={t("pages.deployments.index.release.candidate.5", "release candidate")}>
+                        <Space
+                          orientation="vertical"
+                          size={12}
+                          style={{ width: '100%' }}
+                        >
                           <Select
                             options={(revisionsQuery.data?.revisions ?? []).map(
                               (revision) => ({
-                                label: `${revision.revisionId} · ${formatAevatarStatusLabel(
+                                label: t("pages.deployments.index.copy.3", "{value1} · {value2}", { value1: revision.revisionId, value2: formatAevatarStatusLabel(
                                   revision.status,
-                                )}`,
+                                ) }),
                                 value: revision.revisionId,
                               }),
                             )}
-                            placeholder="选择候选版本"
+                            placeholder={t("pages.deployments.index.select.release.candidate.2", "Select a release candidate")}
                             value={candidateRevisionId || undefined}
                             onChange={setCandidateRevisionId}
                           />
@@ -2336,24 +2941,24 @@ const DeploymentsPage: React.FC = () => {
                             onClick={() => deployMutation.mutate()}
                             type="primary"
                           >
-                            发布候选版本
-                          </Button>
+                            {t("pages.deployments.index.release.candidate.6", "Release candidate")}</Button>
                         </Space>
                       </WorkbenchSection>
                       <RevisionSummaryCard
-                        label="当前 serving 版本"
+                        label={t("pages.deployments.index.current.serving.version.2", "Current serving version")}
                         revision={activeRevision}
                       />
                       <RevisionSummaryCard
-                        label="候选版本"
+                        label={t("pages.deployments.index.release.candidate.7", "release candidate")}
                         revision={candidateRevision}
                       />
                     </div>
                     <div
                       style={{
-                        display: "grid",
+                        display: 'grid',
                         gap: 12,
-                        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                        gridTemplateColumns:
+                          'repeat(auto-fit, minmax(220px, 1fr))',
                       }}
                     >
                       <TargetGroupCard
@@ -2361,31 +2966,39 @@ const DeploymentsPage: React.FC = () => {
                         targets={rolloutQuery.data?.baselineTargets ?? []}
                       />
                       <TargetGroupCard
-                        label="Current Stage"
+                        label={t("pages.deployments.index.current.stage.8", "Current Stage")}
                         targets={
-                          currentStage?.targets ?? servingQuery.data?.targets ?? []
+                          currentStage?.targets ??
+                          servingQuery.data?.targets ??
+                          []
                         }
                       />
                     </div>
                   </div>
                 ),
-                key: "candidate",
-                label: "候选版本",
+                key: 'candidate',
+                label: t("pages.deployments.index.release.candidate.8", "release candidate"),
               },
               {
                 children: (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                    }}
+                  >
                     {editableTargets.length ? (
                       editableTargets.map((target, index) => (
                         <div
-                          key={`${target.revisionId}-${target.servingState || "unset"}`}
+                          key={`${target.revisionId}-${target.servingState || 'unset'}`}
                           style={{
                             background: surfaceToken.colorFillAlter,
                             border: `1px solid ${surfaceToken.colorBorderSecondary}`,
                             borderRadius: surfaceToken.borderRadiusLG,
-                            display: "grid",
+                            display: 'grid',
                             gap: 12,
-                            gridTemplateColumns: "minmax(0, 1fr) 140px 160px",
+                            gridTemplateColumns: 'minmax(0, 1fr) 140px 160px',
                             padding: 14,
                           }}
                         >
@@ -2403,7 +3016,8 @@ const DeploymentsPage: React.FC = () => {
                                 marginTop: 4,
                               }}
                             >
-                              {target.enabledEndpointIds?.join(", ") || "所有入口"}
+                              {target.enabledEndpointIds?.join(', ') ||
+                                t("pages.deployments.index.all.entrances.7", "All entrances")}
                             </Typography.Paragraph>
                           </div>
                           <InputNumber
@@ -2423,15 +3037,16 @@ const DeploymentsPage: React.FC = () => {
                               )
                             }
                           />
-                          <Input
-                            value={target.servingState}
-                            onChange={(event) =>
+                          <Select
+                            options={servingStateOptions}
+                            value={target.servingState || 'active'}
+                            onChange={(value) =>
                               setEditableTargets((current) =>
                                 current.map((item, itemIndex) =>
                                   itemIndex === index
                                     ? {
                                         ...item,
-                                        servingState: event.target.value,
+                                        servingState: value,
                                       }
                                     : item,
                                 ),
@@ -2442,79 +3057,111 @@ const DeploymentsPage: React.FC = () => {
                       ))
                     ) : (
                       <Empty
-                        description="当前没有 serving targets"
+                        description={t("pages.deployments.index.there.are.currently.no.6", "There are currently no serving targets")}
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                       />
                     )}
                     <Input.TextArea
-                      placeholder="说明本次 canary 或权重调整原因"
+                      placeholder={t("pages.deployments.index.explain.the.reason.for.3", "Explain the reason for this canary or weight adjustment")}
                       rows={3}
                       value={drawerReason}
                       onChange={(event) => setDrawerReason(event.target.value)}
                     />
-                    <Button
-                      icon={<PercentageOutlined />}
-                      loading={weightsMutation.isPending}
-                      onClick={() => weightsMutation.mutate()}
-                      type="primary"
-                    >
-                      应用权重
-                    </Button>
+                    <Alert
+                      message={servingTargetPlanStatus.summary}
+                      description={servingTargetPlanStatus.reason}
+                      showIcon
+                      type={
+                        servingTargetPlanStatus.enabled ? 'info' : 'warning'
+                      }
+                    />
+                    <Tooltip title={servingTargetPlanStatus.reason}>
+                      <span
+                        style={{ display: 'inline-flex', width: 'fit-content' }}
+                      >
+                        <Button
+                          disabled={!servingTargetPlanStatus.enabled}
+                          icon={<PercentageOutlined />}
+                          loading={weightsMutation.isPending}
+                          onClick={() => weightsMutation.mutate()}
+                          type="primary"
+                        >
+                          {t("pages.deployments.index.apply.weights.2", "Apply weights")}</Button>
+                      </span>
+                    </Tooltip>
                   </div>
                 ),
-                key: "weights",
-                label: "流量权重",
+                key: 'weights',
+                label: t("pages.deployments.index.traffic.weight.2", "Traffic weight"),
               },
               {
                 children: (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                    }}
+                  >
                     <MetricCard
-                      label="当前 rollout"
+                      label={t("pages.deployments.index.current.rollout.2", "current rollout")}
                       tone="warning"
-                      value={rolloutQuery.data?.rolloutId || "暂无活动 rollout"}
+                      value={rolloutQuery.data?.rolloutId || t("pages.deployments.index.no.activity.yet.rollout.2", "No activity yet rollout")}
                     />
                     <Input.TextArea
-                      placeholder="说明本次暂停、恢复或回滚原因"
+                      placeholder={t("pages.deployments.index.explain.the.reason.for.4", "Explain the reason for this pause, resume or rollback")}
                       rows={3}
                       value={drawerReason}
                       onChange={(event) => setDrawerReason(event.target.value)}
                     />
+                    <Alert
+                      message={
+                        rolloutQuery.data?.rolloutId
+                          ? t("pages.deployments.index.current.rollout.status", "Current rollout status: {value1}", { value1: formatAevatarStatusLabel(rolloutQuery.data.status || 'unknown') })
+                          : t("pages.deployments.index.there.is.currently.no.7", "There is currently no active rollout")
+                      }
+                      description={
+                        rolloutQuery.data?.rolloutId
+                          ? t("pages.deployments.index.only.control.actions.that", "Only control actions that match the current life cycle will remain executable; you still need to wait for the evidence to be refreshed after submission.")
+                          : t("pages.deployments.index.releasing.control.action.requires", "Releasing a control action requires an active rollout.")
+                      }
+                      showIcon
+                      type={rolloutQuery.data?.rolloutId ? 'info' : 'warning'}
+                    />
                     <Space wrap size={[8, 8]}>
-                      <Button
-                        icon={<SendOutlined />}
-                        loading={rolloutMutation.isPending}
-                        onClick={() => rolloutMutation.mutate("advance")}
-                        type="primary"
-                      >
-                        推进 rollout
-                      </Button>
-                      <Button
-                        icon={<PauseCircleOutlined />}
-                        loading={rolloutMutation.isPending}
-                        onClick={() => rolloutMutation.mutate("pause")}
-                      >
-                        暂停
-                      </Button>
-                      <Button
-                        icon={<ReloadOutlined />}
-                        loading={rolloutMutation.isPending}
-                        onClick={() => rolloutMutation.mutate("resume")}
-                      >
-                        恢复
-                      </Button>
-                      <Button
-                        danger
-                        icon={<RollbackOutlined />}
-                        loading={rolloutMutation.isPending}
-                        onClick={() => rolloutMutation.mutate("rollback")}
-                      >
-                        回滚 rollout
-                      </Button>
+                      {rolloutControlDefinitions.map((definition) => {
+                        const availability =
+                          rolloutActionAvailability[definition.action];
+
+                        return (
+                          <Tooltip
+                            key={definition.action}
+                            title={availability.reason}
+                          >
+                            <span>
+                              <Button
+                                danger={definition.danger}
+                                disabled={!availability.enabled}
+                                icon={definition.icon}
+                                loading={rolloutMutation.isPending}
+                                onClick={() =>
+                                  rolloutMutation.mutate(definition.action)
+                                }
+                                type={
+                                  definition.primary ? 'primary' : 'default'
+                                }
+                              >
+                                {formatConsoleMessage(definition.label)}
+                              </Button>
+                            </span>
+                          </Tooltip>
+                        );
+                      })}
                     </Space>
                   </div>
                 ),
-                key: "control",
-                label: "发布控制",
+                key: 'control',
+                label: t("pages.deployments.index.release.control.8", "Release control"),
               },
             ]}
             onChange={(key) =>
@@ -2532,32 +3179,33 @@ const DeploymentsPage: React.FC = () => {
         size="default"
         title={
           inspectorState.open
-            ? inspectorState.kind === "serving"
-              ? "Serving Target 详情"
-              : inspectorState.kind === "traffic"
-                ? "Traffic Endpoint 详情"
-                : "Deployment 详情"
-            : "详情"
+            ? inspectorState.kind === 'serving'
+              ? t("pages.deployments.index.serving.target.details.2", "serving Target details")
+              : inspectorState.kind === 'traffic'
+                ? t("pages.deployments.index.traffic.endpoint.details.2", "Traffic Endpoint Details")
+                : t("pages.deployments.index.deployment.details.2", "deployment details")
+            : t("pages.deployments.index.details.2", "Details")
         }
         styles={{
           body: aevatarDrawerBodyStyle,
           wrapper: {
-            maxWidth: "92vw",
+            maxWidth: '92vw',
             width: 640,
           },
         }}
         onClose={() => setInspectorState({ open: false })}
       >
         <div style={aevatarDrawerScrollStyle}>
-          {inspectorState.open && inspectorState.kind === "serving" ? (
+          {inspectorState.open && inspectorState.kind === 'serving' ? (
             selectedServingTarget ? (
               <div style={cardStackStyle}>
-                <DrawerSection title="Target 摘要">
+                <DrawerSection title={t("pages.deployments.index.target.summary.2", "Target Summary")}>
                   <div
                     style={{
-                      display: "grid",
+                      display: 'grid',
                       gap: 12,
-                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                      gridTemplateColumns:
+                        'repeat(auto-fit, minmax(180px, 1fr))',
                     }}
                   >
                     <DetailFieldCard
@@ -2580,12 +3228,12 @@ const DeploymentsPage: React.FC = () => {
                             value={selectedServingTarget.deploymentId}
                           />
                         ) : (
-                          "未绑定"
+                          t("pages.deployments.index.not.bound.2", "Not bound")
                         )
                       }
                     />
                     <DetailFieldCard
-                      label="主 Actor"
+                      label={t("pages.deployments.index.main.actor.9", "Main actor")}
                       value={
                         selectedServingTarget.primaryActorId ? (
                           <CompactIdentifierText
@@ -2594,66 +3242,68 @@ const DeploymentsPage: React.FC = () => {
                             value={selectedServingTarget.primaryActorId}
                           />
                         ) : (
-                          "暂无"
+                          t("pages.deployments.index.none.yet.14", "None yet")
                         )
                       }
                     />
                     <DetailFieldCard
-                      label="Serving 状态"
+                      label={t("pages.deployments.index.serving.status.6", "serving status")}
                       value={formatAevatarStatusLabel(
-                        selectedServingTarget.servingState || "unknown",
+                        selectedServingTarget.servingState || 'unknown',
                       )}
                     />
                     <DetailFieldCard
-                      label="权重"
+                      label={t("pages.deployments.index.weight.4", "weight")}
                       value={`${selectedServingTarget.allocationWeight}%`}
                     />
                     <DetailFieldCard
-                      label="入口"
+                      label={t("pages.deployments.index.entrance.8", "Entrance")}
                       value={
-                        selectedServingTarget.enabledEndpointIds.join(", ") ||
-                        "所有入口"
+                        selectedServingTarget.enabledEndpointIds.join(', ') ||
+                        t("pages.deployments.index.all.entrances.8", "All entrances")
                       }
                     />
                   </div>
                 </DrawerSection>
-                <DrawerSection title="下一步操作">
+                <DrawerSection title={t("pages.deployments.index.next.steps.3", "Next steps")}>
                   <Space wrap size={[8, 8]}>
                     <Button
                       icon={<PercentageOutlined />}
                       onClick={() => {
                         setInspectorState({ open: false });
-                        openDrawer("weights");
+                        openDrawer('weights');
                       }}
                     >
-                      调整流量
-                    </Button>
+                      {t("pages.deployments.index.adjust.flow.9", "Adjust flow")}</Button>
                     <Button
                       icon={<SendOutlined />}
                       onClick={() => {
                         setInspectorState({ open: false });
-                        openDrawer("candidate");
+                        openDrawer('candidate');
                       }}
                     >
-                      部署候选版本
-                    </Button>
+                      {t("pages.deployments.index.deploy.release.candidate.4", "Deploy a release candidate")}</Button>
                   </Space>
                 </DrawerSection>
               </div>
             ) : (
-              <Empty description="未找到 serving target" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              <Empty
+                description={t("pages.deployments.index.serving.target.not.found.2", "serving target not found")}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
             )
           ) : null}
 
-          {inspectorState.open && inspectorState.kind === "traffic" ? (
+          {inspectorState.open && inspectorState.kind === 'traffic' ? (
             selectedTrafficRow ? (
               <div style={cardStackStyle}>
-                <DrawerSection title="Endpoint 摘要">
+                <DrawerSection title={t("pages.deployments.index.endpoint.summary.2", "Endpoint Summary")}>
                   <div
                     style={{
-                      display: "grid",
+                      display: 'grid',
                       gap: 12,
-                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                      gridTemplateColumns:
+                        'repeat(auto-fit, minmax(180px, 1fr))',
                     }}
                   >
                     <DetailFieldCard
@@ -2667,45 +3317,55 @@ const DeploymentsPage: React.FC = () => {
                       }
                     />
                     <DetailFieldCard
-                      label="目标数"
+                      label={t("pages.deployments.index.number.of.targets.4", "number of targets")}
                       value={String(selectedTrafficRow.targetCount)}
                     />
                     <DetailFieldCard
-                      label="分配摘要"
+                      label={t("pages.deployments.index.assignment.summary.2", "Assignment summary")}
                       value={selectedTrafficRow.splitSummary}
                     />
                     <DetailFieldCard
-                      label="活动 Rollout"
-                      value={trafficQuery.data?.activeRolloutId || "暂无"}
+                      label={t("pages.deployments.index.activity.rollout.2", "Activity rollout")}
+                      value={trafficQuery.data?.activeRolloutId || t("pages.deployments.index.none.yet.15", "None yet")}
                     />
                   </div>
                 </DrawerSection>
-                <DrawerSection title="流量目标">
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <DrawerSection title={t("pages.deployments.index.traffic.target.2", "traffic target")}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                    }}
+                  >
                     {selectedTrafficRow.targets.map((target) => (
                       <DetailFieldCard
                         key={`${target.deploymentId}-${target.revisionId}`}
                         label={`${target.revisionId} · ${target.deploymentId}`}
-                        value={`${target.allocationWeight}% · ${formatAevatarStatusLabel(target.servingState || "unknown")} · ${target.primaryActorId || "暂无 Actor"}`}
+                        value={t("pages.deployments.index.copy.2", "{value1}% · {value2} · {value3}", { value1: target.allocationWeight, value2: formatAevatarStatusLabel(target.servingState || 'unknown'), value3: target.primaryActorId || t("pages.deployments.index.actor", "No Actor yet") })}
                       />
                     ))}
                   </div>
                 </DrawerSection>
               </div>
             ) : (
-              <Empty description="未找到 traffic endpoint" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              <Empty
+                description={t("pages.deployments.index.traffic.endpoint.not.found.2", "traffic endpoint not found")}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
             )
           ) : null}
 
-          {inspectorState.open && inspectorState.kind === "deployment" ? (
+          {inspectorState.open && inspectorState.kind === 'deployment' ? (
             inspectedDeployment ? (
               <div style={cardStackStyle}>
-                <DrawerSection title="Deployment 摘要">
+                <DrawerSection title={t("pages.deployments.index.deployment.summary.2", "deployment Summary")}>
                   <div
                     style={{
-                      display: "grid",
+                      display: 'grid',
                       gap: 12,
-                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                      gridTemplateColumns:
+                        'repeat(auto-fit, minmax(180px, 1fr))',
                     }}
                   >
                     <DetailFieldCard
@@ -2729,11 +3389,13 @@ const DeploymentsPage: React.FC = () => {
                       }
                     />
                     <DetailFieldCard
-                      label="状态"
-                      value={formatAevatarStatusLabel(inspectedDeployment.status)}
+                      label={t("pages.deployments.index.state.8", "state")}
+                      value={formatAevatarStatusLabel(
+                        inspectedDeployment.status,
+                      )}
                     />
                     <DetailFieldCard
-                      label="主 Actor"
+                      label={t("pages.deployments.index.main.actor.10", "Main actor")}
                       value={
                         inspectedDeployment.primaryActorId ? (
                           <CompactIdentifierText
@@ -2742,49 +3404,61 @@ const DeploymentsPage: React.FC = () => {
                             value={inspectedDeployment.primaryActorId}
                           />
                         ) : (
-                          "暂无"
+                          t("pages.deployments.index.none.yet.16", "None yet")
                         )
                       }
                     />
                     <DetailFieldCard
-                      label="激活时间"
+                      label={t("pages.deployments.index.activation.time.4", "activation time")}
                       value={formatDateTime(inspectedDeployment.activatedAt)}
                     />
                     <DetailFieldCard
-                      label="最近更新"
+                      label={t("pages.deployments.index.latest.updates.8", "Latest updates")}
                       value={formatDateTime(inspectedDeployment.updatedAt)}
                     />
                   </div>
                 </DrawerSection>
-                <DrawerSection title="下一步操作">
+                <DrawerSection title={t("pages.deployments.index.next.steps.4", "Next steps")}>
                   <Space wrap size={[8, 8]}>
                     <Button
                       icon={<PercentageOutlined />}
                       onClick={() => {
                         setInspectorState({ open: false });
-                        openDrawer("weights");
+                        openDrawer('weights');
                       }}
                     >
-                      调整流量
-                    </Button>
-                    <Button
-                      danger
-                      icon={<StopOutlined />}
-                      loading={
-                        deactivateMutation.isPending &&
-                        deactivateMutation.variables === inspectedDeployment.deploymentId
-                      }
-                      onClick={() =>
-                        deactivateMutation.mutate(inspectedDeployment.deploymentId)
-                      }
-                    >
-                      停用 deployment
-                    </Button>
+                      {t("pages.deployments.index.adjust.flow.10", "Adjust flow")}</Button>
+                    <Tooltip title={deploymentDeactivateAvailability.reason}>
+                      <span>
+                        <Button
+                          danger
+                          disabled={!deploymentDeactivateAvailability.enabled}
+                          icon={<StopOutlined />}
+                          loading={
+                            deactivateMutation.isPending &&
+                            deactivateMutation.variables ===
+                              inspectedDeployment.deploymentId
+                          }
+                          onClick={() =>
+                            deactivateMutation.mutate(
+                              inspectedDeployment.deploymentId,
+                            )
+                          }
+                        >
+                          {deploymentDeactivateAvailability.enabled
+                            ? t("pages.deployments.index.deactivate.deployment.2", "Deactivate deployment")
+                            : t("pages.deployments.index.cannot.be.deactivated", "Cannot be deactivated")}
+                        </Button>
+                      </span>
+                    </Tooltip>
                   </Space>
                 </DrawerSection>
               </div>
             ) : (
-              <Empty description="未找到 deployment" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              <Empty
+                description={t("pages.deployments.index.deployment.not.found.2", "deployment not found")}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
             )
           ) : null}
         </div>

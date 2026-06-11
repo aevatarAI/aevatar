@@ -138,12 +138,8 @@ public sealed class ClaimScriptScenarioDocument
                 {
                     decisionStatus = "ManualReview";
                     manualReviewRequired = true;
-                    var manualReviewActorId = await context.RuntimeCapabilities.CreateAgentAsync(
-                        "Aevatar.Integration.Tests.ClaimMessageSinkGAgent, Aevatar.Integration.Tests",
-                        "human-review-" + context.RunId,
-                        ct);
                     await context.RuntimeCapabilities.SendToAsync(
-                        manualReviewActorId,
+                        "human-review-" + context.RunId,
                         new ClaimManualReviewRequested { CaseId = command.CaseId ?? string.Empty },
                         ct);
                 }

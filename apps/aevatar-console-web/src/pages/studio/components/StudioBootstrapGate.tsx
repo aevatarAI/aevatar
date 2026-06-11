@@ -1,6 +1,7 @@
 import React from 'react';
 import { describeError } from '@/shared/ui/errorText';
 import StudioStatusBanner from './StudioStatusBanner';
+import { t } from "@/shared/i18n/messages";
 
 type StudioBootstrapGateProps = {
   readonly appContextLoading: boolean;
@@ -39,15 +40,15 @@ const StudioBootstrapGate: React.FC<StudioBootstrapGateProps> = ({
   const issues: string[] = [];
 
   if (appContextError) {
-    issues.push(`团队上下文：${renderErrorMessage(appContextError)}`);
+    issues.push(t("pages.studio.studiobootstrapgate.team.context", "team context: {value1}", { value1: renderErrorMessage(appContextError) }));
   }
 
   if (workspaceError) {
-    issues.push(`工作区设置：${renderErrorMessage(workspaceError)}`);
+    issues.push(t("pages.studio.studiobootstrapgate.workspace.settings", "Workspace settings: {value1}", { value1: renderErrorMessage(workspaceError) }));
   }
 
   if (authError) {
-    issues.push(`登录状态：${renderErrorMessage(authError)}`);
+    issues.push(t("pages.studio.studiobootstrapgate.login.status", "Login status: {value1}", { value1: renderErrorMessage(authError) }));
   }
 
   const authOnlyIssue =
@@ -64,19 +65,19 @@ const StudioBootstrapGate: React.FC<StudioBootstrapGateProps> = ({
         type: appContextError || workspaceError ? 'error' : 'warning',
         title:
           issues.length > 1
-            ? 'Studio 当前有部分能力暂时不可用'
+            ? t("pages.studio.studiobootstrapgate.studio.currently.has.some", "Studio currently has some capabilities that are temporarily unavailable.")
             : appContextError
-              ? '团队上下文暂时不可用'
+              ? t("pages.studio.studiobootstrapgate.team.context.is.temporarily", "team context is temporarily unavailable")
               : workspaceError
-                ? '工作区设置暂时不可用'
-                : '登录状态待确认',
+                ? t("pages.studio.studiobootstrapgate.workspace.settings.are.temporarily", "Workspace settings are temporarily unavailable")
+                : t("pages.studio.studiobootstrapgate.login.status.to.be", "Login status to be confirmed"),
         description: issues.join(' · '),
       }
     : loading
       ? {
           type: 'info',
-          title: '正在准备 Studio',
-          description: '正在加载团队上下文、登录状态和工作区设置。',
+          title: t("pages.studio.studiobootstrapgate.preparing.studio", "Preparing Studio"),
+          description: t("pages.studio.studiobootstrapgate.loading.team.context.login", "Loading team context, login status, and workspace settings."),
         }
       : null;
 

@@ -1,4 +1,8 @@
 version: v1
 directories:
+  - src/Aevatar.Foundation.Abstractions
+  - src/Aevatar.Foundation.VoicePresence.Abstractions
+  - src/Aevatar.AI.Abstractions
   - agents/Aevatar.GAgents.Channel.Abstractions/protos
   - agents/Aevatar.GAgents.Channel.Runtime/protos
+  - src/Aevatar.ChatRouting.Abstractions

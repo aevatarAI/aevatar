@@ -60,8 +60,71 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
         activity.Should().NotBeNull();
         activity!.DisplayName.Should().Be("HandleEvent:ChatRequestEvent");
         activity.GetTagItem("aevatar.agent.id").Should().Be("agent-1");
+        activity.GetTagItem("aevatar.agent.type").Should().Be("unknown");
         activity.GetTagItem("aevatar.event.id").Should().Be("evt-1");
         activity.GetTagItem("aevatar.event.type").Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
+    }
+
+    [Fact]
+    public void AevatarActivitySource_ShouldCreateInspectorActivityHelpers_WithExpectedTags()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using var spawn = AevatarActivitySource.StartAgentSpawn("agent-1", "TestAgent");
+        using var deactivate = AevatarActivitySource.StartAgentDeactivate("agent-1", "TestAgent");
+        using var link = AevatarActivitySource.StartAgentLink("parent-1", "child-1");
+        using var unlink = AevatarActivitySource.StartAgentUnlink("parent-1", "child-1");
+        using var projection = AevatarActivitySource.StartProjectionMaterialize("TestProjectionContext", "evt-1");
+        using var upsert = AevatarActivitySource.StartReadmodelUpsert("TestReadModel", 7);
+        using var delete = AevatarActivitySource.StartReadmodelDelete("TestReadModel", "rm-1");
+        using var workflow = AevatarActivitySource.StartWorkflowRun("run-1", "workflow-a", "step-a");
+
+        spawn.Should().NotBeNull();
+        spawn!.DisplayName.Should().Be(AevatarActivitySource.AgentSpawnActivityName);
+        spawn.GetTagItem(AevatarActivitySource.AgentIdTag).Should().Be("agent-1");
+        spawn.GetTagItem(AevatarActivitySource.AgentTypeTag).Should().Be("TestAgent");
+
+        deactivate.Should().NotBeNull();
+        deactivate!.DisplayName.Should().Be(AevatarActivitySource.AgentDeactivateActivityName);
+        deactivate.GetTagItem(AevatarActivitySource.AgentIdTag).Should().Be("agent-1");
+        deactivate.GetTagItem(AevatarActivitySource.AgentTypeTag).Should().Be("TestAgent");
+
+        link.Should().NotBeNull();
+        link!.DisplayName.Should().Be(AevatarActivitySource.AgentLinkActivityName);
+        link.GetTagItem(AevatarActivitySource.AgentParentTag).Should().Be("parent-1");
+        link.GetTagItem(AevatarActivitySource.AgentIdTag).Should().Be("child-1");
+
+        unlink.Should().NotBeNull();
+        unlink!.DisplayName.Should().Be(AevatarActivitySource.AgentUnlinkActivityName);
+        unlink.GetTagItem(AevatarActivitySource.AgentParentTag).Should().Be("parent-1");
+        unlink.GetTagItem(AevatarActivitySource.AgentIdTag).Should().Be("child-1");
+
+        projection.Should().NotBeNull();
+        projection!.DisplayName.Should().Be(AevatarActivitySource.ProjectionMaterializeActivityName);
+        projection.GetTagItem(AevatarActivitySource.ProjectionNameTag).Should().Be("TestProjectionContext");
+        projection.GetTagItem(AevatarActivitySource.ProjectionLastEventIdTag).Should().Be("evt-1");
+
+        upsert.Should().NotBeNull();
+        upsert!.DisplayName.Should().Be(AevatarActivitySource.ReadModelUpsertActivityName);
+        upsert.GetTagItem(AevatarActivitySource.ReadModelNameTag).Should().Be("TestReadModel");
+        upsert.GetTagItem(AevatarActivitySource.ReadModelStateVersionTag).Should().Be(7L);
+
+        delete.Should().NotBeNull();
+        delete!.DisplayName.Should().Be(AevatarActivitySource.ReadModelDeleteActivityName);
+        delete.GetTagItem(AevatarActivitySource.ReadModelNameTag).Should().Be("TestReadModel");
+        delete.GetTagItem(AevatarActivitySource.ReadModelIdTag).Should().Be("rm-1");
+
+        workflow.Should().NotBeNull();
+        workflow!.DisplayName.Should().Be(AevatarActivitySource.WorkflowRunActivityName);
+        workflow.GetTagItem(AevatarActivitySource.WorkflowRunIdTag).Should().Be("run-1");
+        workflow.GetTagItem(AevatarActivitySource.WorkflowNameTag).Should().Be("workflow-a");
+        workflow.GetTagItem(AevatarActivitySource.WorkflowStepTag).Should().Be("step-a");
     }
 
     [Fact]
@@ -138,6 +201,91 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
         activity.ActivityTraceFlags.Should().Be(ActivityTraceFlags.Recorded);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("Recorded")]
+    [InlineData("not-a-flag")]
+    public void AevatarActivitySource_ShouldResolveEnvelopeTraceFlags(string traceFlags)
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var traceId = ActivityTraceId.CreateRandom();
+        var parentSpanId = ActivitySpanId.CreateRandom();
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-flags",
+            Propagation = new EnvelopePropagation
+            {
+                Trace = new TraceContext
+                {
+                    TraceId = traceId.ToString(),
+                    SpanId = parentSpanId.ToString(),
+                    TraceFlags = traceFlags,
+                },
+            },
+        };
+
+        using var activity = AevatarActivitySource.StartHandleEvent("agent-flags", envelope);
+
+        activity.Should().NotBeNull();
+        activity!.TraceId.Should().Be(traceId);
+        activity.ParentSpanId.Should().Be(parentSpanId);
+    }
+
+    [Fact]
+    public void AevatarActivitySource_ShouldFallbackToFreshActivity_WhenEnvelopeTraceIsInvalid()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-invalid-trace",
+            Propagation = new EnvelopePropagation
+            {
+                Trace = new TraceContext
+                {
+                    TraceId = "not-a-trace-id",
+                    SpanId = "not-a-span-id",
+                    TraceFlags = "01",
+                },
+            },
+        };
+
+        using var activity = AevatarActivitySource.StartHandleEvent("agent-invalid-trace", envelope);
+
+        activity.Should().NotBeNull();
+        activity!.DisplayName.Should().Be("HandleEvent:UnknownEvent");
+        activity.ParentSpanId.Should().Be(default(ActivitySpanId));
+    }
+
+    [Fact]
+    public void AevatarActivitySource_ShouldUseResolvedTypeName_WhenTypeUrlHasNoSlash()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using var activity = AevatarActivitySource.StartHandleEvent("agent-1", "evt-1", "CustomEvent");
+
+        activity.Should().NotBeNull();
+        activity!.DisplayName.Should().Be("HandleEvent:CustomEvent");
+        activity.GetTagItem(AevatarActivitySource.EventTypeTag).Should().Be("CustomEvent");
+    }
+
     [Fact]
     public void AgentMetrics_Instruments_ShouldAllowRecording()
     {
@@ -169,7 +317,7 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
             return Task.FromResult(Actor);
         }
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             _ = actorId;
             ct.ThrowIfCancellationRequested();
@@ -177,6 +325,7 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
                 throw new InvalidOperationException("Actor not configured.");
 
             await Actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
 
         public Task<bool> ExistsAsync(string id) => throw new NotSupportedException();

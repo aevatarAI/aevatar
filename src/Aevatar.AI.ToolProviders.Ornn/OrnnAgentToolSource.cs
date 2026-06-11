@@ -26,16 +26,15 @@ public sealed class OrnnAgentToolSource : IAgentToolSource
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
-        {
-            _logger.LogDebug("Ornn base URL not configured, skipping Ornn skill tools");
-            return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
-        }
-
+        // ornn_search_skills must always be advertised to the LLM regardless of how the
+        // deployment configured the Ornn slug, otherwise the model loses the typed entry
+        // point and resorts to nyxid_proxy path-guessing (issue #530). OrnnSkillClient
+        // routes through NyxID's proxy, so the slug — not a hardcoded base URL — is what
+        // determines reachability.
         IReadOnlyList<IAgentTool> tools = [new OrnnSearchSkillsTool(_client)];
 
         _logger.LogInformation(
-            "Ornn search tool registered (base URL: {BaseUrl})", _options.BaseUrl);
+            "Ornn search tool registered (NyxID slug: {Slug})", _options.NyxIdSlug);
         return Task.FromResult(tools);
     }
 }

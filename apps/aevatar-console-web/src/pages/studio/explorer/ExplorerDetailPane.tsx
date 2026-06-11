@@ -2,6 +2,7 @@ import { Alert, Button, Input, Space, Spin, Tag, Typography } from "antd";
 import React from "react";
 import type { ExplorerManifestEntry } from "@/shared/api/explorerApi";
 import ExplorerContentView from "./ExplorerContentView";
+import { t } from "@/shared/i18n/messages";
 
 type ExplorerDetailPaneProps = {
   content: string | null;
@@ -156,7 +157,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
         <Alert
           type="info"
           showIcon
-          message="Resolve a project scope to browse explorer storage."
+          message={t("pages.studio.explorer.explorerdetailpane.resolve.project.scope.to.browse", "Resolve a project scope to browse explorer storage.")}
         />
       </div>
     );
@@ -168,7 +169,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
         <Alert
           type="warning"
           showIcon
-          message="Explorer is unavailable"
+          message={t("pages.studio.explorer.explorerdetailpane.explorer.is.unavailable", "Explorer is unavailable")}
           description={errorMessage}
         />
       </div>
@@ -178,7 +179,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
   if (!selectedEntry) {
     return (
       <div style={emptyShellStyle}>
-        <Alert type="info" showIcon message="Select a file from Explorer." />
+        <Alert type="info" showIcon message={t("pages.studio.explorer.explorerdetailpane.select.file.from.explorer", "Select a file from Explorer.")} />
       </div>
     );
   }
@@ -198,17 +199,21 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
         </Space>
         <Typography.Text type="secondary">
           {selectedEntry.key}
-          {updatedAt ? ` · Updated ${updatedAt}` : ""}
+          {updatedAt
+            ? t("pages.studio.explorer.explorerdetailpane.updated.at", " · Updated {updatedAt}", {
+                updatedAt,
+              })
+            : ""}
         </Typography.Text>
         {isDirty ? (
-          <Tag color="gold">Unsaved changes</Tag>
+          <Tag color="gold">{t("pages.studio.explorer.explorerdetailpane.unsaved.changes", "Unsaved changes")}</Tag>
         ) : null}
         {canOpenWorkflow || canOpenScript ? (
           <Alert
             type="info"
             showIcon
-            message="Read-only in Explorer"
-            description="Workflow and script files are edited through Studio. Use Explorer to inspect the stored content, then jump back into Studio to change it."
+            message={t("pages.studio.explorer.explorerdetailpane.read.only.in.explorer", "Read-only in Explorer")}
+            description={t("pages.studio.explorer.explorerdetailpane.workflow.and.script.files.are", "Workflow and script files are edited through Studio. Use Explorer to inspect the stored content, then jump back into Studio to change it.")}
             action={
               canOpenWorkflow ? (
                 <Button
@@ -220,8 +225,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                     )
                   }
                 >
-                  Open in Studio
-                </Button>
+                  {t("pages.studio.explorer.explorerdetailpane.open.in.studio", "Open in Studio")}</Button>
               ) : (
                 <Button
                   type="primary"
@@ -232,8 +236,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                     )
                   }
                 >
-                  Open in Studio
-                </Button>
+                  {t("pages.studio.explorer.explorerdetailpane.open.in.studio.2", "Open in Studio")}</Button>
               )
             }
           />
@@ -245,14 +248,12 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                 type={mode === "edit" ? "primary" : "default"}
                 onClick={() => setMode("edit")}
               >
-                Edit
-              </Button>
+                {t("pages.studio.explorer.explorerdetailpane.edit", "Edit")}</Button>
               <Button
                 type={mode === "preview" ? "primary" : "default"}
                 onClick={() => setMode("preview")}
               >
-                Preview
-              </Button>
+                {t("pages.studio.explorer.explorerdetailpane.preview", "Preview")}</Button>
             </Space.Compact>
             <Space wrap size={[8, 8]}>
               <Button
@@ -262,8 +263,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                 }}
                 disabled={!isDirty || isSaving || isDeleting}
               >
-                Reset
-              </Button>
+                {t("pages.studio.explorer.explorerdetailpane.reset", "Reset")}</Button>
               <Button
                 type="primary"
                 loading={isSaving}
@@ -286,8 +286,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                   }
                 }}
               >
-                Save
-              </Button>
+                {t("pages.studio.explorer.explorerdetailpane.save", "Save")}</Button>
               <Button
                 danger
                 loading={isDeleting}
@@ -297,8 +296,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                   setConfirmDelete(true);
                 }}
               >
-                Delete
-              </Button>
+                {t("pages.studio.explorer.explorerdetailpane.delete", "Delete")}</Button>
             </Space>
           </div>
         ) : null}
@@ -306,7 +304,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
           <Alert
             type="warning"
             showIcon
-            message="Delete this file from Storage Explorer?"
+            message={t("pages.studio.explorer.explorerdetailpane.delete.this.file.from.storage", "Delete this file from Storage Explorer?")}
             description={`${selectedEntry.key} will be removed from storage immediately and cannot be recovered from this view.`}
             action={
               <Space wrap size={[8, 8]}>
@@ -315,8 +313,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                   onClick={() => setConfirmDelete(false)}
                   disabled={isDeleting}
                 >
-                  Keep file
-                </Button>
+                  {t("pages.studio.explorer.explorerdetailpane.keep.file", "Keep file")}</Button>
                 <Button
                   danger
                   size="small"
@@ -340,20 +337,19 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                     }
                   }}
                 >
-                  Delete now
-                </Button>
+                  {t("pages.studio.explorer.explorerdetailpane.delete.now", "Delete now")}</Button>
               </Space>
             }
           />
         ) : null}
         {saveError ? (
-          <Alert type="error" showIcon message="Could not save file" description={saveError} />
+          <Alert type="error" showIcon message={t("pages.studio.explorer.explorerdetailpane.could.not.save.file", "Could not save file")} description={saveError} />
         ) : null}
         {deleteError ? (
           <Alert
             type="error"
             showIcon
-            message="Could not delete file"
+            message={t("pages.studio.explorer.explorerdetailpane.could.not.delete.file", "Could not delete file")}
             description={deleteError}
           />
         ) : null}
@@ -361,20 +357,20 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
 
       {contentLoading ? (
         <div style={emptyShellStyle}>
-          <Spin description="Loading file..." />
+          <Spin description={t("pages.studio.explorer.explorerdetailpane.loading.file", "Loading file...")} />
         </div>
       ) : contentErrorMessage ? (
         <Alert
           type="error"
           showIcon
-          message="Could not load file"
+          message={t("pages.studio.explorer.explorerdetailpane.could.not.load.file", "Could not load file")}
           description={contentErrorMessage}
         />
       ) : (
         <div style={editorShellStyle}>
           {isEditable && mode === "edit" ? (
             <Input.TextArea
-              aria-label="Explorer file editor"
+              aria-label={t("pages.studio.explorer.explorerdetailpane.explorer.file.editor", "Explorer file editor")}
               autoSize={false}
               spellCheck={false}
               style={editorStyle}

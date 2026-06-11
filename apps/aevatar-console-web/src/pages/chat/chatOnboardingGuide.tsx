@@ -3,6 +3,7 @@ import React from "react";
 import type { StudioProviderType } from "@/shared/studio/models";
 import { AEVATAR_PRESSABLE_CARD_CLASS } from "@/shared/ui/interactionStandards";
 import type { OnboardingState } from "./onboarding";
+import { t } from "@/shared/i18n/messages";
 
 type ChatOnboardingGuideProps = {
   loading?: boolean;
@@ -89,7 +90,7 @@ function getStepDescription(
       return "NyxID Chat can use this provider immediately. You can switch back to the assistant or start over.";
     case "select_provider":
     default:
-      return "Pick the provider you want NyxID Chat to use by default for this scope.";
+      return "Pick the provider you want NyxID Chat to use by default for this workspace.";
   }
 }
 
@@ -126,7 +127,7 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
   return (
     <div style={shellStyle}>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={sectionLabelStyle}>Provider Setup</div>
+        <div style={sectionLabelStyle}>{t("pages.chat.chatonboardingguide.provider.setup", "Provider Setup")}</div>
         <div style={{ color: "#111827", fontSize: 22, fontWeight: 700 }}>
           {getStepTitle(state?.step)}
         </div>
@@ -143,8 +144,8 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
 
       {loading ? (
         <Alert
-          description="Loading provider types from Studio Settings..."
-          message="Preparing onboarding"
+          description={t("pages.chat.chatonboardingguide.loading.provider.types.from.studio", "Loading provider types from Studio Settings...")}
+          message={t("pages.chat.chatonboardingguide.preparing.onboarding", "Preparing onboarding")}
           showIcon
           type="info"
         />
@@ -152,8 +153,8 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
 
       {!loading && providerTypes.length === 0 ? (
         <Alert
-          description="Open Studio Settings to refresh provider types, then return to onboarding."
-          message="No provider types are currently available"
+          description={t("pages.chat.chatonboardingguide.open.studio.settings.to.refresh", "Open Studio Settings to refresh provider types, then return to onboarding.")}
+          message={t("pages.chat.chatonboardingguide.no.provider.types.are.currently", "No provider types are currently available")}
           showIcon
           type="warning"
         />
@@ -192,14 +193,23 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
                       {providerType.displayName}
                     </span>
                     {providerType.recommended ? (
-                      <Tag color="gold">Recommended</Tag>
+                      <Tag color="gold">{t("pages.chat.chatonboardingguide.recommended", "Recommended")}</Tag>
                     ) : null}
                   </div>
                   <div style={helperTextStyle}>
-                    {providerType.description || "Provider configuration"}
+                    {providerType.description ||
+                      t(
+                        "pages.chat.chatonboardingguide.provider.configuration",
+                        "Provider configuration",
+                      )}
                   </div>
                   <div style={{ color: "#9ca3af", fontSize: 12 }}>
-                    Default endpoint: {providerType.defaultEndpoint || "Custom endpoint required"}
+                    {t("pages.chat.chatonboardingguide.default.endpoint", "Default endpoint:")}
+                    {providerType.defaultEndpoint ||
+                      t(
+                        "pages.chat.chatonboardingguide.custom.endpoint.required",
+                        "Custom endpoint required",
+                      )}
                   </div>
                 </button>
               ))}
@@ -223,11 +233,9 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
                   type="primary"
                   onClick={() => onChooseEndpointMode("default")}
                 >
-                  Use default endpoint
-                </Button>
+                  {t("pages.chat.chatonboardingguide.use.default.endpoint", "Use default endpoint")}</Button>
                 <Button onClick={() => onChooseEndpointMode("custom")}>
-                  Set custom endpoint
-                </Button>
+                  {t("pages.chat.chatonboardingguide.set.custom.endpoint", "Set custom endpoint")}</Button>
               </Space>
             </div>
           ) : null}
@@ -235,9 +243,9 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
           {state?.step === "ask_custom_endpoint" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <label style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <span style={sectionLabelStyle}>Custom Endpoint</span>
+                <span style={sectionLabelStyle}>{t("pages.chat.chatonboardingguide.custom.endpoint", "Custom Endpoint")}</span>
                 <Input
-                  aria-label="Onboarding custom endpoint"
+                  aria-label={t("pages.chat.chatonboardingguide.onboarding.custom.endpoint", "Onboarding custom endpoint")}
                   onChange={(event) => setCustomEndpoint(event.target.value)}
                   placeholder="https://proxy.example.com/v1"
                   value={customEndpoint}
@@ -249,9 +257,8 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
                   onClick={() => onSubmitCustomEndpoint(customEndpoint)}
                   type="primary"
                 >
-                  Continue
-                </Button>
-                <Button onClick={onRestart}>Start over</Button>
+                  {t("pages.chat.chatonboardingguide.continue", "Continue")}</Button>
+                <Button onClick={onRestart}>{t("pages.chat.chatonboardingguide.start.over", "Start over")}</Button>
               </Space>
             </div>
           ) : null}
@@ -259,35 +266,32 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
           {state?.step === "ask_api_key" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <label style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <span style={sectionLabelStyle}>API Key</span>
+                <span style={sectionLabelStyle}>{t("pages.chat.chatonboardingguide.api.key", "API Key")}</span>
                 <Input.Password
-                  aria-label="Onboarding API key"
+                  aria-label={t("pages.chat.chatonboardingguide.onboarding.api.key", "Onboarding API key")}
                   onChange={(event) => setApiKey(event.target.value)}
-                  placeholder="Paste the provider API key"
+                  placeholder={t("pages.chat.chatonboardingguide.paste.the.provider.api.key", "Paste the provider API key")}
                   value={apiKey}
                 />
               </label>
               <Typography.Text type="secondary">
-                The saved key stays in Studio Settings. The chat transcript only stores a
-                redacted confirmation.
-              </Typography.Text>
+                {t("pages.chat.chatonboardingguide.the.saved.key.stays.in", "The saved key stays in Studio Settings. The chat transcript only stores a redacted confirmation.")}</Typography.Text>
               <Space wrap>
                 <Button
                   disabled={!apiKey.trim()}
                   onClick={() => onSubmitApiKey(apiKey)}
                   type="primary"
                 >
-                  Save provider
-                </Button>
-                <Button onClick={onRestart}>Start over</Button>
+                  {t("pages.chat.chatonboardingguide.save.provider", "Save provider")}</Button>
+                <Button onClick={onRestart}>{t("pages.chat.chatonboardingguide.start.over.2", "Start over")}</Button>
               </Space>
             </div>
           ) : null}
 
           {state?.step === "creating" ? (
             <Alert
-              description="Studio Settings is being updated with the selected provider and endpoint."
-              message="Saving provider"
+              description={t("pages.chat.chatonboardingguide.studio.settings.is.being.updated", "Studio Settings is being updated with the selected provider and endpoint.")}
+              message={t("pages.chat.chatonboardingguide.saving.provider", "Saving provider")}
               showIcon
               type="info"
             />
@@ -296,16 +300,15 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
           {state?.step === "done" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <Alert
-                description="The provider has been saved successfully. Switch back to NyxID Chat to continue the conversation."
-                message="Onboarding complete"
+                description={t("pages.chat.chatonboardingguide.the.provider.has.been.saved", "The provider has been saved successfully. Switch back to NyxID Chat to continue the conversation.")}
+                message={t("pages.chat.chatonboardingguide.onboarding.complete", "Onboarding complete")}
                 showIcon
                 type="success"
               />
               <Space wrap>
                 <Button onClick={onSwitchToChat} type="primary">
-                  Open NyxID Chat
-                </Button>
-                <Button onClick={onRestart}>Configure another provider</Button>
+                  {t("pages.chat.chatonboardingguide.open.nyxid.chat", "Open NyxID Chat")}</Button>
+                <Button onClick={onRestart}>{t("pages.chat.chatonboardingguide.configure.another.provider", "Configure another provider")}</Button>
               </Space>
             </div>
           ) : null}

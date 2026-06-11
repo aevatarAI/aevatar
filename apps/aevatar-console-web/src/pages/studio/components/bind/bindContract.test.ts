@@ -5,16 +5,16 @@ import {
 } from './bindContract';
 
 describe('bindContract', () => {
-  it('builds the streaming invoke path for chat endpoints', () => {
+  it('does not build an invoke path without a member identity', () => {
     expect(
       buildStudioBindInvokePath('scope-1', 'chat', undefined, 'default', {
         endpointId: 'chat',
         kind: 'chat',
       }),
-    ).toBe('/api/scopes/scope-1/services/default/invoke/chat:stream');
+    ).toBeNull();
   });
 
-  it('prefers the member invoke path when the current member id is known', () => {
+  it('builds the member invoke path when the current member id is known', () => {
     expect(
       buildStudioBindInvokePath('scope-1', 'chat', 'joker', 'default', {
         endpointId: 'chat',
@@ -41,6 +41,7 @@ describe('bindContract', () => {
         responseTypeUrl: '',
         description: 'Chat with the member.',
       },
+      memberId: 'joker',
       origin: 'https://console.example.test',
       revision: {
         revisionId: 'rev-2',
@@ -91,9 +92,9 @@ describe('bindContract', () => {
       authLabel: 'Authenticated',
       deploymentStatus: 'Active',
       endpointDisplayName: 'Chat',
-      invokePath: '/api/scopes/scope-1/services/default/invoke/chat:stream',
+      invokePath: '/api/scopes/scope-1/members/joker/invoke/chat:stream',
       invokeUrl:
-        'https://console.example.test/api/scopes/scope-1/services/default/invoke/chat:stream',
+        'https://console.example.test/api/scopes/scope-1/members/joker/invoke/chat:stream',
       revisionId: 'rev-2',
       scopeLabel: 'scope-1',
       scopeSource: 'nyxid',
@@ -110,13 +111,52 @@ describe('bindContract', () => {
       buildStudioBindInvokeUrl(
         'scope-1',
         'chat',
-        undefined,
+        'joker',
         'default',
         { endpointId: 'chat', kind: 'chat' },
         'https://console.example.test',
       ),
     ).toBe(
-      'https://console.example.test/api/scopes/scope-1/services/default/invoke/chat:stream',
+      'https://console.example.test/api/scopes/scope-1/members/joker/invoke/chat:stream',
     );
+  });
+
+  it('does not build a bind contract when no backend member identity is known', () => {
+    expect(
+      buildStudioBindContract({
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        endpoint: {
+          endpointId: 'chat',
+          displayName: 'Chat',
+          kind: 'chat',
+          requestTypeUrl: '',
+          responseTypeUrl: '',
+          description: 'Chat with the member.',
+        },
+        origin: 'https://console.example.test',
+        scopeId: 'scope-1',
+        service: {
+          serviceKey: 'scope-1:default:workspace-demo',
+          tenantId: 'scope-1',
+          appId: 'default',
+          namespace: 'default',
+          serviceId: 'default',
+          displayName: 'workspace-demo',
+          defaultServingRevisionId: 'rev-2',
+          activeServingRevisionId: 'rev-2',
+          deploymentId: 'dep-2',
+          primaryActorId: 'actor-default',
+          deploymentStatus: 'Active',
+          endpoints: [],
+          policyIds: [],
+          updatedAt: '2026-03-26T08:00:00Z',
+        },
+      }),
+    ).toBeNull();
   });
 });

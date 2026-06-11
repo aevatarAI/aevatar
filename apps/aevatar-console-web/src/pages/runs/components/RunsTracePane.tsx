@@ -10,6 +10,7 @@ import {
   workbenchTraceTabPanelStyle,
   workbenchTraceTabsStyle,
 } from "../runWorkbenchConfig";
+import { t } from "@/shared/i18n/messages";
 
 const runsTraceTabsClassName = "runs-trace-tabs";
 const runsTraceTabsCss = `
@@ -54,6 +55,7 @@ type RunsTracePaneProps = {
   messageCount: number;
   messagesLabel?: string;
   onConsoleViewChange: (key: ConsoleViewKey) => void;
+  preferMessagesFirst?: boolean;
   timelineView: React.ReactNode;
   title?: string;
 };
@@ -65,12 +67,12 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
   hasPendingInteraction,
   messageConsoleView,
   messageCount,
-  messagesLabel = "Messages",
+  messagesLabel = t("pages.runs.runstracepane.messages.label", "Messages"),
   onConsoleViewChange,
+  preferMessagesFirst = false,
   timelineView,
-  title = "Run trace",
+  title = t("pages.runs.runstracepane.run.trace", "Run trace"),
 }) => {
-  const preferMessagesFirst = messagesLabel === "Conversation";
   const tabItems = preferMessagesFirst
     ? [
         {
@@ -82,14 +84,14 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
         },
         {
           key: "timeline",
-          label: "Timeline",
+          label: t("pages.runs.runstracepane.timeline", "Timeline"),
           children: (
             <div style={workbenchTraceTabPanelStyle}>{timelineView}</div>
           ),
         },
         {
           key: "events",
-          label: "Events",
+          label: t("pages.runs.runstracepane.events.label", "Events"),
           children: (
             <div style={workbenchTraceTabPanelStyle}>{eventConsoleView}</div>
           ),
@@ -98,7 +100,7 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
     : [
         {
           key: "timeline",
-          label: "Timeline",
+          label: t("pages.runs.runstracepane.timeline", "Timeline"),
           children: (
             <div style={workbenchTraceTabPanelStyle}>{timelineView}</div>
           ),
@@ -112,7 +114,7 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
         },
         {
           key: "events",
-          label: "Events",
+          label: t("pages.runs.runstracepane.events.label", "Events"),
           children: (
             <div style={workbenchTraceTabPanelStyle}>{eventConsoleView}</div>
           ),
@@ -129,13 +131,17 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
       extra={
         <Space separator={<Divider orientation="vertical" />} size={12}>
           <Typography.Text type="secondary">
-            {messageCount} messages
-          </Typography.Text>
+            {t("pages.runs.runstracepane.messages.count", "{count} messages", {
+              count: messageCount,
+            })}</Typography.Text>
           <Typography.Text type="secondary">
-            {eventCount} events
-          </Typography.Text>
+            {t("pages.runs.runstracepane.events.count", "{count} events", {
+              count: eventCount,
+            })}</Typography.Text>
           <Typography.Text type="secondary">
-            {hasPendingInteraction ? "action required" : "live trace"}
+            {hasPendingInteraction
+              ? t("pages.runs.runstracepane.action.required", "action required")
+              : t("pages.runs.runstracepane.live.trace", "live trace")}
           </Typography.Text>
         </Space>
       }

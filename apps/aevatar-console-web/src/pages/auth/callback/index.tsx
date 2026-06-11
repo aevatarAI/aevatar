@@ -6,6 +6,7 @@ import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { loadStoredAuthSession } from '@/shared/auth/session';
 import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
 import { describeError } from '@/shared/ui/errorText';
+import { t } from "@/shared/i18n/messages";
 
 const CallbackPage: React.FC = () => {
   const [errorText, setErrorText] = useState<string | undefined>(undefined);
@@ -48,12 +49,11 @@ const CallbackPage: React.FC = () => {
       <Result
         extra={[
           <Button href="/login" key="retry" type="primary">
-            Back to login
-          </Button>,
+            {t("pages.auth.callback.index.back.to.login", "Back to login")}</Button>,
         ]}
         status="error"
         subTitle={errorText}
-        title="NyxID callback failed"
+        title={t("pages.auth.callback.index.nyxid.callback.failed", "NyxID callback failed")}
       />
     );
   }

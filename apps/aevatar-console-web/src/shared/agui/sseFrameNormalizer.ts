@@ -126,6 +126,12 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
           actorId:
             readString(nested, "actorId") ||
             readString(frame, "actorId", "threadId"),
+          commandId:
+            readString(nested, "commandId", "command_id") ||
+            readString(frame, "commandId", "command_id"),
+          correlationId:
+            readString(nested, "correlationId", "correlation_id") ||
+            readString(frame, "correlationId", "correlation_id"),
           runId: readString(nested, "runId") || readString(frame, "runId"),
           threadId:
             readString(nested, "threadId", "actorId") ||
@@ -133,6 +139,12 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
         });
       case AGUIEventType.RUN_FINISHED:
         return createTypedEvent(eventType, timestamp, {
+          commandId:
+            readString(nested, "commandId", "command_id") ||
+            readString(frame, "commandId", "command_id"),
+          correlationId:
+            readString(nested, "correlationId", "correlation_id") ||
+            readString(frame, "correlationId", "correlation_id"),
           result: nested?.result,
           runId: readString(nested, "runId") || readString(frame, "runId"),
           threadId:
@@ -141,7 +153,16 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
         });
       case AGUIEventType.RUN_ERROR:
         return createTypedEvent(eventType, timestamp, {
-          code: readString(nested, "code") || undefined,
+          code:
+            readString(nested, "code", "errorCode", "error_code") ||
+            readString(frame, "code", "errorCode", "error_code") ||
+            undefined,
+          commandId:
+            readString(nested, "commandId", "command_id") ||
+            readString(frame, "commandId", "command_id"),
+          correlationId:
+            readString(nested, "correlationId", "correlation_id") ||
+            readString(frame, "correlationId", "correlation_id"),
           message: readString(nested, "message"),
           runId: readString(nested, "runId") || undefined,
         });

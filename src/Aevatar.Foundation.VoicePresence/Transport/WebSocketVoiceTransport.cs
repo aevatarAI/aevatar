@@ -10,6 +10,9 @@ namespace Aevatar.Foundation.VoicePresence.Transport;
 /// Wraps a raw <see cref="WebSocket"/> into <see cref="IVoiceTransport"/>.
 /// Binary messages = PCM16 audio. Text messages = JSON-encoded VoiceControlFrame.
 /// </summary>
+// Refactor (iter74/cluster-074-voice-ws-request-polling-close-wait):
+//   Old pattern: while ws.State == Open { Task.Delay(500) } polling to keep request alive
+//   New principle: Transport owns close notification; endpoint awaits completion task without periodic sleep
 public sealed class WebSocketVoiceTransport : IVoiceTransport
 {
     private const int ReceiveBufferSize = 8 * 1024;
@@ -17,18 +20,32 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
     private static readonly JsonParser ControlJsonReader = new(JsonParser.Settings.Default);
 
     private readonly WebSocket _ws;
+    private readonly TaskCompletionSource _completion =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _disposed;
 
     public WebSocketVoiceTransport(WebSocket ws)
     {
         _ws = ws ?? throw new ArgumentNullException(nameof(ws));
+        if (_ws.State != WebSocketState.Open)
+            _completion.TrySetResult();
     }
+
+    public Task Completion => _completion.Task;
 
     public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (pcm16.IsEmpty) return;
-        await _ws.SendAsync(pcm16, WebSocketMessageType.Binary, endOfMessage: true, ct);
+        try
+        {
+            await _ws.SendAsync(pcm16, WebSocketMessageType.Binary, endOfMessage: true, ct);
+        }
+        catch
+        {
+            _completion.TrySetResult();
+            throw;
+        }
     }
 
     public async Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
@@ -37,49 +54,69 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
         ArgumentNullException.ThrowIfNull(frame);
         var json = ControlJsonWriter.Format(frame);
         var bytes = Encoding.UTF8.GetBytes(json);
-        await _ws.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, endOfMessage: true, ct);
+        try
+        {
+            await _ws.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, endOfMessage: true, ct);
+        }
+        catch
+        {
+            _completion.TrySetResult();
+            throw;
+        }
     }
 
+    // Refactor (iter74/cluster-074-voice-ws-request-polling-close-wait):
+    //   Old pattern: while ws.State == Open { Task.Delay(500) } polling to keep request alive
+    //   New principle: Transport owns close notification; endpoint awaits completion task without periodic sleep
     public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
         [EnumeratorCancellation] CancellationToken ct)
     {
         var buffer = new byte[ReceiveBufferSize];
-
-        while (_ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
+        try
         {
-            int totalBytes;
-            WebSocketMessageType messageType;
-            try
+            while (_ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
             {
-                (totalBytes, messageType, buffer) = await ReceiveFullMessageAsync(buffer, ct);
-            }
-            catch (WebSocketException)
-            {
-                yield break;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                yield break;
-            }
+                int totalBytes;
+                WebSocketMessageType messageType;
+                try
+                {
+                    (totalBytes, messageType, buffer) = await ReceiveFullMessageAsync(buffer, ct);
+                }
+                catch (WebSocketException)
+                {
+                    yield break;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    yield break;
+                }
 
-            if (messageType == WebSocketMessageType.Close)
-                yield break;
+                if (messageType == WebSocketMessageType.Close)
+                    yield break;
 
-            if (messageType == WebSocketMessageType.Binary)
-            {
-                var audio = new byte[totalBytes];
-                buffer.AsSpan(0, totalBytes).CopyTo(audio);
-                yield return VoiceTransportFrame.Audio(audio);
+                if (messageType == WebSocketMessageType.Binary)
+                {
+                    var audio = new byte[totalBytes];
+                    buffer.AsSpan(0, totalBytes).CopyTo(audio);
+                    yield return VoiceTransportFrame.Audio(audio);
+                }
+                else if (messageType == WebSocketMessageType.Text)
+                {
+                    var frame = TryParseControlFrame(buffer, totalBytes);
+                    if (frame != null)
+                        yield return VoiceTransportFrame.ControlFrame(frame);
+                }
             }
-            else if (messageType == WebSocketMessageType.Text)
-            {
-                var frame = TryParseControlFrame(buffer, totalBytes);
-                if (frame != null)
-                    yield return VoiceTransportFrame.ControlFrame(frame);
-            }
+        }
+        finally
+        {
+            _completion.TrySetResult();
         }
     }
 
+    // Refactor (iter74/cluster-074-voice-ws-request-polling-close-wait):
+    //   Old pattern: while ws.State == Open { Task.Delay(500) } polling to keep request alive
+    //   New principle: Transport owns close notification; endpoint awaits completion task without periodic sleep
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
@@ -99,6 +136,7 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
         }
 
         _ws.Dispose();
+        _completion.TrySetResult();
     }
 
     private async Task<(int TotalBytes, WebSocketMessageType MessageType, byte[] Buffer)>

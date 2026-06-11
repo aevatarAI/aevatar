@@ -32,6 +32,7 @@ import {
   AEVATAR_INTERACTIVE_CHIP_CLASS,
   joinInteractiveClassNames,
 } from '@/shared/ui/interactionStandards';
+import { t } from "@/shared/i18n/messages";
 
 type QueryState<T> = {
   readonly isLoading: boolean;
@@ -143,7 +144,7 @@ const editorHeaderLabelStyle: React.CSSProperties = {
   color: 'var(--ant-color-text-tertiary)',
   fontSize: 10,
   fontWeight: 600,
-  letterSpacing: '0.14em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
 };
 
@@ -266,7 +267,7 @@ const fieldLabelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 11,
   fontWeight: 600,
-  letterSpacing: '0.08em',
+  letterSpacing: 0,
   marginBottom: 6,
   textTransform: 'uppercase',
 };
@@ -766,7 +767,7 @@ async function syncWorkspaceDirectories(
       )
     ) {
       throw new Error(
-        'Workflow directories are managed by the current scope and cannot be edited here.',
+        'Workflow directories are managed by the current workspace and cannot be edited here.',
       );
     }
 
@@ -884,7 +885,7 @@ function FilesDrawer(props: {
       >
         <div style={drawerHeaderStyle}>
           <div>
-            <div style={editorHeaderLabelStyle}>Catalog</div>
+            <div style={editorHeaderLabelStyle}>{t("pages.studio.studiofilesdetailpane.catalog", "Catalog")}</div>
             <div style={editorHeaderTitleStyle}>{props.title}</div>
           </div>
           <button
@@ -893,8 +894,7 @@ function FilesDrawer(props: {
             onClick={props.onClose}
             style={secondaryActionStyle}
           >
-            Close
-          </button>
+            {t("pages.studio.studiofilesdetailpane.close", "Close")}</button>
         </div>
         <div style={drawerBodyStyle}>{props.children}</div>
       </div>
@@ -1161,7 +1161,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
 
       setSettingsNotice({
         type: 'success',
-        message: 'settings.json saved.',
+        message: t("pages.studio.studiofilesdetailpane.settings.json.saved", "settings.json saved."),
       });
     } catch (error) {
       setSettingsNotice({
@@ -1202,7 +1202,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       setRoleCatalogDraft(response.roles.map(createRoleCatalogItem));
       setRoleNotice({
         type: 'success',
-        message: 'Role catalog saved.',
+        message: t("pages.studio.studiofilesdetailpane.role.catalog.saved", "Role catalog saved."),
       });
     } catch (error) {
       setRoleNotice({
@@ -1239,7 +1239,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       setConnectorCatalogDraft(response.connectors.map(toConnectorCatalogItem));
       setConnectorNotice({
         type: 'success',
-        message: 'Connector catalog saved.',
+        message: t("pages.studio.studiofilesdetailpane.connector.catalog.saved", "Connector catalog saved."),
       });
     } catch (error) {
       setConnectorNotice({
@@ -1271,13 +1271,15 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       });
       setChatNotice({
         type: 'success',
-        message: 'Conversation deleted.',
+        message: t("pages.studio.studiofilesdetailpane.conversation.deleted", "Conversation deleted."),
       });
     } catch (error) {
       setChatNotice({
         type: 'error',
         message:
-          error instanceof Error ? error.message : 'Failed to delete conversation.',
+          error instanceof Error
+            ? error.message
+            : t("pages.studio.studiofilesdetailpane.failed.to.delete.conversation", "Failed to delete conversation."),
       });
     }
   };
@@ -1288,7 +1290,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
         <div style={editorHeaderRowStyle}>
           <div>
             <div style={editorHeaderLabelStyle}>settings.json</div>
-            <div style={editorHeaderTitleStyle}>Configuration</div>
+            <div style={editorHeaderTitleStyle}>{t("pages.studio.studiofilesdetailpane.configuration", "Configuration")}</div>
           </div>
           <button
             aria-disabled={!settingsDirty || settingsPending}
@@ -1301,7 +1303,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               opacity: !settingsDirty || settingsPending ? 0.3 : 1,
             }}
           >
-            {settingsPending ? 'Saving...' : 'Save'}
+            {settingsPending
+              ? t("pages.studio.studiofilesdetailpane.saving", "Saving...")
+              : t("pages.studio.studiofilesdetailpane.save", "Save")}
           </button>
         </div>
 
@@ -1309,7 +1313,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <Alert
             type="error"
             showIcon
-            message="Failed to load workspace settings"
+            message={t("pages.studio.studiofilesdetailpane.failed.to.load.workspace.settings", "Failed to load workspace settings")}
             description={describeError(workspaceSettings.error)}
           />
         ) : null}
@@ -1318,7 +1322,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <Alert
             type="error"
             showIcon
-            message="Failed to load provider settings"
+            message={t("pages.studio.studiofilesdetailpane.failed.to.load.provider.settings", "Failed to load provider settings")}
             description={describeError(settings.error)}
           />
         ) : null}
@@ -1333,7 +1337,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
 
         <div style={editorSurfaceStyle}>
           <textarea
-            aria-label="settings.json editor"
+            aria-label={t("pages.studio.studiofilesdetailpane.settings.json.editor", "settings.json editor")}
             spellCheck={false}
             value={settingsEditorValue}
             onChange={(event) => setSettingsEditorValue(event.target.value)}
@@ -1349,8 +1353,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       <div style={cliEditorShellStyle}>
         <div style={editorHeaderRowStyle}>
           <div>
-            <div style={editorHeaderLabelStyle}>role-catalog</div>
-            <div style={editorHeaderTitleStyle}>Role Catalog</div>
+            <div style={editorHeaderLabelStyle}>{t("pages.studio.studiofilesdetailpane.role.catalog.2", "role-catalog")}</div>
+            <div style={editorHeaderTitleStyle}>{t("pages.studio.studiofilesdetailpane.role.catalog", "Role Catalog")}</div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
@@ -1360,8 +1364,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               style={secondaryActionStyle}
             >
               <PlusOutlined />
-              Add Role
-            </button>
+              {t("pages.studio.studiofilesdetailpane.add.role", "Add Role")}</button>
             <button
               aria-disabled={!roleCatalogDirty || rolePending}
               className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1371,9 +1374,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               style={{
                 ...primaryActionStyle,
                 opacity: !roleCatalogDirty || rolePending ? 0.3 : 1,
-              }}
-            >
-              {rolePending ? 'Saving...' : 'Save'}
+            }}
+          >
+              {rolePending
+                ? t("pages.studio.studiofilesdetailpane.saving", "Saving...")
+                : t("pages.studio.studiofilesdetailpane.save", "Save")}
             </button>
           </div>
         </div>
@@ -1386,13 +1391,13 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <Alert
             type="error"
             showIcon
-            message="Failed to load role catalog"
+            message={t("pages.studio.studiofilesdetailpane.failed.to.load.role.catalog", "Failed to load role catalog")}
             description={describeError(roles.error)}
           />
         ) : roles.isLoading ? (
-          <div style={emptyCardStyle}>Loading roles...</div>
+          <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.loading.roles", "Loading roles...")}</div>
         ) : roleCatalogDraft.length === 0 ? (
-          <div style={emptyCardStyle}>No roles defined</div>
+          <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.no.roles.defined", "No roles defined")}</div>
         ) : (
           <div style={catalogListStyle}>
             {roleCatalogDraft.map((role) => (
@@ -1404,7 +1409,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 <TeamOutlined style={{ color: '#8b5cf6', fontSize: 18 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ color: '#1f2937', fontSize: 14, fontWeight: 600 }}>
-                    {role.name || role.id || 'Role'}
+                    {role.name || role.id || t("pages.studio.studiofilesdetailpane.role", "Role")}
                   </div>
                   <div style={catalogMetaStyle}>
                     <span
@@ -1415,9 +1420,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                     >
                       {role.id || 'role_id'}
                     </span>
-                    {role.model ? ` / ${role.model}` : ''}
+                    {role.model ? t("pages.studio.studiofilesdetailpane.copy", "/ {value1}", { value1: role.model }) : ''}
                     {role.connectorsText
-                      ? ` / ${splitCatalogLines(role.connectorsText).length} connector(s)`
+                      ? t("pages.studio.studiofilesdetailpane.connector.count.suffix", " / {count} connector(s)", {
+                          count: splitCatalogLines(role.connectorsText).length,
+                        })
                       : ''}
                   </div>
                 </div>
@@ -1434,7 +1441,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                     }
                   }}
                   style={iconActionStyle}
-                  title="Delete role"
+                  title={t("pages.studio.studiofilesdetailpane.delete.role", "Delete role")}
                 >
                   <DeleteOutlined />
                 </button>
@@ -1448,8 +1455,13 @@ const StudioFilesDetailPane: React.FC<Props> = ({
         open={Boolean(editingRole)}
         title={
           editingRole
-            ? `Edit Role: ${editingRole.name || editingRole.id || 'Role'}`
-            : 'Edit Role'
+            ? t("pages.studio.studiofilesdetailpane.edit.role.named", "Edit Role: {name}", {
+                name:
+                  editingRole.name ||
+                  editingRole.id ||
+                  t("pages.studio.studiofilesdetailpane.role", "Role"),
+              })
+            : t("pages.studio.studiofilesdetailpane.edit.role", "Edit Role")
         }
         onClose={() => setEditingRoleKey(null)}
       >
@@ -1457,7 +1469,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <>
             <div style={twoColumnGridStyle}>
               <FieldInput
-                label="Role ID"
+                label={t("pages.studio.studiofilesdetailpane.role.id", "Role ID")}
                 value={editingRole.id}
                 mono
                 onChange={(value) =>
@@ -1474,7 +1486,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 }
               />
               <FieldInput
-                label="Name"
+                label={t("pages.studio.studiofilesdetailpane.name", "Name")}
                 value={editingRole.name}
                 onChange={(value) =>
                   setRoleCatalogDraft((current) =>
@@ -1493,9 +1505,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
 
             <div style={twoColumnGridStyle}>
               <FieldInput
-                label="Provider"
+                label={t("pages.studio.studiofilesdetailpane.provider", "Provider")}
                 value={editingRole.provider}
-                placeholder="Default"
+                placeholder={t("pages.studio.studiofilesdetailpane.default", "Default")}
                 onChange={(value) =>
                   setRoleCatalogDraft((current) =>
                     current.map((item) =>
@@ -1510,9 +1522,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 }
               />
               <FieldInput
-                label="Model"
+                label={t("pages.studio.studiofilesdetailpane.model", "Model")}
                 value={editingRole.model}
-                placeholder="Default"
+                placeholder={t("pages.studio.studiofilesdetailpane.default", "Default")}
                 onChange={(value) =>
                   setRoleCatalogDraft((current) =>
                     current.map((item) =>
@@ -1529,7 +1541,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             </div>
 
             <FieldTextArea
-              label="System Prompt"
+              label={t("pages.studio.studiofilesdetailpane.system.prompt", "System Prompt")}
               value={editingRole.systemPrompt}
               rows={7}
               onChange={(value) =>
@@ -1547,7 +1559,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             />
 
             <div>
-              <div style={fieldLabelStyle}>Connectors</div>
+              <div style={fieldLabelStyle}>{t("pages.studio.studiofilesdetailpane.connectors", "Connectors")}</div>
               {connectorNames.length > 0 ? (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   {connectorNames.map((name) => {
@@ -1633,8 +1645,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       <div style={cliEditorShellStyle}>
         <div style={editorHeaderRowStyle}>
           <div>
-            <div style={editorHeaderLabelStyle}>connector-catalog</div>
-            <div style={editorHeaderTitleStyle}>Connector Catalog</div>
+            <div style={editorHeaderLabelStyle}>{t("pages.studio.studiofilesdetailpane.connector.catalog.2", "connector-catalog")}</div>
+            <div style={editorHeaderTitleStyle}>{t("pages.studio.studiofilesdetailpane.connector.catalog", "Connector Catalog")}</div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ position: 'relative' }}>
@@ -1645,8 +1657,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 style={secondaryActionStyle}
               >
                 <PlusOutlined />
-                Add
-              </button>
+                {t("pages.studio.studiofilesdetailpane.add", "Add")}</button>
               {connectorAddMenuOpen ? (
                 <div
                   style={{
@@ -1693,9 +1704,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               style={{
                 ...primaryActionStyle,
                 opacity: !connectorCatalogDirty || connectorPending ? 0.3 : 1,
-              }}
-            >
-              {connectorPending ? 'Saving...' : 'Save'}
+            }}
+          >
+              {connectorPending
+                ? t("pages.studio.studiofilesdetailpane.saving", "Saving...")
+                : t("pages.studio.studiofilesdetailpane.save", "Save")}
             </button>
           </div>
         </div>
@@ -1712,13 +1725,13 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <Alert
             type="error"
             showIcon
-            message="Failed to load connector catalog"
+            message={t("pages.studio.studiofilesdetailpane.failed.to.load.connector.catalog", "Failed to load connector catalog")}
             description={describeError(connectors.error)}
           />
         ) : connectors.isLoading ? (
-          <div style={emptyCardStyle}>Loading connectors...</div>
+          <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.loading.connectors", "Loading connectors...")}</div>
         ) : connectorCatalogDraft.length === 0 ? (
-          <div style={emptyCardStyle}>No connectors defined</div>
+          <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.no.connectors.defined", "No connectors defined")}</div>
         ) : (
           <div style={catalogListStyle}>
             {connectorCatalogDraft.map((connector) => {
@@ -1755,14 +1768,17 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        {connector.name || 'Connector'}
+                        {connector.name || t("pages.studio.studiofilesdetailpane.connector", "Connector")}
                       </div>
                       <Tag color="processing" style={{ marginInlineEnd: 0 }}>
                         {connector.type}
                       </Tag>
-                      {!connector.enabled ? <Tag>disabled</Tag> : null}
+                      {!connector.enabled ? <Tag>{t("pages.studio.studiofilesdetailpane.disabled", "disabled")}</Tag> : null}
                     </div>
-                    <div style={catalogMetaStyle}>{preview || 'No target configured'}</div>
+                    <div style={catalogMetaStyle}>
+                      {preview ||
+                        t("pages.studio.studiofilesdetailpane.no.target.configured", "No target configured")}
+                    </div>
                   </div>
                   <button
                     className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1777,7 +1793,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                       }
                     }}
                     style={iconActionStyle}
-                    title="Delete connector"
+                    title={t("pages.studio.studiofilesdetailpane.delete.connector", "Delete connector")}
                   >
                     <DeleteOutlined />
                   </button>
@@ -1792,8 +1808,12 @@ const StudioFilesDetailPane: React.FC<Props> = ({
         open={Boolean(editingConnector)}
         title={
           editingConnector
-            ? `Edit Connector: ${editingConnector.name || 'Connector'}`
-            : 'Edit Connector'
+            ? t("pages.studio.studiofilesdetailpane.edit.connector.named", "Edit Connector: {name}", {
+                name:
+                  editingConnector.name ||
+                  t("pages.studio.studiofilesdetailpane.connector", "Connector"),
+              })
+            : t("pages.studio.studiofilesdetailpane.edit.connector", "Edit Connector")
         }
         onClose={() => setEditingConnectorKey(null)}
       >
@@ -1801,7 +1821,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <>
             <div style={twoColumnGridStyle}>
               <FieldInput
-                label="Name"
+                label={t("pages.studio.studiofilesdetailpane.name", "Name")}
                 value={editingConnector.name}
                 mono
                 onChange={(value) =>
@@ -1818,7 +1838,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 }
               />
               <label>
-                <span style={fieldLabelStyle}>Type</span>
+                <span style={fieldLabelStyle}>{t("pages.studio.studiofilesdetailpane.type", "Type")}</span>
                 <select
                   value={editingConnector.type}
                   onChange={(event) =>
@@ -1835,16 +1855,16 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                   style={fieldInputStyle}
                 >
-                  <option value="http">HTTP</option>
-                  <option value="cli">CLI</option>
-                  <option value="mcp">MCP</option>
+                  <option value="http">{t("pages.studio.studiofilesdetailpane.http", "HTTP")}</option>
+                  <option value="cli">{t("pages.studio.studiofilesdetailpane.cli", "CLI")}</option>
+                  <option value="mcp">{t("pages.studio.studiofilesdetailpane.mcp", "MCP")}</option>
                 </select>
               </label>
             </div>
 
             <div style={twoColumnGridStyle}>
               <div style={toggleRowStyle}>
-                <span style={fieldLabelStyle}>Enabled</span>
+                <span style={fieldLabelStyle}>{t("pages.studio.studiofilesdetailpane.enabled", "Enabled")}</span>
                 <button
                   aria-pressed={editingConnector.enabled}
                   className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1883,7 +1903,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               </div>
               <div style={twoColumnGridStyle}>
                 <FieldInput
-                  label="Timeout (ms)"
+                  label={t("pages.studio.studiofilesdetailpane.timeout.ms", "Timeout (ms)")}
                   mono
                   value={editingConnector.timeoutMs}
                   onChange={(value) =>
@@ -1900,7 +1920,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Retry"
+                  label={t("pages.studio.studiofilesdetailpane.retry", "Retry")}
                   mono
                   value={editingConnector.retry}
                   onChange={(value) =>
@@ -1922,7 +1942,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             {editingConnector.type === 'http' ? (
               <>
                 <FieldInput
-                  label="Base URL"
+                  label={t("pages.studio.studiofilesdetailpane.base.url", "Base URL")}
                   mono
                   value={editingConnector.http.baseUrl}
                   onChange={(value) =>
@@ -1942,7 +1962,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Allowed Methods"
+                  label={t("pages.studio.studiofilesdetailpane.allowed.methods", "Allowed Methods")}
                   value={editingConnector.http.allowedMethods.join(', ')}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
@@ -1964,7 +1984,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Allowed Paths"
+                  label={t("pages.studio.studiofilesdetailpane.allowed.paths", "Allowed Paths")}
                   value={editingConnector.http.allowedPaths.join(', ')}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
@@ -1986,7 +2006,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Allowed Input Keys"
+                  label={t("pages.studio.studiofilesdetailpane.allowed.input.keys", "Allowed Input Keys")}
                   value={editingConnector.http.allowedInputKeys.join(', ')}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
@@ -2008,9 +2028,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldTextArea
-                  label="Default Headers"
+                  label={t("pages.studio.studiofilesdetailpane.default.headers", "Default Headers")}
                   value={formatMapText(editingConnector.http.defaultHeaders)}
-                  placeholder="key: value (one per line)"
+                  placeholder={t("pages.studio.studiofilesdetailpane.key.value.one.per.line", "key: value (one per line)")}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
                       current.map((item) =>
@@ -2033,7 +2053,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             {editingConnector.type === 'cli' ? (
               <>
                 <FieldInput
-                  label="Command"
+                  label={t("pages.studio.studiofilesdetailpane.command", "Command")}
                   mono
                   value={editingConnector.cli.command}
                   onChange={(value) =>
@@ -2053,7 +2073,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Fixed Arguments"
+                  label={t("pages.studio.studiofilesdetailpane.fixed.arguments", "Fixed Arguments")}
                   value={editingConnector.cli.fixedArguments.join(', ')}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
@@ -2075,7 +2095,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Allowed Operations"
+                  label={t("pages.studio.studiofilesdetailpane.allowed.operations", "Allowed Operations")}
                   value={editingConnector.cli.allowedOperations.join(', ')}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
@@ -2097,7 +2117,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Allowed Input Keys"
+                  label={t("pages.studio.studiofilesdetailpane.allowed.input.keys.2", "Allowed Input Keys")}
                   value={editingConnector.cli.allowedInputKeys.join(', ')}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
@@ -2119,7 +2139,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Working Directory"
+                  label={t("pages.studio.studiofilesdetailpane.working.directory", "Working Directory")}
                   mono
                   value={editingConnector.cli.workingDirectory}
                   onChange={(value) =>
@@ -2139,9 +2159,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldTextArea
-                  label="Environment"
+                  label={t("pages.studio.studiofilesdetailpane.environment", "Environment")}
                   value={formatMapText(editingConnector.cli.environment)}
-                  placeholder="KEY: value (one per line)"
+                  placeholder={t("pages.studio.studiofilesdetailpane.key.value.one.per.line.2", "KEY: value (one per line)")}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
                       current.map((item) =>
@@ -2164,7 +2184,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             {editingConnector.type === 'mcp' ? (
               <>
                 <FieldInput
-                  label="Server Name"
+                  label={t("pages.studio.studiofilesdetailpane.server.name", "Server Name")}
                   mono
                   value={editingConnector.mcp.serverName}
                   onChange={(value) =>
@@ -2184,7 +2204,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Command"
+                  label={t("pages.studio.studiofilesdetailpane.command", "Command")}
                   mono
                   value={editingConnector.mcp.command}
                   onChange={(value) =>
@@ -2204,7 +2224,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Arguments"
+                  label={t("pages.studio.studiofilesdetailpane.arguments", "Arguments")}
                   value={editingConnector.mcp.arguments.join(', ')}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
@@ -2226,7 +2246,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Default Tool"
+                  label={t("pages.studio.studiofilesdetailpane.default.tool", "Default Tool")}
                   mono
                   value={editingConnector.mcp.defaultTool}
                   onChange={(value) =>
@@ -2246,7 +2266,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Allowed Tools"
+                  label={t("pages.studio.studiofilesdetailpane.allowed.tools", "Allowed Tools")}
                   value={editingConnector.mcp.allowedTools.join(', ')}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
@@ -2268,7 +2288,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Allowed Input Keys"
+                  label={t("pages.studio.studiofilesdetailpane.allowed.input.keys.3", "Allowed Input Keys")}
                   value={editingConnector.mcp.allowedInputKeys.join(', ')}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
@@ -2290,9 +2310,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldTextArea
-                  label="Environment"
+                  label={t("pages.studio.studiofilesdetailpane.environment", "Environment")}
                   value={formatMapText(editingConnector.mcp.environment)}
-                  placeholder="KEY: value (one per line)"
+                  placeholder={t("pages.studio.studiofilesdetailpane.key.value.one.per.line.3", "KEY: value (one per line)")}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
                       current.map((item) =>
@@ -2324,7 +2344,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <div style={emptyCardStyle}>
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="Select a workflow file to preview its YAML."
+              description={t("pages.studio.studiofilesdetailpane.select.workflow.file.to.preview", "Select a workflow file to preview its YAML.")}
             />
           </div>
         </div>
@@ -2345,7 +2365,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 </div>
               ) : null}
               <div style={catalogMetaStyle}>
-                {selectedWorkflowSummary.stepCount} steps ·{' '}
+                {selectedWorkflowSummary.stepCount} {t("pages.studio.studiofilesdetailpane.steps", "steps ·")}{' '}
                 {selectedWorkflowSummary.directoryLabel}
               </div>
             </div>
@@ -2359,23 +2379,23 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             >
               <EditOutlined />
               {' '}
-              Open in Studio
-            </button>
+              {t("pages.studio.studiofilesdetailpane.open.in.studio", "Open in Studio")}</button>
           </div>
 
           {workflowFile.isLoading ? (
-            <div style={emptyCardStyle}>Loading workflow...</div>
+            <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.loading.workflow", "Loading workflow...")}</div>
           ) : workflowFile.isError ? (
             <Alert
               type="error"
               showIcon
-              message="Failed to load workflow YAML"
+              message={t("pages.studio.studiofilesdetailpane.failed.to.load.workflow.yaml", "Failed to load workflow YAML")}
               description={describeError(workflowFile.error)}
             />
           ) : (
-            <section aria-label="Workflow YAML preview">
+            <section aria-label={t("pages.studio.studiofilesdetailpane.workflow.yaml.preview", "Workflow YAML preview")}>
               <pre style={codePreviewStyle}>
-                {workflowFile.data?.yaml || '# Workflow YAML is empty.'}
+                {workflowFile.data?.yaml ||
+                  t("pages.studio.studiofilesdetailpane.workflow.yaml.empty.comment", "# Workflow YAML is empty.")}
               </pre>
             </section>
           )}
@@ -2392,8 +2412,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <Alert
               type="info"
               showIcon
-              message="Resolve a project scope to browse chat histories."
-              description="Chat histories are loaded from the active scope once the Studio host resolves a scope context."
+              message={t("pages.studio.studiofilesdetailpane.resolve.workspace.to.browse.chat", "Resolve a workspace to browse chat histories.")}
+              description={t("pages.studio.studiofilesdetailpane.chat.histories.are.loaded.from", "Chat histories are loaded from the active workspace once the Studio host resolves a workspace context.")}
             />
           </div>
         </div>
@@ -2403,7 +2423,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     if (chatConversations.isLoading) {
       return (
         <div style={detailScrollStyle}>
-          <div style={emptyCardStyle}>Loading conversations...</div>
+          <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.loading.conversations", "Loading conversations...")}</div>
         </div>
       );
     }
@@ -2415,7 +2435,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <Alert
               type="error"
               showIcon
-              message="Failed to load chat histories"
+              message={t("pages.studio.studiofilesdetailpane.failed.to.load.chat.histories", "Failed to load chat histories")}
               description={describeError(chatConversations.error)}
             />
           </div>
@@ -2429,7 +2449,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <div style={emptyCardStyle}>
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="Select a conversation to preview its messages."
+              description={t("pages.studio.studiofilesdetailpane.select.conversation.to.preview.its", "Select a conversation to preview its messages.")}
             />
           </div>
         </div>
@@ -2447,12 +2467,14 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               </div>
               <div style={editorHeaderDescriptionStyle}>
                 {selectedConversationMeta
-                  ? `${selectedConversationMeta.messageCount} messages · ${selectedConversationMeta.serviceKind || 'chat'} · ${
-                      selectedConversationMeta.updatedAt
+                  ? t("pages.studio.studiofilesdetailpane.conversation.meta", "{count} messages · {serviceKind} · {updatedAt}", {
+                      count: selectedConversationMeta.messageCount,
+                      serviceKind: selectedConversationMeta.serviceKind || 'chat',
+                      updatedAt: selectedConversationMeta.updatedAt
                         ? formatDateTime(selectedConversationMeta.updatedAt)
-                        : 'unknown update time'
-                    }`
-                  : 'Conversation metadata is not available.'}
+                        : t("pages.studio.studiofilesdetailpane.unknown.update.time", "unknown update time"),
+                    })
+                  : t("pages.studio.studiofilesdetailpane.conversation.metadata.unavailable", "Conversation metadata is not available.")}
               </div>
             </div>
             <button
@@ -2466,8 +2488,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               }}
             >
               <DeleteOutlined />
-              Delete
-            </button>
+              {t("pages.studio.studiofilesdetailpane.delete", "Delete")}</button>
           </div>
 
           {chatNotice ? (
@@ -2475,18 +2496,18 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           ) : null}
 
           {selectedConversationMessages.isLoading ? (
-            <div style={emptyCardStyle}>Loading conversation...</div>
+            <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.loading.conversation", "Loading conversation...")}</div>
           ) : selectedConversationMessages.isError ? (
             <Alert
               type="error"
               showIcon
-              message="Failed to load conversation"
+              message={t("pages.studio.studiofilesdetailpane.failed.to.load.conversation", "Failed to load conversation")}
               description={describeError(selectedConversationMessages.error)}
             />
           ) : (selectedConversationMessages.data?.length ?? 0) === 0 ? (
-            <div style={emptyCardStyle}>No messages in this conversation</div>
+            <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.no.messages.in.this.conversation", "No messages in this conversation")}</div>
           ) : (
-            <section aria-label="Chat history messages" style={chatMessageListStyle}>
+            <section aria-label={t("pages.studio.studiofilesdetailpane.chat.history.messages", "Chat history messages")} style={chatMessageListStyle}>
               {(selectedConversationMessages.data ?? []).map(
                 (message: StoredChatMessage) => (
                   <article
@@ -2506,7 +2527,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                         style={{
                           color: message.role === 'user' ? '#2563eb' : '#6b7280',
                           fontWeight: 700,
-                          letterSpacing: '0.08em',
+                          letterSpacing: 0,
                           textTransform: 'uppercase',
                         }}
                       >
@@ -2515,7 +2536,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                       <span style={{ color: '#9ca3af' }}>
                         {message.timestamp
                           ? formatDateTime(new Date(message.timestamp).toISOString())
-                          : 'unknown'}
+                          : t("pages.studio.studiofilesdetailpane.unknown", "unknown")}
                       </span>
                     </div>
 
@@ -2544,7 +2565,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                         wordBreak: 'break-word',
                       }}
                     >
-                      {message.content || '(empty message)'}
+                      {message.content ||
+                        t("pages.studio.studiofilesdetailpane.empty.message", "(empty message)")}
                     </div>
 
                     {message.error ? (
@@ -2570,8 +2592,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <Alert
               type="info"
               showIcon
-              message="Scripts are disabled for this Studio host."
-              description="Enable the scripts feature to browse script files here."
+              message={t("pages.studio.studiofilesdetailpane.scripts.are.disabled.for.this", "Scripts are disabled for this Studio host.")}
+              description={t("pages.studio.studiofilesdetailpane.enable.the.scripts.feature.to", "Enable the scripts feature to browse script files here.")}
             />
           </div>
         </div>
@@ -2585,8 +2607,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <Alert
               type="info"
               showIcon
-              message="Resolve a project scope to browse scripts."
-              description="Script files are loaded from the active scope once Studio resolves a scope context."
+              message={t("pages.studio.studiofilesdetailpane.resolve.workspace.to.browse.scripts", "Resolve a workspace to browse scripts.")}
+              description={t("pages.studio.studiofilesdetailpane.script.files.are.loaded.from", "Script files are loaded from the active workspace once Studio resolves a workspace context.")}
             />
           </div>
         </div>
@@ -2596,7 +2618,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     if (scripts.isLoading) {
       return (
         <div style={detailScrollStyle}>
-          <div style={emptyCardStyle}>Loading scripts...</div>
+          <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.loading.scripts", "Loading scripts...")}</div>
         </div>
       );
     }
@@ -2608,7 +2630,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <Alert
               type="error"
               showIcon
-              message="Failed to load scripts"
+              message={t("pages.studio.studiofilesdetailpane.failed.to.load.scripts", "Failed to load scripts")}
               description={describeError(scripts.error)}
             />
           </div>
@@ -2622,7 +2644,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <div style={emptyCardStyle}>
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="Select a script file to preview its source."
+              description={t("pages.studio.studiofilesdetailpane.select.script.file.to.preview", "Select a script file to preview its source.")}
             />
           </div>
         </div>
@@ -2638,10 +2660,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <div>
               <div style={editorHeaderTitleStyle}>{scriptId}.cs</div>
               <div style={catalogMetaStyle}>
-                Revision: {selectedScriptDetail.script.activeRevision} · Updated:{' '}
+                {t("pages.studio.studiofilesdetailpane.revision.label", "Revision:")}{' '}
+                {selectedScriptDetail.script.activeRevision} {t("pages.studio.studiofilesdetailpane.updated", "· Updated:")}{' '}
                 {selectedScriptDetail.script.updatedAt
                   ? formatDateTime(selectedScriptDetail.script.updatedAt)
-                  : 'unknown'}
+                  : t("pages.studio.studiofilesdetailpane.unknown", "unknown")}
               </div>
             </div>
             <button
@@ -2652,14 +2675,14 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             >
               <EditOutlined />
               {' '}
-              Open Scripts Studio
+              {t("pages.studio.studiofilesdetailpane.open.script.build", "Open Script Build")}
             </button>
           </div>
 
-          <section aria-label="Script source preview">
+          <section aria-label={t("pages.studio.studiofilesdetailpane.script.source.preview", "Script source preview")}>
             <pre style={codePreviewStyle}>
               {selectedScriptDetail.source?.sourceText ||
-                '// Source code not available. The script may need to be promoted first.'}
+                t("pages.studio.studiofilesdetailpane.script.source.unavailable.comment", "// Source code not available. The script may need to be promoted first.")}
             </pre>
           </section>
         </div>

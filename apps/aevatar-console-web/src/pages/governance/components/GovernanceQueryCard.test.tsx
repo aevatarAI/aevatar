@@ -1,9 +1,18 @@
 import { screen, waitFor } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import React from 'react';
 import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
 import GovernanceQueryCard from './GovernanceQueryCard';
 
 describe('GovernanceQueryCard', () => {
+  beforeEach(() => {
+    setLocale('zh-CN', false);
+  });
+
+  afterEach(() => {
+    setLocale('en-US', false);
+  });
+
   it('hydrates missing identity fields from a unique selected service', async () => {
     const onChange = jest.fn();
 
@@ -86,12 +95,14 @@ describe('GovernanceQueryCard', () => {
             serviceId: 'svc-1',
           },
         ]}
+        onReset={() => {}}
         onChange={() => {}}
         onLoad={() => {}}
       />,
     );
 
     expect(screen.getByText('先选择服务')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重置' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '加载治理信息' })).toBeDisabled();
   });
 });

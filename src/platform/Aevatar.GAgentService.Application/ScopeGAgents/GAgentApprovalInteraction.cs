@@ -6,7 +6,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Application.ScopeGAgents;
@@ -18,27 +18,45 @@ internal sealed class GAgentApprovalCommandTarget
       ICommandDispatchCleanupAware
 {
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
+    private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
     public GAgentApprovalCommandTarget(
         IActor actor,
-        IGAgentDraftRunProjectionPort projectionPort)
+        IGAgentDraftRunProjectionPort projectionPort,
+        IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
     public IActor Actor { get; }
     public string TargetId => Actor.Id;
     public string ActorId => Actor.Id;
+    public string SessionId { get; private set; } = string.Empty;
     public IGAgentDraftRunProjectionLease? ProjectionLease { get; private set; }
+    public IGAgentRunTerminalProjectionLease? TerminalProjectionLease { get; private set; }
+    public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<AGUIEvent>? LiveSink { get; private set; }
+
+    public void BindTerminalProjection(IGAgentRunTerminalProjectionLease? lease)
+    {
+        TerminalProjectionLease = lease;
+    }
 
     public void BindLiveObservation(
         IGAgentDraftRunProjectionLease lease,
-        IEventSink<AGUIEvent> sink)
+        IAsyncDisposable? liveSinkLease,
+        IEventSink<AGUIEvent> sink,
+        string sessionId)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
+        LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
+        SessionId = sessionId;
     }
 
     public IEventSink<AGUIEvent> RequireLiveSink() =>
@@ -69,10 +87,12 @@ internal sealed class GAgentApprovalCommandTarget
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
                     projectionLease,
+                    LiveSinkLease,
                     sink,
                     null,
                     ct);
                 ProjectionLease = null;
+                LiveSinkLease = null;
                 LiveSink = null;
             }
             catch (Exception ex)
@@ -88,6 +108,7 @@ internal sealed class GAgentApprovalCommandTarget
                 {
                     sink.Complete();
                     await sink.DisposeAsync();
+                    LiveSinkLease = null;
                     LiveSink = null;
                 }
                 catch (Exception ex)
@@ -102,11 +123,26 @@ internal sealed class GAgentApprovalCommandTarget
                 {
                     await _projectionPort.ReleaseActorProjectionAsync(projectionLease, ct);
                     ProjectionLease = null;
+                    LiveSinkLease = null;
                 }
                 catch (Exception ex)
                 {
                     firstException ??= ex;
                 }
+            }
+        }
+
+        var terminalProjectionLease = TerminalProjectionLease;
+        if (terminalProjectionLease != null)
+        {
+            try
+            {
+                await _terminalProjectionPort.ReleaseProjectionAsync(terminalProjectionLease, ct);
+                TerminalProjectionLease = null;
+            }
+            catch (Exception ex)
+            {
+                firstException ??= ex;
             }
         }
 
@@ -120,13 +156,16 @@ internal sealed class GAgentApprovalCommandTargetResolver
 {
     private readonly IActorRuntime _actorRuntime;
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
+    private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
     public GAgentApprovalCommandTargetResolver(
         IActorRuntime actorRuntime,
-        IGAgentDraftRunProjectionPort projectionPort)
+        IGAgentDraftRunProjectionPort projectionPort,
+        IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
     public async Task<CommandTargetResolution<GAgentApprovalCommandTarget, GAgentApprovalStartError>> ResolveAsync(
@@ -143,59 +182,94 @@ internal sealed class GAgentApprovalCommandTargetResolver
         }
 
         return CommandTargetResolution<GAgentApprovalCommandTarget, GAgentApprovalStartError>.Success(
-            new GAgentApprovalCommandTarget(actor, _projectionPort));
+            new GAgentApprovalCommandTarget(actor, _projectionPort, _terminalProjectionPort));
     }
 }
 
-internal sealed class GAgentApprovalCommandTargetBinder
-    : ICommandTargetBinder<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalStartError>
+internal sealed class GAgentApprovalObservationLifecycle
+    : ICommandObservationLifecycle<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError>
 {
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
+    private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
-    public GAgentApprovalCommandTargetBinder(
-        IGAgentDraftRunProjectionPort projectionPort)
+    public GAgentApprovalObservationLifecycle(
+        IGAgentDraftRunProjectionPort projectionPort,
+        IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
-    public async Task<CommandTargetBindingResult<GAgentApprovalStartError>> BindAsync(
+    public async Task<CommandObservationBindingResult<GAgentApprovalStartError>> BindAsync(
         GAgentApprovalCommand command,
-        GAgentApprovalCommandTarget target,
-        CommandContext context,
+        CommandDispatchExecution<GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
+        // Refactor (iter37/cluster-037-gagentservice-binders-attach-existing):
+        //   Old pattern: GAgentService interaction binders synchronously prime projection sessions before dispatch(request-path projection activation in BindAsync).
+        //   New principle: Attach-only to existing projection sessions/materialization leases via capability-specific attach-existing ports.
+        //   Cold sessions return ProjectionUnavailable / pending before dispatch; no top-level live-observation exception.
         ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(execution);
 
+        var target = execution.Target;
+        var context = execution.Context;
         var sink = new EventChannel<AGUIEvent>();
+        IGAgentRunTerminalProjectionLease? terminalProjectionLease = null;
 
         try
         {
-            var projectionLease = await _projectionPort.EnsureAndAttachAsync(
-                token => _projectionPort.EnsureActorProjectionAsync(
-                    target.ActorId,
-                    context.CommandId,
-                    token),
+            terminalProjectionLease = await _terminalProjectionPort.AttachExistingProjectionAsync(
+                target.ActorId,
+                context.CorrelationId,
+                GAgentRunTerminalInteractionKind.Approval,
+                ct);
+            if (terminalProjectionLease == null)
+                return await FailProjectionUnavailableAsync(sink);
+
+            target.BindTerminalProjection(terminalProjectionLease);
+
+            var attachment = await _projectionPort.AttachExistingActorProjectionAsync(
+                target.ActorId,
+                context.CorrelationId,
                 sink,
                 ct);
 
-            if (projectionLease == null)
+            if (attachment == null)
             {
-                sink.Complete();
-                await sink.DisposeAsync();
-                throw new InvalidOperationException("GAgent approval projection pipeline is unavailable.");
+                await _terminalProjectionPort.ReleaseProjectionAsync(terminalProjectionLease, ct);
+                target.BindTerminalProjection(null);
+                return await FailProjectionUnavailableAsync(sink);
             }
 
-            target.BindLiveObservation(projectionLease, sink);
-            return CommandTargetBindingResult<GAgentApprovalStartError>.Success();
+            target.BindLiveObservation(
+                attachment.ProjectionLease,
+                attachment.LiveSinkLease,
+                sink,
+                command.SessionId?.Trim() ?? string.Empty);
+            return CommandObservationBindingResult<GAgentApprovalStartError>.Success();
         }
         catch
         {
+            if (terminalProjectionLease != null)
+            {
+                await _terminalProjectionPort.ReleaseProjectionAsync(terminalProjectionLease, ct);
+                target.BindTerminalProjection(null);
+            }
+
             sink.Complete();
             await sink.DisposeAsync();
             throw;
         }
+    }
+
+    private static async Task<CommandObservationBindingResult<GAgentApprovalStartError>> FailProjectionUnavailableAsync(
+        IEventSink<AGUIEvent> sink)
+    {
+        sink.Complete();
+        await sink.DisposeAsync();
+        return CommandObservationBindingResult<GAgentApprovalStartError>.Failure(
+            GAgentApprovalStartError.ProjectionUnavailable);
     }
 }
 
@@ -242,7 +316,8 @@ internal sealed class GAgentApprovalAcceptedReceiptFactory
         return new GAgentApprovalAcceptedReceipt(
             target.ActorId,
             context.CommandId,
-            context.CorrelationId);
+            context.CorrelationId,
+            target.SessionId);
     }
 }
 
@@ -307,12 +382,58 @@ internal sealed class GAgentApprovalFinalizeEmitter
 internal sealed class GAgentApprovalDurableCompletionResolver
     : ICommandDurableCompletionResolver<GAgentApprovalAcceptedReceipt, GAgentApprovalCompletionStatus>
 {
-    public Task<CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>> ResolveAsync(
+    private readonly IGAgentRunTerminalQueryPort _queryPort;
+
+    public GAgentApprovalDurableCompletionResolver(
+        IGAgentRunTerminalQueryPort queryPort)
+    {
+        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+    }
+
+    public async Task<CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>> ResolveAsync(
         GAgentApprovalAcceptedReceipt receipt,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        _ = ct;
-        return Task.FromResult(CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete);
+
+        try
+        {
+            var snapshot = await _queryPort.GetByCorrelationIdAsync(receipt.ActorId, receipt.CorrelationId, ct);
+            if (!MatchesReceipt(snapshot, receipt))
+                snapshot = null;
+            if (snapshot == null && !string.IsNullOrWhiteSpace(receipt.SessionId))
+            {
+                var sessionSnapshot = await _queryPort.GetBySessionIdAsync(receipt.ActorId, receipt.SessionId, ct);
+                if (MatchesReceipt(sessionSnapshot, receipt))
+                    snapshot = sessionSnapshot;
+            }
+            return Map(snapshot);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete;
+        }
     }
+
+    private static bool MatchesReceipt(
+        GAgentRunTerminalSnapshot? snapshot,
+        GAgentApprovalAcceptedReceipt receipt) =>
+        snapshot != null &&
+        string.Equals(snapshot.ActorId, receipt.ActorId, StringComparison.Ordinal) &&
+        string.Equals(snapshot.CorrelationId, receipt.CorrelationId, StringComparison.Ordinal) &&
+        snapshot.InteractionKind == GAgentRunTerminalInteractionKind.Approval;
+
+    private static CommandDurableCompletionObservation<GAgentApprovalCompletionStatus> Map(
+        GAgentRunTerminalSnapshot? snapshot) =>
+        snapshot?.Status switch
+        {
+            GAgentRunTerminalStatus.TextMessageCompleted => new(true, GAgentApprovalCompletionStatus.TextMessageCompleted),
+            GAgentRunTerminalStatus.RunFinished => new(true, GAgentApprovalCompletionStatus.RunFinished),
+            GAgentRunTerminalStatus.Failed => new(true, GAgentApprovalCompletionStatus.Failed),
+            _ => CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete,
+        };
 }

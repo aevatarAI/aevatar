@@ -1,4 +1,4 @@
-import { runtimeRunsApi } from "./runtimeRunsApi";
+import { RuntimeRunsApiError, runtimeRunsApi } from "./runtimeRunsApi";
 import {
   encodeAppScriptCommandBase64,
   encodeStringValueBase64,
@@ -173,6 +173,116 @@ describe("runtimeRunsApi", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/scopes/scope-1/members/joker/invoke/chat:stream",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+  });
+
+  it("routes streamTeamChat through the scoped team stream endpoint", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.streamTeamChat(
+      "scope-1",
+      "team-alpha",
+      {
+        prompt: "Test the team",
+        metadata: { source: "team-detail" },
+        sessionId: "session-1",
+      } as Parameters<typeof runtimeRunsApi.streamTeamChat>[2],
+      new AbortController().signal
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/teams/team-alpha/invoke/chat:stream",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+    expect(JSON.parse(String(init.body))).toEqual({
+      prompt: "Test the team",
+      sessionId: "session-1",
+      headers: { source: "team-detail" },
+    });
+  });
+
+  it("surfaces non-OK streamTeamChat responses from the team runtime boundary", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      statusText: "Conflict",
+      text: async () =>
+        '{"code":"TEAM_ENTRY_MEMBER_NOT_CONFIGURED","message":"team has no entry member configured."}',
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const act = runtimeRunsApi.streamTeamChat(
+      "scope-1",
+      "team-alpha",
+      {
+        prompt: "Test the team",
+      },
+      new AbortController().signal
+    );
+
+    await expect(act).rejects.toThrow("team has no entry member configured.");
+    await expect(act).rejects.toMatchObject({
+      code: "TEAM_ENTRY_MEMBER_NOT_CONFIGURED",
+      name: "RuntimeRunsApiError",
+      status: 409,
+    } satisfies Partial<RuntimeRunsApiError>);
+  });
+
+  it("keeps router team-not-found errors distinct from missing routes", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: "Not Found",
+      text: async () => '{"code":"TEAM_NOT_FOUND","message":"team not found."}',
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      runtimeRunsApi.streamTeamChat(
+        "scope-1",
+        "team-missing",
+        {
+          prompt: "Test the team",
+        },
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({
+      code: "TEAM_NOT_FOUND",
+      message: "team not found.",
+      status: 404,
+    });
+  });
+
+  it("routes streamChat through the team stream endpoint when teamId is provided", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.streamChat(
+      "scope-1",
+      {
+        prompt: "Run it",
+      },
+      new AbortController().signal,
+      { teamId: "team-1", serviceId: "service-1" }
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/teams/team-1/invoke/chat:stream",
       expect.objectContaining({
         method: "POST",
       })
@@ -454,6 +564,36 @@ describe("runtimeRunsApi", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/scopes/scope-1/members/joker/invoke/run",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+  });
+
+  it("routes generic endpoint invokes through the team endpoint path when teamId is provided", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        requestId: "cmd-2",
+        targetActorId: "actor-2",
+        endpointId: "run",
+      }),
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.invokeEndpoint(
+      "scope-1",
+      {
+        endpointId: "run",
+        prompt: "Launch the endpoint",
+        commandId: "cmd-2",
+      },
+      { teamId: "team-1", serviceId: "service-1" }
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/teams/team-1/invoke/run",
       expect.objectContaining({
         method: "POST",
       })

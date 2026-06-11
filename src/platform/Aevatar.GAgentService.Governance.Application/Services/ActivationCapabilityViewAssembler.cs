@@ -12,16 +12,16 @@ public sealed class ActivationCapabilityViewAssembler : IActivationCapabilityVie
 {
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
     private readonly IServiceConfigurationQueryReader _configurationQueryReader;
-    private readonly IServiceRevisionArtifactStore _artifactStore;
+    private readonly IServiceRevisionCatalogQueryReader _revisionCatalogQueryReader;
 
     public ActivationCapabilityViewAssembler(
         IServiceCatalogQueryReader catalogQueryReader,
         IServiceConfigurationQueryReader configurationQueryReader,
-        IServiceRevisionArtifactStore artifactStore)
+        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader)
     {
         _catalogQueryReader = catalogQueryReader ?? throw new ArgumentNullException(nameof(catalogQueryReader));
         _configurationQueryReader = configurationQueryReader ?? throw new ArgumentNullException(nameof(configurationQueryReader));
-        _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
+        _revisionCatalogQueryReader = revisionCatalogQueryReader ?? throw new ArgumentNullException(nameof(revisionCatalogQueryReader));
     }
 
     public Task<ActivationCapabilityView> GetAsync(
@@ -42,8 +42,8 @@ public sealed class ActivationCapabilityViewAssembler : IActivationCapabilityVie
         var serviceKey = ServiceKeys.Build(identity);
         var catalog = await _catalogQueryReader.GetAsync(identity, ct)
             ?? throw new InvalidOperationException($"Service definition '{serviceKey}' was not found.");
-        var artifact = await _artifactStore.GetAsync(serviceKey, revisionId, ct)
-            ?? throw new InvalidOperationException($"Prepared artifact for '{serviceKey}' revision '{revisionId}' was not found.");
+        var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(identity, ct);
+        var artifact = revisionCatalog.GetRequiredPreparedArtifact(identity, revisionId);
         var configuration = await _configurationQueryReader.GetAsync(identity, ct);
 
         var view = new ActivationCapabilityView

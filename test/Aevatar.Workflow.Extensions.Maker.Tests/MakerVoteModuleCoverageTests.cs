@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
@@ -21,7 +20,7 @@ public class MakerVoteModuleCoverageTests
         var module = new MakerVoteModule();
 
         module.CanHandle(Envelope(new StepRequestEvent { StepType = "maker_vote", StepId = "s1" })).Should().BeTrue();
-        module.CanHandle(Envelope(new ChatResponseEvent { Content = "x" })).Should().BeFalse();
+        module.CanHandle(Envelope(new WorkflowLlmInvocationCompletedEvent { Content = "x" })).Should().BeFalse();
         module.CanHandle(new EventEnvelope()).Should().BeFalse();
     }
 

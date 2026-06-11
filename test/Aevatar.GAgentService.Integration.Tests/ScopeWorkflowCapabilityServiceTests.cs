@@ -40,32 +40,11 @@ public sealed class ScopeWorkflowApplicationServicesTests
         var queryPort = new FakeServiceLifecycleQueryPort();
         var governanceQueryPort = new FakeServiceGovernanceQueryPort();
         queryPort.GetServiceResults.Enqueue(null);
-        queryPort.GetServiceResults.Enqueue(new ServiceCatalogSnapshot(
-            ServiceKeys.Build(identity),
-            identity.TenantId,
-            identity.AppId,
-            identity.Namespace,
-            identity.ServiceId,
-            "Approval Flow",
-            revisionId,
-            revisionId,
-            expectedDeploymentId,
-            expectedActorId,
-            "active",
-            [],
-            [],
-            DateTimeOffset.UtcNow));
-
-        var queryService = new ScopeWorkflowQueryApplicationService(
-            queryPort,
-            new FakeWorkflowActorBindingReader(),
-            Options.Create(options));
         var service = new ScopeWorkflowCommandApplicationService(
             commandPort,
             queryPort,
             governanceCommandPort,
             governanceQueryPort,
-            queryService,
             Options.Create(options));
 
         var result = await service.UpsertAsync(new ScopeWorkflowUpsertRequest(
@@ -77,8 +56,20 @@ public sealed class ScopeWorkflowApplicationServicesTests
             InlineWorkflowYamls: new Dictionary<string, string> { ["child.yaml"] = "name: child" },
             RevisionId: revisionId));
 
-        result.Workflow.ScopeId.Should().Be("external-user-1");
-        result.Workflow.ActorId.Should().Be(expectedActorId);
+        result.ScopeId.Should().Be("external-user-1");
+        result.WorkflowId.Should().Be("approval-flow");
+        result.ExpectedActorId.Should().Be(expectedActorId);
+        result.ExpectedDeploymentId.Should().Be(expectedDeploymentId);
+        result.AcceptanceStage.Should().Be("accepted");
+        result.PropagationStage.Should().Be("readmodel_propagating");
+        result.ReadModelUrl.Should().Be("/api/scopes/external-user-1/workflows/approval-flow");
+        result.CommandHandles.Select(x => x.Stage).Should().Equal(
+            "create_service",
+            "create_revision",
+            "prepare_revision",
+            "publish_revision",
+            "set_default_serving_revision",
+            "activate_service_revision");
         result.DefinitionActorIdPrefix.Should().Be(expectedActorPrefix);
         commandPort.CreateServiceCommand!.Spec.Identity.Should().BeEquivalentTo(identity);
         commandPort.CreateRevisionCommand!.Spec.WorkflowSpec.DefinitionActorId.Should().Be(expectedActorPrefix);

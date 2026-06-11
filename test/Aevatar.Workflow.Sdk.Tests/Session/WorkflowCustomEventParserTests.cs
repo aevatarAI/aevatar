@@ -1,6 +1,8 @@
-using System.Text.Json;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Sdk.Contracts;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Sdk.Tests.Session;
 
@@ -9,18 +11,18 @@ public sealed class WorkflowCustomEventParserTests
     [Fact]
     public void TryParseRunContext_ShouldParseCamelCaseAndPascalCase()
     {
-        var camel = new WorkflowOutputFrame
+        var camel = CustomFrame(WorkflowCustomEventNames.RunContext, new WorkflowRunContextPayload
         {
-            Type = WorkflowEventTypes.Custom,
-            Name = WorkflowCustomEventNames.RunContext,
-            Value = ParseObject("""{"actorId":"actor-c","workflowName":"auto","commandId":"cmd-c"}"""),
-        };
-        var pascal = new WorkflowOutputFrame
+            ActorId = "actor-c",
+            WorkflowName = "auto",
+            CommandId = "cmd-c",
+        });
+        var pascal = CustomFrame(WorkflowCustomEventNames.RunContext, new WorkflowRunContextPayload
         {
-            Type = WorkflowEventTypes.Custom,
-            Name = WorkflowCustomEventNames.RunContext,
-            Value = ParseObject("""{"ActorId":"actor-p","WorkflowName":"manual","CommandId":"cmd-p"}"""),
-        };
+            ActorId = "actor-p",
+            WorkflowName = "manual",
+            CommandId = "cmd-p",
+        });
 
         WorkflowCustomEventParser.TryParseRunContext(camel, out var camelData).Should().BeTrue();
         WorkflowCustomEventParser.TryParseRunContext(pascal, out var pascalData).Should().BeTrue();
@@ -36,12 +38,13 @@ public sealed class WorkflowCustomEventParserTests
     [Fact]
     public void TryParseWaitingSignal_ShouldReturnTypedPayload()
     {
-        var frame = new WorkflowOutputFrame
+        var frame = CustomFrame(WorkflowCustomEventNames.WaitingSignal, new WorkflowWaitingSignalCustomPayload
         {
-            Type = WorkflowEventTypes.Custom,
-            Name = WorkflowCustomEventNames.WaitingSignal,
-            Value = ParseObject("""{"runId":"run-1","stepId":"wait-1","signalName":"continue","timeoutMs":30000}"""),
-        };
+            RunId = "run-1",
+            StepId = "wait-1",
+            SignalName = "continue",
+            TimeoutMs = 30000,
+        });
 
         var ok = WorkflowCustomEventParser.TryParseWaitingSignal(frame, out var data);
 
@@ -55,12 +58,18 @@ public sealed class WorkflowCustomEventParserTests
     [Fact]
     public void TryParseStepCompleted_ShouldReturnTypedControlFields()
     {
-        var frame = new WorkflowOutputFrame
+        var frame = CustomFrame(WorkflowCustomEventNames.StepCompleted, new WorkflowStepCompletedCustomPayload
         {
-            Type = WorkflowEventTypes.Custom,
-            Name = WorkflowCustomEventNames.StepCompleted,
-            Value = ParseObject("""{"runId":"run-1","stepId":"branch-1","success":true,"output":"done","annotations":{"source":"tests"},"nextStepId":"publish","branchKey":"approved","assignedVariable":"result","assignedValue":"done"}"""),
-        };
+            RunId = "run-1",
+            StepId = "branch-1",
+            Success = true,
+            Output = "done",
+            Annotations = { { "source", "tests" } },
+            NextStepId = "publish",
+            BranchKey = "approved",
+            AssignedVariable = "result",
+            AssignedValue = "done",
+        });
 
         var ok = WorkflowCustomEventParser.TryParseStepCompleted(frame, out var data);
 
@@ -77,12 +86,11 @@ public sealed class WorkflowCustomEventParserTests
     [Fact]
     public void TryParseHumanInputRequest_WhenEventNameMismatch_ShouldReturnFalse()
     {
-        var frame = new WorkflowOutputFrame
+        var frame = CustomFrame(WorkflowCustomEventNames.StepRequest, new WorkflowStepRequestCustomPayload
         {
-            Type = WorkflowEventTypes.Custom,
-            Name = WorkflowCustomEventNames.StepRequest,
-            Value = ParseObject("""{"runId":"run-1","stepId":"s1"}"""),
-        };
+            RunId = "run-1",
+            StepId = "s1",
+        });
 
         var ok = WorkflowCustomEventParser.TryParseHumanInputRequest(frame, out _);
 
@@ -90,32 +98,112 @@ public sealed class WorkflowCustomEventParserTests
     }
 
     [Fact]
-    public void TryParseHumanInputRequest_ShouldReturnTypedVariableWithoutMetadataMirror()
+    public void TryParseHumanInputRequest_ShouldReturnTypedSecureInputWithoutMetadataMirror()
     {
-        var frame = new WorkflowOutputFrame
+        var frame = CustomFrame(WorkflowCustomEventNames.HumanInputRequest, new WorkflowHumanInputRequestCustomPayload
         {
-            Type = WorkflowEventTypes.Custom,
-            Name = WorkflowCustomEventNames.HumanInputRequest,
-            Value = ParseObject("""{"runId":"run-1","stepId":"approve","suspensionType":"human_input","prompt":"approve?","timeoutSeconds":30,"variableName":"decision","metadata":{"secure":"true"}}"""),
-        };
+            RunId = "run-1",
+            StepId = "approve",
+            SuspensionType = "secure_input",
+            Prompt = "approve?",
+            TimeoutSeconds = 30,
+            VariableName = "decision",
+            Secure = true,
+            RedactedOutput = "[captured]",
+            Metadata = { { "source", "test" } },
+        });
 
         var ok = WorkflowCustomEventParser.TryParseHumanInputRequest(frame, out var data);
 
         ok.Should().BeTrue();
         data.VariableName.Should().Be("decision");
-        data.Metadata.Should().ContainKey("secure").WhoseValue.Should().Be("true");
+        data.Secure.Should().BeTrue();
+        data.RedactedOutput.Should().Be("[captured]");
+        data.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("test");
         data.Metadata.Should().NotContainKey("variable");
+        data.Metadata.Should().NotContainKey("secure");
+        data.Metadata.Should().NotContainKey("input_mode");
+        data.Metadata.Should().NotContainKey("redacted_output");
+    }
+
+    [Fact]
+    public void TryParseHumanInputRequest_ShouldPreferTypedSecureInputOverLegacyMetadata()
+    {
+        var frame = CustomFrame(WorkflowCustomEventNames.HumanInputRequest, new WorkflowHumanInputRequestCustomPayload
+        {
+            RunId = "run-1",
+            StepId = "approve",
+            SuspensionType = "secure_input",
+            Prompt = "approve?",
+            TimeoutSeconds = 30,
+            VariableName = "decision",
+            Secure = true,
+            RedactedOutput = "[captured]",
+            Metadata =
+            {
+                { "variable", "legacy_decision" },
+                { "secure", "false" },
+                { "input_mode", "password" },
+                { "redacted_output", "[legacy captured]" },
+                { "source", "test" },
+            },
+        });
+
+        var ok = WorkflowCustomEventParser.TryParseHumanInputRequest(frame, out var data);
+
+        ok.Should().BeTrue();
+        data.VariableName.Should().Be("decision");
+        data.Secure.Should().BeTrue();
+        data.RedactedOutput.Should().Be("[captured]");
+        data.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("test");
+        data.Metadata.Should().NotContainKey("variable");
+        data.Metadata.Should().NotContainKey("secure");
+        data.Metadata.Should().NotContainKey("input_mode");
+        data.Metadata.Should().NotContainKey("redacted_output");
+    }
+
+    [Fact]
+    public void TryParseHumanInputRequest_ShouldFallbackLegacySecureInputMetadata()
+    {
+        var frame = CustomFrame(WorkflowCustomEventNames.HumanInputRequest, new WorkflowHumanInputRequestCustomPayload
+        {
+            RunId = "run-1",
+            StepId = "approve",
+            SuspensionType = "secure_input",
+            Prompt = "approve?",
+            TimeoutSeconds = 30,
+            Metadata =
+            {
+                { "variable", "decision" },
+                { "secure", "true" },
+                { "input_mode", "password" },
+                { "redacted_output", "[legacy captured]" },
+            },
+        });
+
+        var ok = WorkflowCustomEventParser.TryParseHumanInputRequest(frame, out var data);
+
+        ok.Should().BeTrue();
+        data.VariableName.Should().BeEmpty();
+        data.Secure.Should().BeFalse();
+        data.RedactedOutput.Should().BeEmpty();
+        data.Metadata.Should().NotContainKey("variable");
+        data.Metadata.Should().NotContainKey("secure");
+        data.Metadata.Should().NotContainKey("input_mode");
+        data.Metadata.Should().NotContainKey("redacted_output");
     }
 
     [Fact]
     public void TryParseSignalBuffered_ShouldReturnTypedPayload()
     {
-        var frame = new WorkflowOutputFrame
+        var frame = CustomFrame(WorkflowCustomEventNames.SignalBuffered, new WorkflowSignalBufferedCustomPayload
         {
-            Type = WorkflowEventTypes.Custom,
-            Name = WorkflowCustomEventNames.SignalBuffered,
-            Value = ParseObject("""{"runId":"run-2","stepId":"wait-2","signalName":"continue","payload":"ok","receivedAtUnixTimeMs":1710000000000}"""),
-        };
+            RunId = "run-2",
+            StepId = "wait-2",
+            SignalName = "continue",
+            Payload = "ok",
+            ReceivedAtUnixTimeMs = 1710000000000,
+        });
 
         var ok = WorkflowCustomEventParser.TryParseSignalBuffered(frame, out var data);
 
@@ -127,9 +215,14 @@ public sealed class WorkflowCustomEventParserTests
         data.ReceivedAtUnixTimeMs.Should().Be(1710000000000);
     }
 
-    private static JsonElement ParseObject(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-        return document.RootElement.Clone();
-    }
+    private static WorkflowRunEventEnvelope CustomFrame<TPayload>(string name, TPayload payload)
+        where TPayload : class, IMessage =>
+        new()
+        {
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = name,
+                Payload = Any.Pack(payload),
+            },
+        };
 }

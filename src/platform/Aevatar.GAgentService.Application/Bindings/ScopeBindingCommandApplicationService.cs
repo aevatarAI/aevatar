@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Internal;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -19,42 +20,42 @@ namespace Aevatar.GAgentService.Application.Bindings;
 
 public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommandPort
 {
-    private static readonly TimeSpan ReadModelVisibilityTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan ReadModelVisibilityPollInterval = TimeSpan.FromMilliseconds(25);
-
     private readonly IServiceCommandPort _serviceCommandPort;
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
-    private readonly IServiceServingQueryPort _serviceServingQueryPort;
     private readonly IServiceGovernanceCommandPort _serviceGovernanceCommandPort;
     private readonly IServiceGovernanceQueryPort _serviceGovernanceQueryPort;
     private readonly IScopeScriptQueryPort _scopeScriptQueryPort;
     private readonly IScriptDefinitionSnapshotPort _scriptDefinitionSnapshotPort;
-    private readonly IWorkflowRunActorPort _workflowRunActorPort;
+    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IAgentKindRegistry? _agentKindRegistry;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
     public ScopeBindingCommandApplicationService(
         IServiceCommandPort serviceCommandPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
-        IServiceServingQueryPort serviceServingQueryPort,
         IServiceGovernanceCommandPort serviceGovernanceCommandPort,
         IServiceGovernanceQueryPort serviceGovernanceQueryPort,
         IScopeScriptQueryPort scopeScriptQueryPort,
         IScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
-        IWorkflowRunActorPort workflowRunActorPort,
-        IOptions<ScopeWorkflowCapabilityOptions> options)
+        IWorkflowDefinitionParser workflowDefinitionParser,
+        IOptions<ScopeWorkflowCapabilityOptions> options,
+        IAgentKindRegistry? agentKindRegistry = null)
     {
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
-        _serviceServingQueryPort = serviceServingQueryPort ?? throw new ArgumentNullException(nameof(serviceServingQueryPort));
         _serviceGovernanceCommandPort = serviceGovernanceCommandPort ?? throw new ArgumentNullException(nameof(serviceGovernanceCommandPort));
         _serviceGovernanceQueryPort = serviceGovernanceQueryPort ?? throw new ArgumentNullException(nameof(serviceGovernanceQueryPort));
         _scopeScriptQueryPort = scopeScriptQueryPort ?? throw new ArgumentNullException(nameof(scopeScriptQueryPort));
         _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort ?? throw new ArgumentNullException(nameof(scriptDefinitionSnapshotPort));
-        _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
+        _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _agentKindRegistry = agentKindRegistry;
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("Scope workflow capability options are required.");
     }
 
+    // Refactor (iter2/cluster-006):
+    //   Old pattern: Upsert dispatched lifecycle commands then polled service catalog and serving readmodels before ACK.
+    //   New principle: Upsert returns accepted lifecycle ids; readmodel freshness is observed through explicit read paths.
     public async Task<ScopeBindingUpsertResult> UpsertAsync(
         ScopeBindingUpsertRequest request,
         CancellationToken ct = default)
@@ -122,87 +123,17 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             RevisionId = revisionId,
         }, ct);
 
-        // The six command awaits above only guarantee the event-sourcing
-        // commits have landed. Read-model projections (service catalog +
-        // serving set) materialize asynchronously; if we return before they
-        // catch up, the frontend's immediate follow-up invoke races
-        // ServiceInvocationResolutionService and sees "Service ... was not
-        // found" or "has no serving traffic view". Poll both readmodels
-        // until visible (bounded) so the bind HTTP ACK honestly means
-        // "readmodel observed, invoke is safe now".
-        await WaitForBindingVisibleAsync(identity, ct);
-
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
+        // TODO(iter2/cluster-006): If callers need "invoke safe now", add an explicit read/projection
+        // observation path in a separate PR rather than blocking this command path on readmodels.
         return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
     }
-
-    private async Task WaitForBindingVisibleAsync(ServiceIdentity identity, CancellationToken ct)
-    {
-        // Bounded wait — don't hold the HTTP request forever. The invoke
-        // path retains its own error surface if the projection truly never
-        // materializes; the frontend sees the same error it would have seen
-        // before this wait.
-        var deadline = DateTimeOffset.UtcNow + ReadModelVisibilityTimeout;
-        // Fast-fail cap when neither readmodel ever shows up. Keeps
-        // test environments that don't wire projections from burning the
-        // full 5s budget per call while still giving production room to
-        // catch up on a real materialization lag.
-        const int fastFailPollLimit = 8;
-        var consecutiveNoProgress = 0;
-
-        while (true)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var service = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
-            ServiceServingSetSnapshot? servingSet = null;
-            if (service != null)
-            {
-                servingSet = await _serviceServingQueryPort.GetServiceServingSetAsync(identity, ct);
-            }
-
-            if (service != null && servingSet != null && servingSet.Targets.Any(IsTargetActivationVisible))
-            {
-                return;
-            }
-
-            if (service == null)
-            {
-                consecutiveNoProgress++;
-            }
-            else
-            {
-                consecutiveNoProgress = 0;
-            }
-
-            if (consecutiveNoProgress >= fastFailPollLimit || DateTimeOffset.UtcNow >= deadline)
-            {
-                return;
-            }
-
-            try
-            {
-                await Task.Delay(ReadModelVisibilityPollInterval, ct);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                return;
-            }
-        }
-    }
-
-    private static bool IsTargetActivationVisible(ServiceServingTargetSnapshot target) =>
-        System.Enum.TryParse<ServiceServingState>(target.ServingState, ignoreCase: true, out var state)
-        && state == ServiceServingState.Active;
 
     private async Task<bool> ShouldCreateRevisionAsync(
         ScopeBindingUpsertRequest request,
         ServiceRevisionSpec revisionSpec,
         CancellationToken ct)
     {
-        if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting)
-            return true;
-
         var requestedRevisionId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.RevisionId);
         if (string.IsNullOrWhiteSpace(requestedRevisionId))
             return true;
@@ -216,7 +147,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (existingRevision == null)
             return true;
 
-        if (!string.Equals(existingRevision.ImplementationKind, ServiceImplementationKind.Scripting.ToString(), StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(existingRevision.ImplementationKind, revisionSpec.ImplementationKind.ToString(), StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' with implementation '{existingRevision.ImplementationKind}'.");
@@ -228,14 +159,48 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but has been retired.");
         }
 
-        var expectedArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);
+        if (request.ImplementationKind == ScopeBindingImplementationKind.Scripting)
+        {
+            var expectedScriptingArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);
+            if (!string.Equals(existingRevision.ArtifactHash, expectedScriptingArtifactHash, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different scripting artifact.");
+            }
+
+            return false;
+        }
+
+        if (!request.AllowExistingRevisionReplay ||
+            !string.Equals(request.ReplayRevisionId, revisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(existingRevision.ArtifactHash))
+            return false;
+
+        var expectedArtifactHash = ComputeNonScriptingArtifactHash(revisionSpec);
         if (!string.Equals(existingRevision.ArtifactHash, expectedArtifactHash, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different scripting artifact.");
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different {request.ImplementationKind} artifact.");
         }
 
         return false;
+    }
+
+    private static string ComputeNonScriptingArtifactHash(ServiceRevisionSpec revisionSpec)
+    {
+        var artifact = revisionSpec.ImplementationSpecCase switch
+        {
+            ServiceRevisionSpec.ImplementationSpecOneofCase.WorkflowSpec => BuildWorkflowArtifact(revisionSpec),
+            ServiceRevisionSpec.ImplementationSpecOneofCase.StaticSpec => BuildStaticArtifact(revisionSpec),
+            _ => throw new InvalidOperationException(
+                $"Unsupported replay implementation spec '{revisionSpec.ImplementationSpecCase}'."),
+        };
+        return ComputeArtifactHash(artifact);
     }
 
     private async Task<string> ComputeScriptingArtifactHashAsync(
@@ -274,6 +239,67 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         artifact.Endpoints.Add(
             BuildScriptEndpointSpecs(snapshot)
                 .Select(ToEndpointDescriptor));
+        return ComputeArtifactHash(artifact);
+    }
+
+    private static PreparedServiceRevisionArtifact BuildWorkflowArtifact(ServiceRevisionSpec revisionSpec)
+    {
+        var workflowSpec = revisionSpec.WorkflowSpec
+            ?? throw new InvalidOperationException("workflow implementation_spec is required.");
+        return new PreparedServiceRevisionArtifact
+        {
+            Identity = revisionSpec.Identity.Clone(),
+            RevisionId = revisionSpec.RevisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            Endpoints =
+            {
+                new ServiceEndpointDescriptor
+                {
+                    EndpointId = "chat",
+                    DisplayName = "chat",
+                    Kind = ServiceEndpointKind.Chat,
+                    RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
+                    ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
+                    Description = "Workflow chat endpoint.",
+                },
+            },
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = workflowSpec.WorkflowName,
+                    WorkflowYaml = workflowSpec.WorkflowYaml,
+                    DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
+                    InlineWorkflowYamls = { workflowSpec.InlineWorkflowYamls },
+                },
+            },
+        };
+    }
+
+    private static PreparedServiceRevisionArtifact BuildStaticArtifact(ServiceRevisionSpec revisionSpec)
+    {
+        var staticSpec = revisionSpec.StaticSpec
+            ?? throw new InvalidOperationException("static implementation_spec is required.");
+        return new PreparedServiceRevisionArtifact
+        {
+            Identity = revisionSpec.Identity.Clone(),
+            RevisionId = revisionSpec.RevisionId,
+            ImplementationKind = ServiceImplementationKind.Static,
+            Endpoints = { staticSpec.Endpoints.Select(x => x.Clone()) },
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                StaticPlan = new StaticServiceDeploymentPlan
+                {
+                    ActorTypeName = staticSpec.ActorTypeName,
+                    AgentKind = staticSpec.AgentKind,
+                    PreferredActorId = staticSpec.PreferredActorId ?? string.Empty,
+                },
+            },
+        };
+    }
+
+    private static string ComputeArtifactHash(PreparedServiceRevisionArtifact artifact)
+    {
         var normalizedArtifact = artifact.Clone();
         normalizedArtifact.ArtifactHash = string.Empty;
         return Convert.ToHexString(SHA256.HashData(normalizedArtifact.ToByteArray()));
@@ -304,6 +330,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         CancellationToken ct)
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
+        var workflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId) ??
+                         ScopeWorkflowCapabilityOptions.NormalizeRequired(identity.ServiceId, nameof(identity.ServiceId));
         var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(_options, normalizedScopeId);
         var displayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(
             request.DisplayName,
@@ -347,8 +375,10 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     WorkflowName: workflowBundle.EntryWorkflowName,
                     DefinitionActorIdPrefix: definitionActorIdPrefix,
                     Workflow: new ScopeBindingWorkflowResult(
+                        workflowId,
                         workflowBundle.EntryWorkflowName,
-                        definitionActorIdPrefix)));
+                        definitionActorIdPrefix),
+                    ExpectedDeploymentId: expectedDeploymentId));
     }
 
     private async Task<DesiredScopeBinding> BuildScriptBindingAsync(
@@ -413,7 +443,11 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     Script: new ScopeBindingScriptResult(
                         scriptSummary.ScriptId,
                         scriptSummary.ActiveRevision,
-                        scriptSummary.DefinitionActorId)));
+                        scriptSummary.DefinitionActorId)
+                    {
+                        EndpointIds = endpointSpecs.Select(endpoint => endpoint.EndpointId).ToArray(),
+                    },
+                    ExpectedDeploymentId: expectedDeploymentId));
     }
 
     private DesiredScopeBinding BuildGAgentBinding(
@@ -422,7 +456,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     {
         var gagent = request.GAgent
             ?? throw new InvalidOperationException("gagent is required for implementationKind 'gagent'.");
-        var actorTypeName = ScopeWorkflowCapabilityOptions.NormalizeRequired(gagent.ActorTypeName, nameof(gagent.ActorTypeName));
+        var agentKind = NormalizeGAgentKind(gagent);
+        var actorTypeName = NormalizeLegacyActorTypeName(gagent.ActorTypeName, agentKind);
 
         // Start with caller-supplied endpoints, then ensure a chat endpoint always exists.
         var endpointSpecs = (gagent.Endpoints ?? [])
@@ -452,6 +487,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     StaticSpec = new StaticServiceRevisionSpec
                     {
                         ActorTypeName = actorTypeName,
+                        AgentKind = agentKind,
                     },
                 };
                 revisionSpec.StaticSpec.Endpoints.Add(endpointSpecs.Select(ToEndpointDescriptor));
@@ -466,7 +502,40 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     ScopeBindingImplementationKind.GAgent,
                     $"gagent-service:static-runtime:{expectedDeploymentId}",
                     GAgent: new ScopeBindingGAgentResult(
-                        actorTypeName)));
+                        actorTypeName),
+                    ExpectedDeploymentId: expectedDeploymentId));
+    }
+
+    private string NormalizeGAgentKind(ScopeBindingGAgentSpec gagent)
+    {
+        var agentKind = ScopeWorkflowCapabilityConventions.NormalizeOptional(gagent.AgentKind);
+        if (!string.IsNullOrWhiteSpace(agentKind))
+            return agentKind;
+
+        var actorTypeName = ScopeWorkflowCapabilityConventions.NormalizeOptional(gagent.ActorTypeName);
+        if (string.IsNullOrWhiteSpace(actorTypeName))
+            ScopeWorkflowCapabilityOptions.NormalizeRequired(string.Empty, nameof(gagent.AgentKind));
+
+        if (_agentKindRegistry != null &&
+            _agentKindRegistry.TryResolveKindByClrTypeName(actorTypeName!, out var resolvedKind))
+            return resolvedKind;
+
+        return string.Empty;
+    }
+
+    private string NormalizeLegacyActorTypeName(string? actorTypeName, string agentKind)
+    {
+        var normalizedActorTypeName = ScopeWorkflowCapabilityConventions.NormalizeOptional(actorTypeName);
+        if (!string.IsNullOrWhiteSpace(normalizedActorTypeName))
+            return normalizedActorTypeName;
+
+        if (_agentKindRegistry != null)
+        {
+            var implementation = _agentKindRegistry.Resolve(agentKind);
+            return implementation.Metadata.ImplementationClrTypeName;
+        }
+
+        return string.Empty;
     }
 
     private async Task<WorkflowYamlBundle> ParseWorkflowBundleAsync(
@@ -488,7 +557,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             if (string.IsNullOrWhiteSpace(workflowYaml))
                 throw new InvalidOperationException("workflowYamls must not contain empty YAML entries.");
 
-            var parse = await _workflowRunActorPort.ParseWorkflowYamlAsync(workflowYaml, ct);
+            var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
             if (!parse.Succeeded)
                 throw new InvalidOperationException(parse.Error);
 

@@ -315,7 +315,7 @@ describe('StudioFilesPage', () => {
 
     expect(screen.getByText('Configuration')).toBeInTheDocument();
     const editor = screen.getByLabelText(
-      'settings.json editor',
+      'Settings.json editor',
     ) as HTMLTextAreaElement;
     expect(editor.value).toContain('https://runtime.example.test');
 
@@ -388,7 +388,7 @@ describe('StudioFilesPage', () => {
       );
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Scripts Studio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Script Build' }));
     expect(props.onOpenScriptInStudio).toHaveBeenCalledWith('script-alpha');
   });
 

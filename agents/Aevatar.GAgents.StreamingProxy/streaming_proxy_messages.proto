@@ -28,6 +28,7 @@ message StreamingProxyGAgentState {
   repeated StreamingProxyChatMessage messages = 3;
   int64 next_sequence = 4;
   map<string, StreamingProxyChatSessionTerminalRecord> terminal_sessions = 5;
+  map<string, StreamingProxyChatLifecycleRecord> chat_lifecycles = 6;
 }
 
 message StreamingProxyChatSessionTerminalRecord {
@@ -35,6 +36,125 @@ message StreamingProxyChatSessionTerminalRecord {
   StreamingProxyChatSessionTerminalStatus status = 2;
   google.protobuf.Timestamp terminal_at = 3;
   string error_message = 4;
+}
+
+message StreamingProxyChatLifecycleRecord {
+  string session_id = 1;
+  string scope_id = 2;
+  string access_token = 3;
+  string preferred_route = 4;
+  string default_model = 5;
+  string prompt = 6;
+  int32 max_rounds = 7;
+  int32 current_round = 8;
+  int32 next_participant_index = 9;
+  int32 successful_reply_count = 10;
+  repeated StreamingProxyChatLifecycleParticipant participants = 11;
+}
+
+message StreamingProxyChatLifecycleParticipant {
+  string participant_id = 1;
+  string display_name = 2;
+  string route_preference = 3;
+  string model = 4;
+  StreamingProxyChatLifecycleParticipantStatus status = 5;
+  int32 failed_round = 6;
+  string failure_reason = 7;
+}
+
+enum StreamingProxyChatLifecycleParticipantStatus {
+  STREAMING_PROXY_CHAT_LIFECYCLE_PARTICIPANT_STATUS_UNSPECIFIED = 0;
+  STREAMING_PROXY_CHAT_LIFECYCLE_PARTICIPANT_STATUS_ACTIVE = 1;
+  STREAMING_PROXY_CHAT_LIFECYCLE_PARTICIPANT_STATUS_FAILED = 2;
+  STREAMING_PROXY_CHAT_LIFECYCLE_PARTICIPANT_STATUS_LEFT = 3;
+}
+
+message StreamingProxyChatTranscriptEntry {
+  string speaker = 1;
+  string content = 2;
+}
+
+enum StreamingProxyChatParticipantReplyFailureKind {
+  STREAMING_PROXY_CHAT_PARTICIPANT_REPLY_FAILURE_KIND_UNSPECIFIED = 0;
+  STREAMING_PROXY_CHAT_PARTICIPANT_REPLY_FAILURE_KIND_PROVIDER_UNAVAILABLE = 1;
+  STREAMING_PROXY_CHAT_PARTICIPANT_REPLY_FAILURE_KIND_PARTICIPANT_UNAVAILABLE = 2;
+  STREAMING_PROXY_CHAT_PARTICIPANT_REPLY_FAILURE_KIND_EMPTY_REPLY = 3;
+  STREAMING_PROXY_CHAT_PARTICIPANT_REPLY_FAILURE_KIND_ERROR = 4;
+}
+
+// ─── Commands / Requests ───
+
+message StreamingProxyParticipantJoinRequested {
+  string agent_id = 1;
+  string display_name = 2;
+}
+
+message StreamingProxyParticipantMessageRequested {
+  string agent_id = 1;
+  string agent_name = 2;
+  string content = 3;
+  string session_id = 4;
+}
+
+message StreamingProxyParticipantLeaveRequested {
+  string agent_id = 1;
+  string reason = 2;
+}
+
+message StreamingProxySessionTerminalStateRequested {
+  string session_id = 1;
+  StreamingProxyChatSessionTerminalStatus status = 2;
+  string error_message = 3;
+}
+
+message StreamingProxyChatLifecycleContinuationRequested {
+  string session_id = 1;
+  string scope_id = 2;
+  string prompt = 3;
+  string access_token = 4;
+  string preferred_route = 5;
+  string default_model = 6;
+  string room_id = 7;
+}
+
+message StreamingProxyChatParticipantsResolvedRequested {
+  string session_id = 1;
+  repeated StreamingProxyChatLifecycleParticipant participants = 2;
+}
+
+message StreamingProxyChatParticipantReplyRequested {
+  string room_id = 1;
+  string session_id = 2;
+  string participant_id = 3;
+  string display_name = 4;
+  string route_preference = 5;
+  string model = 6;
+  int32 round = 7;
+  int32 participant_index = 8;
+  string prompt = 9;
+  string access_token = 10;
+  string preferred_route = 11;
+  string default_model = 12;
+  int32 max_rounds = 13;
+  repeated StreamingProxyChatLifecycleParticipant active_participants = 14;
+  repeated StreamingProxyChatTranscriptEntry transcript = 15;
+}
+
+message StreamingProxyChatParticipantReplyObservedRequested {
+  string session_id = 1;
+  string participant_id = 2;
+  int32 round = 3;
+  int32 participant_index = 4;
+  string content = 5;
+}
+
+message StreamingProxyChatParticipantReplyFailedRequested {
+  string session_id = 1;
+  string participant_id = 2;
+  int32 round = 3;
+  int32 participant_index = 4;
+  StreamingProxyChatParticipantReplyFailureKind failure_kind = 5;
+  string error_message = 6;
 }
 
 // ─── Events ───
@@ -77,6 +197,39 @@ message StreamingProxyChatSessionTerminalStateChanged {
   string error_message = 4;
 }
 
+message StreamingProxyChatLifecycleAcceptedEvent {
+  string session_id = 1;
+  string scope_id = 2;
+  string access_token = 3;
+  string preferred_route = 4;
+  string default_model = 5;
+  string prompt = 6;
+}
+
+message StreamingProxyChatLifecycleParticipantsResolvedEvent {
+  string session_id = 1;
+  repeated StreamingProxyChatLifecycleParticipant participants = 2;
+  int32 max_rounds = 3;
+}
+
+message StreamingProxyChatParticipantReplyRecordedEvent {
+  string session_id = 1;
+  string participant_id = 2;
+  int32 round = 3;
+  int32 participant_index = 4;
+  string content = 5;
+  int64 message_sequence = 6;
+}
+
+message StreamingProxyChatParticipantReplyFailedEvent {
+  string session_id = 1;
+  string participant_id = 2;
+  int32 round = 3;
+  int32 participant_index = 4;
+  StreamingProxyChatParticipantReplyFailureKind failure_kind = 5;
+  string error_message = 6;
+}
+
 message StreamingProxyRoomSessionEnvelope {
   aevatar.EventEnvelope envelope = 1;
 }
@@ -92,4 +245,20 @@ message StreamingProxyChatSessionTerminalSnapshot {
   StreamingProxyChatSessionTerminalStatus status = 8;
   google.protobuf.Timestamp terminal_at = 9;
   string error_message = 10;
+}
+
+message StreamingProxyRoomParticipantSnapshotEntry {
+  string agent_id = 1;
+  string display_name = 2;
+  google.protobuf.Timestamp joined_at = 3;
+}
+
+message StreamingProxyRoomParticipantsSnapshot {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string root_actor_id = 6;
+  repeated StreamingProxyRoomParticipantSnapshotEntry participants = 7;
 }

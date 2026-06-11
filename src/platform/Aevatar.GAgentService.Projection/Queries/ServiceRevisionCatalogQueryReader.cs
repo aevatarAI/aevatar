@@ -55,7 +55,8 @@ public sealed class ServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQ
                     x.PreparedAt,
                     x.PublishedAt,
                     x.RetiredAt,
-                    BuildImplementationSnapshot(x)))
+                    BuildImplementationSnapshot(x),
+                    x.PreparedArtifact?.Clone()))
                 .ToList(),
             readModel.UpdatedAt,
             readModel.StateVersion,
@@ -67,10 +68,12 @@ public sealed class ServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQ
     {
         var staticSnapshot =
             !string.IsNullOrWhiteSpace(revision.StaticActorTypeName) ||
-            !string.IsNullOrWhiteSpace(revision.StaticPreferredActorId)
+            !string.IsNullOrWhiteSpace(revision.StaticPreferredActorId) ||
+            !string.IsNullOrWhiteSpace(revision.StaticAgentKind)
                 ? new ServiceRevisionStaticSnapshot(
                     revision.StaticActorTypeName ?? string.Empty,
-                    revision.StaticPreferredActorId ?? string.Empty)
+                    revision.StaticPreferredActorId ?? string.Empty,
+                    revision.StaticAgentKind ?? string.Empty)
                 : null;
 
         var scriptingSnapshot =

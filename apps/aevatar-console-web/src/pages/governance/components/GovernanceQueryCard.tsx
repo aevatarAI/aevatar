@@ -6,6 +6,7 @@ import {
   type GovernanceDraft,
   type GovernanceServiceOption,
 } from './governanceQuery';
+import { t } from "@/shared/i18n/messages";
 
 export type GovernanceRevisionOption = {
   label: string;
@@ -32,7 +33,10 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
   includeRevision = false,
   revisionOptions = [],
   revisionOptionsLoading = false,
-  loadLabel = '加载治理信息',
+  loadLabel = t(
+    'pages.governance.governancequerycard.load.governance.information',
+    'Load governance information',
+  ),
   onChange,
   onLoad,
   onReset,
@@ -87,19 +91,19 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
 
   const loadDisabledReason = useMemo(() => {
     if (!normalizedTenantId || !normalizedNamespace) {
-      return '先填写治理范围';
+      return t("pages.governance.governancequerycard.fill.in.the.governance", "Fill in the governance scope first");
     }
 
     if (!serviceSearchEnabled) {
-      return '当前范围还不能加载服务';
+      return t("pages.governance.governancequerycard.the.service.cannot.yet", "The service cannot yet be loaded in the current scope");
     }
 
     if (!normalizedServiceId) {
-      return serviceOptions.length === 0 ? '当前范围没有可用服务' : '先选择服务';
+      return serviceOptions.length === 0 ? t("pages.governance.governancequerycard.there.are.no.services", "There are no services available in the current scope") : t("pages.governance.governancequerycard.choose.service.first", "Choose a service first");
     }
 
     if (includeRevision && !normalizedRevisionId) {
-      return revisionOptionsLoading ? '正在加载版本' : '先选择版本';
+      return revisionOptionsLoading ? t("pages.governance.governancequerycard.loading.version", "Loading version") : t("pages.governance.governancequerycard.select.version.first", "Select version first");
     }
 
     return '';
@@ -133,12 +137,17 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
       <div
         style={{
           alignItems: 'flex-start',
-          display: 'grid',
+          display: 'flex',
+          flexWrap: 'wrap',
           gap: 12,
-          gridTemplateColumns: 'minmax(0, 1fr) auto',
+          justifyContent: 'space-between',
         }}
       >
-        <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+        <Space
+          orientation="vertical"
+          size={4}
+          style={{ flex: '1 1 160px', minWidth: 160 }}
+        >
           <span
             style={{
               color: 'var(--ant-color-primary)',
@@ -148,8 +157,7 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
               textTransform: 'uppercase',
             }}
             >
-            治理范围
-          </span>
+            {t("pages.governance.governancequerycard.governance.scope", "Governance scope")}</span>
           <span
             style={{
               color: 'var(--ant-color-text)',
@@ -158,8 +166,7 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
               lineHeight: 1.2,
             }}
           >
-            选择服务范围
-          </span>
+            {t("pages.governance.governancequerycard.select.service.scope", "Select service scope")}</span>
         </Space>
         <div
           style={{
@@ -169,16 +176,18 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
             borderRadius: 999,
             color: 'var(--ant-color-primary)',
             display: 'inline-flex',
+            flex: '0 1 auto',
             fontSize: 12,
             fontWeight: 600,
+            maxWidth: '100%',
             minHeight: 30,
+            overflowWrap: 'anywhere',
             padding: '0 12px',
-            whiteSpace: 'nowrap',
           }}
         >
           {selectedScopeSegments.length > 0
-            ? `当前范围 ${selectedScopeSegments.join(' / ')}`
-            : '尚未锁定服务范围'}
+            ? t("pages.governance.governancequerycard.current.scope", "Current scope {value1}", { value1: selectedScopeSegments.join(' / ') })
+            : t("pages.governance.governancequerycard.the.service.scope.has", "The service scope has not been locked yet")}
         </div>
       </div>
 
@@ -197,10 +206,9 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
               fontWeight: 600,
             }}
           >
-            团队
-          </span>
+            {t("pages.governance.governancequerycard.team", "team")}</span>
           <Input
-            placeholder="团队 ID"
+            placeholder={t("pages.governance.governancequerycard.team.id", "team ID")}
             value={draft.tenantId}
             onChange={(event) =>
               onChange({
@@ -219,10 +227,9 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
               fontWeight: 600,
             }}
           >
-            应用
-          </span>
+            {t("pages.governance.governancequerycard.application", "application")}</span>
           <Input
-            placeholder="应用 ID"
+            placeholder={t("pages.governance.governancequerycard.application.id", "Application ID")}
             value={draft.appId}
             onChange={(event) =>
               onChange({
@@ -241,10 +248,9 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
               fontWeight: 600,
             }}
           >
-            命名空间
-          </span>
+            {t("pages.governance.governancequerycard.namespace", "namespace")}</span>
           <Input
-            placeholder="命名空间"
+            placeholder={t("pages.governance.governancequerycard.namespace.2", "namespace")}
             value={draft.namespace}
             onChange={(event) =>
               onChange({
@@ -263,21 +269,20 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
               fontWeight: 600,
             }}
           >
-            服务
-          </span>
+            {t("pages.governance.governancequerycard.serve", "Serve")}</span>
           <Select
             allowClear
             placeholder={
               serviceSearchEnabled
-                ? '选择服务'
-                : '先填写团队、应用和命名空间'
+                ? t("pages.governance.governancequerycard.select.service", "Select service")
+                : t("pages.governance.governancequerycard.first.fill.in.the", "First fill in the team, application and namespace")
             }
             showSearch
             style={{ width: '100%' }}
             options={serviceOptions}
             disabled={!serviceSearchEnabled}
             notFoundContent={
-              serviceSearchEnabled ? '当前范围没有服务' : '先填写团队、应用和命名空间'
+              serviceSearchEnabled ? t("pages.governance.governancequerycard.there.are.no.services.2", "There are no services in the current scope") : t("pages.governance.governancequerycard.first.fill.in.the.2", "First fill in the team, application and namespace")
             }
             value={selectedServiceOption?.value}
             filterOption={(input, option) => {
@@ -327,18 +332,17 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
                 fontWeight: 600,
               }}
             >
-              版本
-            </span>
+              {t("pages.governance.governancequerycard.version", "Version")}</span>
             <Select
               allowClear
               placeholder={
                 !draft.serviceId.trim()
-                  ? '先选择服务'
+                  ? t("pages.governance.governancequerycard.choose.service.first.2", "Choose a service first")
                   : revisionOptionsLoading
-                    ? '正在加载版本'
+                    ? t("pages.governance.governancequerycard.loading.version.2", "Loading version")
                     : revisionOptions.length > 0
-                      ? '选择版本'
-                      : '暂无版本'
+                      ? t("pages.governance.governancequerycard.select.version", "Select version")
+                      : t("pages.governance.governancequerycard.no.version.yet", "No version yet")
               }
               showSearch
               style={{ width: '100%' }}
@@ -381,7 +385,14 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
           {loadDisabledReason}
         </span>
         <Space size={10}>
-          {onReset ? <Button onClick={onReset}>重置</Button> : null}
+          {onReset ? (
+            <Button
+              aria-label={t("pages.governance.governancequerycard.reset", "Reset")}
+              onClick={onReset}
+            >
+              {t("pages.governance.governancequerycard.reset", "Reset")}
+            </Button>
+          ) : null}
           <Button
             aria-disabled={loadDisabled}
             disabled={loadDisabled}

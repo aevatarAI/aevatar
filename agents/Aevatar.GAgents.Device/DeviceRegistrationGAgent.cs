@@ -39,6 +39,7 @@ public sealed class DeviceRegistrationGAgent : GAgentBase<DeviceRegistrationStat
             HmacKey = cmd.HmacKey,
             NyxConversationId = cmd.NyxConversationId,
             Description = cmd.Description,
+            DeviceEventTargetActorId = cmd.DeviceEventTargetActorId,
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 

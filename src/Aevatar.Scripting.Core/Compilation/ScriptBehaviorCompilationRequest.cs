@@ -4,6 +4,9 @@ namespace Aevatar.Scripting.Core.Compilation;
 
 public sealed record ScriptBehaviorCompilationRequest
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     public ScriptBehaviorCompilationRequest(
         string ScriptId,
         string Revision,
@@ -51,25 +54,8 @@ public sealed record ScriptBehaviorCompilationRequest
 
     public string ResolvedPackageHash =>
         string.IsNullOrWhiteSpace(SourceHash)
-            ? ScriptSourcePackageSerializer.ComputeHash(Package)
+            ? ScriptPackageModel.ComputePackageHash(Package)
             : SourceHash;
 
     public bool HasProtoFiles => Package.ProtoFiles.Count > 0;
-
-    public string SourceText => Package.CSharpSources.Count == 1 && Package.ProtoFiles.Count == 0
-        ? Package.CSharpSources[0].Content
-        : ScriptSourcePackageSerializer.Serialize(Package);
-
-    public static ScriptBehaviorCompilationRequest FromPersistedSource(
-        string scriptId,
-        string revision,
-        string sourceText,
-        string? sourceHash = null)
-    {
-        return new ScriptBehaviorCompilationRequest(
-            scriptId,
-            revision,
-            ScriptSourcePackageSerializer.DeserializeOrWrapCSharp(sourceText),
-            sourceHash);
-    }
 }

@@ -17,13 +17,15 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// </summary>
 public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistrationStoreState>
 {
+    // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
+    //   Old pattern: live scope repair commands patched registrations from readmodel-derived backfill candidates.
+    //   New principle: delete live repair/backfill command paths; keep ChannelBotScopeIdRepairedEvent state transition for committed event replay.
     public const string WellKnownId = "channel-bot-registration-store";
 
     protected override ChannelBotRegistrationStoreState TransitionState(ChannelBotRegistrationStoreState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
             .On<ChannelBotRegisteredEvent>(ApplyRegistered)
-            .On<ChannelBotProjectionRebuildRequestedEvent>(static (state, _) => state)
             .On<ChannelBotRegistrationRejectedEvent>(static (state, _) => state)
             .On<ChannelBotScopeIdRepairedEvent>(ApplyScopeIdRepaired)
             .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
@@ -112,67 +114,6 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             TombstoneStateVersion = NextCommittedVersion(),
         });
         Logger.LogInformation("Unregistered channel bot: id={Id}", cmd.RegistrationId);
-    }
-
-    [EventHandler]
-    public async Task HandleRepairScopeId(ChannelBotRepairScopeIdCommand cmd)
-    {
-        var registrationId = cmd.RegistrationId?.Trim();
-        if (string.IsNullOrWhiteSpace(registrationId))
-        {
-            Logger.LogWarning("Cannot repair scope id: registration id is required.");
-            return;
-        }
-
-        var scopeId = cmd.ScopeId?.Trim();
-        if (string.IsNullOrWhiteSpace(scopeId))
-        {
-            Logger.LogWarning(
-                "Cannot repair scope id: scope id is required for registrationId={RegistrationId}",
-                registrationId);
-            return;
-        }
-
-        var entry = State.Registrations.FirstOrDefault(r => r.Id == registrationId);
-        if (entry is null || entry.Tombstoned)
-        {
-            Logger.LogWarning(
-                "Cannot repair scope id: registration not found or tombstoned: {RegistrationId}",
-                registrationId);
-            return;
-        }
-
-        // Idempotent: re-applying the same scope id is a no-op so the audit log
-        // is not littered with redundant repair events.
-        if (string.Equals(entry.ScopeId, scopeId, StringComparison.Ordinal))
-            return;
-
-        await PersistDomainEventAsync(new ChannelBotScopeIdRepairedEvent
-        {
-            RegistrationId = registrationId,
-            PreviousScopeId = entry.ScopeId ?? string.Empty,
-            ScopeId = scopeId,
-            RepairedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        });
-        Logger.LogInformation(
-            "Repaired channel bot registration scope id: registrationId={RegistrationId}, previousScopeId={PreviousScopeId}, scopeId={ScopeId}",
-            registrationId,
-            entry.ScopeId ?? string.Empty,
-            scopeId);
-    }
-
-    [EventHandler]
-    public async Task HandleRebuildProjection(ChannelBotRebuildProjectionCommand cmd)
-    {
-        await PersistDomainEventAsync(new ChannelBotProjectionRebuildRequestedEvent
-        {
-            Reason = cmd.Reason ?? string.Empty,
-            RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        });
-        Logger.LogInformation(
-            "Requested channel bot registration projection rebuild: actorId={ActorId}, reason={Reason}",
-            Id,
-            string.IsNullOrWhiteSpace(cmd.Reason) ? "unspecified" : cmd.Reason);
     }
 
     [EventHandler]

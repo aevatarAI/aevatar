@@ -26,12 +26,8 @@ internal sealed class ConnectedServicesContextMiddleware : ILLMCallMiddleware
 
     private void TryInjectConnectedServices(LLMCallContext context)
     {
-        var metadata = context.Request.Metadata;
-        if (metadata is null)
-            return;
-
-        if (!metadata.TryGetValue(LLMRequestMetadataKeys.ConnectedServicesContext, out var servicesContext) ||
-            string.IsNullOrWhiteSpace(servicesContext))
+        var servicesContext = context.Request.ToolContext?.ConnectedServices.ContextJson;
+        if (string.IsNullOrWhiteSpace(servicesContext))
             return;
 
         var messages = context.Request.Messages;

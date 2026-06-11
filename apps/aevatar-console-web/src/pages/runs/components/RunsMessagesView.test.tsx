@@ -1,8 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import React from "react";
+import { setLocale } from "@umijs/max";
 import RunsMessagesView from "./RunsMessagesView";
 
 describe("RunsMessagesView", () => {
+  beforeEach(() => {
+    setLocale("en-US");
+  });
+
   it("renders message cards with role, status, and content", () => {
     render(
       <RunsMessagesView
@@ -26,11 +31,11 @@ describe("RunsMessagesView", () => {
     expect(screen.getByText("Message stream")).toBeInTheDocument();
     expect(screen.getByText("2 observed")).toBeInTheDocument();
     expect(screen.getByText("assistant")).toBeInTheDocument();
-    expect(screen.getByText("streaming")).toBeInTheDocument();
+    expect(screen.getByText("Streaming")).toBeInTheDocument();
     expect(screen.getByText("msg-1")).toBeInTheDocument();
     expect(screen.getByText("Streaming reply chunk")).toBeInTheDocument();
     expect(screen.getByText("user")).toBeInTheDocument();
-    expect(screen.getByText("complete")).toBeInTheDocument();
+    expect(screen.getByText("Complete")).toBeInTheDocument();
     expect(screen.getByText("Operator prompt")).toBeInTheDocument();
   });
 

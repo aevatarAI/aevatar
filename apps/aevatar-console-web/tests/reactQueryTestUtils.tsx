@@ -1,11 +1,14 @@
-import { enUSIntl, ProConfigProvider } from '@ant-design/pro-components';
+import { ProConfigProvider } from '@ant-design/pro-components';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { RenderResult } from '@testing-library/react';
 import { render } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
-import enUS from 'antd/locale/en_US';
 import type { ReactElement } from 'react';
 import React from 'react';
+import {
+  resolveAntdLocale,
+  resolveProIntl,
+} from '../src/shared/i18n/localeProvider';
 
 const activeQueryClients = new Set<QueryClient>();
 
@@ -27,11 +30,15 @@ export function createTestQueryClient(): QueryClient {
 
 export function renderWithQueryClient(
   ui: ReactElement,
+  providedQueryClient?: QueryClient,
 ): RenderResult & { queryClient: QueryClient } {
-  const queryClient = createTestQueryClient();
+  const queryClient = providedQueryClient ?? createTestQueryClient();
+  if (providedQueryClient) {
+    activeQueryClients.add(queryClient);
+  }
   const view = render(
-    <ConfigProvider locale={enUS}>
-      <ProConfigProvider intl={enUSIntl}>
+    <ConfigProvider locale={resolveAntdLocale('en-US')}>
+      <ProConfigProvider intl={resolveProIntl('en-US')}>
         <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
       </ProConfigProvider>
     </ConfigProvider>,

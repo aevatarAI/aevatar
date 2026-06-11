@@ -1,38 +1,27 @@
 namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
-/// Honest accepted / observed status returned by the catalog command port.
-/// </summary>
-public enum CatalogCommandOutcome
-{
-    /// <summary>Command was dispatched into the catalog actor inbox; projection has not yet caught up.</summary>
-    Accepted = 0,
-
-    /// <summary>Command was dispatched and the projection has materialized the resulting state version.</summary>
-    Observed = 1,
-
-    /// <summary>Tombstone path: requested agent id was not present at the time of the call.</summary>
-    NotFound = 2,
-}
-
-public sealed record UserAgentCatalogUpsertResult(CatalogCommandOutcome Outcome);
-
-public sealed record UserAgentCatalogTombstoneResult(CatalogCommandOutcome Outcome);
-
-/// <summary>
 /// Application-service surface for catalog mutations. Owns projection
 /// priming, envelope construction, dispatch through
-/// <see cref="Aevatar.Foundation.Abstractions.IActorDispatchPort"/>, and
-/// projection-version polling so callers (LLM tools, Studio admin endpoints,
-/// etc.) stay thin parameter-mapping adapters.
+/// <see cref="Aevatar.Foundation.Abstractions.IActorDispatchPort"/> so callers
+/// (LLM tools, Studio admin endpoints, etc.) stay thin parameter-mapping adapters.
+/// Refactor (iter1/cluster-001):
+///   Old pattern: catalog mutation plumbing also carried per-runner execution status.
+///   New principle: command port mutations are membership-only; execution is projected from runner commits.
+/// Refactor (iter4/cluster-009):
+///   Old pattern: Command port outcomes encoded opportunistic readmodel observation.
+///   New principle: Command outcomes are accepted-only; readmodel freshness is queried explicitly.
+/// Refactor (iter5/cluster-012):
+///   Old pattern: Accepted-only command ACKs were wrapped in result records with a single enum value.
+///   New principle: Successful completion of the Task is the command-port ACK; user-facing accepted copy stays at tool boundaries.
 /// </summary>
 public interface IUserAgentCatalogCommandPort
 {
-    Task<UserAgentCatalogUpsertResult> UpsertAsync(
+    Task UpsertAsync(
         UserAgentCatalogUpsertCommand command,
         CancellationToken ct = default);
 
-    Task<UserAgentCatalogTombstoneResult> TombstoneAsync(
+    Task TombstoneAsync(
         string agentId,
         CancellationToken ct = default);
 }

@@ -145,7 +145,7 @@ public sealed class HttpConnector : IConnector
             if (_authorizationProvider != null)
                 await _authorizationProvider.ApplyAsync(msg, timeoutCts.Token);
 
-            ApplyRequestMetadataAuthorization(msg, request.Metadata);
+            ApplyRequestAuthorization(msg, request.HttpAuthorization);
 
             if (request.Parameters.TryGetValue("content_type", out var contentType) &&
                 !string.IsNullOrWhiteSpace(contentType))
@@ -365,18 +365,15 @@ public sealed class HttpConnector : IConnector
         }
     }
 
-    private static void ApplyRequestMetadataAuthorization(
+    // Refactor (issue1422/phase9-first-slice):
+    //   Old pattern: HTTP connector recovered authorization from ConnectorRequest.Metadata string keys.
+    //   New principle: HTTP authorization is a typed connector request field; Metadata is not an auth carrier.
+    private static void ApplyRequestAuthorization(
         HttpRequestMessage request,
-        IReadOnlyDictionary<string, string>? metadata)
+        string? authorization)
     {
-        if (request.Headers.Authorization != null || metadata == null || metadata.Count == 0)
+        if (request.Headers.Authorization != null || string.IsNullOrWhiteSpace(authorization))
             return;
-
-        if (!metadata.TryGetValue(ConnectorRequest.HttpAuthorizationMetadataKey, out var authorization) ||
-            string.IsNullOrWhiteSpace(authorization))
-        {
-            return;
-        }
 
         if (!AuthenticationHeaderValue.TryParse(authorization.Trim(), out var parsed))
             return;

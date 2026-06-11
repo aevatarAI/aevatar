@@ -66,9 +66,12 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
             };
             await SaveStateAsync(state, ctx, ct);
 
+            // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+            //   Old pattern: Information log included raw value/prompt/input preview
+            //   New principle: only stable id + length + status + redaction marker
             ctx.Logger.LogInformation(
-                "HumanInput: run={RunId} step={StepId} suspended, prompt=\"{Prompt}\", variable={Var}, timeout={Timeout}s",
-                runId, request.StepId, prompt, variable, timeoutSeconds);
+                "HumanInput: run={RunId} step={StepId} status=suspended prompt_len={PromptLen} prompt_redacted=true variable={Var} timeout={Timeout}s",
+                runId, request.StepId, prompt.Length, variable, timeoutSeconds);
 
             var suspended = new WorkflowSuspendedEvent
             {

@@ -31,4 +31,7 @@
   <ItemGroup>
     <Protobuf Include="test_projection_read_models.proto" GrpcServices="None" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\ProjectionActivationPlanProviderTestBase.cs" Link="Shared\ProjectionActivationPlanProviderTestBase.cs" />
+  </ItemGroup>
 </Project>

@@ -7,11 +7,11 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 
 public sealed class WorkflowServiceImplementationAdapter : IServiceImplementationAdapter
 {
-    private readonly IWorkflowRunActorPort _workflowRunActorPort;
+    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
 
-    public WorkflowServiceImplementationAdapter(IWorkflowRunActorPort workflowRunActorPort)
+    public WorkflowServiceImplementationAdapter(IWorkflowDefinitionParser workflowDefinitionParser)
     {
-        _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
+        _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
     }
 
     public ServiceImplementationKind ImplementationKind => ServiceImplementationKind.Workflow;
@@ -26,14 +26,18 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
         if (string.IsNullOrWhiteSpace(spec.WorkflowYaml))
             throw new InvalidOperationException("workflow_yaml is required.");
 
-        var resolvedWorkflowName = spec.WorkflowName;
+        var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(spec.WorkflowYaml, ct);
+        if (!parse.Succeeded)
+            throw new InvalidOperationException(parse.Error);
+
+        var resolvedWorkflowName = spec.WorkflowName?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(resolvedWorkflowName))
         {
-            var parse = await _workflowRunActorPort.ParseWorkflowYamlAsync(spec.WorkflowYaml, ct);
-            if (!parse.Succeeded)
-                throw new InvalidOperationException(parse.Error);
-
             resolvedWorkflowName = parse.WorkflowName;
+        }
+        else if (!string.Equals(resolvedWorkflowName, parse.WorkflowName, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("workflow_name must match workflow_yaml name.");
         }
 
         return new PreparedServiceRevisionArtifact

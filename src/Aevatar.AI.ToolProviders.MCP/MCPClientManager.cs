@@ -17,7 +17,7 @@ namespace Aevatar.AI.ToolProviders.MCP;
 /// Clients are tracked via an immutable list for thread-safe append;
 /// disposal iterates a snapshot and is intended to be called once at shutdown.
 /// </summary>
-public sealed class MCPClientManager : IAsyncDisposable
+public sealed class MCPClientManager : IMCPToolDiscoveryPort, IAsyncDisposable
 {
     private ImmutableList<McpClient> _clients = ImmutableList<McpClient>.Empty;
     private readonly ILogger _logger;

@@ -94,8 +94,11 @@ public sealed class ConversationDispatchMiddlewareTests
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
-            Actor.HandleEventAsync(envelope, ct);
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            await Actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
+        }
 
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
             throw new NotSupportedException();

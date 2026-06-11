@@ -143,16 +143,16 @@ public sealed class InMemoryStreamingCoverageTests
     }
 
     [Fact]
-    public async Task DispatchSubscribersConcurrently_True_ShouldNotBlockFastSubscriber()
+    public async Task ProduceAsync_ShouldInvokeSubscribersSequentially()
     {
-        var stream = new InMemoryStream(
-            "stream-concurrent",
-            new InMemoryStreamOptions { DispatchSubscribersConcurrently = true });
+        var stream = new InMemoryStream("stream-sequential");
         var fast = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slowStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var slowGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var slow = await stream.SubscribeAsync<StringValue>(async _ =>
         {
+            slowStarted.TrySetResult(true);
             await slowGate.Task.WaitAsync(TimeSpan.FromSeconds(2));
         });
 
@@ -163,18 +163,21 @@ public sealed class InMemoryStreamingCoverageTests
         });
 
         await stream.ProduceAsync(new StringValue { Value = "x" });
-        await fast.Task.WaitAsync(TimeSpan.FromMilliseconds(200));
+        await slowStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        fast.Task.IsCompleted.Should().BeFalse("the second subscriber must not run until the first subscriber completes");
+
         slowGate.TrySetResult(true);
+        await fast.Task.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
     [Fact]
-    public async Task DispatchSubscribersConcurrently_True_ShouldStillInvokePostDispatchCallback()
+    public async Task ProduceAsync_ShouldRunPostDispatchCallbackAfterSubscribersComplete()
     {
         var forwarded = new TaskCompletionSource<EventEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slowStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var slowGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var stream = new InMemoryStream(
-            "stream-concurrent-forward",
-            new InMemoryStreamOptions { DispatchSubscribersConcurrently = true },
+            "stream-sequential-forward",
             onDispatchedAsync: envelope =>
             {
                 forwarded.TrySetResult(envelope);
@@ -183,14 +186,17 @@ public sealed class InMemoryStreamingCoverageTests
 
         await using var slow = await stream.SubscribeAsync<StringValue>(async _ =>
         {
+            slowStarted.TrySetResult(true);
             await slowGate.Task.WaitAsync(TimeSpan.FromSeconds(2));
         });
 
         await stream.ProduceAsync(new StringValue { Value = "forward" });
-        var envelope = await forwarded.Task.WaitAsync(TimeSpan.FromMilliseconds(300));
-        envelope.Payload!.Unpack<StringValue>().Value.Should().Be("forward");
+        await slowStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        forwarded.Task.IsCompleted.Should().BeFalse("post-dispatch forwarding must wait for sequential subscriber completion");
 
         slowGate.TrySetResult(true);
+        var envelope = await forwarded.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        envelope.Payload!.Unpack<StringValue>().Value.Should().Be("forward");
     }
 
     [Fact]
@@ -294,6 +300,40 @@ public sealed class InMemoryStreamingCoverageTests
 
         created.Should().NotContain("actor-3");
         removed.Should().NotContain("actor-2");
+    }
+
+    [Fact]
+    public async Task StreamProvider_ConcurrentFirstUse_ShouldCreateAndNotifyOnce()
+    {
+        var provider = new InMemoryStreamProvider();
+        var created = 0;
+        using var subscription = provider.SubscribeCreated(id =>
+        {
+            if (id == "actor-parallel")
+                Interlocked.Increment(ref created);
+        });
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readyCount = 0;
+
+        var tasks = Enumerable.Range(0, 64)
+            .Select(_ => Task.Run(async () =>
+            {
+                if (Interlocked.Increment(ref readyCount) == 64)
+                    ready.TrySetResult(true);
+
+                await start.Task;
+                return provider.GetStream("actor-parallel");
+            }))
+            .ToArray();
+
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        start.SetResult(true);
+
+        var streams = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
+
+        streams.Should().OnlyContain(stream => ReferenceEquals(stream, streams[0]));
+        created.Should().Be(1);
     }
 
     [Fact]

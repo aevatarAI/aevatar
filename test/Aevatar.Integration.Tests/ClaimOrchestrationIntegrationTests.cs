@@ -68,8 +68,9 @@ public class ClaimOrchestrationIntegrationTests
             nameof(ClaimFraudScoringRequested),
             nameof(ClaimComplianceCheckRequested),
             nameof(ClaimManualReviewRequested));
-        capabilities.CreateCalls.Should().ContainSingle();
-        capabilities.CreateCalls[0].ActorId.Should().Be("human-review-run-claim-b");
+        capabilities.SendCalls.Should().ContainSingle(x =>
+            x.TargetActorId == "human-review-run-claim-b" &&
+            x.MessageType == nameof(ClaimManualReviewRequested));
         emitted.Should().ContainSingle();
         emitted[0].Should().BeOfType<ClaimDecisionRecorded>()
             .Which.Current.DecisionStatus.Should().Be("ManualReview");
@@ -114,7 +115,6 @@ public class ClaimOrchestrationIntegrationTests
                 RuntimeCapabilities: capabilities),
             CancellationToken.None);
 
-        capabilities.CreateCalls.Should().BeEmpty();
         capabilities.SendCalls.Select(static x => x.MessageType).Should().ContainInOrder(
             nameof(ClaimAnalystReviewRequested),
             nameof(ClaimFraudScoringRequested),
@@ -126,7 +126,6 @@ public class ClaimOrchestrationIntegrationTests
     private sealed class RecordingCapabilities(string aiOutput) : IScriptBehaviorRuntimeCapabilities
     {
         public List<(string TargetActorId, string MessageType)> SendCalls { get; } = [];
-        public List<(string AgentType, string? ActorId)> CreateCalls { get; } = [];
 
         public Task<string> AskAIAsync(string prompt, CancellationToken ct)
         {
@@ -152,22 +151,10 @@ public class ClaimOrchestrationIntegrationTests
             Task.FromResult(new Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease("runtime-1", callbackId, 0, Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
 
         public Task CancelDurableCallbackAsync(Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
-
-        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            CreateCalls.Add((agentTypeAssemblyQualifiedName, actorId));
-            return Task.FromResult(actorId ?? "created");
-        }
-
-        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
-        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
-        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
-        public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) => Task.FromResult<ScriptReadModelSnapshot?>(null);
-        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
         public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct) => Task.FromResult(new ScriptPromotionDecision(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, new ScriptEvolutionValidationReport(false, [])));
-        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) => Task.FromResult(definitionActorId ?? string.Empty);
-        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) => Task.FromResult(runtimeActorId ?? string.Empty);
+        public Task<ScriptDefinitionUpsertResult> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
+            Task.FromResult(new ScriptDefinitionUpsertResult(definitionActorId ?? string.Empty, new ScriptDefinitionBindingSpec { ScriptId = scriptId, Revision = scriptRevision, SourceHash = sourceHash }));
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, ScriptDefinitionBindingSpec definitionSnapshot, CancellationToken ct) => Task.FromResult(runtimeActorId ?? string.Empty);
         public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) => Task.CompletedTask;
         public Task PromoteRevisionAsync(string catalogActorId, string scriptId, string revision, string definitionActorId, string sourceHash, string proposalId, CancellationToken ct) => Task.CompletedTask;
         public Task RollbackRevisionAsync(string catalogActorId, string scriptId, string targetRevision, string reason, string proposalId, CancellationToken ct) => Task.CompletedTask;

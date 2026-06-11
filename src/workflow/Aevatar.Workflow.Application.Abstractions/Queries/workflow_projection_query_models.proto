@@ -32,7 +32,7 @@ message WorkflowActorProjectionState {
   google.protobuf.Timestamp last_updated_at_utc = 5;
 }
 
-message WorkflowActorTimelineItem {
+message WorkflowRunTimelineExportItem {
   google.protobuf.Timestamp timestamp_utc = 1;
   string stage = 2;
   string message = 3;
@@ -43,14 +43,14 @@ message WorkflowActorTimelineItem {
   map<string, string> data = 8;
 }
 
-message WorkflowActorGraphNode {
+message WorkflowRunGraphExportNode {
   string node_id = 1;
   string node_type = 2;
   google.protobuf.Timestamp updated_at_utc = 3;
   map<string, string> properties = 4;
 }
 
-message WorkflowActorGraphEdge {
+message WorkflowRunGraphExportEdge {
   string edge_id = 1;
   string from_node_id = 2;
   string to_node_id = 3;
@@ -59,8 +59,8 @@ message WorkflowActorGraphEdge {
   map<string, string> properties = 6;
 }
 
-message WorkflowActorGraphSubgraph {
+message WorkflowRunGraphExportSubgraph {
   string root_node_id = 1;
-  repeated WorkflowActorGraphNode nodes = 2;
-  repeated WorkflowActorGraphEdge edges = 3;
+  repeated WorkflowRunGraphExportNode nodes = 2;
+  repeated WorkflowRunGraphExportEdge edges = 3;
 }

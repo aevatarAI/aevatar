@@ -26,10 +26,12 @@ env:
 
 jobs:
   changes:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     outputs:
+      docs_only: ${{ steps.docs_only_route.outputs.docs_only }}
+      all_changed: ${{ steps.filter.outputs.all_changed }}
       core_code: ${{ steps.filter.outputs.core_code }}
+      host_composition: ${{ steps.filter.outputs.host_composition }}
       projection_provider: ${{ steps.filter.outputs.projection_provider }}
       kafka_runtime: ${{ steps.filter.outputs.kafka_runtime }}
       event_sourcing: ${{ steps.filter.outputs.event_sourcing }}
@@ -44,6 +46,15 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
+            all_changed:
+              - '**'
+            docs_only:
+              - '**/*.md'
+              - 'docs/**'
+              - 'LICENSE'
+              - 'CHANGELOG*'
+              - '.github/ISSUE_TEMPLATE/**'
+              - '.gitignore'
             core_code:
               - 'src/**'
               - 'test/**'
@@ -54,6 +65,17 @@ jobs:
               - 'Directory.Packages.props'
               - 'global.json'
               - 'tools/ci/**'
+              - '.github/workflows/ci.yml'
+            host_composition:
+              - 'src/**'
+              - 'test/**'
+              - 'aevatar.slnx'
+              - 'aevatar.*.slnf'
+              - '.editorconfig'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'global.json'
+              - 'tools/ci/host_composition_smoke.sh'
               - '.github/workflows/ci.yml'
             projection_provider:
               - 'docker-compose.projection-providers.yml'
@@ -87,8 +109,23 @@ jobs:
               - 'apps/aevatar-console-web/**'
               - '.github/workflows/ci.yml'
 
+      - name: Resolve Doc-Only Route
+        id: docs_only_route
+        env:
+          ALL_CHANGED_COUNT: ${{ steps.filter.outputs.all_changed_count }}
+          DOCS_ONLY_COUNT: ${{ steps.filter.outputs.docs_only_count }}
+        run: |
+          if [ "${ALL_CHANGED_COUNT:-0}" != "0" ] && [ "${ALL_CHANGED_COUNT:-0}" = "${DOCS_ONLY_COUNT:-0}" ]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
   fast-gates:
-    if: github.event_name != 'schedule' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.core_code == 'true')
+    # Refactor (iter16/cluster-ci-systemic-refactor):
+    #   Old pattern: fast-gates skipped scheduled CI and ran for workflow_dispatch or core_code changes
+    #   New principle: skip scheduled/doc-only CI while keeping workflow_dispatch active
+    if: github.event_name != 'schedule' && needs.changes.outputs.docs_only == 'false'
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -125,13 +162,10 @@ jobs:
         run: bash tools/ci/test_stability_guards.sh
 
   console-web:
-    if: |
-      github.event_name != 'schedule' && (
-        github.event_name == 'pull_request' ||
-        github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-        needs.changes.outputs.console_web == 'true'
-      )
+    # Refactor (iter16/cluster-ci-systemic-refactor):
+    #   Old pattern: console-web skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or console_web changes
+    #   New principle: gate on changes.outputs.console_web per Phase 9 #716 r3 consensus A
+    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -163,42 +197,20 @@ jobs:
       - name: Build console-web
         run: pnpm --dir apps/aevatar-console-web build
 
-  split-test-guards:
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        solution_filter:
-          - aevatar.foundation.slnf
-          - aevatar.ai.slnf
-          - aevatar.cqrs.slnf
-          - aevatar.workflow.slnf
-          - aevatar.hosting.slnf
-          - aevatar.distributed.slnf
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Prepare Runner
-        uses: ./.github/actions/prepare-runner
-
-      - name: Run split test guard (${{ matrix.solution_filter }})
-        run: |
-          dotnet test "${{ matrix.solution_filter }}" \
-            --nologo \
-            --tl:off \
-            -m:1 \
-            -p:UseSharedCompilation=false \
-            -p:NuGetAudit=false
-
   slow-test-guards:
+    needs: changes
+    # Refactor (iter18/cluster-019-strict-coverage-aevatar-slnx):
+    #   Old pattern: coverage_quality_guard.sh 吞 test fail 继续 emit coverage;split-test-guards 漏跑 22 orphan project
+    #   New principle: strict-coverage fail-fast(不吞 fail);aevatar.slnx-or-slow-test 唯一测试权威;
+    #   retire slnf 测试执行(只保留 slnf build boundary);slow-tests 独立 CI job
     if: |
-      github.event_name == 'workflow_dispatch' ||
       github.event_name == 'schedule' ||
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+      (
+        needs.changes.outputs.docs_only == 'false' &&
+        needs.changes.outputs.core_code == 'true'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -211,13 +223,10 @@ jobs:
         run: bash tools/ci/slow_test_guards.sh
 
   projection-provider-e2e:
-    if: |
-      github.event_name != 'schedule' && (
-        github.event_name == 'pull_request' ||
-        github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-        needs.changes.outputs.projection_provider == 'true'
-      )
+    # Refactor (iter16/cluster-ci-systemic-refactor):
+    #   Old pattern: projection-provider-e2e skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or projection_provider changes
+    #   New principle: gate on changes.outputs.projection_provider per Phase 9 #716 r3 consensus A
+    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.projection_provider == 'true'
     needs:
       - changes
     runs-on: ubuntu-latest
@@ -234,13 +243,10 @@ jobs:
         run: bash tools/ci/projection_provider_e2e_smoke.sh
 
   kafka-transport-integration:
-    if: |
-      github.event_name != 'schedule' && (
-        github.event_name == 'pull_request' ||
-        github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-        needs.changes.outputs.kafka_runtime == 'true'
-      )
+    # Refactor (iter16/cluster-ci-systemic-refactor):
+    #   Old pattern: kafka-transport-integration skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or kafka_runtime changes
+    #   New principle: gate on changes.outputs.kafka_runtime per Phase 9 #716 r3 consensus A
+    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.kafka_runtime == 'true'
     needs:
       - changes
     runs-on: ubuntu-latest
@@ -255,13 +261,10 @@ jobs:
         run: bash tools/ci/kafka_transport_integration_smoke.sh
 
   event-sourcing-regression:
-    if: |
-      github.event_name != 'schedule' && (
-        github.event_name == 'pull_request' ||
-        github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-        needs.changes.outputs.event_sourcing == 'true'
-      )
+    # Refactor (iter16/cluster-ci-systemic-refactor):
+    #   Old pattern: event-sourcing-regression skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or event_sourcing changes
+    #   New principle: gate on changes.outputs.event_sourcing per Phase 9 #716 r3 consensus A
+    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.event_sourcing == 'true'
     needs:
       - changes
     runs-on: ubuntu-latest
@@ -278,12 +281,34 @@ jobs:
       - name: EventSourcing Regression
         run: bash tools/ci/event_sourcing_regression.sh
 
+  host-composition-smoke:
+    needs: changes
+    # Refactor (iter16/cluster-ci-systemic-refactor):
+    #   Old pattern: host-composition-smoke skipped scheduled CI and ran for every PR, workflow_dispatch, or main/dev push
+    #   New principle: gate on changes.outputs.host_composition per Phase 9 #716 r3 consensus A
+    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.host_composition == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Host Composition Smoke (DI ValidateOnBuild)
+        run: bash tools/ci/host_composition_smoke.sh
+
   coverage-quality:
+    needs: changes
+    # Refactor (iter18/cluster-019-strict-coverage-aevatar-slnx):
+    #   Old pattern: coverage_quality_guard.sh 吞 test fail 继续 emit coverage;split-test-guards 漏跑 22 orphan project
+    #   New principle: strict-coverage fail-fast(不吞 fail);aevatar.slnx-or-slow-test 唯一测试权威;
+    #   retire slnf 测试执行(只保留 slnf build boundary);slow-tests 独立 CI job
     if: |
-      github.event_name == 'pull_request' ||
-      github.event_name == 'workflow_dispatch' ||
       github.event_name == 'schedule' ||
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+      needs.changes.outputs.docs_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -313,7 +338,7 @@ jobs:
         if: ${{ success() && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
-          files: ./artifacts/coverage/**/raw/**/coverage.cobertura.xml
+          files: ./artifacts/coverage/**/report/Cobertura.xml
           disable_search: true
           fail_ci_if_error: true
           flags: ci
@@ -338,6 +363,10 @@ jobs:
         run: bash tools/ci/distributed_3node_smoke.sh
 
   distributed-mixed-version-smoke:
+    needs: changes
+    # Refactor (iter16/cluster-ci-systemic-refactor):
+    #   Old pattern: distributed-mixed-version-smoke ran unconditionally on scheduled/manual CI, including doc-only changes
+    #   New principle: preserve scheduled/manual health checks
     if: |
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch'

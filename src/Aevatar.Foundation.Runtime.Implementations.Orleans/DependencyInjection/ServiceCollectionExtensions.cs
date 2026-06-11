@@ -48,10 +48,18 @@ public static class ServiceCollectionExtensions
             {
                 garnetOptions.ConnectionString = options.GarnetConnectionString;
             });
+
+            // Garnet hosts both the event store and Orleans's PubSubStore (see
+            // EnsurePersistentStreamPubSubStorage). Stale rendezvous state from
+            // an earlier silo wave / retired actor type can otherwise block
+            // RegisterAsStreamProducer with InconsistentStateException.
+            services.TryAddSingleton<IStreamPubSubMaintenance, OrleansRedisStreamPubSubMaintenance>();
         }
         else
         {
             services.TryAddSingleton<IEventStore, InMemoryEventStore>();
+            services.TryAddSingleton<IEventStoreMaintenance>(sp =>
+                (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>());
         }
 
         services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
@@ -66,6 +74,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
         services.TryAddSingleton<IActorRuntimeCallbackScheduler, OrleansActorRuntimeDurableCallbackScheduler>();
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
+        // Kind-token identity registry + transitional reflection fallback
+        // (issue #498). Modules contribute their kinds in their own DI
+        // extensions; the runtime guarantees the registry is available
+        // here so RuntimeActorGrain.OnActivateAsync can resolve identities
+        // without holding a reflection scan itself.
+        services.AddAevatarAgentKindRegistry();
         services.TryAddSingleton<IActorEventSubscriptionProvider>(sp =>
             new StreamProviderActorEventSubscriptionProvider(sp.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>()));
         services.AddAevatarFoundationRuntimeOrleansStreaming();

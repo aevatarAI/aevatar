@@ -90,7 +90,7 @@ describe('scriptsApi host-session requests', () => {
         runId: 'run-1',
         sourceHash: 'hash-1',
         commandTypeUrl: 'type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand',
-        readModelUrl: '/api/app/scripts/runtimes/runtime-1/readmodel',
+        activityUrl: '/api/app/scripts/runtimes/runtime-1/activity',
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -124,7 +124,7 @@ describe('scriptsApi host-session requests', () => {
     });
   });
 
-  it('reads runtime readmodels from the Studio app host routes', async () => {
+  it('reads runtime activity from the Studio app host routes', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -149,8 +149,11 @@ describe('scriptsApi host-session requests', () => {
         scriptId: 'demo',
         definitionActorId: 'definition-1',
         revision: 'draft-1',
-        readModelTypeUrl: 'type.googleapis.com/example.ReadModel',
-        readModelPayloadJson: '{}',
+        input: '',
+        output: '',
+        status: '',
+        lastCommandId: '',
+        notes: [],
         stateVersion: 1,
         lastEventId: 'event-1',
         updatedAt: '2026-03-27T00:00:00Z',
@@ -158,13 +161,13 @@ describe('scriptsApi host-session requests', () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await scriptsApi.getRuntimeReadModel('runtime-1');
+    await scriptsApi.getRuntimeActivity('runtime-1');
 
     const [input, init] = fetchMock.mock.calls[0] as [
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/app/scripts/runtimes/runtime-1/readmodel');
+    expect(input).toBe('/api/app/scripts/runtimes/runtime-1/activity');
     expect(init?.credentials).toBe('same-origin');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',

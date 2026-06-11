@@ -1,14 +1,13 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Google.Protobuf.WellKnownTypes;
+using Aevatar.Hosting;
+using Aevatar.AGUI.Contracts;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using Any = Google.Protobuf.WellKnownTypes.Any;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -19,19 +18,24 @@ public static partial class NyxIdChatEndpoints
         string scopeId,
         string actorId,
         NyxIdChatStreamRequest request,
-        [FromServices] IActorRuntime actorRuntime,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> interactionService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
-        IActor? actor = null;
         var accessToken = string.Empty;
         var prompt = string.Empty;
+        var messageId = request.SessionId ?? Guid.NewGuid().ToString("N");
 
         try
         {
+            // Refactor (iter21/cluster-002-request-path-projection-session-priming):
+            //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
+            //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
             accessToken = ExtractBearerToken(http);
             if (string.IsNullOrWhiteSpace(accessToken))
             {
@@ -54,13 +58,6 @@ public static partial class NyxIdChatEndpoints
                     ScopeResourceOperation.Stream,
                     ct))
                 return;
-
-            actor = await actorRuntime.GetAsync(actorId);
-            if (actor == null)
-            {
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
         }
         catch (OperationCanceledException)
         {
@@ -73,126 +70,46 @@ public static partial class NyxIdChatEndpoints
             return;
         }
 
-        await NyxIdChatStreamingRunner.RunAsync(
-            http,
-            actorId,
-            actor!.Id,
-            subscriptionProvider,
-            logger,
-            dispatchAsync: async (messageId, runCt) =>
-            {
-                var chatRequest = new ChatRequestEvent
+        var writer = new NyxIdChatSseWriter(http.Response);
+        try
+        {
+            await writer.StartAsync(ct);
+            await writer.WriteRunStartedAsync(actorId, ct);
+            var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+            var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
+            await InjectConnectedServicesAsync(http, accessToken, metadata, ct);
+
+            // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
+            // Streaming endpoints no longer pre-read runtime state before command dispatch.
+            // The CQRS command target resolver owns actor lookup and reports typed start errors.
+            // Endpoint responsibility stays at auth, admission, input mapping, and SSE writing.
+            var result = await interactionService.ExecuteAsync(
+                new NyxIdChatCommand(
+                    actorId,
+                    scopeId,
+                    prompt,
+                    messageId,
+                    accessToken,
+                    request.InputParts,
+                    metadata,
+                    llmControl),
+                async (evt, _) =>
                 {
-                    Prompt = prompt,
-                    SessionId = request.SessionId ?? messageId,
-                    ScopeId = scopeId,
-                };
-                if (request.InputParts is { Count: > 0 })
-                {
-                    foreach (var part in request.InputParts)
-                        chatRequest.InputParts.Add(part.ToProto());
-                }
+                    await NyxIdChatAguiSseEventWriter.WriteAsync(evt, messageId, writer);
+                },
+                null,
+                ct);
 
-                chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
-                chatRequest.Metadata["scope_id"] = scopeId;
-                await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, runCt);
-                await InjectUserMemoryAsync(http, chatRequest.Metadata, runCt);
-                await InjectConnectedServicesAsync(http, accessToken, chatRequest.Metadata, runCt);
-
-                var envelope = new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    Payload = Any.Pack(chatRequest),
-                    Route = new EnvelopeRoute
-                    {
-                        Direct = new DirectRoute { TargetActorId = actor.Id },
-                    },
-                };
-
-                await actor.HandleEventAsync(envelope, runCt);
-            },
-            mapAndWriteEventAsync: MapAndWriteEventAsync,
-            errorMessages: new NyxIdChatStreamingRunner.ErrorMessages(
-                "The chat request failed before completion. Please try again.",
-                "Request timed out.",
-                "The chat request failed. Please try again."),
-            ct);
-    }
-
-    /// <summary>
-    /// Maps AI event envelope payloads to NyxIdChat SSE frames.
-    /// </summary>
-    private static async ValueTask<string?> MapAndWriteEventAsync(
-        EventEnvelope envelope,
-        string messageId,
-        NyxIdChatSseWriter writer)
-    {
-        var payload = envelope.Payload;
-        if (payload is null)
-            return null;
-
-        if (payload.Is(TextMessageStartEvent.Descriptor))
-        {
-            await writer.WriteTextStartAsync(messageId, CancellationToken.None);
+            await HandleInteractionFailureAsync(result, writer, "The chat request failed. Please try again.");
         }
-        else if (payload.Is(TextMessageContentEvent.Descriptor))
+        catch (OperationCanceledException)
         {
-            var evt = payload.Unpack<TextMessageContentEvent>();
-            if (!string.IsNullOrEmpty(evt.Delta))
-                await writer.WriteTextDeltaAsync(evt.Delta, CancellationToken.None);
         }
-        else if (payload.Is(ToolCallEvent.Descriptor))
+        catch (Exception ex)
         {
-            var evt = payload.Unpack<ToolCallEvent>();
-            await writer.WriteToolCallStartAsync(evt.ToolName, evt.CallId, CancellationToken.None);
+            logger.LogError(ex, "NyxID streaming request failed for actor {ActorId}", actorId);
+            await writer.WriteRunErrorAsync("The chat request failed. Please try again.", CancellationToken.None);
         }
-        else if (payload.Is(ToolResultEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ToolResultEvent>();
-            await writer.WriteToolCallEndAsync(evt.CallId, evt.ResultJson, CancellationToken.None);
-        }
-        else if (payload.Is(ToolApprovalRequestEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ToolApprovalRequestEvent>();
-            await writer.WriteToolApprovalRequestAsync(
-                evt.RequestId, evt.ToolName, evt.ToolCallId,
-                evt.ArgumentsJson, evt.IsDestructive, evt.TimeoutSeconds,
-                CancellationToken.None);
-        }
-        else if (payload.Is(MediaContentEvent.Descriptor))
-        {
-            var evt = payload.Unpack<MediaContentEvent>();
-            await writer.WriteMediaContentAsync(evt, CancellationToken.None);
-        }
-        else if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-            if (!string.IsNullOrEmpty(evt.Content))
-            {
-                const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                const string llmFailedPrefix = "LLM request failed:";
-                if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                {
-                    await writer.WriteRunErrorAsync(
-                        ClassifyError(evt.Content[llmErrorPrefix.Length..].Trim()), CancellationToken.None);
-                    return "RUN_ERROR";
-                }
-
-                if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                {
-                    await writer.WriteRunErrorAsync(
-                        ClassifyError(evt.Content.Trim()),
-                        CancellationToken.None);
-                    return "RUN_ERROR";
-                }
-            }
-
-            await writer.WriteTextEndAsync(messageId, CancellationToken.None);
-            return "TEXT_MESSAGE_END";
-        }
-
-        return null;
     }
 
     /// <summary>
@@ -204,17 +121,22 @@ public static partial class NyxIdChatEndpoints
         string scopeId,
         string actorId,
         NyxIdApprovalRequest request,
-        [FromServices] IActorRuntime actorRuntime,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> interactionService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
-        IActor? actor = null;
+        var messageId = request.SessionId ?? scopeId;
 
         try
         {
+            // Refactor (iter21/cluster-002-request-path-projection-session-priming):
+            //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
+            //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
             var accessToken = ExtractBearerToken(http);
             if (string.IsNullOrWhiteSpace(accessToken))
             {
@@ -236,13 +158,6 @@ public static partial class NyxIdChatEndpoints
                     ScopeResourceOperation.Approve,
                     ct))
                 return;
-
-            actor = await actorRuntime.GetAsync(actorId);
-            if (actor == null)
-            {
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
         }
         catch (OperationCanceledException)
         {
@@ -255,41 +170,57 @@ public static partial class NyxIdChatEndpoints
             return;
         }
 
-        await NyxIdChatStreamingRunner.RunAsync(
-            http,
-            actorId,
-            actor!.Id,
-            subscriptionProvider,
-            logger,
-            dispatchAsync: async (_, runCt) =>
+        var writer = new NyxIdChatSseWriter(http.Response);
+        try
+        {
+            await writer.StartAsync(ct);
+            await writer.WriteRunStartedAsync(actorId, ct);
+            // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
+            // Approval continuation follows the same resolver-owned lookup path as chat streaming.
+            // Missing actors are typed command start failures, not Host-side runtime probes.
+            // This keeps endpoint lifecycle independent from the actor runtime implementation.
+            var result = await interactionService.ExecuteAsync(
+                new NyxIdApprovalCommand(
+                    actorId,
+                    request.RequestId,
+                    request.Approved,
+                    request.Reason ?? string.Empty,
+                    messageId),
+                async (evt, _) =>
+                {
+                    await NyxIdChatAguiSseEventWriter.WriteAsync(evt, messageId, writer);
+                },
+                null,
+                ct);
+
+            await HandleInteractionFailureAsync(result, writer, "The approval continuation failed. Please try again.");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "NyxID approval streaming request failed for actor {ActorId}", actorId);
+            await writer.WriteRunErrorAsync("The approval continuation failed. Please try again.", CancellationToken.None);
+        }
+    }
+
+    private static async Task HandleInteractionFailureAsync(
+        CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus> result,
+        NyxIdChatSseWriter writer,
+        string message)
+    {
+        if (result.Succeeded)
+            return;
+
+        await writer.WriteRunErrorAsync(
+            result.Error switch
             {
-                var decisionEvent = new ToolApprovalDecisionEvent
-                {
-                    RequestId = request.RequestId,
-                    SessionId = request.SessionId ?? scopeId,
-                    Approved = request.Approved,
-                    Reason = request.Reason ?? string.Empty,
-                };
-
-                var envelope = new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    Payload = Any.Pack(decisionEvent),
-                    Route = new EnvelopeRoute
-                    {
-                        Direct = new DirectRoute { TargetActorId = actor.Id },
-                    },
-                };
-
-                await actor.HandleEventAsync(envelope, runCt);
+                NyxIdChatStartError.ProjectionUnavailable => "NyxID chat projection pipeline is unavailable.",
+                NyxIdChatStartError.ActorNotFound => "NyxID chat conversation was not found.",
+                _ => message,
             },
-            mapAndWriteEventAsync: MapAndWriteEventAsync,
-            errorMessages: new NyxIdChatStreamingRunner.ErrorMessages(
-                "The approval continuation failed before completion. Please try again.",
-                "Approval continuation timed out.",
-                "The approval continuation failed. Please try again."),
-            ct);
+            CancellationToken.None);
     }
 
     public sealed record NyxIdApprovalRequest(

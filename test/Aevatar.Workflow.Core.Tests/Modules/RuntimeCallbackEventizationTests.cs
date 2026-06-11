@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
@@ -757,11 +756,12 @@ public class RuntimeCallbackEventizationTests
             ctx,
             CancellationToken.None);
 
-        var chatRequest = ctx.Published.Select(x => x.Event).OfType<ChatRequestEvent>().Single();
+        var intent = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
         ctx.Published.Clear();
-        var responseEnvelope = Wrap(new ChatResponseEvent
+        var responseEnvelope = Wrap(new WorkflowLlmInvocationCompletedEvent
         {
-            SessionId = chatRequest.SessionId,
+            SessionId = intent.SessionId,
+            Success = true,
             Content = "ok",
         });
 
@@ -772,7 +772,7 @@ public class RuntimeCallbackEventizationTests
             .WithMessage("transient publish failure");
 
         ctx.LoadState<LLMCallModuleState>("llm_call")
-            .PendingBySessionId.Should().ContainKey(chatRequest.SessionId);
+            .PendingBySessionId.Should().ContainKey(intent.SessionId);
 
         await module.HandleAsync(responseEnvelope, ctx, CancellationToken.None);
 
@@ -802,8 +802,8 @@ public class RuntimeCallbackEventizationTests
         await module.HandleAsync(requestEnvelope, ctx, CancellationToken.None);
 
         var firstDispatch = ctx.Outbound
-            .Single(x => x.Event is ChatRequestEvent);
-        var firstChatRequest = (ChatRequestEvent)firstDispatch.Event;
+            .Single(x => x.Event is WorkflowLlmExecutionIntent);
+        var firstIntent = (WorkflowLlmExecutionIntent)firstDispatch.Event;
         firstDispatch.TargetActorId.Should().NotBeNullOrWhiteSpace();
         firstDispatch.Options.Should().NotBeNull();
         firstDispatch.Options!.Delivery.Should().NotBeNull();
@@ -811,9 +811,9 @@ public class RuntimeCallbackEventizationTests
         dedupOriginId.Should().StartWith("workflow-llm-dispatch:");
 
         var state = ctx.LoadState<LLMCallModuleState>("llm_call");
-        var pending = state.PendingBySessionId[firstChatRequest.SessionId];
+        var pending = state.PendingBySessionId[firstIntent.SessionId];
         pending.RequestDispatched = false;
-        state.PendingBySessionId[firstChatRequest.SessionId] = pending;
+        state.PendingBySessionId[firstIntent.SessionId] = pending;
         await ctx.SaveStateAsync("llm_call", state, CancellationToken.None);
         ctx.Published.Clear();
         ctx.Outbound.Clear();
@@ -821,14 +821,14 @@ public class RuntimeCallbackEventizationTests
         await module.HandleAsync(requestEnvelope, ctx, CancellationToken.None);
 
         var replayDispatch = ctx.Outbound
-            .Single(x => x.Event is ChatRequestEvent);
-        var replayChatRequest = (ChatRequestEvent)replayDispatch.Event;
-        replayChatRequest.SessionId.Should().Be(firstChatRequest.SessionId);
+            .Single(x => x.Event is WorkflowLlmExecutionIntent);
+        var replayIntent = (WorkflowLlmExecutionIntent)replayDispatch.Event;
+        replayIntent.SessionId.Should().Be(firstIntent.SessionId);
         replayDispatch.TargetActorId.Should().Be(firstDispatch.TargetActorId);
         replayDispatch.Options!.Delivery!.DeduplicationOperationId.Should().Be(dedupOriginId);
 
         ctx.LoadState<LLMCallModuleState>("llm_call")
-            .PendingBySessionId[firstChatRequest.SessionId]
+            .PendingBySessionId[firstIntent.SessionId]
             .DispatchDedupId.Should().Be(dedupOriginId);
     }
 
@@ -1415,6 +1415,25 @@ public class RuntimeCallbackEventizationTests
 
         public string RunId { get; } = runId;
 
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+        public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+        {
+            ApplyDelta(ExecutionContextState, delta);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ExecutionContextState.Llm = null;
+            ExecutionContextState.Connector = null;
+            return Task.CompletedTask;
+        }
+
         public Any? GetExecutionState(string scopeKey) =>
             _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
@@ -1450,6 +1469,34 @@ public class RuntimeCallbackEventizationTests
     private sealed class NullServiceProvider : IServiceProvider
     {
         public object? GetService(System.Type serviceType) => null;
+    }
+
+    private static void ApplyDelta(
+        WorkflowRunExecutionContextState state,
+        WorkflowRunExecutionContextDelta delta)
+    {
+        if (delta.ClearLlm)
+            state.Llm = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
+        if (delta.Llm != null)
+        {
+            state.Llm = new WorkflowLlmExecutionContextState
+            {
+                ModelOverride = delta.Llm.ModelOverride,
+                UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
+            };
+            if (delta.Llm.HasMaxToolRoundsOverride)
+                state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
+        }
+
+        if (delta.Connector != null)
+        {
+            state.Connector = new WorkflowConnectorExecutionContextState
+            {
+                HttpAuthorization = delta.Connector.HttpAuthorization,
+            };
+        }
     }
 
     private sealed record ScheduledCallback(

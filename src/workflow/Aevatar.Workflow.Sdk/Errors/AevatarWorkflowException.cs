@@ -1,4 +1,5 @@
 using System.Net;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Sdk.Contracts;
 
 namespace Aevatar.Workflow.Sdk.Errors;
@@ -46,15 +47,15 @@ public sealed class AevatarWorkflowException : Exception
     public static AevatarWorkflowException StreamPayload(string message, string? rawPayload = null, Exception? innerException = null) =>
         new(AevatarWorkflowErrorKind.StreamPayload, message, rawPayload: rawPayload, innerException: innerException);
 
-    public static AevatarWorkflowException RunFailed(WorkflowOutputFrame frame)
+    public static AevatarWorkflowException RunFailed(WorkflowRunEventEnvelope frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        var message = string.IsNullOrWhiteSpace(frame.Message)
+        var message = string.IsNullOrWhiteSpace(frame.RunError?.Message)
             ? "Workflow run failed."
-            : frame.Message!;
+            : frame.RunError.Message;
         return new AevatarWorkflowException(
             AevatarWorkflowErrorKind.RunFailed,
             message,
-            errorCode: frame.Code);
+            errorCode: frame.RunError?.Code);
     }
 }

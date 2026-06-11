@@ -27,6 +27,9 @@ public sealed class MCPServerConfig
 
     /// <summary>可选的远程 MCP 专用 HttpClient。</summary>
     public HttpClient? HttpClient { get; init; }
+
+    /// <summary>Whether connector lifecycle owns <see cref="HttpClient"/>.</summary>
+    public bool OwnsHttpClient { get; init; }
 }
 
 /// <summary>MCP Tools 选项。</summary>

@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
@@ -17,6 +16,9 @@ namespace Aevatar.GAgents.Household;
 /// HouseholdEntity — autonomous home AI agent.
 /// Implements Perceive-Reason-Act loop driven by stream events.
 /// </summary>
+// Refactor (iter108/cluster-108-003-household-tool-direct-runtime-command-path):
+//   Old pattern: orphan HouseholdEntityTool derived actor id, created actor through IActorRuntime, built EventEnvelope, and dispatched directly.
+//   New principle: HouseholdEntity is reached through the device callback CQRS command facade; the orphan LLM tool adapter was deleted.
 public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 {
     public HouseholdEntity(
@@ -190,62 +192,53 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 
         try
         {
-            switch (evt.EventType)
+            // Refactor (issue1485/first-slice): Old pattern: actor parsed DeviceInbound.PayloadJson by event_type.
+            // New principle: Host/Adapter owns JSON parsing and allowlist admission.
+            // HouseholdEntity consumes only typed Protobuf payload cases and ignores missing payloads.
+            // This keeps actor control flow independent of external callback JSON shape.
+            switch (evt.PayloadCase)
             {
-                case "temperature_change":
+                case DeviceInbound.PayloadOneofCase.Sensor:
                 {
-                    using var doc = JsonDocument.Parse(evt.PayloadJson);
-                    var root = doc.RootElement;
-                    var sensorEvt = new SensorDataEvent();
-                    if (root.TryGetProperty("temperature", out var temp)) sensorEvt.Temperature = temp.GetDouble();
-                    if (root.TryGetProperty("humidity", out var hum)) sensorEvt.Humidity = hum.GetDouble();
-                    if (root.TryGetProperty("light_level", out var light)) sensorEvt.LightLevel = light.GetDouble();
-                    if (root.TryGetProperty("motion", out var motion)) sensorEvt.MotionDetected = motion.GetBoolean();
+                    await HandleSensorData(new SensorDataEvent
+                    {
+                        Temperature = evt.Sensor.Temperature,
+                        Humidity = evt.Sensor.Humidity,
+                        LightLevel = evt.Sensor.LightLevel,
+                        MotionDetected = evt.Sensor.MotionDetected,
+                    });
+                    break;
+                }
+                case DeviceInbound.PayloadOneofCase.Camera:
+                {
+                    await HandleCameraScene(new CameraSceneEvent { SceneDescription = evt.Camera.SceneDescription });
+                    break;
+                }
+                case DeviceInbound.PayloadOneofCase.Motion:
+                {
+                    var sensorEvt = new SensorDataEvent { MotionDetected = evt.Motion.Detected };
                     await HandleSensorData(sensorEvt);
                     break;
                 }
-                case "person_detected":
-                case "scene_summary":
+                case DeviceInbound.PayloadOneofCase.Speech:
                 {
-                    using var doc = JsonDocument.Parse(evt.PayloadJson);
-                    var root = doc.RootElement;
-                    var desc = root.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
-                    await HandleCameraScene(new CameraSceneEvent { SceneDescription = desc });
-                    break;
-                }
-                case "motion_detected":
-                {
-                    var sensorEvt = new SensorDataEvent { MotionDetected = true };
-                    await HandleSensorData(sensorEvt);
-                    break;
-                }
-                case "speech_detected":
-                {
-                    using var doc = JsonDocument.Parse(evt.PayloadJson);
-                    var root = doc.RootElement;
-                    var text = root.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
-                    if (!string.IsNullOrWhiteSpace(text))
+                    if (!string.IsNullOrWhiteSpace(evt.Speech.Text))
                     {
                         await HandleChat(new HouseholdChatEvent
                         {
-                            Prompt = text,
+                            Prompt = evt.Speech.Text,
                             SessionId = evt.EventId,
                         });
                     }
                     break;
                 }
+                case DeviceInbound.PayloadOneofCase.None:
                 default:
                     Logger.LogWarning(
-                        "[Household] Unknown device event type: {EventType}, source={Source}",
+                        "[Household] Device event has no typed payload: type={EventType}, source={Source}",
                         evt.EventType, evt.Source);
                     break;
             }
-        }
-        catch (JsonException ex)
-        {
-            Logger.LogWarning(ex,
-                "[Household] Failed to parse device event payload: type={EventType}, source={Source}",
-                evt.EventType, evt.Source);
         }
         catch (Exception ex)
         {
@@ -274,15 +267,24 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 
         try
         {
-            var response = await ChatAsync(prompt, requestId: null, metadata);
+            // Refactor (iter2/cluster-007):
+            //   Old pattern: household reasoning used the non-streaming chat shortcut as the main chain.
+            //   New principle: household reasoning consumes the streaming chain and commits only its final text.
+            var responseBuilder = new StringBuilder();
+            await foreach (var chunk in ChatStreamAsync(prompt, requestId: null, metadata))
+            {
+                if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                    responseBuilder.Append(chunk.DeltaContent);
+            }
 
-            var isNoAction = response != null &&
-                             response.Contains("NO_ACTION", StringComparison.OrdinalIgnoreCase);
+            var response = responseBuilder.ToString();
+
+            var isNoAction = response.Contains("NO_ACTION", StringComparison.OrdinalIgnoreCase);
 
             await PersistDomainEventAsync(new ReasoningCompletedEvent
             {
                 Decision = isNoAction ? "NO_ACTION" : "ACTION",
-                Reasoning = response ?? "",
+                Reasoning = response,
                 Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             });
 

@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import { message } from 'antd';
 import React from 'react';
 import { studioApi } from '@/shared/studio/api';
@@ -21,116 +22,166 @@ jest.mock('antd', () => {
 });
 
 describe('TeamCreatePage', () => {
+  const teamResponse = {
+    teamId: 't-alpha',
+    scopeId: 'scope-a',
+    displayName: '订单助手团队',
+    description: '处理订单异常',
+    lifecycleStage: 'active',
+    memberCount: 0,
+    entryMemberId: null,
+    createdAt: '2026-05-06T08:00:00Z',
+    updatedAt: '2026-05-06T08:00:00Z',
+  };
+  let fetchMock: jest.Mock;
+
   beforeEach(() => {
-    window.history.replaceState({}, '', '/teams/new');
+    setLocale('zh-CN', false);
+    window.history.replaceState({}, '', '/teams/new?scopeId=scope-a');
     jest.clearAllMocks();
+    fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        enabled: false,
+        scopeId: 'scope-a',
+        scopeSource: 'nyxid',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
   });
 
-  it('renders the hidden compatibility page for saved draft recovery', async () => {
-    renderWithQueryClient(React.createElement(TeamCreatePage));
-
-    expect(await screen.findByText('Aevatar / Teams')).toBeTruthy();
-    expect(screen.getByText('Saved Draft Recovery')).toBeTruthy();
-    expect(screen.getByText('用途')).toBeTruthy();
-    expect(screen.getByText('恢复对象')).toBeTruthy();
-    expect(screen.getByText('继续位置')).toBeTruthy();
-    expect(screen.getByText('新增后端事实')).toBeTruthy();
-    expect(screen.getByText('Continue initial member draft')).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 3, name: 'Saved draft recovery' })).toBeTruthy();
-    expect(screen.getByLabelText('Legacy team label')).toBeTruthy();
-    expect(screen.getByLabelText('Initial member label')).toBeTruthy();
-    expect(
-      screen.getAllByRole('button', { name: 'Continue in Studio' }).length,
-    ).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'View Behaviors' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Back to My Teams' })).toBeTruthy();
-    expect(
-      screen.getByText(
-        'This compatibility page preserves old Create Team links and saved draft recovery. New team creation now starts in Studio by creating the first member.',
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByText('Team Builder Entry')).toBeNull();
-    expect(screen.queryByText('Start Building')).toBeNull();
-    expect(screen.queryByText('Open Studio')).toBeNull();
-    expect(
-      screen.queryByText(
-        '当前实现不会新增一套独立后端流程，而是复用现有 Studio 工作区先组建团队，再进入 Team Details 查看拓扑和事件流。',
-      ),
-    ).toBeNull();
-    expect(screen.queryByText('Next Steps')).toBeNull();
-    expect(screen.queryByText('Builder 模式')).toBeNull();
-    expect(screen.queryByText('默认入口')).toBeNull();
-    expect(screen.queryByText('后续页')).toBeNull();
-    expect(screen.queryByText('数据源')).toBeNull();
+  afterEach(() => {
+    setLocale('en-US', false);
   });
 
-  it('opens Studio in member-first build mode without persisting create-team draft params', async () => {
+  it('renders the simplified Team create page', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    const openStudioButtons = await screen.findAllByRole('button', {
-      name: 'Continue in Studio',
-    });
+    expect(await screen.findByText('阿凡达/团队')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: '创建团队' })).toBeTruthy();
+    expect(screen.getByText('团队信息')).toBeTruthy();
+    expect(screen.getByLabelText('队名')).toBeTruthy();
+    expect(screen.getByLabelText('团队描述')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '创建团队' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: '返回我的团队' })).toBeTruthy();
+    expect(screen.queryByText('工作空间上下文')).toBeNull();
+    expect(screen.queryByText('StudioTeam')).toBeNull();
+    expect(screen.queryByRole('button', { name: '继续在 Studio 中编辑' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '查看 Behaviors' })).toBeNull();
+    expect(screen.queryByText('已保存草稿')).toBeNull();
+  });
 
-    expect(openStudioButtons[0]).toBeDisabled();
+  it('creates a backend StudioTeam and routes to team focus', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        enabled: false,
+        scopeId: 'scope-a',
+        scopeSource: 'nyxid',
+      }),
+    } as Response);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => teamResponse,
+    } as Response);
 
-    fireEvent.change(screen.getByLabelText('Legacy team label'), {
+    const { queryClient } = renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    fireEvent.change(await screen.findByLabelText('队名'), {
       target: { value: '订单助手团队' },
     });
-    fireEvent.change(screen.getByLabelText('Initial member label'), {
-      target: { value: '订单入口' },
+    fireEvent.change(screen.getByLabelText('团队描述'), {
+      target: { value: '处理订单异常' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: '创建团队' })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/scopes/scope-a/teams',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            displayName: '订单助手团队',
+            description: '处理订单异常',
+          }),
+        }),
+      );
     });
 
-    expect(openStudioButtons[0]).toBeEnabled();
-    fireEvent.click(openStudioButtons[0]);
-
-    expect(window.location.pathname).toBe('/studio');
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get('tab')).toBe('studio');
-    expect(params.get('focus')).toBeNull();
-    expect(params.get('teamMode')).toBeNull();
-    expect(params.get('teamName')).toBeNull();
-    expect(params.get('entryName')).toBeNull();
-    expect(params.get('draft')).toBeNull();
-  });
-
-  it('shows the saved draft summary and resumes that draft in Studio without legacy draft route params', async () => {
-    window.history.replaceState(
-      {},
-      '',
-      '/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft',
-    );
-
-    renderWithQueryClient(React.createElement(TeamCreatePage));
-
-    expect(await screen.findByText('Saved Draft')).toBeTruthy();
-    expect(screen.getByText('已保存草稿')).toBeTruthy();
-    expect(screen.getByText('order-entry-draft')).toBeTruthy();
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/teams/scope-a/t-alpha');
+    });
     expect(
-      screen.getByText(
-        'Delete Draft removes the linked workflow draft. Legacy labels stay in the URL so old links remain understandable.',
-      ),
-    ).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Continue Draft' }));
-
-    expect(window.location.pathname).toBe('/studio');
+      queryClient.getQueryData(['teams', 'team-summary', 'scope-a', 't-alpha']),
+    ).toEqual(teamResponse);
     const params = new URLSearchParams(window.location.search);
-    expect(params.get('tab')).toBe('studio');
-    expect(params.get('focus')).toBe('workflow:workflow-7');
-    expect(params.get('teamMode')).toBeNull();
-    expect(params.get('teamName')).toBeNull();
-    expect(params.get('entryName')).toBeNull();
-    expect(params.get('teamDraftWorkflowId')).toBeNull();
-    expect(params.get('teamDraftWorkflowName')).toBeNull();
-    expect(params.get('workflow')).toBeNull();
-    expect(params.get('draft')).toBeNull();
+    expect(params.get('scopeId')).toBeNull();
+    expect(params.get('teamId')).toBeNull();
+    expect(message.success).toHaveBeenCalledWith('已创建团队。');
   });
 
-  it('deletes the saved draft and keeps the team form values in place', async () => {
-    const deleteWorkflowSpy = jest
-      .spyOn(studioApi, 'deleteWorkflow')
-      .mockResolvedValue(undefined);
+  it('ignores legacy scopeId=new links and creates under the authenticated scope', async () => {
+    window.history.replaceState({}, '', '/teams/new?scopeId=new&teamName=test');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        enabled: false,
+        scopeId: 'scope-a',
+        scopeSource: 'nyxid',
+      }),
+    } as Response);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        ...teamResponse,
+        displayName: 'test',
+        description: 'test',
+      }),
+    } as Response);
 
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    expect(await screen.findByLabelText('队名')).toHaveValue('test');
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('scopeId')).toBe(
+        'scope-a',
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('团队描述'), {
+      target: { value: 'test' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: '创建团队' })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/scopes/scope-a/teams',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            displayName: 'test',
+            description: 'test',
+          }),
+        }),
+      );
+    });
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/scopes/new/teams',
+      expect.anything(),
+    );
+  });
+
+  it('drops legacy draft recovery params from old create links', async () => {
     window.history.replaceState(
       {},
       '',
@@ -139,22 +190,18 @@ describe('TeamCreatePage', () => {
 
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete Draft' }));
-
     await waitFor(() => {
-      expect(deleteWorkflowSpy).toHaveBeenCalledWith('workflow-7');
+      expect(new URLSearchParams(window.location.search).get('scopeId')).toBe(
+        'scope-a',
+      );
     });
-
-    await waitFor(() => {
-      expect(screen.queryByText('Saved Draft')).toBeNull();
-    });
-
     const params = new URLSearchParams(window.location.search);
     expect(window.location.pathname).toBe('/teams/new');
     expect(params.get('teamName')).toBe('订单助手团队');
-    expect(params.get('entryName')).toBe('订单入口');
+    expect(params.get('entryName')).toBeNull();
     expect(params.get('teamDraftWorkflowId')).toBeNull();
     expect(params.get('teamDraftWorkflowName')).toBeNull();
-    expect(message.success).toHaveBeenCalledWith('已删除当前团队草稿。');
+    expect(screen.queryByText('已保存草稿')).toBeNull();
+    expect(screen.queryByRole('button', { name: '继续草稿' })).toBeNull();
   });
 });

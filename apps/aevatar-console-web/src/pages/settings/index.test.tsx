@@ -9,9 +9,10 @@ import SettingsPage from "./index";
 
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
-    getUserConfig: jest.fn(),
-    getUserConfigModels: jest.fn(),
-    saveUserConfig: jest.fn(),
+    getAuthSession: jest.fn(),
+    getUserConfigRuntime: jest.fn(),
+    getUserLlmSettings: jest.fn(),
+    saveUserLlmSettings: jest.fn(),
   },
 }));
 
@@ -19,11 +20,93 @@ const { studioApi: mockStudioApi } = jest.requireMock(
   "@/shared/studio/api",
 ) as {
   studioApi: {
-    getUserConfig: jest.Mock;
-    getUserConfigModels: jest.Mock;
-    saveUserConfig: jest.Mock;
+    getAuthSession: jest.Mock;
+    getUserConfigRuntime: jest.Mock;
+    getUserLlmSettings: jest.Mock;
+    saveUserLlmSettings: jest.Mock;
   };
 };
+
+function createLlmSettings(overrides: Record<string, unknown> = {}) {
+  return {
+    savedRoute: "",
+    savedRouteLabel: "Backend saved gateway",
+    effectiveRoute: "",
+    effectiveRouteLabel: "Backend effective gateway",
+    routeFallbackActive: false,
+    fallbackReason: null,
+    catalogStatus: "ready",
+    defaultModel: "",
+    capabilities: {
+      canEditRoute: true,
+      canEditModel: true,
+      canSave: true,
+      canRetryCatalog: false,
+    },
+    routeOptions: [
+      {
+        routeValue: "",
+        label: "Gateway route option",
+        source: "gateway_provider",
+        status: "ready",
+        allowed: true,
+        ready: true,
+        serviceId: null,
+        serviceSlug: null,
+        description: null,
+      },
+      {
+        routeValue: "/api/v1/proxy/s/openai-team",
+        label: "OpenAI Team Service",
+        source: "user_service",
+        status: "ready",
+        allowed: true,
+        ready: true,
+        serviceId: "svc-openai",
+        serviceSlug: "openai-team",
+        description: null,
+      },
+      {
+        routeValue: "/api/v1/proxy/s/anthropic-team",
+        label: "Anthropic Lab Service",
+        source: "user_service",
+        status: "ready",
+        allowed: true,
+        ready: true,
+        serviceId: "svc-anthropic",
+        serviceSlug: "anthropic-team",
+        description: null,
+      },
+    ],
+    modelGroupsByRoute: [
+      {
+        routeValue: "",
+        groupId: "openai",
+        label: "OpenAI Gateway",
+        models: ["gpt-4o", "gpt-4o-mini"],
+      },
+      {
+        routeValue: "",
+        groupId: "anthropic",
+        label: "Anthropic Gateway",
+        models: ["claude-3-5-sonnet", "claude-3-opus"],
+      },
+      {
+        routeValue: "/api/v1/proxy/s/openai-team",
+        groupId: "openai-team",
+        label: "OpenAI Team Service",
+        models: ["gpt-4.1-mini"],
+      },
+      {
+        routeValue: "/api/v1/proxy/s/anthropic-team",
+        groupId: "anthropic-team",
+        label: "Anthropic Lab Service",
+        models: ["claude-3-haiku"],
+      },
+    ],
+    ...overrides,
+  };
+}
 
 describe("SettingsPage", () => {
   beforeEach(() => {
@@ -31,69 +114,36 @@ describe("SettingsPage", () => {
     window.history.replaceState({}, "", "/settings");
     jest.clearAllMocks();
 
-    mockStudioApi.getUserConfig.mockResolvedValue({
-      defaultModel: "",
-      preferredLlmRoute: "",
-      runtimeMode: "local",
-      localRuntimeBaseUrl: "",
-      remoteRuntimeBaseUrl: "",
-      maxToolRounds: 40,
-    });
-    mockStudioApi.getUserConfigModels.mockResolvedValue({
-      providers: [
-        {
-          providerSlug: "openai",
-          providerName: "OpenAI Gateway",
-          proxyUrl: "https://nyx.example/gateway/openai",
-          source: "gateway_provider",
-          status: "ready",
-        },
-        {
-          providerSlug: "anthropic",
-          providerName: "Anthropic Gateway",
-          proxyUrl: "https://nyx.example/gateway/anthropic",
-          source: "gateway_provider",
-          status: "ready",
-        },
-        {
-          providerSlug: "openai-team",
-          providerName: "OpenAI Team Service",
-          proxyUrl: "https://nyx.example/openai",
-          source: "user_service",
-          status: "ready",
-        },
-        {
-          providerSlug: "anthropic-team",
-          providerName: "Anthropic Lab Service",
-          proxyUrl: "https://nyx.example/anthropic",
-          source: "user_service",
-          status: "ready",
-        },
-      ],
-      gatewayUrl: "https://nyx.example/gateway",
-      modelsByProvider: {
-        openai: ["gpt-4o", "gpt-4o-mini"],
-        anthropic: ["claude-3-5-sonnet", "claude-3-opus"],
-        "openai-team": ["gpt-4.1-mini"],
-        "anthropic-team": ["claude-3-haiku"],
+    mockStudioApi.getAuthSession.mockResolvedValue({
+      enabled: true,
+      authenticated: true,
+      providerDisplayName: "NyxID",
+      profile: null,
+      session: {
+        authenticated: true,
+        providerDisplayName: "NyxID",
       },
-      supportedModels: [
-        "gpt-4o",
-        "gpt-4o-mini",
-        "claude-3-5-sonnet",
-        "claude-3-opus",
-        "gpt-4.1-mini",
-        "claude-3-haiku",
-      ],
     });
-    mockStudioApi.saveUserConfig.mockImplementation(async (input) => ({
-      defaultModel: input.defaultModel,
-      preferredLlmRoute: input.preferredLlmRoute ?? "",
+    mockStudioApi.getUserLlmSettings.mockResolvedValue(createLlmSettings());
+    mockStudioApi.getUserConfigRuntime.mockResolvedValue({
       runtimeMode: "local",
-      localRuntimeBaseUrl: "",
-      remoteRuntimeBaseUrl: "",
-      maxToolRounds: 40,
-    }));
+      activeRuntimeBaseUrl: "http://127.0.0.1:5080",
+      localRuntimeBaseUrl: "http://127.0.0.1:5080",
+      remoteRuntimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
+      runtimeDefaults: {
+        localRuntimeBaseUrl: "http://127.0.0.1:5080",
+        remoteRuntimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
+        localMode: "local",
+        remoteMode: "remote",
+      },
+    });
+    mockStudioApi.saveUserLlmSettings.mockImplementation(async (input) =>
+      createLlmSettings({
+        savedRoute: input.routeValue,
+        effectiveRoute: input.routeValue,
+        defaultModel: input.model ?? "",
+      })
+    );
   });
 
   afterEach(() => {
@@ -108,6 +158,8 @@ describe("SettingsPage", () => {
     expect(screen.getByText("How defaults work")).toBeTruthy();
     expect(screen.getByText("Technical preview")).toBeTruthy();
     expect(screen.getAllByText("Effective route").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Backend effective gateway").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Backend saved gateway").length).toBeGreaterThan(0);
     expect(screen.getByText("Connected providers")).toBeTruthy();
     expect(screen.getAllByText("OpenAI Team Service").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Default model").length).toBeGreaterThan(0);
@@ -148,21 +200,21 @@ describe("SettingsPage", () => {
     expect(screen.getByText("Authentication")).toBeTruthy();
   });
 
-  it("shows gateway models from every ready gateway provider", async () => {
+  it("shows gateway models from backend model groups", async () => {
     renderWithQueryClient(React.createElement(SettingsPage));
 
     expect(await screen.findByText("4 live")).toBeTruthy();
   });
 
-  it("uses route-scoped model choices when the preferred route is a service", async () => {
-    mockStudioApi.getUserConfig.mockResolvedValueOnce({
-      defaultModel: "",
-      preferredLlmRoute: "/api/v1/proxy/s/anthropic-team",
-      runtimeMode: "local",
-      localRuntimeBaseUrl: "",
-      remoteRuntimeBaseUrl: "",
-      maxToolRounds: 40,
-    });
+  it("uses backend route-scoped model choices when the saved route is a service", async () => {
+    mockStudioApi.getUserLlmSettings.mockResolvedValueOnce(
+      createLlmSettings({
+        savedRoute: "/api/v1/proxy/s/anthropic-team",
+        savedRouteLabel: "Anthropic Lab Service",
+        effectiveRoute: "/api/v1/proxy/s/anthropic-team",
+        effectiveRouteLabel: "Anthropic Lab Service",
+      })
+    );
 
     renderWithQueryClient(React.createElement(SettingsPage));
 
@@ -171,38 +223,23 @@ describe("SettingsPage", () => {
     });
   });
 
-  it("does not relabel the global supported model union as a service-specific catalog", async () => {
-    mockStudioApi.getUserConfig.mockResolvedValueOnce({
-      defaultModel: "",
-      preferredLlmRoute: "/api/v1/proxy/s/anthropic-team",
-      runtimeMode: "local",
-      localRuntimeBaseUrl: "",
-      remoteRuntimeBaseUrl: "",
-      maxToolRounds: 40,
-    });
-    mockStudioApi.getUserConfigModels.mockResolvedValueOnce({
-      providers: [
-        {
-          providerSlug: "openai",
-          providerName: "OpenAI Gateway",
-          proxyUrl: "https://nyx.example/gateway/openai",
-          source: "gateway_provider",
-          status: "ready",
-        },
-        {
-          providerSlug: "anthropic-team",
-          providerName: "Anthropic Lab Service",
-          proxyUrl: "https://nyx.example/anthropic",
-          source: "user_service",
-          status: "ready",
-        },
-      ],
-      gatewayUrl: "https://nyx.example/gateway",
-      modelsByProvider: {
-        openai: ["gpt-4o", "gpt-4o-mini"],
-      },
-      supportedModels: ["gpt-4o", "gpt-4o-mini", "claude-3-haiku"],
-    });
+  it("does not invent service-specific model choices when backend sends no route group", async () => {
+    mockStudioApi.getUserLlmSettings.mockResolvedValueOnce(
+      createLlmSettings({
+        savedRoute: "/api/v1/proxy/s/anthropic-team",
+        savedRouteLabel: "Anthropic Lab Service",
+        effectiveRoute: "/api/v1/proxy/s/anthropic-team",
+        effectiveRouteLabel: "Anthropic Lab Service",
+        modelGroupsByRoute: [
+          {
+            routeValue: "",
+            groupId: "openai",
+            label: "OpenAI Gateway",
+            models: ["gpt-4o", "gpt-4o-mini"],
+          },
+        ],
+      })
+    );
 
     renderWithQueryClient(React.createElement(SettingsPage));
 
@@ -213,13 +250,47 @@ describe("SettingsPage", () => {
     expect(screen.queryByRole("combobox", { name: "Default model" })).toBeNull();
   });
 
-  it("saves only the editable LLM fields", async () => {
-    mockStudioApi.getUserConfigModels.mockResolvedValueOnce({
-      providers: [],
-      gatewayUrl: "",
-      modelsByProvider: {},
-      supportedModels: [],
+  it("excludes stale saved routes and models that are not in the backend catalog", async () => {
+    mockStudioApi.getUserLlmSettings.mockResolvedValueOnce(
+      createLlmSettings({
+        defaultModel: "retired-model",
+        effectiveRoute: "/api/v1/proxy/s/retired-team",
+        effectiveRouteLabel: "Retired Team",
+        routeOptions: [
+          {
+            routeValue: "",
+            label: "NyxID Gateway",
+            source: "gateway_provider",
+            status: "ready",
+            allowed: true,
+            ready: true,
+            serviceId: null,
+            serviceSlug: null,
+            description: null,
+          },
+        ],
+        savedRoute: "/api/v1/proxy/s/retired-team",
+        savedRouteLabel: "Retired Team",
+      })
+    );
+
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Preferred route" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("NyxID Gateway").length).toBeGreaterThan(1);
     });
+    expect(screen.queryByRole("option", { name: "Retired Team" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "retired-model" })).toBeNull();
+  });
+
+  it("saves canonical LLM settings", async () => {
+    mockStudioApi.getUserLlmSettings.mockResolvedValueOnce(
+      createLlmSettings({
+        modelGroupsByRoute: [],
+      })
+    );
 
     renderWithQueryClient(React.createElement(SettingsPage));
 
@@ -230,9 +301,9 @@ describe("SettingsPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Save config" }));
 
     await waitFor(() => {
-      expect(mockStudioApi.saveUserConfig).toHaveBeenCalledWith({
-        defaultModel: "gpt-4o",
-        preferredLlmRoute: "",
+      expect(mockStudioApi.saveUserLlmSettings).toHaveBeenCalledWith({
+        model: "gpt-4o",
+        routeValue: "",
       });
     });
   });

@@ -7,9 +7,10 @@ option csharp_namespace = "Aevatar.Scripting.Core.Ports";
 import "script_host_messages.proto";
 
 message ScriptDefinitionSnapshot {
+  reserved 3;
+  reserved "source_text";
   string script_id = 1;
   string revision = 2;
-  string source_text = 3;
   string source_hash = 4;
   aevatar.scripting.ScriptPackageSpec script_package = 5;
   string state_type_url = 6;

@@ -15,10 +15,10 @@ public sealed class WorkflowRunActorResolverTests
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
         registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
-        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, registry);
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", " direct ", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow(" direct ")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -36,13 +36,12 @@ public sealed class WorkflowRunActorResolverTests
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
         registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
-        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, registry);
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
             new WorkflowChatRunRequest(
                 "hello",
-                "direct",
-                null,
+                WorkflowChatSource.CatalogWorkflow("direct"),
                 ScopeId: "scope-user-1"),
             CancellationToken.None);
 
@@ -58,17 +57,13 @@ public sealed class WorkflowRunActorResolverTests
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
         registry.Register("auto", "name: auto\nroles: []\nsteps: []\n");
-        var resolver = new WorkflowRunActorResolver(
-            bindingReader,
-            actorPort,
-            registry,
-            new WorkflowRunBehaviorOptions
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry, new WorkflowRunBehaviorOptions
             {
                 UseAutoAsDefaultWhenWorkflowUnspecified = true,
             });
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct()),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -83,17 +78,13 @@ public sealed class WorkflowRunActorResolverTests
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
         registry.Register("review", "name: review\nroles: []\nsteps: []\n");
-        var resolver = new WorkflowRunActorResolver(
-            new StaticWorkflowActorBindingReader(null),
-            actorPort,
-            registry,
-            new WorkflowRunBehaviorOptions
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, registry, new WorkflowRunBehaviorOptions
             {
                 DefaultWorkflowName = "review",
             });
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct()),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -103,19 +94,36 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
-    public async Task ResolveOrCreateAsync_ShouldReturnWorkflowNotFound_WhenRegistryDoesNotContainWorkflow()
+    public async Task ResolveOrCreateAsync_ShouldNotReadSourceActorBinding_WhenSourceIsDirect()
     {
-        var resolver = new WorkflowRunActorResolver(
-            new StaticWorkflowActorBindingReader(null),
-            new RecordingWorkflowRunActorPort(),
-            new InMemoryWorkflowDefinitionCatalog());
+        var bindingReader = new ThrowingWorkflowActorBindingReader();
+        var actorPort = new RecordingWorkflowRunActorPort();
+        var registry = new InMemoryWorkflowDefinitionCatalog();
+        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", "missing", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct()),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.WorkflowNameForRun.Should().Be("direct");
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].WorkflowName.Should().Be("direct");
+        bindingReader.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldReturnWorkflowNotFound_WhenRegistryDoesNotContainWorkflow()
+    {
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), new RecordingWorkflowRunActorPort(), new RecordingWorkflowRunActorPort(), new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
-        result.Actor.Should().BeNull();
+        result.Target.Should().BeNull();
         result.WorkflowNameForRun.Should().Be("missing");
     }
 
@@ -149,20 +157,19 @@ public sealed class WorkflowRunActorResolverTests
         var actorPort = new RecordingWorkflowRunActorPort();
         actorPort.ParseResults[entryWorkflowYaml] = WorkflowYamlParseResult.Success("inline_entry");
         actorPort.ParseResults[helperWorkflowYaml] = WorkflowYamlParseResult.Success("helper");
-        var resolver = new WorkflowRunActorResolver(
-            bindingReader,
-            actorPort,
-            new InMemoryWorkflowDefinitionCatalog());
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1", WorkflowYamls: [entryWorkflowYaml, helperWorkflowYaml]),
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml, helperWorkflowYaml], actorId: "agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
         result.WorkflowNameForRun.Should().Be("inline_entry");
-        result.Actor.Should().NotBeNull();
-        result.Actor!.Id.Should().Be("run-1");
-        result.CreatedActorIds.Should().Equal("definition-isolated-1", "run-1");
+        result.Target.Should().NotBeNull();
+        result.Target!.ActorId.Should().Be("run-1");
+        result.Target!.CreatedActorIds.Should().Equal("definition-isolated-1", "run-1");
         actorPort.CreateRunBindings.Should().ContainSingle();
         actorPort.CreateRunBindings[0].DefinitionActorId.Should().BeEmpty();
         actorPort.CreateRunBindings[0].WorkflowName.Should().Be("inline_entry");
@@ -171,6 +178,92 @@ public sealed class WorkflowRunActorResolverTests
             new KeyValuePair<string, string>("inline_entry", entryWorkflowYaml));
         actorPort.CreateRunBindings[0].InlineWorkflowYamls.Should().Contain(
             new KeyValuePair<string, string>("helper", helperWorkflowYaml));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldResolveTypedInlineYamlSourceActorId()
+    {
+        const string entryWorkflowYaml =
+            """
+            name: inline_entry
+            roles: []
+            steps: []
+            """;
+        const string sourceActorId = "typed-source-actor-1";
+        var bindingReader = new RecordingWorkflowActorBindingReader();
+        bindingReader.Register(
+            sourceActorId,
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                sourceActorId,
+                "shared-definition-1",
+                "source-run-1",
+                "inline_entry",
+                "name: inline_entry\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ScopeId: "source-scope-1"));
+        var actorPort = new RecordingWorkflowRunActorPort();
+        actorPort.ParseResults[entryWorkflowYaml] = WorkflowYamlParseResult.Success("inline_entry");
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                ScopeId: "request-scope-1",
+                Source: WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml], actorId: sourceActorId)),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        bindingReader.LastActorId.Should().Be(sourceActorId);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].WorkflowName.Should().Be("inline_entry");
+        actorPort.CreateRunBindings[0].ScopeId.Should().Be("source-scope-1");
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldResolveLegacyWorkflowAgentIdSourceActor()
+    {
+        const string sourceActorId = "legacy-source-actor-1";
+        const string legacyYaml =
+            """
+            name: direct
+            description: source actor definition
+            roles: []
+            steps: []
+            """;
+        var bindingReader = new RecordingWorkflowActorBindingReader();
+        bindingReader.Register(
+            sourceActorId,
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                sourceActorId,
+                "definition-direct-bound",
+                "source-run-1",
+                "direct",
+                legacyYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ScopeId: "source-scope-1"));
+        var actorPort = new RecordingWorkflowRunActorPort();
+        var registry = new InMemoryWorkflowDefinitionCatalog();
+        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.DefinitionActor(sourceActorId, "direct"),
+                ScopeId: "request-scope-1",
+                LlmControl: null),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.WorkflowNameForRun.Should().Be("direct");
+        bindingReader.LastActorId.Should().Be(sourceActorId);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].DefinitionActorId.Should().Be("definition-direct-bound");
+        actorPort.CreateRunBindings[0].WorkflowName.Should().Be("direct");
+        actorPort.CreateRunBindings[0].WorkflowYaml.Should().Be(legacyYaml);
+        actorPort.CreateRunBindings[0].ScopeId.Should().Be("source-scope-1");
     }
 
     [Fact]
@@ -193,13 +286,12 @@ public sealed class WorkflowRunActorResolverTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)));
         var actorPort = new RecordingWorkflowRunActorPort();
         actorPort.ParseResults[entryWorkflowYaml] = WorkflowYamlParseResult.Success("inline_entry");
-        var resolver = new WorkflowRunActorResolver(
-            bindingReader,
-            actorPort,
-            new InMemoryWorkflowDefinitionCatalog());
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1", WorkflowYamls: [entryWorkflowYaml]),
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml], actorId: "agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowBindingMismatch);
@@ -225,18 +317,17 @@ public sealed class WorkflowRunActorResolverTests
         var actorPort = new RecordingWorkflowRunActorPort();
         actorPort.ParseResults[entryWorkflowYaml] = WorkflowYamlParseResult.Success("inline_entry");
         actorPort.ParseResults[helperWorkflowYaml] = WorkflowYamlParseResult.Success("helper");
-        var resolver = new WorkflowRunActorResolver(
-            new StaticWorkflowActorBindingReader(null),
-            actorPort,
-            new InMemoryWorkflowDefinitionCatalog());
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", "auto", null, WorkflowYamls: [entryWorkflowYaml, helperWorkflowYaml]),
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml, helperWorkflowYaml], "auto")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNameMismatch);
         result.WorkflowNameForRun.Should().Be("inline_entry");
-        result.Actor.Should().BeNull();
+        result.Target.Should().BeNull();
         actorPort.CreateRunBindings.Should().BeEmpty();
     }
 
@@ -245,13 +336,10 @@ public sealed class WorkflowRunActorResolverTests
     {
         var actorPort = new RecordingWorkflowRunActorPort();
         actorPort.ParseResults["bad"] = WorkflowYamlParseResult.Invalid("bad yaml");
-        var resolver = new WorkflowRunActorResolver(
-            new StaticWorkflowActorBindingReader(null),
-            actorPort,
-            new InMemoryWorkflowDefinitionCatalog());
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null, WorkflowYamls: ["bad"]),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.InlineYamlBundle(["bad"])),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
@@ -276,13 +364,10 @@ public sealed class WorkflowRunActorResolverTests
         var actorPort = new RecordingWorkflowRunActorPort();
         actorPort.ParseResults[firstYaml] = WorkflowYamlParseResult.Success("duplicate");
         actorPort.ParseResults[secondYaml] = WorkflowYamlParseResult.Success("duplicate");
-        var resolver = new WorkflowRunActorResolver(
-            new StaticWorkflowActorBindingReader(null),
-            actorPort,
-            new InMemoryWorkflowDefinitionCatalog());
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null, WorkflowYamls: [firstYaml, secondYaml]),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.InlineYamlBundle([firstYaml, secondYaml])),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
@@ -290,35 +375,91 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
-    public async Task ResolveOrCreateAsync_ShouldReturnAgentNotFound_WhenSourceActorBindingMissing()
+    public async Task ResolveOrCreateAsync_ShouldReturnInvalidWorkflowYaml_WhenNamedInlineDocumentNameMismatchesYaml()
     {
+        const string helperWorkflowYaml =
+            """
+            name: helper
+            roles: []
+            steps: []
+            """;
+        var actorPort = new RecordingWorkflowRunActorPort();
+        actorPort.ParseResults[helperWorkflowYaml] = WorkflowYamlParseResult.Success("helper");
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.InlineYamlBundle(
+                    "foo",
+                    [new WorkflowChatInlineYamlDocument("foo", helperWorkflowYaml)])),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        result.Target.Should().BeNull();
+        actorPort.CreateRunBindings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldCreateRun_WhenNamedInlineDocumentNameMatchesYaml()
+    {
+        const string entryWorkflowYaml =
+            """
+            name: inline_entry
+            roles: []
+            steps: []
+            """;
+        var actorPort = new RecordingWorkflowRunActorPort();
+        actorPort.ParseResults[entryWorkflowYaml] = WorkflowYamlParseResult.Success("inline_entry");
         var resolver = new WorkflowRunActorResolver(
             new StaticWorkflowActorBindingReader(null),
-            new RecordingWorkflowRunActorPort(),
+            actorPort,
+            actorPort,
             new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-404"),
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.InlineYamlBundle(
+                    "inline_entry",
+                    [new WorkflowChatInlineYamlDocument("inline_entry", entryWorkflowYaml)])),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.WorkflowNameForRun.Should().Be("inline_entry");
+        result.Target.Should().NotBeNull();
+        result.Target!.ActorId.Should().Be("run-1");
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].WorkflowName.Should().Be("inline_entry");
+        actorPort.CreateRunBindings[0].WorkflowYaml.Should().Be(entryWorkflowYaml);
+        actorPort.CreateRunBindings[0].InlineWorkflowYamls.Should().ContainSingle()
+            .Which.Should().Be(new KeyValuePair<string, string>("inline_entry", entryWorkflowYaml));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldReturnAgentNotFound_WhenSourceActorBindingMissing()
+    {
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), new RecordingWorkflowRunActorPort(), new RecordingWorkflowRunActorPort(), new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-404")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.AgentNotFound);
-        result.Actor.Should().BeNull();
+        result.Target.Should().BeNull();
     }
 
     [Fact]
     public async Task ResolveOrCreateAsync_ShouldReturnAgentTypeNotSupported_WhenSourceActorIsUnsupported()
     {
-        var resolver = new WorkflowRunActorResolver(
-            new StaticWorkflowActorBindingReader(WorkflowActorBinding.Unsupported("agent-1")),
-            new RecordingWorkflowRunActorPort(),
-            new InMemoryWorkflowDefinitionCatalog());
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(WorkflowActorBinding.Unsupported("agent-1")), new RecordingWorkflowRunActorPort(), new RecordingWorkflowRunActorPort(), new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.AgentTypeNotSupported);
-        result.Actor.Should().BeNull();
+        result.Target.Should().BeNull();
     }
 
     [Fact]
@@ -335,10 +476,11 @@ public sealed class WorkflowRunActorResolverTests
                     string.Empty,
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))),
             new RecordingWorkflowRunActorPort(),
+            new RecordingWorkflowRunActorPort(),
             new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.AgentWorkflowNotConfigured);
@@ -358,10 +500,11 @@ public sealed class WorkflowRunActorResolverTests
                     string.Empty,
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))),
             new RecordingWorkflowRunActorPort(),
+            new RecordingWorkflowRunActorPort(),
             new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", "requested", "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1", "requested")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowBindingMismatch);
@@ -385,10 +528,11 @@ public sealed class WorkflowRunActorResolverTests
                     string.Empty,
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))),
             actorPort,
+            actorPort,
             registry);
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -414,10 +558,11 @@ public sealed class WorkflowRunActorResolverTests
                     "name: source\nroles: []\nsteps: []\n",
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))),
             actorPort,
+            actorPort,
             registry);
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -458,10 +603,10 @@ public sealed class WorkflowRunActorResolverTests
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
         registry.Register("direct", latestYaml);
-        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, registry);
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var boundResult = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, opaqueActorId),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor(opaqueActorId)),
             CancellationToken.None);
 
         boundResult.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -474,7 +619,7 @@ public sealed class WorkflowRunActorResolverTests
         actorPort.CreateRunBindings.Clear();
 
         var freshResult = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             CancellationToken.None);
 
         freshResult.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -499,10 +644,11 @@ public sealed class WorkflowRunActorResolverTests
                     string.Empty,
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))),
             actorPort,
+            actorPort,
             new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.AgentWorkflowNotConfigured);
@@ -518,13 +664,10 @@ public sealed class WorkflowRunActorResolverTests
         };
         var registry = new InMemoryWorkflowDefinitionCatalog();
         registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
-        var resolver = new WorkflowRunActorResolver(
-            new StaticWorkflowActorBindingReader(null),
-            actorPort,
-            registry);
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, registry);
 
         var act = async () => await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             CancellationToken.None);
 
         var ex = await act.Should().ThrowAsync<WorkflowDirectFallbackTriggerException>();
@@ -545,13 +688,10 @@ public sealed class WorkflowRunActorResolverTests
             CreateRunException = new InvalidOperationException("inline failed"),
         };
         actorPort.ParseResults[entryWorkflowYaml] = WorkflowYamlParseResult.Success("inline_entry");
-        var resolver = new WorkflowRunActorResolver(
-            new StaticWorkflowActorBindingReader(null),
-            actorPort,
-            new InMemoryWorkflowDefinitionCatalog());
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var act = async () => await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null, WorkflowYamls: [entryWorkflowYaml]),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml])),
             CancellationToken.None);
 
         var ex = await act.Should().ThrowAsync<InvalidOperationException>();
@@ -575,6 +715,17 @@ public sealed class WorkflowRunActorResolverTests
         }
     }
 
+    private sealed class ThrowingWorkflowActorBindingReader : IWorkflowActorBindingReader
+    {
+        public int Calls { get; private set; }
+
+        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
+        {
+            Calls++;
+            throw new InvalidOperationException($"Direct source must not read actor binding '{actorId}'.");
+        }
+    }
+
     private sealed class RecordingWorkflowActorBindingReader : IWorkflowActorBindingReader
     {
         private readonly Dictionary<string, WorkflowActorBinding> _bindings = new(StringComparer.Ordinal);
@@ -592,24 +743,19 @@ public sealed class WorkflowRunActorResolverTests
         }
     }
 
-    private sealed class RecordingWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class RecordingWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public Dictionary<string, WorkflowYamlParseResult> ParseResults { get; } = new(StringComparer.Ordinal);
         public List<WorkflowDefinitionBinding> CreateRunBindings { get; } = [];
         public Exception? CreateRunException { get; set; }
-
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             if (CreateRunException != null)
                 throw CreateRunException;
             CreateRunBindings.Add(definition);
             return Task.FromResult(
-                new WorkflowRunCreationResult(
-                    new FakeActor("run-1"),
+                new WorkflowRunCreationReceipt("run-1",
                     "definition-isolated-1",
                     ["definition-isolated-1", "run-1"]));
         }

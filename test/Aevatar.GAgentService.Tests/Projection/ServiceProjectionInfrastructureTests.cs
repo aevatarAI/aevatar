@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
@@ -25,77 +26,174 @@ namespace Aevatar.GAgentService.Tests.Projection;
 public sealed class ServiceProjectionInfrastructureTests
 {
     [Fact]
-    public async Task CatalogProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
+    public async Task GAgentRunTerminalProjectionPort_ShouldAttachExistingProjection_WhenScopeActorExists()
     {
-        var activationService = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
-            static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = projectionName,
-            });
-        IServiceCatalogProjectionPort service = new ServiceCatalogProjectionPort(
+        var runtime = new RecordingActorRuntime();
+        runtime.KnownActorIds.Add(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            "actor-1",
+            "gagent-run-terminal-draft-run",
+            ProjectionRuntimeMode.DurableMaterialization,
+            "corr-1")));
+        IGAgentRunTerminalProjectionPort service = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
-            activationService,
-            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>>());
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                runtime,
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
 
-        await service.EnsureProjectionAsync(string.Empty);
-        await service.EnsureProjectionAsync("actor-1");
+        var lease = await service.AttachExistingProjectionAsync(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.DraftRun);
 
-        activationService.Calls.Should().ContainSingle();
-        activationService.Calls[0].Should().Be(("actor-1", "service-catalog"));
+        lease.Should().NotBeNull();
+        lease!.ActorId.Should().Be("actor-1");
+        lease.CorrelationId.Should().Be("corr-1");
+        lease.InteractionKind.Should().Be(GAgentRunTerminalInteractionKind.DraftRun);
     }
 
     [Fact]
-    public async Task RevisionProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
+    public async Task GAgentRunTerminalProjectionPort_ShouldReturnNullForAttachExisting_WhenScopeActorIsMissingOrInvalid()
     {
-        var activationService = new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
-            static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = projectionName,
-            });
-        IServiceRevisionCatalogProjectionPort service = new ServiceRevisionCatalogProjectionPort(
+        var runtime = new RecordingActorRuntime();
+        runtime.KnownActorIds.Add("different-scope");
+        IGAgentRunTerminalProjectionPort disabledService = new GAgentRunTerminalProjectionPort(
+            new ServiceProjectionOptions { Enabled = false },
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                runtime,
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
+        IGAgentRunTerminalProjectionPort enabledService = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
-            activationService,
-            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>>());
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                runtime,
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
 
-        await service.EnsureProjectionAsync(" ");
-        await service.EnsureProjectionAsync("actor-2");
-
-        activationService.Calls.Should().ContainSingle();
-        activationService.Calls[0].Should().Be(("actor-2", "service-revisions"));
+        (await disabledService.AttachExistingProjectionAsync(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.DraftRun)).Should().BeNull();
+        (await enabledService.AttachExistingProjectionAsync(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.DraftRun)).Should().BeNull();
+        (await enabledService.AttachExistingProjectionAsync(
+            "",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.DraftRun)).Should().BeNull();
+        (await enabledService.AttachExistingProjectionAsync(
+            "actor-1",
+            " ",
+            GAgentRunTerminalInteractionKind.DraftRun)).Should().BeNull();
     }
 
     [Fact]
-    public async Task ProjectionPorts_ShouldSkipActivation_WhenDisabled()
+    public async Task GAgentRunTerminalProjectionPort_ShouldGuardReleaseAndUnknownKinds()
     {
-        var catalogActivation = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
-            static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = projectionName,
-            });
-        var revisionActivation = new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
-            static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = projectionName,
-            });
-        var disabledOptions = new ServiceProjectionOptions { Enabled = false };
-        IServiceCatalogProjectionPort catalogPort = new ServiceCatalogProjectionPort(
-            disabledOptions,
-            catalogActivation,
-            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>>());
-        IServiceRevisionCatalogProjectionPort revisionPort = new ServiceRevisionCatalogProjectionPort(
-            disabledOptions,
-            revisionActivation,
-            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>>());
+        IGAgentRunTerminalProjectionPort service = new GAgentRunTerminalProjectionPort(
+            new ServiceProjectionOptions(),
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                new RecordingActorRuntime(),
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
 
-        await catalogPort.EnsureProjectionAsync("actor-1");
-        await revisionPort.EnsureProjectionAsync("actor-2");
+        Func<Task> releaseNull = () => service.ReleaseProjectionAsync(null!);
+        Func<Task> releaseForeignLease = () => service.ReleaseProjectionAsync(new ForeignGAgentRunTerminalProjectionLease());
+        Func<Task> ensureUnknownKind = () => service.AttachExistingProjectionAsync(
+            "actor-1",
+            "corr-1",
+            (GAgentRunTerminalInteractionKind)999);
+        var resolveUnknownProjection = () => GAgentRunTerminalProjectionPort.ResolveInteractionKind("unknown-projection");
 
-        catalogActivation.Calls.Should().BeEmpty();
-        revisionActivation.Calls.Should().BeEmpty();
+        await releaseNull.Should().ThrowAsync<ArgumentNullException>();
+        await releaseForeignLease.Should().ThrowAsync<InvalidOperationException>();
+        await ensureUnknownKind.Should().ThrowAsync<ArgumentOutOfRangeException>();
+        resolveUnknownProjection.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public void GAgentRunTerminalProjectionPort_ShouldValidateAttachExistingLookupDependency()
+    {
+        var create = () => new GAgentRunTerminalProjectionPort(
+            new ServiceProjectionOptions(),
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            null!);
+
+        create.Should().Throw<ArgumentNullException>().WithParameterName("attachExistingLeaseLookup");
+    }
+
+    [Fact]
+    public void GAgentRunTerminalModels_ShouldExposeStableSessionContextAndSnapshotShape()
+    {
+        var context = new GAgentRunTerminalProjectionContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "gagent-run-terminal-draft-run",
+            CorrelationId = "corr-1",
+            InteractionKind = GAgentRunTerminalInteractionKind.DraftRun,
+        };
+        var observedAt = DateTimeOffset.Parse("2026-05-14T01:00:00+00:00");
+        var snapshot = new GAgentRunTerminalSnapshot(
+            "actor-1",
+            "session-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.DraftRun,
+            GAgentRunTerminalStatus.TextMessageCompleted,
+            "",
+            "",
+            14,
+            "evt-14",
+            observedAt);
+
+        context.SessionId.Should().Be("corr-1");
+        var copy = snapshot with { };
+        copy.Should().Be(snapshot);
+        var (
+            actorId,
+            sessionId,
+            correlationId,
+            interactionKind,
+            status,
+            reasonCode,
+            reasonMessage,
+            stateVersion,
+            lastEventId,
+            actualObservedAt) = snapshot;
+        actorId.Should().Be("actor-1");
+        sessionId.Should().Be("session-1");
+        correlationId.Should().Be("corr-1");
+        interactionKind.Should().Be(GAgentRunTerminalInteractionKind.DraftRun);
+        status.Should().Be(GAgentRunTerminalStatus.TextMessageCompleted);
+        reasonCode.Should().BeEmpty();
+        reasonMessage.Should().BeEmpty();
+        stateVersion.Should().Be(14);
+        lastEventId.Should().Be("evt-14");
+        actualObservedAt.Should().Be(observedAt);
     }
 
     [Fact]
@@ -103,11 +201,24 @@ public sealed class ServiceProjectionInfrastructureTests
     {
         var catalog = new ServiceCatalogReadModelMetadataProvider();
         var revisions = new ServiceRevisionCatalogReadModelMetadataProvider();
+        var terminal = new GAgentRunTerminalReadModelMetadataProvider();
 
         catalog.Metadata.IndexName.Should().Be("gagent-service-catalog");
         revisions.Metadata.IndexName.Should().Be("gagent-service-revisions");
-        catalog.Metadata.Mappings.Should().BeEmpty();
+        terminal.Metadata.IndexName.Should().Be("gagent-run-terminals");
+
+        var properties = catalog.Metadata.Mappings["properties"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        var namespaceMapping = properties["namespace"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        namespaceMapping["type"].Should().Be("keyword");
+
         revisions.Metadata.Settings.Should().BeEmpty();
+        terminal.Metadata.Mappings.Should().BeEmpty();
+        terminal.Metadata.Settings.Should().BeEmpty();
+        terminal.Metadata.Aliases.Should().BeEmpty();
     }
 
     [Fact]
@@ -124,23 +235,45 @@ public sealed class ServiceProjectionInfrastructureTests
             x.ServiceType == typeof(IProjectionDocumentMetadataProvider<ServiceRevisionCatalogReadModel>) &&
             x.ImplementationType == typeof(ServiceRevisionCatalogReadModelMetadataProvider));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionDocumentMetadataProvider<GAgentRunTerminalReadModel>) &&
+            x.ImplementationType == typeof(GAgentRunTerminalReadModelMetadataProvider));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceCatalogQueryReader) &&
             x.ImplementationType == typeof(ServiceCatalogQueryReader));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceRevisionCatalogQueryReader) &&
             x.ImplementationType == typeof(ServiceRevisionCatalogQueryReader));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IServiceCatalogProjectionPort) &&
-            x.ImplementationType == typeof(ServiceCatalogProjectionPort));
+            x.ServiceType == typeof(IGAgentRunTerminalQueryPort) &&
+            x.ImplementationType == typeof(GAgentRunTerminalQueryReader));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IServiceRevisionCatalogProjectionPort) &&
-            x.ImplementationType == typeof(ServiceRevisionCatalogProjectionPort));
-        services.Should().Contain(x =>
+            x.ServiceType == typeof(IGAgentRunTerminalProjectionPort) &&
+            x.ImplementationType == typeof(GAgentRunTerminalProjectionPort));
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceCatalogProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceCatalogProjector));
-        services.Should().Contain(x =>
+            IsObservedProjectionArtifactMaterializerFor<ServiceCatalogProjector>(x.ImplementationType));
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRevisionCatalogProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceRevisionCatalogProjector));
+            IsObservedProjectionArtifactMaterializerFor<ServiceRevisionCatalogProjector>(x.ImplementationType));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ICurrentStateProjectionMaterializer<GAgentRunTerminalProjectionContext>) &&
+            IsObservedCurrentStateMaterializerFor<GAgentRunTerminalProjector>(x.ImplementationType));
+    }
+
+    private static bool IsObservedProjectionArtifactMaterializerFor<TProjector>(System.Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedProjectionArtifactMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
+    }
+
+    private static bool IsObservedCurrentStateMaterializerFor<TProjector>(System.Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedCurrentStateProjectionMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
     }
 
     [Fact]
@@ -218,7 +351,7 @@ public sealed class ServiceProjectionInfrastructureTests
                         Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-16T01:00:00+00:00")),
                         EventData = Any.Pack(new StringValue { Value = "payload" }),
                     },
-                }),
+            }),
             },
             new FixedProjectionClock(DateTimeOffset.Parse("2026-03-16T02:00:00+00:00")),
             null,
@@ -242,7 +375,7 @@ public sealed class ServiceProjectionInfrastructureTests
                         EventId = "evt-2",
                         Version = 0,
                     },
-                }),
+            }),
             },
             new FixedProjectionClock(DateTimeOffset.Parse("2026-03-16T03:00:00+00:00")),
             null,
@@ -270,10 +403,6 @@ public sealed class ServiceProjectionInfrastructureTests
         var plainResult = (bool)supportType
             .GetMethod("TryGetObservedPayload", BindingFlags.Static | BindingFlags.Public)!
             .Invoke(null, plainArgs)!;
-        var resolvedVersion = (long)supportType
-            .GetMethod("ResolveNextStateVersion", BindingFlags.Static | BindingFlags.Public)!
-            .Invoke(null, [3L, 0L])!;
-
         targetSnapshot.EnabledEndpointIds.Should().Equal("run", "chat");
         targetSnapshot.ServingState.Should().Be(ServiceServingState.Active.ToString());
         trafficSnapshot.ServingState.Should().Be(ServiceServingState.Paused.ToString());
@@ -292,7 +421,6 @@ public sealed class ServiceProjectionInfrastructureTests
         plainArgs[3].Should().Be(string.Empty);
         plainArgs[4].Should().Be(0L);
         plainArgs[5].Should().Be(default(DateTimeOffset));
-        resolvedVersion.Should().Be(0L);
     }
 
     [Fact]
@@ -348,4 +476,26 @@ public sealed class ServiceProjectionInfrastructureTests
         traffic.AllocationWeight.Should().Be(10);
         traffic.ServingState.Should().Be(ServiceServingState.Paused.ToString());
     }
+
+    private sealed class ForeignGAgentRunTerminalProjectionLease : IGAgentRunTerminalProjectionLease
+    {
+        public string ActorId => "actor-foreign";
+
+        public string CorrelationId => "corr-foreign";
+
+        public GAgentRunTerminalInteractionKind InteractionKind => GAgentRunTerminalInteractionKind.DraftRun;
+    }
+
+    private static IProjectionScopeAttachExistingLeaseLookup<ServiceProjectionRuntimeLease<TContext>> CreateAttachExistingLookup<TContext>(
+        IActorRuntime runtime,
+        Func<ProjectionRuntimeScopeKey, TContext> contextFactory)
+        where TContext : class, IProjectionMaterializationContext =>
+        new ProjectionScopeAttachExistingLeaseLookup<ServiceProjectionRuntimeLease<TContext>, TContext>(
+            runtime,
+            request => contextFactory(new ProjectionRuntimeScopeKey(
+                request.RootActorId,
+                request.ProjectionKind,
+                request.Mode,
+                request.SessionId)),
+            static (_, context) => new ServiceProjectionRuntimeLease<TContext>(context.RootActorId, context));
 }

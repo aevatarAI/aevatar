@@ -1,60 +1,24 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Studio.Application.Studio.Abstractions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
+using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
+// Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+// Nyx-specific HTTP/status parsing and ChatStreamAsync reading stay outside the room actor turn.
+// Room effects are submitted only through IStreamingProxyRoomCommandService typed requests.
+// The adapter keeps no authority to create committed room facts.
 internal sealed class StreamingProxyNyxParticipantCoordinator
 {
     private const string NyxIdProviderName = "nyxid";
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
-    private static readonly IReadOnlyDictionary<string, string[]> FallbackModels =
-        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["anthropic"] =
-            [
-                "claude-sonnet-4-5-20250929",
-                "claude-opus-4-20250514",
-                "claude-sonnet-4-20250514",
-                "claude-haiku-4-5-20251001",
-            ],
-            ["google-ai"] =
-            [
-                "gemini-2.5-pro-preview-06-05",
-                "gemini-2.5-flash-preview-05-20",
-                "gemini-2.0-flash",
-            ],
-            ["cohere"] =
-            [
-                "command-r-plus",
-                "command-r",
-                "command-a-03-2025",
-            ],
-        };
-
-    private static readonly string[] NonLlmServiceKeywords =
-    [
-        "sisyphus",
-        "chrono-storage",
-        "chrono-sandbox",
-        "chrono-graph",
-        "ornn",
-        "admin",
-        "webhook",
-        "n8n",
-        "grafana",
-        "prometheus",
-    ];
 
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IConfiguration _configuration;
@@ -76,179 +40,98 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         _preferencesStore = preferencesStore;
     }
 
-    public async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureParticipantsJoinedAsync(
+    public Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> ResolveParticipantsAsync(
         string scopeId,
         string roomId,
-        IActor actor,
-        IStreamingProxyParticipantStore participantStore,
         string accessToken,
         CancellationToken ct,
         string? preferredRoute = null,
         string? defaultModel = null)
     {
-        var participants = await ResolveParticipantsAsync(accessToken, preferredRoute, defaultModel, ct);
-        if (participants.Count == 0)
-            return participants;
-
-        var existing = await participantStore.ListAsync(roomId, ct);
-        var existingIds = existing
-            .Select(entry => entry.AgentId)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var participant in participants)
-        {
-            if (existingIds.Contains(participant.ParticipantId))
-                continue;
-
-            await DispatchAsync(actor, new GroupChatParticipantJoinedEvent
-            {
-                AgentId = participant.ParticipantId,
-                DisplayName = participant.DisplayName,
-            }, ct);
-
-            await participantStore.AddAsync(roomId, participant.ParticipantId, participant.DisplayName, ct);
-        }
-
-        return participants;
+        _ = scopeId;
+        _ = roomId;
+        return ResolveParticipantsAsync(accessToken, preferredRoute, defaultModel, ct);
     }
 
-    public async Task<int> GenerateRepliesAsync(
-        IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants,
-        IActor actor,
-        string prompt,
-        string sessionId,
-        string accessToken,
-        CancellationToken ct,
-        IStreamingProxyParticipantStore? participantStore = null,
-        string? roomId = null)
+    public async Task<StreamingProxyParticipantReplyOutcome> GenerateReplyAsync(
+        StreamingProxyChatParticipantReplyRequested request,
+        CancellationToken ct)
     {
-        if (participants.Count == 0)
-            return 0;
-
+        ArgumentNullException.ThrowIfNull(request);
         if (!_llmProviderFactory.GetAvailableProviders().Contains(NyxIdProviderName, StringComparer.OrdinalIgnoreCase))
         {
             _logger.LogWarning("NyxID provider '{ProviderName}' is not registered; skip Streaming Proxy participants.", NyxIdProviderName);
-            return 0;
+            return StreamingProxyParticipantReplyOutcome.Failed(
+                StreamingProxyChatParticipantReplyFailureKind.ProviderUnavailable,
+                $"NyxID provider '{NyxIdProviderName}' is not registered.");
         }
 
         var provider = _llmProviderFactory.GetProvider(NyxIdProviderName);
-        var transcript = new List<(string Speaker, string Content)>();
-        var activeParticipants = participants.ToList();
-        var rounds = activeParticipants.Count > 1 ? StreamingProxyDefaults.MaxDiscussionRounds : 1;
-        var totalSuccessfulReplies = 0;
+        var participant = new StreamingProxyNyxParticipantDefinition(
+            request.ParticipantId,
+            request.RoutePreference,
+            request.DisplayName,
+            request.Model);
+        var activeParticipants = request.ActiveParticipants
+            .Select(candidate => new StreamingProxyNyxParticipantDefinition(
+                candidate.ParticipantId,
+                candidate.RoutePreference,
+                candidate.DisplayName,
+                string.IsNullOrWhiteSpace(candidate.Model) ? null : candidate.Model))
+            .ToList();
+        var transcript = request.Transcript
+            .Select(entry => (entry.Speaker, entry.Content))
+            .ToList();
 
-        for (var round = 1; round <= rounds && activeParticipants.Count > 0; round++)
+        try
         {
-            var successfulReplies = 0;
-            var failedParticipants = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var roundParticipants = activeParticipants.ToList();
-
-            foreach (var participant in roundParticipants)
+            var llmRequest = BuildParticipantRequest(
+                participant,
+                activeParticipants,
+                request.Prompt,
+                request.SessionId,
+                request.AccessToken,
+                transcript,
+                request.Round,
+                request.MaxRounds);
+            var response = await ReadParticipantResponseAsync(provider, llmRequest, ct);
+            if (IsUnavailableResponse(response))
             {
-                ct.ThrowIfCancellationRequested();
-
-                if (failedParticipants.Contains(participant.ParticipantId))
-                    continue;
-
-                var availableParticipants = activeParticipants
-                    .Where(candidate => !failedParticipants.Contains(candidate.ParticipantId))
-                    .ToList();
-
-                if (availableParticipants.Count == 0)
-                    break;
-
-                try
-                {
-                    var request = BuildParticipantRequest(
-                        participant,
-                        availableParticipants,
-                        prompt,
-                        sessionId,
-                        accessToken,
-                        transcript,
-                        round,
-                        rounds);
-                    var response = await ReadParticipantResponseAsync(provider, request, ct);
-                    if (IsUnavailableResponse(response))
-                    {
-                        failedParticipants.Add(participant.ParticipantId);
-                        await MarkParticipantLeftAsync(
-                            actor,
-                            participantStore,
-                            roomId,
-                            participant.ParticipantId,
-                            ct);
-                        _logger.LogWarning(
-                            "Streaming Proxy participant '{Participant}' returned an unavailable response for route '{RoutePreference}' in round {Round}.",
-                            participant.DisplayName,
-                            participant.RoutePreference,
-                            round);
-                        continue;
-                    }
-
-                    var content = NormalizeParticipantReply(
-                        participant,
-                        availableParticipants,
-                        response.Content);
-                    if (string.IsNullOrWhiteSpace(content))
-                    {
-                        failedParticipants.Add(participant.ParticipantId);
-                        await MarkParticipantLeftAsync(
-                            actor,
-                            participantStore,
-                            roomId,
-                            participant.ParticipantId,
-                            ct);
-                        continue;
-                    }
-
-                    transcript.Add((participant.DisplayName, content));
-                    successfulReplies++;
-                    totalSuccessfulReplies++;
-                    await DispatchAsync(actor, new GroupChatMessageEvent
-                    {
-                        AgentId = participant.ParticipantId,
-                        AgentName = participant.DisplayName,
-                        Content = content,
-                        SessionId = sessionId,
-                    }, ct);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    failedParticipants.Add(participant.ParticipantId);
-                    await MarkParticipantLeftAsync(
-                        actor,
-                        participantStore,
-                        roomId,
-                        participant.ParticipantId,
-                        ct);
-                    _logger.LogWarning(ex,
-                        "Streaming Proxy participant '{Participant}' failed for route '{RoutePreference}' in round {Round}.",
-                        participant.DisplayName,
-                        participant.RoutePreference,
-                        round);
-                }
+                _logger.LogWarning(
+                    "Streaming Proxy participant '{Participant}' returned an unavailable response for route '{RoutePreference}' in round {Round}.",
+                    participant.DisplayName,
+                    participant.RoutePreference,
+                    request.Round);
+                return StreamingProxyParticipantReplyOutcome.Failed(
+                    StreamingProxyChatParticipantReplyFailureKind.ParticipantUnavailable,
+                    "Nyx participant unavailable.");
             }
 
-            if (failedParticipants.Count > 0)
-            {
-                activeParticipants = activeParticipants
-                    .Where(participant => !failedParticipants.Contains(participant.ParticipantId))
-                    .ToList();
-            }
-
-            if (successfulReplies == 0)
-                break;
-
-            if (activeParticipants.Count < 2)
-                break;
+            var content = NormalizeParticipantReply(
+                participant,
+                activeParticipants,
+                response.Content);
+            return string.IsNullOrWhiteSpace(content)
+                ? StreamingProxyParticipantReplyOutcome.Failed(
+                    StreamingProxyChatParticipantReplyFailureKind.EmptyReply,
+                    "Nyx participant returned an empty reply.")
+                : StreamingProxyParticipantReplyOutcome.Succeeded(content);
         }
-
-        return totalSuccessfulReplies;
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Streaming Proxy participant '{Participant}' failed for route '{RoutePreference}' in round {Round}.",
+                participant.DisplayName,
+                participant.RoutePreference,
+                request.Round);
+            return StreamingProxyParticipantReplyOutcome.Failed(
+                StreamingProxyChatParticipantReplyFailureKind.Error,
+                ex.Message);
+        }
     }
 
     private async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> ResolveParticipantsAsync(
@@ -278,7 +161,6 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
             })
             .ToList();
 
-        var modelsByProvider = await FetchModelsFromProvidersAsync(authorityBase, accessToken, candidates, ct);
         var preferences = await preferencesTask;
         if (preferredRoute is not null || defaultModel is not null)
         {
@@ -302,8 +184,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
             if (!seenParticipantIds.Add(candidate.ParticipantId))
                 continue;
 
-            modelsByProvider.TryGetValue(candidate.ParticipantId, out var availableModels);
-            var model = ResolveParticipantModel(preferences.DefaultModel, availableModels);
+            var model = ResolveParticipantModel(preferences.DefaultModel, ResolveProviderModels(candidate.Provider));
             participants.Add(new StreamingProxyNyxParticipantDefinition(
                 candidate.ParticipantId,
                 candidate.RoutePreference,
@@ -319,167 +200,181 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         string accessToken,
         CancellationToken ct)
     {
-        var providers = new List<StreamingProxyNyxProviderStatus>();
+        using var response = await SendNyxIdLlmCatalogRequestAsync(authorityBase, accessToken, "/api/v1/llm/services", ct);
+        if (!response.IsSuccessStatusCode &&
+            response.StatusCode != HttpStatusCode.NotFound)
+            return [];
 
-        var gatewayProvidersTask = FetchReadyGatewayProvidersAsync(authorityBase, accessToken, ct);
-        var userServicesTask = FetchUserServicesAsync(authorityBase, accessToken, ct);
+        var body = response.StatusCode == HttpStatusCode.NotFound
+            ? await FetchLegacyLlmStatusAsync(authorityBase, accessToken, ct)
+            : await response.Content.ReadAsStringAsync(ct);
+        if (string.IsNullOrWhiteSpace(body))
+            return [];
 
-        try
+        return ParseLlmServices(body)
+            .Select(NormalizeProviderStatus)
+            .Where(provider =>
+                provider.Allowed == true &&
+                string.Equals(provider.Status, "ready", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(provider.ProviderSlug) &&
+                !string.IsNullOrWhiteSpace(provider.ProxyUrl))
+            .ToList();
+    }
+
+    private async Task<string?> FetchLegacyLlmStatusAsync(
+        string authorityBase,
+        string accessToken,
+        CancellationToken ct)
+    {
+        using var response = await SendNyxIdLlmCatalogRequestAsync(authorityBase, accessToken, "/api/v1/llm/status", ct);
+        return response.IsSuccessStatusCode
+            ? await response.Content.ReadAsStringAsync(ct)
+            : null;
+    }
+
+    private async Task<HttpResponseMessage> SendNyxIdLlmCatalogRequestAsync(
+        string authorityBase,
+        string accessToken,
+        string path,
+        CancellationToken ct)
+    {
+        var statusUrl = $"{authorityBase}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, statusUrl);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        return await _httpClientFactory.CreateClient().SendAsync(request, ct).ConfigureAwait(false);
+    }
+
+    private static IReadOnlyList<StreamingProxyNyxProviderStatus> ParseLlmServices(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return [];
+
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        if (root.ValueKind == JsonValueKind.Array)
+            return ParseLlmServicesArray(root);
+
+        if (root.ValueKind != JsonValueKind.Object)
+            return [];
+
+        if (root.TryGetProperty("services", out var servicesElement) &&
+            servicesElement.ValueKind == JsonValueKind.Array)
         {
-            var gatewayProviders = await gatewayProvidersTask;
-            providers.AddRange(gatewayProviders.Where(provider => !string.IsNullOrWhiteSpace(provider.ProviderSlug)));
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Failed to fetch ready gateway providers for Streaming Proxy participants.");
+            return ParseLlmServicesArray(servicesElement);
         }
 
-        try
+        if (root.TryGetProperty("items", out var itemsElement) &&
+            itemsElement.ValueKind == JsonValueKind.Array)
         {
-            var userServices = await userServicesTask;
-            foreach (var service in userServices)
+            return ParseLlmServicesArray(itemsElement);
+        }
+
+        if (root.TryGetProperty("providers", out var providersElement) &&
+            providersElement.ValueKind == JsonValueKind.Array)
+        {
+            return ParseLegacyLlmStatus(root, providersElement);
+        }
+
+        return [];
+    }
+
+    private static IReadOnlyList<StreamingProxyNyxProviderStatus> ParseLegacyLlmStatus(
+        JsonElement root,
+        JsonElement providersElement)
+    {
+        var supportedModels = ReadStringArray(root, "supported_models", "supportedModels");
+        var modelsByProvider = ReadStringMapArray(root, "models_by_provider", "modelsByProvider");
+        var providers = ParseLlmServicesArray(providersElement)
+            .Select(NormalizeProviderStatus)
+            .ToList();
+
+        foreach (var provider in providers)
+        {
+            if (provider.Models is { Count: > 0 } ||
+                string.IsNullOrWhiteSpace(provider.ProviderSlug))
             {
-                if (IsNonLlmService(service.Slug))
-                    continue;
-
-                providers.Add(new StreamingProxyNyxProviderStatus
-                {
-                    ProviderSlug = service.Slug,
-                    ProviderName = service.Label,
-                    Status = "ready",
-                    ProxyUrl = $"{authorityBase}/api/v1/proxy/s/{Uri.EscapeDataString(service.Slug)}",
-                    Source = "user_service",
-                    Id = service.Id,
-                    ServiceId = service.ServiceId,
-                    NodeId = service.NodeId,
-                    ApiKeyId = service.ApiKeyId,
-                });
+                continue;
             }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Failed to fetch ready user services for Streaming Proxy participants.");
+
+            provider.Models = modelsByProvider.TryGetValue(provider.ProviderSlug, out var providerModels) &&
+                              providerModels.Count > 0
+                ? providerModels.ToList()
+                : supportedModels.ToList();
         }
 
         return providers;
     }
 
-    private async Task<StreamingProxyNyxProviderStatus[]> FetchReadyGatewayProvidersAsync(
-        string authorityBase,
-        string accessToken,
-        CancellationToken ct)
+    private static IReadOnlyList<StreamingProxyNyxProviderStatus> ParseLlmServicesArray(JsonElement element)
     {
-        var statusUrl = $"{authorityBase}/api/v1/llm/status";
-        using var request = new HttpRequestMessage(HttpMethod.Get, statusUrl);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        var services = new List<StreamingProxyNyxProviderStatus>();
+        foreach (var item in element.EnumerateArray())
+        {
+            var service = JsonSerializer.Deserialize<StreamingProxyNyxProviderStatus>(
+                item.GetRawText(),
+                JsonOptions);
+            if (service is not null)
+                services.Add(service);
+        }
 
-        using var response = await _httpClientFactory.CreateClient().SendAsync(request, ct);
-        if (!response.IsSuccessStatusCode)
-            return [];
-
-        var body = await response.Content.ReadAsStringAsync(ct);
-        var status = JsonSerializer.Deserialize<StreamingProxyNyxLlmStatusResponse>(body, JsonOptions);
-        return (status?.Providers ?? [])
-            .Where(provider =>
-                string.Equals(provider.Status, "ready", StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(provider.ProviderSlug))
-            .ToArray();
+        return services;
     }
 
-    private async Task<List<StreamingProxyNyxUserService>> FetchUserServicesAsync(
-        string authorityBase,
-        string accessToken,
-        CancellationToken ct)
+    private static IReadOnlyList<string> ReadStringArray(JsonElement element, params string[] propertyNames)
     {
-        var keysUrl = $"{authorityBase}/api/v1/keys";
-        using var request = new HttpRequestMessage(HttpMethod.Get, keysUrl);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-
-        using var response = await _httpClientFactory.CreateClient().SendAsync(request, ct);
-        if (!response.IsSuccessStatusCode)
-            return [];
-
-        var body = await response.Content.ReadAsStringAsync(ct);
-        var envelope = JsonSerializer.Deserialize<StreamingProxyNyxKeysResponse>(body, JsonOptions);
-        return (envelope?.Keys ?? [])
-            .Where(service =>
-                string.Equals(service.Status, "active", StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(service.Slug) &&
-                !string.IsNullOrWhiteSpace(service.EndpointUrl))
-            .ToList();
-    }
-
-    private async Task<Dictionary<string, List<string>>> FetchModelsFromProvidersAsync(
-        string authorityBase,
-        string accessToken,
-        IReadOnlyList<StreamingProxyNyxParticipantCandidate> readyProviders,
-        CancellationToken ct)
-    {
-        var tasks = readyProviders
-            .DistinctBy(candidate => candidate.ParticipantId, StringComparer.OrdinalIgnoreCase)
-            .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Provider.ProxyUrl))
-            .Select(async candidate =>
+        foreach (var propertyName in propertyNames)
+        {
+            if (!element.TryGetProperty(propertyName, out var property) ||
+                property.ValueKind != JsonValueKind.Array)
             {
-                var participantId = candidate.ParticipantId;
-                try
-                {
-                    var proxyUrl = candidate.Provider.ProxyUrl!.Trim().TrimEnd('/');
-                    if (!proxyUrl.StartsWith("/", StringComparison.Ordinal) &&
-                        !proxyUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
-                    {
-                        proxyUrl = "/" + proxyUrl;
-                    }
+                continue;
+            }
 
-                    var baseUrl = proxyUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                        ? proxyUrl
-                        : $"{authorityBase}{proxyUrl}";
+            return property
+                .EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString()?.Trim())
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Select(item => item!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
 
-                    var modelsUrl = $"{baseUrl}/models";
-                    using var request = new HttpRequestMessage(HttpMethod.Get, modelsUrl);
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        return [];
+    }
 
-                    using var response = await _httpClientFactory.CreateClient().SendAsync(request, ct);
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var body = await response.Content.ReadAsStringAsync(ct);
-                        var envelope = JsonSerializer.Deserialize<StreamingProxyOpenAIModelsResponse>(body, JsonOptions);
-                        var models = (envelope?.Data ?? [])
-                            .Where(model => !string.IsNullOrWhiteSpace(model.Id))
-                            .Select(model => model.Id!.Trim())
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                            .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
-                            .ToList();
-                        return new KeyValuePair<string, List<string>>(participantId, models);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Failed to fetch models for Streaming Proxy participant '{ParticipantId}'.", participantId);
-                }
+    private static Dictionary<string, IReadOnlyList<string>> ReadStringMapArray(
+        JsonElement element,
+        params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!element.TryGetProperty(propertyName, out var property) ||
+                property.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
 
-                var fallbackKey = candidate.Provider.ProviderSlug?.Trim() ?? string.Empty;
-                var fallback = FallbackModels.TryGetValue(fallbackKey, out var fallbackModels)
-                    ? fallbackModels.ToList()
-                    : [];
-                return new KeyValuePair<string, List<string>>(participantId, fallback);
-            });
+            var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in property.EnumerateObject())
+            {
+                if (entry.Value.ValueKind != JsonValueKind.Array)
+                    continue;
 
-        var results = await Task.WhenAll(tasks);
-        return results
-            .Where(result => !string.IsNullOrWhiteSpace(result.Key))
-            .ToDictionary(result => result.Key, result => result.Value, StringComparer.OrdinalIgnoreCase);
+                result[entry.Name] = entry.Value
+                    .EnumerateArray()
+                    .Where(item => item.ValueKind == JsonValueKind.String)
+                    .Select(item => item.GetString()?.Trim())
+                    .Where(item => !string.IsNullOrWhiteSpace(item))
+                    .Select(item => item!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
+            return result;
+        }
+
+        return new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
     }
 
     private async Task<NyxIdUserLlmPreferences> GetPreferencesAsync(CancellationToken ct)
@@ -489,7 +384,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
 
         try
         {
-            return await _preferencesStore.GetAsync(ct);
+            return await _preferencesStore.GetOwnerAsync(ct);
         }
         catch
         {
@@ -537,12 +432,18 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     {
         var identityParts = new[]
         {
+            provider.UserServiceId,
+            TryGetAdditionalString(provider.AdditionalProperties, "user_service_id"),
+            TryGetAdditionalString(provider.AdditionalProperties, "userServiceId"),
             provider.NodeId,
             TryGetAdditionalString(provider.AdditionalProperties, "node_id"),
+            TryGetAdditionalString(provider.AdditionalProperties, "nodeId"),
             provider.ServiceId,
             TryGetAdditionalString(provider.AdditionalProperties, "service_id"),
+            TryGetAdditionalString(provider.AdditionalProperties, "serviceId"),
             provider.ApiKeyId,
             TryGetAdditionalString(provider.AdditionalProperties, "api_key_id"),
+            TryGetAdditionalString(provider.AdditionalProperties, "apiKeyId"),
             provider.Id,
             TryGetAdditionalString(provider.AdditionalProperties, "id"),
             routePreference,
@@ -575,7 +476,9 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         string participantId)
     {
         var displayName = FirstNonEmpty(
+            provider.DisplayName,
             provider.ProviderName,
+            provider.ServiceName,
             provider.ProviderSlug,
             provider.Source);
 
@@ -656,6 +559,46 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
             : normalized;
     }
 
+    private static StreamingProxyNyxProviderStatus NormalizeProviderStatus(
+        StreamingProxyNyxProviderStatus provider)
+    {
+        provider.ProviderSlug = FirstNonEmpty(
+            provider.ServiceSlug,
+            provider.ProviderSlug,
+            TryGetAdditionalString(provider.AdditionalProperties, "serviceSlug"),
+            TryGetAdditionalString(provider.AdditionalProperties, "slug"));
+        provider.ProviderName = FirstNonEmpty(
+            provider.DisplayName,
+            provider.ProviderName,
+            provider.ServiceName,
+            TryGetAdditionalString(provider.AdditionalProperties, "displayName"),
+            TryGetAdditionalString(provider.AdditionalProperties, "serviceName"),
+            TryGetAdditionalString(provider.AdditionalProperties, "label"));
+        provider.ProxyUrl = FirstNonEmpty(
+            provider.RouteValue,
+            provider.ProxyUrl,
+            TryGetAdditionalString(provider.AdditionalProperties, "routeValue"),
+            TryGetAdditionalString(provider.AdditionalProperties, "proxyUrl"));
+        provider.Id = FirstNonEmpty(
+            provider.UserServiceId,
+            provider.Id,
+            TryGetAdditionalString(provider.AdditionalProperties, "userServiceId"));
+        provider.Allowed ??= TryGetAdditionalBool(provider.AdditionalProperties, "allowed");
+        provider.Allowed ??= string.Equals(provider.Status, "ready", StringComparison.OrdinalIgnoreCase);
+        return provider;
+    }
+
+    private static IReadOnlyList<string> ResolveProviderModels(StreamingProxyNyxProviderStatus provider)
+    {
+        var models = provider.Models ?? provider.AvailableModels ?? [];
+        return models
+            .Where(model => !string.IsNullOrWhiteSpace(model))
+            .Select(model => model.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private static string? FirstNonEmpty(params string?[] values) =>
         values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
 
@@ -677,13 +620,23 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         };
     }
 
-    private static bool IsNonLlmService(string? slug)
+    private static bool? TryGetAdditionalBool(
+        Dictionary<string, JsonElement>? additionalProperties,
+        string propertyName)
     {
-        if (string.IsNullOrWhiteSpace(slug))
-            return true;
+        if (additionalProperties == null ||
+            !additionalProperties.TryGetValue(propertyName, out var value))
+        {
+            return null;
+        }
 
-        var lower = slug.Trim().ToLowerInvariant();
-        return NonLlmServiceKeywords.Any(keyword => lower.Contains(keyword, StringComparison.Ordinal));
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
+            _ => null,
+        };
     }
 
     private string? ResolveNyxIdAuthorityBase()
@@ -799,15 +752,14 @@ If you want to hand the turn to someone, only hand it to this currently active p
 Return only {participant.DisplayName}'s reply text, with no prefixed name and no extra transcript formatting.
 """;
 
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken,
-            [LLMRequestMetadataKeys.NyxIdRoutePreference] = participant.RoutePreference,
-        };
-
-        if (!string.IsNullOrWhiteSpace(participant.Model))
-            metadata[LLMRequestMetadataKeys.ModelOverride] = participant.Model;
-
+        var llmControl = new LLMControlContext(
+            Normalize(accessToken),
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            Normalize(participant.Model),
+            Normalize(participant.RoutePreference),
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
         return new LLMRequest
         {
             RequestId = $"{sessionId}:{participant.ParticipantId}:round-{round}",
@@ -816,12 +768,22 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
                 ChatMessage.System(systemPrompt),
                 ChatMessage.User(userPrompt),
             ],
-            Metadata = metadata,
+            Metadata = null,
+            CallerContext = new LLMRequestCallerContext(
+                ScopeId: string.Empty,
+                OwnerSubject: participant.ParticipantId,
+                ResponseId: sessionId,
+                Credentials: new LLMRequestCallerCredentials(Normalize(accessToken))),
+            LlmControl = llmControl,
+            RoutingContext = llmControl.ToRoutingContext(),
             Model = participant.Model,
             Temperature = 0.7,
             MaxTokens = 220,
         };
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static async Task<LLMResponse> ReadParticipantResponseAsync(
         ILLMProvider provider,
@@ -901,28 +863,6 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
         return string.Join('\n', lines).Trim();
     }
 
-    private static async Task MarkParticipantLeftAsync(
-        IActor actor,
-        IStreamingProxyParticipantStore? participantStore,
-        string? roomId,
-        string participantId,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(participantId))
-            return;
-
-        if (participantStore is not null &&
-            !string.IsNullOrWhiteSpace(roomId))
-        {
-            await participantStore.RemoveParticipantAsync(roomId, participantId, ct);
-        }
-
-        await DispatchAsync(actor, new GroupChatParticipantLeftEvent
-        {
-            AgentId = participantId,
-        }, ct);
-    }
-
     private static bool IsUnavailableResponse(LLMResponse response)
     {
         if (string.Equals(response.FinishReason, "error", StringComparison.OrdinalIgnoreCase) ||
@@ -968,21 +908,6 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
         yield return $"**{trimmed}**";
     }
 
-    private static async Task DispatchAsync(IActor actor, IMessage payload, CancellationToken ct)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-
-        await actor.HandleEventAsync(envelope, ct);
-    }
 }
 
 internal sealed record StreamingProxyNyxParticipantDefinition(
@@ -990,6 +915,21 @@ internal sealed record StreamingProxyNyxParticipantDefinition(
     string RoutePreference,
     string DisplayName,
     string? Model);
+
+internal sealed record StreamingProxyParticipantReplyOutcome(
+    bool IsSuccess,
+    string? Content,
+    StreamingProxyChatParticipantReplyFailureKind FailureKind,
+    string? ErrorMessage)
+{
+    public static StreamingProxyParticipantReplyOutcome Succeeded(string content) =>
+        new(true, content, StreamingProxyChatParticipantReplyFailureKind.Unspecified, null);
+
+    public static StreamingProxyParticipantReplyOutcome Failed(
+        StreamingProxyChatParticipantReplyFailureKind failureKind,
+        string? errorMessage) =>
+        new(false, null, failureKind, errorMessage);
+}
 
 internal sealed record StreamingProxyNyxParticipantCandidate(
     StreamingProxyNyxProviderStatus Provider,
@@ -1001,16 +941,13 @@ internal sealed record ParticipantDisplayNameEntry(
     int Index,
     string DisplayName);
 
-internal sealed class StreamingProxyNyxLlmStatusResponse
-{
-    [JsonPropertyName("providers")]
-    public List<StreamingProxyNyxProviderStatus>? Providers { get; set; }
-}
-
 internal sealed class StreamingProxyNyxProviderStatus
 {
     [JsonPropertyName("id")]
     public string? Id { get; set; }
+
+    [JsonPropertyName("user_service_id")]
+    public string? UserServiceId { get; set; }
 
     [JsonPropertyName("service_id")]
     public string? ServiceId { get; set; }
@@ -1021,8 +958,17 @@ internal sealed class StreamingProxyNyxProviderStatus
     [JsonPropertyName("node_id")]
     public string? NodeId { get; set; }
 
+    [JsonPropertyName("service_slug")]
+    public string? ServiceSlug { get; set; }
+
     [JsonPropertyName("provider_slug")]
     public string? ProviderSlug { get; set; }
+
+    [JsonPropertyName("display_name")]
+    public string? DisplayName { get; set; }
+
+    [JsonPropertyName("service_name")]
+    public string? ServiceName { get; set; }
 
     [JsonPropertyName("provider_name")]
     public string? ProviderName { get; set; }
@@ -1030,60 +976,24 @@ internal sealed class StreamingProxyNyxProviderStatus
     [JsonPropertyName("status")]
     public string? Status { get; set; }
 
+    [JsonPropertyName("route_value")]
+    public string? RouteValue { get; set; }
+
     [JsonPropertyName("proxy_url")]
     public string? ProxyUrl { get; set; }
+
+    [JsonPropertyName("models")]
+    public List<string>? Models { get; set; }
+
+    [JsonPropertyName("available_models")]
+    public List<string>? AvailableModels { get; set; }
+
+    [JsonPropertyName("allowed")]
+    public bool? Allowed { get; set; }
 
     [JsonPropertyName("source")]
     public string? Source { get; set; }
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; set; }
-}
-
-internal sealed class StreamingProxyNyxKeysResponse
-{
-    [JsonPropertyName("keys")]
-    public List<StreamingProxyNyxUserService>? Keys { get; set; }
-}
-
-internal sealed class StreamingProxyNyxUserService
-{
-    [JsonPropertyName("id")]
-    public string? Id { get; set; }
-
-    [JsonPropertyName("service_id")]
-    public string? ServiceId { get; set; }
-
-    [JsonPropertyName("api_key_id")]
-    public string? ApiKeyId { get; set; }
-
-    [JsonPropertyName("node_id")]
-    public string? NodeId { get; set; }
-
-    [JsonPropertyName("slug")]
-    public string Slug { get; set; } = string.Empty;
-
-    [JsonPropertyName("label")]
-    public string Label { get; set; } = string.Empty;
-
-    [JsonPropertyName("endpoint_url")]
-    public string? EndpointUrl { get; set; }
-
-    [JsonPropertyName("status")]
-    public string? Status { get; set; }
-
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalProperties { get; set; }
-}
-
-internal sealed class StreamingProxyOpenAIModelsResponse
-{
-    [JsonPropertyName("data")]
-    public List<StreamingProxyOpenAIModelEntry>? Data { get; set; }
-}
-
-internal sealed class StreamingProxyOpenAIModelEntry
-{
-    [JsonPropertyName("id")]
-    public string? Id { get; set; }
 }

@@ -50,6 +50,34 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
+    public async Task DuplicateWorkflowCallStart_WithSameRunAndInvocation_ShouldNotPublishAlreadyActiveFailure()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(SingleStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "run-1",
+            Input = "hello",
+        };
+        start.Parameters["workflow_call.invocation_id"] = "invoke-1";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await kernel.HandleAsync(Wrap(start.Clone()), ctx, CancellationToken.None);
+
+        ctx.Published.Select(p => p.Event)
+            .Where(e => e.Is(WorkflowCompletedEvent.Descriptor))
+            .Should()
+            .BeEmpty();
+        ctx.Published.Select(p => p.Event)
+            .Where(e => e.Is(StepRequestEvent.Descriptor))
+            .Should()
+            .BeEmpty();
+    }
+
+    [Fact]
     public async Task StepCompleted_MatchingId_ShouldAccept()
     {
         var ctx = new RecordingEventHandlerContext();
@@ -361,6 +389,25 @@ public sealed class IdempotentStepExecutionTests
     {
         public string RunId { get; set; } = "run-1";
 
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+        public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+        {
+            ApplyDelta(ExecutionContextState, delta);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ExecutionContextState.Llm = null;
+            ExecutionContextState.Connector = null;
+            return Task.CompletedTask;
+        }
+
         public Dictionary<string, Any> States { get; } = new(StringComparer.Ordinal);
 
         public Any? GetExecutionState(string scopeKey) =>
@@ -397,6 +444,34 @@ public sealed class IdempotentStepExecutionTests
     private sealed class NullServiceProvider : IServiceProvider
     {
         public object? GetService(System.Type serviceType) => null;
+    }
+
+    private static void ApplyDelta(
+        WorkflowRunExecutionContextState state,
+        WorkflowRunExecutionContextDelta delta)
+    {
+        if (delta.ClearLlm)
+            state.Llm = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
+        if (delta.Llm != null)
+        {
+            state.Llm = new WorkflowLlmExecutionContextState
+            {
+                ModelOverride = delta.Llm.ModelOverride,
+                UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
+            };
+            if (delta.Llm.HasMaxToolRoundsOverride)
+                state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
+        }
+
+        if (delta.Connector != null)
+        {
+            state.Connector = new WorkflowConnectorExecutionContextState
+            {
+                HttpAuthorization = delta.Connector.HttpAuthorization,
+            };
+        }
     }
 
     internal record RecordedCallback(string CallbackId, TimeSpan DueTime, Any Event, EventEnvelopePublishOptions? Options);

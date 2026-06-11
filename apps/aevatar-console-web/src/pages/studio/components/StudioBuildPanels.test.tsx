@@ -1,8 +1,11 @@
 import { AGUIEventType } from '@aevatar-react-sdk/types';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import * as React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
+import { scriptsApi } from '@/shared/studio/scriptsApi';
 import {
   applyStepInspectorDraft,
   connectStepToTarget,
@@ -14,7 +17,69 @@ import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
 } from '@/shared/studio/graph';
-import { StudioWorkflowBuildPanel } from './StudioBuildPanels';
+import {
+  StudioGAgentBuildPanel,
+  StudioScriptBuildPanel,
+  StudioWorkflowBuildPanel,
+} from './StudioBuildPanels';
+
+type WorkflowPrimitiveParameterTestDescriptor = {
+  readonly name: string;
+  readonly type: string;
+  readonly required: boolean;
+  readonly description: string;
+  readonly default: string;
+  readonly enumValues: string[];
+};
+
+type WorkflowPrimitiveTestDescriptor = {
+  readonly name: string;
+  readonly aliases: string[];
+  readonly category: string;
+  readonly description: string;
+  readonly parameters: WorkflowPrimitiveParameterTestDescriptor[];
+  readonly exampleWorkflows: string[];
+};
+
+type WorkflowBuildHarnessRoleDocument = {
+  readonly id?: string;
+  readonly name?: string;
+  readonly systemPrompt?: string;
+  readonly provider?: string | null;
+  readonly model?: string | null;
+  readonly connectors?: unknown[];
+};
+
+type WorkflowBuildHarnessStepDocument = {
+  readonly id?: string;
+  readonly type?: string;
+  readonly originalType?: string;
+  readonly targetRole?: string | null;
+  readonly target_role?: string | null;
+  readonly parameters?: Record<string, unknown> | null;
+  readonly next?: string | null;
+  readonly branches?: Record<string, string> | null;
+};
+
+type WorkflowBuildHarnessDocument = {
+  readonly name?: string;
+  readonly description?: string;
+  readonly roles: WorkflowBuildHarnessRoleDocument[];
+  readonly steps: WorkflowBuildHarnessStepDocument[];
+};
+
+type AppliedStepDraft = {
+  readonly parametersText: string;
+};
+
+type BuildWorkflowYamlsForTest = (
+  draft?: {
+    readonly stepId: string;
+    readonly draft: {
+      readonly parametersText: string;
+    };
+  } | null,
+) => Promise<string[]>;
 
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
@@ -22,8 +87,24 @@ jest.mock('@/shared/api/runtimeRunsApi', () => ({
   },
 }));
 
+jest.mock('@/shared/api/runtimeGAgentApi', () => ({
+  runtimeGAgentApi: {
+    streamDraftRun: jest.fn(),
+  },
+}));
+
 jest.mock('@/shared/agui/sseFrameNormalizer', () => ({
   parseBackendSSEStream: jest.fn(),
+}));
+
+jest.mock('@/shared/studio/scriptsApi', () => ({
+  scriptsApi: {
+    validateDraft: jest.fn(),
+    saveScript: jest.fn(),
+    observeSaveScript: jest.fn(),
+    runDraftScript: jest.fn(),
+    proposeEvolution: jest.fn(),
+  },
 }));
 
 jest.mock('@/shared/graphs/GraphCanvas', () => ({
@@ -63,26 +144,63 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
 jest.mock('@/modules/studio/scripts/ScriptCodeEditor', () => ({
   __esModule: true,
   default: ({
+    focusTarget,
     value = '',
     onChange,
   }: {
+    readonly focusTarget?: { readonly filePath: string; readonly startLineNumber: number } | null;
     readonly value?: string;
     readonly onChange?: (nextValue: string) => void;
   }) => (
-    <textarea
-      aria-label="Mock script code editor"
-      value={value}
-      onChange={(event) => onChange?.(event.target.value)}
-    />
+    <div>
+      <textarea
+        aria-label="Mock script code editor"
+        value={value}
+        onChange={(event) => onChange?.(event.target.value)}
+      />
+      <div data-testid="mock-script-focus-target">
+        {focusTarget ? `${focusTarget.filePath}:${focusTarget.startLineNumber}` : ''}
+      </div>
+    </div>
   ),
 }));
 
 const mockedRuntimeRunsApi = runtimeRunsApi as unknown as {
   streamDraftRun: jest.Mock;
 };
+const mockedRuntimeGAgentApi = runtimeGAgentApi as unknown as {
+  streamDraftRun: jest.Mock;
+};
 const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
+const mockedScriptsApi = scriptsApi as unknown as {
+  validateDraft: jest.Mock;
+  saveScript: jest.Mock;
+  observeSaveScript: jest.Mock;
+  runDraftScript: jest.Mock;
+  proposeEvolution: jest.Mock;
+};
 
-const initialDocument = {
+const scriptDetail = {
+  available: true,
+  scopeId: 'scope-1',
+  script: {
+    scopeId: 'scope-1',
+    scriptId: 'script-alpha',
+    catalogActorId: 'catalog-1',
+    definitionActorId: 'definition-1',
+    activeRevision: 'rev-1',
+    activeSourceHash: 'hash-1',
+    updatedAt: '2026-04-27T00:00:00Z',
+  },
+  source: {
+    sourceText: 'using System;',
+    definitionActorId: 'definition-1',
+    revision: 'rev-1',
+    sourceHash: 'hash-1',
+  },
+};
+
+const initialDocument: WorkflowBuildHarnessDocument = {
   name: 'workflow-demo',
   description: 'Workflow demo',
   roles: [
@@ -123,7 +241,7 @@ function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function buildWorkflowYaml(document: typeof initialDocument): string {
+function buildWorkflowYaml(document: WorkflowBuildHarnessDocument): string {
   const roleLines = document.roles.flatMap((role) => {
     const lines = [`  - id: ${role.id}`];
     if (role.name) {
@@ -160,17 +278,24 @@ function buildWorkflowYaml(document: typeof initialDocument): string {
 }
 
 function WorkflowBuildHarness({
+  buildWorkflowYamlsOverride,
+  initialDocumentOverride,
   onApplyStepDraftOverride,
   onContinueToBind,
   onSaveDraft,
+  runtimePrimitivesOverride,
 }: {
+  readonly buildWorkflowYamlsOverride?: BuildWorkflowYamlsForTest;
+  readonly initialDocumentOverride?: WorkflowBuildHarnessDocument;
   readonly onApplyStepDraftOverride?: (draft: any) => Promise<void>;
   readonly onContinueToBind: jest.Mock;
   readonly onSaveDraft: jest.Mock;
+  readonly runtimePrimitivesOverride?: readonly WorkflowPrimitiveTestDescriptor[];
 }) {
-  const [document, setDocument] = React.useState(() => cloneValue(initialDocument));
+  const documentSeed = initialDocumentOverride ?? initialDocument;
+  const [document, setDocument] = React.useState(() => cloneValue(documentSeed));
   const [draftYaml, setDraftYaml] = React.useState(() =>
-    buildWorkflowYaml(initialDocument),
+    buildWorkflowYaml(documentSeed),
   );
   const [selectedGraphNodeId, setSelectedGraphNodeId] = React.useState(
     'step:draft_step',
@@ -184,7 +309,7 @@ function WorkflowBuildHarness({
 
   const commitDocument = React.useCallback(
     async (
-      nextDocument: typeof initialDocument,
+      nextDocument: WorkflowBuildHarnessDocument,
       options?: {
         readonly nextSelectedNodeId?: string;
       },
@@ -201,7 +326,7 @@ function WorkflowBuildHarness({
   return (
     <StudioWorkflowBuildPanel
       availableStepTypes={['llm_call', 'human_approval', 'connector_call']}
-      buildWorkflowYamls={async () => [draftYaml]}
+      buildWorkflowYamls={buildWorkflowYamlsOverride ?? (async () => [draftYaml])}
       canSaveWorkflow
       draftYaml={draftYaml}
       dryRunModelLabel="gpt-5.4-mini"
@@ -212,7 +337,7 @@ function WorkflowBuildHarness({
           : async (draft) => {
               const currentStepId = selectedGraphNodeId.replace(/^step:/, '');
               const result = applyStepInspectorDraft(document, currentStepId, draft);
-              await commitDocument(result.document as typeof initialDocument, {
+              await commitDocument(result.document as WorkflowBuildHarnessDocument, {
                 nextSelectedNodeId: result.nodeId,
               });
             }
@@ -231,7 +356,7 @@ function WorkflowBuildHarness({
             sourceStep?.branches || {},
           ),
         );
-        void commitDocument(result.document as typeof initialDocument, {
+        void commitDocument(result.document as WorkflowBuildHarnessDocument, {
           nextSelectedNodeId: result.nodeId,
         });
       }}
@@ -241,7 +366,7 @@ function WorkflowBuildHarness({
           afterStepId: selectedGraphNodeId.replace(/^step:/, ''),
           targetRoleId: 'assistant',
         });
-        await commitDocument(result.document as typeof initialDocument, {
+        await commitDocument(result.document as WorkflowBuildHarnessDocument, {
           nextSelectedNodeId: result.nodeId,
         });
       }}
@@ -257,7 +382,7 @@ function WorkflowBuildHarness({
       onRemoveSelectedStep={async () => {
         const currentStepId = selectedGraphNodeId.replace(/^step:/, '');
         const result = removeStep(document, currentStepId);
-        await commitDocument(result.document as typeof initialDocument, {
+        await commitDocument(result.document as WorkflowBuildHarnessDocument, {
           nextSelectedNodeId: result.nodeId,
         });
       }}
@@ -268,7 +393,7 @@ function WorkflowBuildHarness({
         }
 
         const result = removeStep(document, selectedNodeId);
-        await commitDocument(result.document as typeof initialDocument, {
+        await commitDocument(result.document as WorkflowBuildHarnessDocument, {
           nextSelectedNodeId: result.nodeId,
         });
       }}
@@ -277,9 +402,9 @@ function WorkflowBuildHarness({
         'nyxid.route_preference': '/api/v1/proxy/s/openai',
       }}
       onRunPromptChange={setRunPrompt}
-      onSaveDraft={() => onSaveDraft(draftYaml)}
+      onSaveDraft={(pendingDraft) => onSaveDraft(pendingDraft ?? draftYaml)}
       onSetDraftYaml={setDraftYaml}
-      runtimePrimitives={[
+      runtimePrimitives={runtimePrimitivesOverride ?? [
         {
           name: 'llm_call',
           aliases: [],
@@ -352,8 +477,43 @@ function WorkflowBuildHarness({
 
 describe('StudioWorkflowBuildPanel', () => {
   beforeEach(() => {
+    setLocale('en-US', false);
     jest.clearAllMocks();
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({} as Response);
+    mockedScriptsApi.validateDraft.mockResolvedValue({
+      success: true,
+      errorCount: 0,
+      warningCount: 0,
+      diagnostics: [],
+    });
+    mockedScriptsApi.saveScript.mockResolvedValue({
+      acceptedScript: {
+        scriptId: 'script-alpha',
+        revisionId: 'rev-2',
+        definitionActorId: 'definition-1',
+        sourceHash: 'hash-2',
+        proposalId: 'proposal-1',
+        expectedBaseRevision: 'rev-1',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+    mockedScriptsApi.observeSaveScript.mockResolvedValue({
+      status: 'applied',
+    });
+    mockedScriptsApi.runDraftScript.mockResolvedValue({
+      ok: true,
+    });
+    mockedScriptsApi.proposeEvolution.mockResolvedValue({
+      accepted: true,
+      proposalId: 'proposal-1',
+      scriptId: 'script-alpha',
+      baseRevision: 'rev-1',
+      candidateRevision: 'rev-2',
+      status: 'accepted',
+      failureReason: '',
+      definitionActorId: 'definition-1',
+      catalogActorId: 'catalog-1',
+    });
     mockedParseBackendSSEStream.mockImplementation(async function* () {
       yield {
         type: AGUIEventType.RUN_STARTED,
@@ -365,6 +525,620 @@ describe('StudioWorkflowBuildPanel', () => {
         delta: 'workflow draft output',
       };
     });
+  });
+
+  it('keeps the Script bind CTA stable and uses the dry-run panel as the run entry', () => {
+    const handleContinueToBind = jest.fn();
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={handleContinueToBind}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Ready to bind')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Dry-run' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Run' })).toHaveLength(1);
+
+    fireEvent.change(screen.getByLabelText('Mock script code editor'), {
+      target: {
+        value: 'using System;\n// changed',
+      },
+    });
+
+    expect(screen.getByText('Validate current source')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
+  });
+
+  it('keeps the empty Script build state focused on creating the first script', () => {
+    const handleCreateScriptDraft = jest.fn();
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId=""
+        onContinueToBind={jest.fn()}
+        onCreateScriptDraft={handleCreateScriptDraft}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        'Create a script to start editing. Saved workspace scripts appear here when this catalog has one.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('No script is selected yet. Start a script draft to open the editor.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Script ID')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Script lifecycle status')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Script dry run input')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Validation, save, bind/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/dry-run controls/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Bind becomes available/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Create a script before running it')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Validate' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save script' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load sample input' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue to Bind' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Promotion')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add script' }));
+    expect(handleCreateScriptDraft).toHaveBeenCalled();
+  });
+
+  it('starts a named Script draft without a saved catalog script', async () => {
+    const handleDraftSaved = jest.fn();
+    mockedScriptsApi.saveScript.mockResolvedValueOnce({
+      acceptedScript: {
+        scriptId: 'orders-script',
+        revisionId: 'draft-1',
+        definitionActorId: 'definition-draft',
+        sourceHash: 'hash-draft',
+        proposalId: 'proposal-draft',
+        expectedBaseRevision: '',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="orders-script"
+        pendingScriptDraft={{
+          scriptId: 'orders-script',
+          displayName: 'Orders Script',
+        }}
+        onContinueToBind={jest.fn()}
+        onRefreshScripts={jest.fn()}
+        onScriptDraftSaved={handleDraftSaved}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByText('orders-script (draft)')).toBeInTheDocument();
+    expect(
+      (screen.getByLabelText('Mock script code editor') as HTMLTextAreaElement).value,
+    ).toContain('DraftBehavior');
+    expect(screen.getByText('Validate current source')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.validateDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scriptId: 'orders-script',
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.saveScript).toHaveBeenCalledWith(
+        'scope-1',
+        expect.objectContaining({
+          scriptId: 'orders-script',
+          expectedBaseRevision: undefined,
+        }),
+      );
+    });
+    expect(mockedScriptsApi.saveScript.mock.calls[0]?.[1]).not.toHaveProperty(
+      'revisionId',
+    );
+    await waitFor(() => {
+      expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
+    });
+    expect(screen.getByText('Ready to bind')).toBeInTheDocument();
+  });
+
+  it('renders validation diagnostics and focuses the selected problem', async () => {
+    mockedScriptsApi.validateDraft.mockResolvedValueOnce({
+      success: false,
+      scriptId: 'script-alpha',
+      scriptRevision: 'rev-1',
+      primarySourcePath: 'Behavior.cs',
+      errorCount: 1,
+      warningCount: 0,
+      diagnostics: [
+        {
+          severity: 'error',
+          code: 'CS1002',
+          message: '; expected',
+          filePath: 'Behavior.cs',
+          startLine: 12,
+          startColumn: 8,
+          endLine: 12,
+          endColumn: 9,
+          origin: 'compiler',
+        },
+      ],
+    });
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Mock script code editor'), {
+      target: {
+        value: 'using System;\n// changed',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+
+    expect(await screen.findByText('; expected')).toBeInTheDocument();
+    expect(screen.getByText('Behavior.cs:12:8')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /CS1002/ }));
+
+    expect(screen.getByTestId('mock-script-focus-target')).toHaveTextContent(
+      'Behavior.cs:12',
+    );
+  });
+
+  it('shows structured dry-run facts after running a Script draft', async () => {
+    mockedScriptsApi.runDraftScript.mockResolvedValueOnce({
+      accepted: true,
+      scopeId: 'scope-1',
+      scriptId: 'script-alpha',
+      scriptRevision: 'rev-1',
+      definitionActorId: 'definition-run',
+      runtimeActorId: 'runtime-run',
+      runId: 'run-script-1',
+      sourceHash: 'hash-run',
+      commandTypeUrl: 'type.googleapis.com/AppScriptCommand',
+      activityUrl: '/api/app/scripts/runtimes/runtime-run/activity',
+    });
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(await screen.findByLabelText('Script dry run facts')).toBeInTheDocument();
+    expect(screen.getByText('run-script-1')).toBeInTheDocument();
+    expect(screen.getByText('runtime-run')).toBeInTheDocument();
+    expect(screen.getByText('type.googleapis.com/AppScriptCommand')).toBeInTheDocument();
+  });
+
+  it('keeps save observation pending honest and exposes catalog refresh', async () => {
+    mockedScriptsApi.saveScript.mockResolvedValueOnce({
+      acceptedScript: {
+        scriptId: 'orders-script',
+        revisionId: 'draft-1',
+        definitionActorId: 'definition-draft',
+        sourceHash: 'hash-draft',
+        proposalId: 'proposal-draft',
+        expectedBaseRevision: '',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+    mockedScriptsApi.observeSaveScript.mockResolvedValue({
+      scopeId: 'scope-1',
+      scriptId: 'orders-script',
+      status: 'pending',
+      message: 'pending',
+      currentScript: null,
+      isTerminal: false,
+    });
+    const handleRefreshScripts = jest.fn();
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="orders-script"
+        pendingScriptDraft={{
+          scriptId: 'orders-script',
+          displayName: 'Orders Script',
+        }}
+        onContinueToBind={jest.fn()}
+        onRefreshScripts={handleRefreshScripts}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+
+    expect(await screen.findByText(/Waiting for catalog/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh catalog' }));
+    expect(handleRefreshScripts).toHaveBeenCalled();
+  });
+
+  it('surfaces rejected Script save observations and keeps Bind disabled', async () => {
+    mockedScriptsApi.saveScript.mockResolvedValueOnce({
+      acceptedScript: {
+        scriptId: 'orders-script',
+        revisionId: 'draft-1',
+        definitionActorId: 'definition-draft',
+        sourceHash: 'hash-draft',
+        proposalId: 'proposal-draft',
+        expectedBaseRevision: '',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+    mockedScriptsApi.observeSaveScript.mockResolvedValueOnce({
+      scopeId: 'scope-1',
+      scriptId: 'orders-script',
+      status: 'rejected',
+      message: 'Catalog rejected the revision.',
+      currentScript: null,
+      isTerminal: true,
+    });
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="orders-script"
+        pendingScriptDraft={{
+          scriptId: 'orders-script',
+          displayName: 'Orders Script',
+        }}
+        onContinueToBind={jest.fn()}
+        onRefreshScripts={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+
+    expect(await screen.findByText('Catalog rejected the revision.')).toBeInTheDocument();
+    expect(screen.getByText('Save needs attention')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+  });
+
+  it('polls save observation until a pending Script save is applied', async () => {
+    const handleDraftSaved = jest.fn();
+    mockedScriptsApi.saveScript.mockResolvedValueOnce({
+      acceptedScript: {
+        scriptId: 'orders-script',
+        revisionId: 'draft-1',
+        definitionActorId: 'definition-draft',
+        sourceHash: 'hash-draft',
+        proposalId: 'proposal-draft',
+        expectedBaseRevision: '',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+    mockedScriptsApi.observeSaveScript
+      .mockResolvedValueOnce({
+        scopeId: 'scope-1',
+        scriptId: 'orders-script',
+        status: 'pending',
+        message: 'pending',
+        currentScript: null,
+        isTerminal: false,
+      })
+      .mockResolvedValueOnce({
+        scopeId: 'scope-1',
+        scriptId: 'orders-script',
+        status: 'applied',
+        message: 'applied',
+        currentScript: {
+          scopeId: 'scope-1',
+          scriptId: 'orders-script',
+          catalogActorId: 'catalog-1',
+          definitionActorId: 'definition-draft',
+          activeRevision: 'draft-1',
+          activeSourceHash: 'hash-draft',
+          updatedAt: '2026-04-27T00:00:01Z',
+        },
+        isTerminal: true,
+      });
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="orders-script"
+        pendingScriptDraft={{
+          scriptId: 'orders-script',
+          displayName: 'Orders Script',
+        }}
+        onContinueToBind={jest.fn()}
+        onRefreshScripts={jest.fn()}
+        onScriptDraftSaved={handleDraftSaved}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+
+    expect(await screen.findByText(/checking again in 1s/)).toBeInTheDocument();
+    await waitFor(
+      () => {
+        expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
+        expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
+        expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
+      },
+      { timeout: 2500 },
+    );
+  });
+
+  it('ignores a save observation that resolves after the source changes', async () => {
+    mockedScriptsApi.saveScript.mockResolvedValueOnce({
+      acceptedScript: {
+        scriptId: 'orders-script',
+        revisionId: 'draft-1',
+        definitionActorId: 'definition-draft',
+        sourceHash: 'hash-draft',
+        proposalId: 'proposal-draft',
+        expectedBaseRevision: '',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+    let resolveObservation: (value: {
+      scopeId: string;
+      scriptId: string;
+      status: 'applied';
+      message: string;
+      currentScript: {
+        scopeId: string;
+        scriptId: string;
+        catalogActorId: string;
+        definitionActorId: string;
+        activeRevision: string;
+        activeSourceHash: string;
+        updatedAt: string;
+      };
+      isTerminal: true;
+    }) => void = () => undefined;
+    mockedScriptsApi.observeSaveScript.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveObservation = resolve;
+      }),
+    );
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="orders-script"
+        pendingScriptDraft={{
+          scriptId: 'orders-script',
+          displayName: 'Orders Script',
+        }}
+        onContinueToBind={jest.fn()}
+        onRefreshScripts={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+    await waitFor(() => {
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalled();
+    });
+
+    fireEvent.change(screen.getByLabelText('Mock script code editor'), {
+      target: {
+        value: 'using System;\n// edited while save is observing',
+      },
+    });
+    await act(async () => {
+      resolveObservation({
+        scopeId: 'scope-1',
+        scriptId: 'orders-script',
+        status: 'applied',
+        message: 'applied',
+        currentScript: {
+          scopeId: 'scope-1',
+          scriptId: 'orders-script',
+          catalogActorId: 'catalog-1',
+          definitionActorId: 'definition-draft',
+          activeRevision: 'draft-1',
+          activeSourceHash: 'hash-draft',
+          updatedAt: '2026-04-27T00:00:01Z',
+        },
+        isTerminal: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
+    });
+    expect(screen.queryByText(/Save applied/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+  });
+
+  it('edits a multi-file package and entry settings', () => {
+    const promptSpy = jest
+      .spyOn(window, 'prompt')
+      .mockReturnValueOnce('Support.cs')
+      .mockReturnValueOnce('SupportRenamed.cs');
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('Script package tree')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Advanced package'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add C#' }));
+    expect(screen.getByRole('button', { name: /Support\.cs/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(screen.getByRole('button', { name: /SupportRenamed\.cs/ })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Entry behavior type'), {
+      target: {
+        value: 'SupportBehavior',
+      },
+    });
+    expect(screen.getByText(/Behavior: SupportBehavior/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set entry source' }));
+    expect(screen.getByText(/Entry: SupportRenamed\.cs/)).toBeInTheDocument();
+    promptSpy.mockRestore();
+  });
+
+  it('records promotion decisions for the current Script revision', async () => {
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Promotion'));
+    fireEvent.change(screen.getByLabelText('Promotion reason'), {
+      target: {
+        value: 'ready for binding',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Propose evolution' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.proposeEvolution).toHaveBeenCalledWith(
+        'scope-1',
+        'script-alpha',
+        expect.objectContaining({
+          baseRevision: 'rev-1',
+          reason: 'ready for binding',
+        }),
+      );
+    });
+    expect(await screen.findByText(/Promotion accepted/)).toBeInTheDocument();
+    expect(screen.getByText('Accepted')).toBeInTheDocument();
   });
 
   it('walks a complete workflow build loop', async () => {
@@ -427,7 +1201,7 @@ describe('StudioWorkflowBuildPanel', () => {
 
     await waitFor(() => {
       expect(
-        (screen.getByLabelText('定义 YAML') as HTMLTextAreaElement).value,
+        (screen.getByLabelText('Define YAML') as HTMLTextAreaElement).value,
       ).toContain('review_step');
     });
     expect(screen.getByTestId('workflow-step-detail-panel')).toBeInTheDocument();
@@ -451,6 +1225,9 @@ describe('StudioWorkflowBuildPanel', () => {
             'nyxid.route_preference': '/api/v1/proxy/s/openai',
           },
           prompt: 'Please triage the refund request.',
+          workflowYamls: [
+            expect.stringContaining('name: workflow-demo'),
+          ],
         }),
         expect.any(AbortSignal),
       );
@@ -463,6 +1240,262 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(handleContinueToBind).toHaveBeenCalledWith(
       expect.stringContaining('review_step'),
     );
+  });
+
+  it('writes llm_call prompt edits to prompt_prefix when runtime exposes prompt', async () => {
+    const handleApplyStepDraft = jest.fn<Promise<void>, [AppliedStepDraft]>(
+      async () => undefined,
+    );
+
+    render(
+      <WorkflowBuildHarness
+        initialDocumentOverride={{
+          ...initialDocument,
+          steps: [
+            {
+              ...initialDocument.steps[0],
+              parameters: {
+                prompt: 'Legacy prompt field',
+              },
+            },
+            initialDocument.steps[1],
+          ],
+        }}
+        onApplyStepDraftOverride={handleApplyStepDraft}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+        runtimePrimitivesOverride={[
+          {
+            name: 'llm_call',
+            aliases: [],
+            description: 'Call the LLM.',
+            category: 'ai',
+            parameters: [
+              {
+                name: 'prompt',
+                type: 'string',
+                required: false,
+                description: 'Prompt template or prompt override.',
+                default: '',
+                enumValues: [],
+              },
+            ],
+            exampleWorkflows: ['workflow-demo'],
+          },
+        ]}
+      />,
+    );
+
+    const promptPrefixInput = await screen.findByLabelText(
+      'Parameter Prompt instruction',
+    );
+    expect(promptPrefixInput).toHaveValue('Legacy prompt field');
+    expect(screen.getByText('Prompt instruction')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Parameter prompt')).not.toBeInTheDocument();
+    expect(screen.queryByText('prompt_prefix')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Instruction added before each workflow run input reaches the LLM/i),
+    ).toBeInTheDocument();
+
+    fireEvent.change(promptPrefixInput, {
+      target: {
+        value: 'Translate the input to Japanese.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }));
+
+    await waitFor(() => {
+      expect(handleApplyStepDraft).toHaveBeenCalledTimes(1);
+    });
+    const appliedDraft = handleApplyStepDraft.mock.calls.at(0)?.[0];
+    if (!appliedDraft) {
+      throw new Error('Expected an applied step draft.');
+    }
+    expect(JSON.parse(appliedDraft.parametersText)).toEqual({
+      prompt_prefix: 'Translate the input to Japanese.',
+    });
+  });
+
+  it('passes unsaved llm_call prompt edits to save draft', async () => {
+    const handleSaveDraft = jest.fn();
+
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={handleSaveDraft}
+      />,
+    );
+
+    const promptPrefixInput = await screen.findByLabelText(
+      'Parameter Prompt instruction',
+    );
+    fireEvent.change(promptPrefixInput, {
+      target: {
+        value: 'Classify the refund request before answering.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    await waitFor(() => {
+      expect(handleSaveDraft).toHaveBeenCalledTimes(1);
+    });
+    const pendingDraft = handleSaveDraft.mock.calls.at(0)?.[0];
+    if (!pendingDraft || typeof pendingDraft === 'string') {
+      throw new Error('Expected Save draft to receive the pending step draft.');
+    }
+    expect(pendingDraft.stepId).toBe('draft_step');
+    expect(JSON.parse(pendingDraft.draft.parametersText)).toEqual({
+      prompt_prefix: 'Classify the refund request before answering.',
+    });
+  });
+
+  it('passes unsaved llm_call prompt edits to workflow dry-run YAMLs', async () => {
+    const buildWorkflowYamls = jest.fn<
+      Promise<string[]>,
+      Parameters<BuildWorkflowYamlsForTest>
+    >(async () => ['name: workflow-demo']);
+
+    render(
+      <WorkflowBuildHarness
+        buildWorkflowYamlsOverride={buildWorkflowYamls}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    const promptPrefixInput = await screen.findByLabelText(
+      'Parameter Prompt instruction',
+    );
+    fireEvent.change(promptPrefixInput, {
+      target: {
+        value: 'Translate the input to English.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    await waitFor(() => {
+      expect(buildWorkflowYamls).toHaveBeenCalledTimes(1);
+    });
+    const pendingDraft = buildWorkflowYamls.mock.calls.at(0)?.[0];
+    if (!pendingDraft) {
+      throw new Error('Expected Run to pass the pending step draft.');
+    }
+    expect(pendingDraft.stepId).toBe('draft_step');
+    expect(JSON.parse(pendingDraft.draft.parametersText)).toEqual({
+      prompt_prefix: 'Translate the input to English.',
+    });
+  });
+
+  it('does not show object defaults as llm prompt instructions', async () => {
+    render(
+      <WorkflowBuildHarness
+        initialDocumentOverride={{
+          ...initialDocument,
+          steps: [
+            {
+              ...initialDocument.steps[0],
+              parameters: {},
+            },
+            initialDocument.steps[1],
+          ],
+        }}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+        runtimePrimitivesOverride={[
+          {
+            name: 'llm_call',
+            aliases: [],
+            description: 'Call the LLM.',
+            category: 'ai',
+            parameters: [
+              {
+                name: 'prompt',
+                type: 'string',
+                required: false,
+                description: 'Prompt template or prompt override.',
+                default: '{}',
+                enumValues: [],
+              },
+            ],
+            exampleWorkflows: ['workflow-demo'],
+          },
+        ]}
+      />,
+    );
+
+    const promptPrefixInput = await screen.findByLabelText(
+      'Parameter Prompt instruction',
+    );
+    expect(promptPrefixInput).toHaveValue('');
+    expect(promptPrefixInput).toHaveAttribute(
+      'placeholder',
+      'e.g. Translate the user input to Japanese',
+    );
+  });
+
+  it('keeps human prompt edits on the prompt parameter', async () => {
+    const handleApplyStepDraft = jest.fn<Promise<void>, [AppliedStepDraft]>(
+      async () => undefined,
+    );
+
+    render(
+      <WorkflowBuildHarness
+        initialDocumentOverride={{
+          ...initialDocument,
+          steps: [
+            initialDocument.steps[0],
+            {
+              ...initialDocument.steps[1],
+              parameters: {
+                prompt: 'Approve this step?',
+              },
+            },
+          ],
+        }}
+        onApplyStepDraftOverride={handleApplyStepDraft}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+        runtimePrimitivesOverride={[
+          {
+            name: 'human_approval',
+            aliases: [],
+            description: 'Pause for approval.',
+            category: 'human',
+            parameters: [
+              {
+                name: 'prompt',
+                type: 'string',
+                required: false,
+                description: 'Prompt shown to the reviewer.',
+                default: '',
+                enumValues: [],
+              },
+            ],
+            exampleWorkflows: ['workflow-demo'],
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'approve_step' }));
+    const promptInput = await screen.findByLabelText('Parameter prompt');
+    fireEvent.change(promptInput, {
+      target: {
+        value: 'Approve the generated response?',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }));
+
+    await waitFor(() => {
+      expect(handleApplyStepDraft).toHaveBeenCalledTimes(1);
+    });
+    const appliedDraft = handleApplyStepDraft.mock.calls.at(0)?.[0];
+    if (!appliedDraft) {
+      throw new Error('Expected an applied step draft.');
+    }
+    expect(JSON.parse(appliedDraft.parametersText)).toEqual({
+      prompt: 'Approve the generated response?',
+    });
   });
 
   it('keeps runtime metadata out of output and only exposes it in debug details', async () => {
@@ -560,8 +1593,45 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
 
     expect(
-      await screen.findByText(/provider 还没有连好/i),
+      await screen.findByText(/provider is not connected yet/i),
     ).toBeInTheDocument();
+  });
+
+  it('keeps a GAgent draft-run failure inside Build with a recovery path', async () => {
+    mockedRuntimeGAgentApi.streamDraftRun.mockRejectedValueOnce(
+      new Error('GAgent draft run timed out before the backend returned any event.'),
+    );
+
+    render(
+      <StudioGAgentBuildPanel
+        scopeId="scope-1"
+        currentMemberLabel="gagent-1"
+        gAgentTypes={[
+          {
+            assemblyName: 'Aevatar.GAgents',
+            fullName: 'Aevatar.GAgents.TestGAgent',
+            typeName: 'TestGAgent',
+          },
+        ]}
+        gAgentTypesError={null}
+        gAgentTypesLoading={false}
+        selectedGAgentTypeName="Aevatar.GAgents.TestGAgent, Aevatar.GAgents"
+        onContinueToBind={jest.fn()}
+        onSelectGAgentTypeName={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(
+      await screen.findByText('Build dry-run needs attention'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'This only failed the Build dry-run. Adjust the prompt or tools and retry, or continue to Bind when the member definition is ready to publish.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
   });
 
   it('locks apply changes while the step mutation is pending', async () => {

@@ -52,29 +52,6 @@ message WorkflowExecutionCurrentStateDocument {
   google.protobuf.BoolValue success_wrapper = 17;
 }
 
-message WorkflowRunTimelineDocument {
-  string id = 1;
-  int64 state_version = 2;
-  string last_event_id = 3;
-  google.protobuf.Timestamp updated_at_utc_value = 4;
-  string root_actor_id = 5;
-  string command_id = 6;
-  repeated WorkflowExecutionTimelineEvent timeline_entries = 7;
-}
-
-message WorkflowRunGraphArtifactDocument {
-  string id = 1;
-  int64 state_version = 2;
-  string last_event_id = 3;
-  google.protobuf.Timestamp updated_at_utc_value = 4;
-  string root_actor_id = 5;
-  string command_id = 6;
-  string workflow_name = 7;
-  string input = 8;
-  repeated WorkflowExecutionTopologyEdge topology_entries = 9;
-  repeated WorkflowExecutionStepTrace step_entries = 10;
-}
-
 message WorkflowExecutionTopologyEdge {
   string parent = 1;
   string child = 2;
@@ -127,4 +104,68 @@ message WorkflowExecutionSummary {
   int32 completed_steps = 3;
   int32 role_reply_count = 4;
   map<string, int32> step_type_counts_map = 5;
+}
+
+message WorkflowCatalogCurrentStateDocument {
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp updated_at_utc_value = 4;
+  string actor_id = 5;
+  string workflow_name = 6;
+  string workflow_yaml = 7;
+  string description = 8;
+  string category = 9;
+  string group = 10;
+  string group_label = 11;
+  int32 sort_order = 12;
+  string source = 13;
+  string source_label = 14;
+  bool show_in_library = 15;
+  bool is_primitive_example = 16;
+  bool requires_llm_provider = 17;
+  repeated string primitive_entries = 18;
+  bool closed_world_mode = 19;
+  repeated WorkflowCatalogRoleReadModel role_entries = 20;
+  repeated WorkflowCatalogStepReadModel step_entries = 21;
+  repeated WorkflowCatalogEdgeReadModel edge_entries = 22;
+  repeated string required_connector_entries = 23;
+  repeated string workflow_call_entries = 24;
+}
+
+message WorkflowCatalogRoleReadModel {
+  string id = 1;
+  string name = 2;
+  string system_prompt = 3;
+  string provider = 4;
+  string model = 5;
+  google.protobuf.FloatValue temperature = 6;
+  google.protobuf.Int32Value max_tokens = 7;
+  google.protobuf.Int32Value max_tool_rounds = 8;
+  google.protobuf.Int32Value max_history_messages = 9;
+  repeated string event_module_entries = 10;
+  string event_routes = 11;
+  repeated string connector_entries = 12;
+}
+
+message WorkflowCatalogStepReadModel {
+  string id = 1;
+  string type = 2;
+  string target_role = 3;
+  map<string, string> parameter_entries = 4;
+  string next = 5;
+  map<string, string> branch_entries = 6;
+  repeated WorkflowCatalogChildStepReadModel child_entries = 7;
+}
+
+message WorkflowCatalogChildStepReadModel {
+  string id = 1;
+  string type = 2;
+  string target_role = 3;
+}
+
+message WorkflowCatalogEdgeReadModel {
+  string from = 1;
+  string to = 2;
+  string label = 3;
 }

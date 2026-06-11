@@ -148,6 +148,24 @@ public class InvokeServiceToolTests
         tool.ApprovalMode.Should().Be(Aevatar.AI.Abstractions.ToolProviders.ToolApprovalMode.AlwaysRequire);
     }
 
+    [Fact]
+    public void RequiresApproval_DefaultsToTrue()
+    {
+        var tool = new InvokeServiceTool(new StubInvocationPort(), DefaultCatalogReader(), DefaultOptions());
+
+        tool.RequiresApproval("""{"service_id":"svc1","endpoint_id":"cmd1"}""").Should().BeTrue();
+    }
+
+    [Fact]
+    public void RequiresApproval_WhenBypassEnabled_ReturnsFalse()
+    {
+        var options = DefaultOptions();
+        options.BypassInvokeApproval = true;
+        var tool = new InvokeServiceTool(new StubInvocationPort(), DefaultCatalogReader(), options);
+
+        tool.RequiresApproval("""{"service_id":"svc1","endpoint_id":"cmd1"}""").Should().BeFalse();
+    }
+
     private sealed class StubCatalogReader(IReadOnlyList<ServiceCatalogSnapshot> snapshots) : IServiceCatalogQueryReader
     {
         public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>

@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Materialization;
@@ -10,14 +10,21 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptNativeDocumentProjector
     : ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>
 {
+    // Refactor (issue1289): native documents consume materializer-derived payloads instead of event-embedded payloads.
+    // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
+    //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
+    //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root
     private readonly IProjectionWriteDispatcher<ScriptNativeDocumentReadModel> _nativeWriteDispatcher;
+    private readonly IScriptProjectionPayloadMaterializer _payloadMaterializer;
     private readonly IScriptNativeDocumentMaterializer _materializer;
 
     public ScriptNativeDocumentProjector(
         IProjectionWriteDispatcher<ScriptNativeDocumentReadModel> nativeWriteDispatcher,
+        IScriptProjectionPayloadMaterializer payloadMaterializer,
         IScriptNativeDocumentMaterializer materializer)
     {
         _nativeWriteDispatcher = nativeWriteDispatcher ?? throw new ArgumentNullException(nameof(nativeWriteDispatcher));
+        _payloadMaterializer = payloadMaterializer ?? throw new ArgumentNullException(nameof(payloadMaterializer));
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
     }
 
@@ -37,12 +44,20 @@ public sealed class ScriptNativeDocumentProjector
         }
 
         var fact = observedPayload.Unpack<ScriptDomainFactCommitted>();
-        if (fact.NativeDocument == null)
-            return;
-
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(
             envelope,
             DateTimeOffset.FromUnixTimeMilliseconds(fact.OccurredAtUnixTimeMs));
+        var payload = await _payloadMaterializer.MaterializeAsync(
+            new ScriptProjectionMaterializationInput(
+                fact,
+                envelope,
+                context.RootActorId,
+                sourceEventId,
+                updatedAt),
+            ct);
+        if (payload.NativeDocument == null)
+            return;
+
         var nativeDocument = _materializer.Materialize(
             context.RootActorId,
             fact.ScriptId ?? string.Empty,
@@ -51,7 +66,7 @@ public sealed class ScriptNativeDocumentProjector
             fact,
             sourceEventId,
             updatedAt,
-            fact.NativeDocument);
+            payload.NativeDocument);
         await _nativeWriteDispatcher.UpsertAsync(nativeDocument, ct);
     }
 

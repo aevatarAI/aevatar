@@ -101,6 +101,22 @@ public class WebRtcVoiceTransportTests
             transport.SendControlAsync(new VoiceControlFrame(), CancellationToken.None));
     }
 
+    [Fact]
+    public void WebRtcVoiceTransport_lock_should_only_guard_pcm_buffering()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var sourcePath = Path.Combine(
+            repoRoot,
+            "src/Aevatar.Foundation.VoicePresence/Transport/WebRtcVoiceTransport.cs");
+        var source = File.ReadAllText(sourcePath);
+
+        source.ShouldContain("lock (_pendingSendPcm)");
+        source.ShouldNotContain("lock (_session");
+        source.ShouldNotContain("lock (_lease");
+        source.ShouldNotContain("lock (_transportAttached");
+        source.ShouldNotContain("lock (_response");
+    }
+
     private static async Task<List<VoiceTransportFrame>> CollectFramesAsync(WebRtcVoiceTransport transport)
     {
         var frames = new List<VoiceTransportFrame>();
@@ -108,6 +124,20 @@ public class WebRtcVoiceTransportTests
             frames.Add(frame);
 
         return frames;
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current != null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "aevatar.slnx")))
+                return current.FullName;
+
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not find repository root containing aevatar.slnx.");
     }
 
     private sealed class FakeWebRtcVoicePeer : IWebRtcVoicePeer

@@ -45,3 +45,43 @@ message ExternalLinkMessageReceivedEvent {
   bytes raw_payload = 3;
   google.protobuf.Timestamp received_at = 4;
 }
+
+// --- Internal callback signals (Infrastructure → Actor turn) ---
+
+// Refactor (iter22/cluster-004):
+//   Old pattern: reconnect delay completion was represented by a background task mutating link state directly.
+//   New principle: delay completion is a typed self signal with the expected attempt for actor-turn reconciliation.
+message ExternalLinkReconnectDueSignal {
+  string link_id = 1;
+  int32 expected_attempt = 2;
+}
+
+// Refactor (iter56/cluster-912-external-link-signal-contract):
+//   old=transport direct callback, new=typed signal sink.
+//   Transport receive loops publish this internal signal; actor-turn code
+//   reconciles the link and emits the observable event.
+message ExternalLinkMessageReceivedSignal {
+  string link_id = 1;
+  bytes raw_payload = 2;
+  google.protobuf.Timestamp received_at = 3;
+}
+
+// Refactor (iter22/cluster-004):
+//   Old pattern: transport callback state was passed straight into manager mutation from the callback thread.
+//   New principle: callback state is captured as a protobuf enum so the actor turn owns the transition.
+enum ExternalLinkTransportStateSignalKind {
+  EXTERNAL_LINK_TRANSPORT_STATE_SIGNAL_KIND_UNSPECIFIED = 0;
+  EXTERNAL_LINK_TRANSPORT_STATE_SIGNAL_KIND_CONNECTED = 1;
+  EXTERNAL_LINK_TRANSPORT_STATE_SIGNAL_KIND_DISCONNECTED = 2;
+  EXTERNAL_LINK_TRANSPORT_STATE_SIGNAL_KIND_ERROR = 3;
+  EXTERNAL_LINK_TRANSPORT_STATE_SIGNAL_KIND_CLOSED = 4;
+}
+
+// Refactor (iter22/cluster-004):
+//   Old pattern: transport state callbacks directly toggled connection flags and scheduled reconnect work.
+//   New principle: transport callbacks dispatch this typed signal; the actor turn validates the link and applies state.
+message ExternalLinkTransportStateChangedSignal {
+  string link_id = 1;
+  ExternalLinkTransportStateSignalKind state = 2;
+  string reason = 3;
+}

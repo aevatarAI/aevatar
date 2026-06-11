@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf;
@@ -277,8 +278,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             definitionUpsert = await _definitionCommandPort.UpsertDefinitionWithSnapshotAsync(
                 proposal.ScriptId ?? string.Empty,
                 proposal.CandidateRevision ?? string.Empty,
-                proposal.CandidateSource ?? string.Empty,
-                proposal.CandidateSourceHash ?? string.Empty,
+                ScriptPackageSpecExtensions.CreateSingleSource(proposal.CandidateSource ?? string.Empty),
                 null,
                 proposal.ScopeId,
                 ct);
@@ -307,7 +307,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
                 proposal.BaseRevision ?? string.Empty,
                 proposal.CandidateRevision ?? string.Empty,
                 definitionActorId,
-                proposal.CandidateSourceHash ?? string.Empty,
+                definitionUpsert.Snapshot.SourceHash ?? string.Empty,
                 proposal.ProposalId ?? string.Empty,
                 proposal.ScopeId,
                 ct);

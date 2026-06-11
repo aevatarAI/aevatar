@@ -1,4 +1,4 @@
-import { Tag, Typography } from 'antd';
+import { Space, Tag, Typography } from 'antd';
 import React from 'react';
 import {
   cardStackStyle,
@@ -12,6 +12,7 @@ import {
 import { formatUtcDateTime } from '@/shared/datetime/dateTime';
 import { AevatarCompactText } from '@/shared/ui/compactText';
 import type { GovernanceDraft } from './governanceQuery';
+import { t } from "@/shared/i18n/messages";
 
 type GovernanceStatusTag = {
   color: 'default' | 'processing' | 'success' | 'warning' | 'error';
@@ -31,6 +32,7 @@ export type GovernanceSummaryMetric = {
 
 type GovernanceSummaryPanelProps = {
   title: string;
+  actions?: React.ReactNode;
   description?: string;
   draft: GovernanceDraft;
   revisionId?: string;
@@ -42,6 +44,7 @@ type GovernanceSummaryPanelProps = {
 
 type GovernanceSelectionNoticeProps = {
   title: string;
+  actions?: React.ReactNode;
   description?: string;
   highlights?: Array<{
     key?: string;
@@ -111,11 +114,11 @@ const governanceSelectionHighlightStyle: React.CSSProperties = {
 
 function renderFieldValue(value: React.ReactNode): React.ReactNode {
   if (typeof value === 'string') {
-    return value.trim() || '暂无';
+    return value.trim() || t("pages.governance.governanceresultpanels.none.yet", "None yet");
   }
 
   if (value === null || value === undefined || value === false) {
-    return '暂无';
+    return t("pages.governance.governanceresultpanels.none.yet.2", "None yet");
   }
 
   return value;
@@ -145,31 +148,46 @@ function GovernanceMetric({
 }
 
 export function formatGovernanceTimestamp(value: string | undefined): string {
-  return formatUtcDateTime(value, '待更新');
+  return formatUtcDateTime(value, t("pages.governance.governanceresultpanels.to.be.updated", "To be updated"));
 }
 
 export const GovernanceSelectionNotice: React.FC<
   GovernanceSelectionNoticeProps
-> = ({ title, description, highlights = [] }) => (
+> = ({ title, actions, description, highlights = [] }) => (
   <div style={governanceSurfaceStyle}>
     <div style={cardStackStyle}>
-      <div style={governanceHeaderStackStyle}>
-        <Typography.Text
-          strong
-          style={{ color: 'var(--ant-color-text-heading)', fontSize: 16 }}
-        >
-          {title}
-        </Typography.Text>
-        {description ? (
-          <span
-            style={{
-              color: 'var(--ant-color-text-secondary)',
-              fontSize: 14,
-              lineHeight: 1.6,
-            }}
+      <div
+        style={{
+          alignItems: 'flex-start',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          justifyContent: 'space-between',
+        }}
+      >
+        <div style={governanceHeaderStackStyle}>
+          <Typography.Text
+            strong
+            style={{ color: 'var(--ant-color-text-heading)', fontSize: 16 }}
           >
-            {description}
-          </span>
+            {title}
+          </Typography.Text>
+          {description ? (
+            <span
+              style={{
+                color: 'var(--ant-color-text-secondary)',
+                fontSize: 14,
+                lineHeight: 1.6,
+              }}
+            >
+              {description}
+            </span>
+          ) : null}
+        </div>
+        {actions ? (
+          <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
+            {actions}
+          </Space>
         ) : null}
       </div>
       {highlights.length > 0 ? (
@@ -206,6 +224,7 @@ export const GovernanceSelectionNotice: React.FC<
 
 export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
   title,
+  actions,
   description,
   draft,
   revisionId,
@@ -217,11 +236,11 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
   const fields: GovernanceSummaryField[] = [
     ...(includeDefaultFields
       ? [
-          { label: '服务', value: draft.serviceId },
-          { label: '团队', value: draft.tenantId },
-          { label: '应用', value: draft.appId },
-          { label: '命名空间', value: draft.namespace },
-          revisionId ? { label: '版本', value: revisionId } : null,
+          { label: t("pages.governance.governanceresultpanels.serve", "Serve"), value: draft.serviceId },
+          { label: t("pages.governance.governanceresultpanels.team", "team"), value: draft.tenantId },
+          { label: t("pages.governance.governanceresultpanels.application", "application"), value: draft.appId },
+          { label: t("pages.governance.governanceresultpanels.namespace", "namespace"), value: draft.namespace },
+          revisionId ? { label: t("pages.governance.governanceresultpanels.version", "Version"), value: revisionId } : null,
         ]
       : []),
     ...extraFields,
@@ -249,8 +268,7 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
                 textTransform: 'uppercase',
               }}
             >
-              治理摘要
-            </span>
+              {t("pages.governance.governanceresultpanels.governance.summary", "Governance summary")}</span>
             <Typography.Text
               strong
               style={{ color: 'var(--ant-color-text-heading)', fontSize: 20 }}
@@ -283,6 +301,11 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
             >
               {status.label}
             </Tag>
+          ) : null}
+          {actions ? (
+            <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
+              {actions}
+            </Space>
           ) : null}
         </div>
 
@@ -333,7 +356,7 @@ export function buildGovernanceCompactValue(
 ): React.ReactNode {
   const normalized = value?.trim() ?? '';
   if (!normalized) {
-    return '暂无';
+    return t("pages.governance.governanceresultpanels.none.yet.3", "None yet");
   }
 
   return (

@@ -36,6 +36,7 @@ for name in "${forbidden_names[@]}"; do
       --glob '!**/obj/**' \
       --glob '!docs/**' \
       --glob '!tools/ci/channel_inbox_gagent_guard.sh' \
+      . \
       || true
   )
 done

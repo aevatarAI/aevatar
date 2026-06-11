@@ -1,5 +1,5 @@
 using System.Globalization;
-using Aevatar.AI.Abstractions.LLMProviders;
+using System.Diagnostics.CodeAnalysis;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
@@ -12,11 +12,16 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
 
-/// <summary>LLM call module. Sends <see cref="ChatRequestEvent"/> to a role actor or direct agent target.</summary>
+/// <summary>LLM call module. Sends <see cref="WorkflowLlmExecutionIntent"/> to a role actor.</summary>
+// Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+//   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+//   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+// Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+//   Old pattern: Information log included raw value/prompt/input preview
+//   New principle: only stable id + length + status + redaction marker
 public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;
-    private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const string LlmWatchdogCallbackPrefix = "llm-watchdog";
     private const string ModuleStateKey = "llm_call";
 
@@ -35,8 +40,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         var payload = envelope.Payload;
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(TextMessageEndEvent.Descriptor) ||
-                payload.Is(ChatResponseEvent.Descriptor) ||
+                payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor) ||
                 payload.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor));
     }
 
@@ -52,15 +56,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        if (payload.Is(TextMessageEndEvent.Descriptor))
+        if (payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor))
         {
-            await HandleTextMessageEndAsync(payload.Unpack<TextMessageEndEvent>(), envelope, ctx, ct);
-            return;
-        }
-
-        if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            await HandleChatResponseAsync(payload.Unpack<ChatResponseEvent>(), ctx, ct);
+            await HandleLlmInvocationCompletedAsync(payload.Unpack<WorkflowLlmInvocationCompletedEvent>(), envelope, ctx, ct);
             return;
         }
 
@@ -106,8 +104,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 TargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(
                     workflow: null,
                     configuredTargetRole: request.TargetRole,
-                    stepType: request.StepType,
-                    parameters: request.Parameters),
+                    stepType: request.StepType),
                 RequestDispatched = false,
                 WatchdogCallbackId = BuildWatchdogCallbackId(sessionId),
                 DispatchDedupId = BuildDispatchDedupId(sessionId),
@@ -155,8 +152,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private async Task HandleTextMessageEndAsync(
-        TextMessageEndEvent evt,
+    private async Task HandleLlmInvocationCompletedAsync(
+        WorkflowLlmInvocationCompletedEvent evt,
         EventEnvelope envelope,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
@@ -171,21 +168,19 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
         await StopWatchdogAsync(pending, ctx, ct);
         var publisherActorId = envelope.Route?.PublisherActorId ?? ctx.AgentId;
-        if (TryExtractLlmFailure(evt.Content, out var error))
+        if (!evt.Success)
         {
-            await PublishFailedCompletionAsync(pending, error, publisherActorId, ctx, ct);
+            await PublishFailedCompletionAsync(pending, string.IsNullOrWhiteSpace(evt.Error) ? "LLM call failed." : evt.Error, publisherActorId, ctx, ct);
             await RemovePendingAsync(sessionId, pending, ctx, ct);
             return;
         }
 
-        var outputPreview = (evt.Content ?? string.Empty).Length > 300
-            ? evt.Content![..300] + "..."
-            : evt.Content ?? string.Empty;
         ctx.Logger.LogInformation(
-            "LLMCallModule: step={StepId} completed ({Len} chars): {Preview}",
+            "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=completed output_len={OutputLen} output_redacted=true",
+            pending.RunId,
             pending.StepId,
-            evt.Content?.Length ?? 0,
-            outputPreview);
+            sessionId,
+            evt.Content?.Length ?? 0);
 
         await ctx.PublishAsync(
             new StepCompletedEvent
@@ -195,50 +190,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Success = true,
                 Output = evt.Content ?? string.Empty,
                 WorkerId = publisherActorId,
-            },
-            TopologyAudience.Self,
-            ct);
-        await RemovePendingAsync(sessionId, pending, ctx, ct);
-    }
-
-    private async Task HandleChatResponseAsync(
-        ChatResponseEvent evt,
-        IWorkflowExecutionContext ctx,
-        CancellationToken ct)
-    {
-        var sessionId = evt.SessionId;
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return;
-
-        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
-        if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out var pending))
-            return;
-
-        await StopWatchdogAsync(pending, ctx, ct);
-        if (TryExtractLlmFailure(evt.Content, out var error))
-        {
-            await PublishFailedCompletionAsync(pending, error, ctx.AgentId, ctx, ct);
-            await RemovePendingAsync(sessionId, pending, ctx, ct);
-            return;
-        }
-
-        var outputPreview = (evt.Content ?? string.Empty).Length > 300
-            ? evt.Content![..300] + "..."
-            : evt.Content ?? string.Empty;
-        ctx.Logger.LogInformation(
-            "LLMCallModule: step={StepId} completed non-streaming ({Len} chars): {Preview}",
-            pending.StepId,
-            evt.Content?.Length ?? 0,
-            outputPreview);
-
-        await ctx.PublishAsync(
-            new StepCompletedEvent
-            {
-                StepId = pending.StepId,
-                RunId = pending.RunId,
-                Success = true,
-                Output = evt.Content ?? string.Empty,
-                WorkerId = ctx.AgentId,
             },
             TopologyAudience.Self,
             ct);
@@ -316,55 +267,56 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return DefaultLlmTimeoutMs;
     }
 
-    private static bool TryExtractLlmFailure(string? content, out string error)
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: LLM override metadata was forwarded from generic execution
+    //                item values after string-key lookup.
+    //   New principle: LLM override metadata is copied from typed runtime
+    //                  override fields after blank-value filtering.
+    private static void CopyParametersToChatRequest(
+        StepRequestEvent request,
+        WorkflowLlmExecutionIntent intent,
+        int timeoutMs)
     {
-        if (string.IsNullOrEmpty(content) ||
-            !content.StartsWith(LlmFailureContentPrefix, StringComparison.Ordinal))
-        {
-            error = string.Empty;
-            return false;
-        }
-
-        var extracted = content[LlmFailureContentPrefix.Length..].Trim();
-        error = string.IsNullOrWhiteSpace(extracted) ? "LLM call failed." : extracted;
-        return true;
-    }
-
-    private static readonly string[] PropagatedMetadataKeys =
-    [
-        LLMRequestMetadataKeys.NyxIdAccessToken,
-        LLMRequestMetadataKeys.ModelOverride,
-    ];
-
-    private static void CopyPropagatedMetadata(
-        IWorkflowExecutionContext ctx,
-        MapField<string, string> metadata)
-    {
-        foreach (var key in PropagatedMetadataKeys)
-        {
-            if (WorkflowExecutionItemsAccess.TryGetItem<string>(ctx, key, out var value) &&
-                !string.IsNullOrWhiteSpace(value))
-            {
-                metadata[key] = value;
-            }
-        }
-    }
-
-    private static void CopyParametersToChatMetadata(
-        MapField<string, string> parameters,
-        MapField<string, string> headers)
-    {
-        foreach (var (key, value) in parameters)
+        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+        //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
+        //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
+        foreach (var (key, value) in request.Parameters)
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
-            if (string.Equals(key, "agent_type", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(key, "agent_id", StringComparison.OrdinalIgnoreCase))
-            {
+            var normalizedKey = key.Trim();
+            var normalizedValue = value.Trim();
+            if (IsReservedParameter(normalizedKey))
                 continue;
-            }
 
-            headers[key.Trim()] = value.Trim();
+            intent.Annotations[normalizedKey] = normalizedValue;
+        }
+    }
+
+    [SuppressMessage(
+        "Maintainability",
+        "CA1502:Avoid excessive complexity",
+        Justification = "Mechanical boundary normalization from known workflow step keys into typed Telegram fields; splitting would add indirection without changing behavior.")]
+    internal static bool IsReservedParameter(string key)
+    {
+        switch (key)
+        {
+            case "telegram.timeout_ms":
+            case "timeout_ms":
+            case "llm_timeout_ms":
+            case "aevatar.llm_timeout_ms":
+                return true;
+            case "run_id":
+            case "workflow.run_id":
+            case "workflow_run_id":
+            case "session_id":
+                return true;
+            case "step_id":
+            case "workflow.step_id":
+            case "workflow_step_id":
+                return true;
+            default:
+                return false;
         }
     }
 
@@ -426,39 +378,49 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
-        var chatRequest = new ChatRequestEvent
+        var intent = new WorkflowLlmExecutionIntent
         {
             Prompt = prompt,
             SessionId = sessionId,
             TimeoutMs = timeoutMs,
+            RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
+            StepId = stepId,
         };
-        CopyPropagatedMetadata(ctx, chatRequest.Metadata);
-        CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
-        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(ctx, chatRequest.Metadata);
+        if (WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm))
+        {
+            intent.Model = Normalize(llm.ModelOverride) ?? string.Empty;
+            intent.UserMemoryPrompt = Normalize(llm.UserMemoryPrompt) ?? string.Empty;
+            if (llm.HasMaxToolRoundsOverride)
+                intent.MaxToolRounds = llm.MaxToolRoundsOverride;
+        }
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+        CopyParametersToChatRequest(request, intent, timeoutMs);
+        WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
 
         if (!target.UseSelf)
         {
             ctx.Logger.LogInformation(
-                "LLMCallModule: step={StepId} → SendTo mode={Mode} actor={ActorId} timeout={Timeout}ms prompt=({Len} chars) {Preview}",
+                "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=dispatching mode={Mode} actor={ActorId} timeout={Timeout}ms prompt_len={PromptLen} prompt_redacted=true",
+                WorkflowRunIdNormalizer.Normalize(request.RunId),
                 stepId,
+                sessionId,
                 target.Mode,
                 target.ActorId,
                 timeoutMs,
-                prompt.Length,
-                promptPreview);
-            await ctx.SendToAsync(target.ActorId, chatRequest, ct, dispatchOptions);
+                prompt.Length);
+            await ctx.SendToAsync(target.ActorId, intent, ct, dispatchOptions);
             return;
         }
 
         ctx.Logger.LogInformation(
-            "LLMCallModule: step={StepId} → Self timeout={Timeout}ms prompt=({Len} chars) {Preview}",
+            "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=dispatching_self timeout={Timeout}ms prompt_len={PromptLen} prompt_redacted=true",
+            WorkflowRunIdNormalizer.Normalize(request.RunId),
             stepId,
+            sessionId,
             timeoutMs,
-            prompt.Length,
-            promptPreview);
-        await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct, dispatchOptions);
+            prompt.Length);
+        await ctx.PublishAsync(intent, TopologyAudience.Self, ct, dispatchOptions);
     }
 
     private static Task PublishFailedCompletionAsync(
@@ -505,8 +467,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
     private static string CreateSessionId(string scopeId, string runId, string stepId, int attempt) =>
         string.IsNullOrWhiteSpace(runId)
-            ? ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, $"{stepId}:a{attempt}")
-            : ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepId, attempt);
+            ? WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, $"{stepId}:a{attempt}")
+            : WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepId, attempt);
 
     private static EventEnvelopePublishOptions BuildDispatchOptions(string dispatchDedupId) =>
         new()
@@ -516,6 +478,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 DeduplicationOperationId = dispatchDedupId,
             },
         };
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static bool TryResolvePending(
         LLMCallModuleState state,

@@ -152,12 +152,12 @@ public sealed class WorkflowRunFinalizeEmitterTests
 
     private sealed class FakeCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
     {
-        public bool EnableActorQueryEndpoints => true;
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
         public WorkflowActorSnapshot? Snapshot { get; set; }
         public WorkflowActorProjectionState? ProjectionState { get; set; }
         public Exception? SnapshotException { get; set; }
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
             _ = actorId;
             ct.ThrowIfCancellationRequested();
@@ -166,10 +166,10 @@ public sealed class WorkflowRunFinalizeEmitterTests
             return Task.FromResult(Snapshot);
         }
 
-        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(int take = 200, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(string actorId, CancellationToken ct = default)
         {
             _ = actorId;
             ct.ThrowIfCancellationRequested();

@@ -54,6 +54,21 @@ public static class AevatarAuthenticationHostExtensions
 
                 jwt.TokenValidationParameters.ValidAudience = options.Audience;
                 jwt.TokenValidationParameters.ValidateAudience = !string.IsNullOrWhiteSpace(options.Audience);
+                jwt.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        if (context.Request.Path.StartsWithSegments("/ws/voice") &&
+                            context.Request.Query.TryGetValue("access_token", out var accessTokenValues))
+                        {
+                            var accessToken = accessTokenValues.FirstOrDefault();
+                            if (!string.IsNullOrWhiteSpace(accessToken))
+                                context.Token = accessToken.Trim();
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                };
             });
 
         // When authentication is enabled, endpoints default to requiring an authenticated caller.

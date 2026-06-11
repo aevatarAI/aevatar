@@ -1,4 +1,5 @@
 import { AGUIEventType, CustomEventName } from "@aevatar-react-sdk/types";
+import { useIntl } from "@umijs/max";
 import { Alert, Empty, Space, Typography } from "antd";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
@@ -6,7 +7,6 @@ import { authFetch } from "@/shared/auth/fetch";
 import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scopesApi } from "@/shared/api/scopesApi";
-import { servicesApi } from "@/shared/api/servicesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
@@ -25,7 +25,6 @@ import {
   buildScopeConsoleServiceOptions,
   extractRuntimeInvokeReceipt,
   scopeServiceAppId,
-  scopeServiceNamespace,
 } from "@/shared/runs/scopeConsole";
 import { studioApi } from "@/shared/studio/api";
 import { AevatarContextDrawer } from "@/shared/ui/aevatarPageShells";
@@ -49,16 +48,21 @@ import {
   buildTimelineBlockingSummary,
   describeActorCompletionStatus,
 } from "./runtimeInspector";
+import {
+  formatConsoleMessage,
+  t,
+  type ConsoleMessageDescriptor,
+} from "@/shared/i18n/messages";
 
 type ConsoleTab = "query" | "execute" | "timeline" | "raw";
 type QueryTarget = "binding" | "services" | "workflows" | "actor";
 
 type ConsoleFlow = {
-  badge?: string;
-  description: string;
+  badge?: ConsoleMessageDescriptor;
+  description: ConsoleMessageDescriptor;
   group: "developer" | "operate" | "understand";
   id: ConsoleTab;
-  label: string;
+  label: ConsoleMessageDescriptor;
   priority: "primary" | "secondary";
 };
 
@@ -97,63 +101,124 @@ type ExecuteLaunchContext = {
 const monoFontFamily =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
 
-const queryTargets: { description: string; id: QueryTarget; label: string }[] = [
+const queryTargets: {
+  description: ConsoleMessageDescriptor;
+  id: QueryTarget;
+  label: ConsoleMessageDescriptor;
+}[] = [
   {
-    description: "Current default binding for this scope.",
+    description: {
+      id: "pages.chat.chatadvancedconsole.current.default.binding.for.this",
+      defaultMessage: "Current default binding for this workspace.",
+    },
     id: "binding",
-    label: "Scope Binding",
+    label: {
+      id: "pages.chat.chatadvancedconsole.workspace.binding",
+      defaultMessage: "Workspace Binding",
+    },
   },
   {
-    description: "All published services currently visible to this scope.",
+    description: {
+      id: "pages.chat.chatadvancedconsole.all.published.services.currently.visible",
+      defaultMessage: "All published services currently visible to this workspace.",
+    },
     id: "services",
-    label: "Services",
+    label: {
+      id: "pages.chat.chatadvancedconsole.services",
+      defaultMessage: "Services",
+    },
   },
   {
-    description: "Workflow assets currently deployed into this scope.",
+    description: {
+      id: "pages.chat.chatadvancedconsole.workflow.assets.currently.deployed.into",
+      defaultMessage: "Workflow assets currently deployed into this workspace.",
+    },
     id: "workflows",
-    label: "Workflows",
+    label: {
+      id: "pages.chat.chatadvancedconsole.workflows",
+      defaultMessage: "Workflows",
+    },
   },
   {
-    description: "Inspect a specific actor by its runtime ID.",
+    description: {
+      id: "pages.chat.chatadvancedconsole.inspect.a.specific.actor.by",
+      defaultMessage: "Inspect a specific actor by its runtime ID.",
+    },
     id: "actor",
-    label: "Actor Snapshot",
+    label: {
+      id: "pages.chat.chatadvancedconsole.actor.snapshot",
+      defaultMessage: "Actor Snapshot",
+    },
   },
 ];
 
 const consoleFlows: readonly ConsoleFlow[] = [
   {
-    badge: "Recommended first",
-    description:
-      "Check the default route target, published services, deployed workflows, or inspect an actor directly.",
+    badge: {
+      id: "pages.chat.chatadvancedconsole.recommended.first",
+      defaultMessage: "Recommended first",
+    },
+    description: {
+      id: "pages.chat.chatadvancedconsole.check.the.default.route.target",
+      defaultMessage:
+        "Check the default route target, published services, deployed workflows, or inspect an actor directly.",
+    },
     group: "understand",
     id: "query",
-    label: "Query",
+    label: {
+      id: "pages.chat.chatadvancedconsole.query",
+      defaultMessage: "Query",
+    },
     priority: "primary",
   },
   {
-    description:
-      "Inspect actor state, timeline evidence, graph topology, and any blocking gate that needs operator action.",
+    description: {
+      id: "pages.chat.chatadvancedconsole.inspect.actor.state.timeline.evidence",
+      defaultMessage:
+        "Inspect actor state, timeline evidence, graph topology, and any blocking gate that needs operator action.",
+    },
     group: "understand",
     id: "timeline",
-    label: "Timeline",
+    label: {
+      id: "pages.chat.chatadvancedconsole.timeline",
+      defaultMessage: "Timeline",
+    },
     priority: "secondary",
   },
   {
-    badge: "Common next step",
-    description:
-      "Launch a service endpoint, capture the run receipt, and continue into Runs or Explorer when needed.",
+    badge: {
+      id: "pages.chat.chatadvancedconsole.common.next.step",
+      defaultMessage: "Common next step",
+    },
+    description: {
+      id: "pages.chat.chatadvancedconsole.launch.a.service.endpoint.capture",
+      defaultMessage:
+        "Launch a service endpoint, capture the run receipt, and continue into Runs or Explorer when needed.",
+    },
     group: "operate",
     id: "execute",
-    label: "Execute",
+    label: {
+      id: "pages.chat.chatadvancedconsole.execute",
+      defaultMessage: "Execute",
+    },
     priority: "primary",
   },
   {
-    badge: "Expert",
-    description:
-      "Send direct API requests only when you need low-level integration or protocol debugging.",
+    badge: {
+      id: "pages.chat.chatadvancedconsole.expert",
+      defaultMessage: "Expert",
+    },
+    description: {
+      id: "pages.chat.chatadvancedconsole.send.direct.api.requests.only",
+      defaultMessage:
+        "Send direct API requests only when you need low-level integration or protocol debugging.",
+    },
     group: "developer",
     id: "raw",
-    label: "Raw API",
+    label: {
+      id: "pages.chat.chatadvancedconsole.raw.api.2",
+      defaultMessage: "Raw API",
+    },
     priority: "secondary",
   },
 ];
@@ -284,8 +349,7 @@ function createResultPanel(
             style={actionButtonStyle("secondary")}
             type="button"
           >
-            Copy
-          </button>
+            {t("pages.chat.chatadvancedconsole.copy.2", "Copy")}</button>
         ) : null}
       </div>
       <pre style={monoBlockStyle}>{value}</pre>
@@ -313,7 +377,7 @@ function renderAuditPreviewCard(
     >
       <Typography.Text strong>{title}</Typography.Text>
       <Typography.Text type="secondary">
-        {description || "No detail"}
+        {description || t("pages.chat.chatadvancedconsole.no.detail", "No detail")}
       </Typography.Text>
       {stamp ? (
         <Typography.Text type="secondary">
@@ -369,6 +433,7 @@ export function ChatAdvancedConsole({
   services,
   sessionActorId,
 }: ChatAdvancedConsoleProps): React.ReactElement {
+  const intl = useIntl();
   const executeAbortRef = useRef<AbortController | null>(null);
 
   const consoleServices = useMemo(
@@ -491,25 +556,43 @@ export function ChatAdvancedConsole({
   const consoleFlowGroups = useMemo(
     () => [
       {
-        description: "Inspect the current scope and understand runtime state.",
+        description: intl.formatMessage({
+          id: "pages.chat.chatadvancedconsole.inspect.the.current.workspace.and",
+          defaultMessage: "Inspect the current workspace and understand runtime state.",
+        }),
         flows: consoleFlows.filter((flow) => flow.group === "understand"),
         id: "understand",
-        label: "Understand",
+        label: intl.formatMessage({
+          id: "pages.chat.chatadvancedconsole.understand",
+          defaultMessage: "Understand",
+        }),
       },
       {
-        description: "Run work, inspect the receipt, and act on runtime gates.",
+        description: intl.formatMessage({
+          id: "pages.chat.chatadvancedconsole.run.work.inspect.the.receipt",
+          defaultMessage: "Run work, inspect the receipt, and act on runtime gates.",
+        }),
         flows: consoleFlows.filter((flow) => flow.group === "operate"),
         id: "operate",
-        label: "Operate",
+        label: intl.formatMessage({
+          id: "pages.chat.chatadvancedconsole.operate",
+          defaultMessage: "Operate",
+        }),
       },
       {
-        description: "Drop to direct API calls when you need low-level debugging.",
+        description: intl.formatMessage({
+          id: "pages.chat.chatadvancedconsole.drop.to.direct.api.calls",
+          defaultMessage: "Drop to direct API calls when you need low-level debugging.",
+        }),
         flows: consoleFlows.filter((flow) => flow.group === "developer"),
         id: "developer",
-        label: "Developer",
+        label: intl.formatMessage({
+          id: "pages.chat.chatadvancedconsole.developer",
+          defaultMessage: "Developer",
+        }),
       },
     ],
-    []
+    [intl]
   );
   const activeConsoleFlow = useMemo(
     () => consoleFlows.find((flow) => flow.id === activeTab) || null,
@@ -519,29 +602,29 @@ export function ChatAdvancedConsole({
   const rawShortcuts = useMemo(
     () => [
       {
-        label: "Binding",
+        label: t("pages.chat.chatadvancedconsole.binding", "Binding"),
         method: "GET",
         path: `/scopes/${scopeId}/binding`,
       },
       {
-        label: "Services",
+        label: t("pages.chat.chatadvancedconsole.services.2", "Services"),
         method: "GET",
-        path: `/services?tenantId=${scopeId}&appId=${scopeServiceAppId}&namespace=${scopeServiceNamespace}&take=20`,
+        path: `/scopes/${scopeId}/services?appId=${scopeServiceAppId}&take=20`,
       },
       {
-        label: "Workflows",
+        label: t("pages.chat.chatadvancedconsole.workflows.2", "Workflows"),
         method: "GET",
         path: `/scopes/${scopeId}/workflows`,
       },
       activeExecuteService
         ? {
-            label: "Runs",
+            label: t("pages.chat.chatadvancedconsole.runs", "Runs"),
             method: "GET",
             path: `/scopes/${scopeId}/services/${activeExecuteService.serviceId}/runs?take=10`,
           }
         : null,
       {
-        label: "Auth Session",
+        label: t("pages.chat.chatadvancedconsole.auth.session", "Auth Session"),
         method: "GET",
         path: "/auth/me",
       },
@@ -705,11 +788,9 @@ export function ChatAdvancedConsole({
           result = await studioApi.getDefaultRouteTarget(scopeId);
           break;
         case "services":
-          result = await servicesApi.listServices({
+          result = await scopeRuntimeApi.listServices(scopeId, {
             appId: scopeServiceAppId,
-            namespace: scopeServiceNamespace,
             take: 100,
-            tenantId: scopeId,
           });
           break;
         case "workflows":
@@ -1157,26 +1238,23 @@ export function ChatAdvancedConsole({
     <AevatarContextDrawer
       onClose={onClose}
       open={open}
-      subtitle="Inspect scope state, invoke endpoints, or hit raw API paths without leaving chat."
-      title="Advanced Console"
+      subtitle={t("pages.chat.chatadvancedconsole.inspect.workspace.state.invoke.endpoints", "Inspect workspace state, invoke endpoints, or hit raw API paths without leaving chat.")}
+      title={t("pages.chat.chatadvancedconsole.advanced.console", "Advanced Console")}
       width={960}
     >
       {!scopeId ? (
         <Alert
-          description="Open a scoped chat first so the console has a project context."
+          description={t("pages.chat.chatadvancedconsole.open.workspace.chat.first.so", "Open a workspace chat first so the console has a project context.")}
           showIcon
-          title="No scope is currently active."
+          title={t("pages.chat.chatadvancedconsole.no.workspace.is.currently.active", "No workspace is currently active.")}
           type="warning"
         />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={drawerSectionStyle}>
-            <Typography.Text strong>Choose a task</Typography.Text>
+            <Typography.Text strong>{t("pages.chat.chatadvancedconsole.choose.task", "Choose a task")}</Typography.Text>
             <Typography.Text type="secondary">
-              Advanced Console keeps runtime inspection, operator actions, and
-              developer tooling in one drawer. Start from the task you are
-              trying to complete.
-            </Typography.Text>
+              {t("pages.chat.chatadvancedconsole.advanced.console.keeps.runtime.inspection", "Advanced Console keeps runtime inspection, operator actions, and developer tooling in one drawer. Start from the task you are trying to complete.")}</Typography.Text>
             <div
               style={{
                 background: "#fafaf8",
@@ -1188,12 +1266,7 @@ export function ChatAdvancedConsole({
                 padding: "10px 12px",
               }}
             >
-              Suggested path: start with <strong>Query</strong> to orient the
-              scope, move to <strong>Execute</strong> when you are ready to act,
-              then use <strong>Timeline</strong> if the run needs evidence or
-              operator input. Keep <strong>Raw API</strong> for protocol-level
-              debugging.
-            </div>
+              {t("pages.chat.chatadvancedconsole.suggested.path.start.with", "Suggested path: start with")}<strong>{t("pages.chat.chatadvancedconsole.query", "Query")}</strong> {t("pages.chat.chatadvancedconsole.to.orient.the.workspace.move", "to orient the workspace, move to")}<strong>{t("pages.chat.chatadvancedconsole.execute", "Execute")}</strong> {t("pages.chat.chatadvancedconsole.when.you.are.ready.to", "when you are ready to act, then use")}<strong>{t("pages.chat.chatadvancedconsole.timeline", "Timeline")}</strong> {t("pages.chat.chatadvancedconsole.if.the.run.needs.evidence", "if the run needs evidence or operator input. Keep")}<strong>{t("pages.chat.chatadvancedconsole.raw.api", "Raw API")}</strong> {t("pages.chat.chatadvancedconsole.for.protocol.level.debugging", "for protocol-level debugging.")}</div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {consoleFlowGroups.map((group) => (
@@ -1225,9 +1298,14 @@ export function ChatAdvancedConsole({
                   >
                     {group.flows.map((flow) => {
                       const active = activeTab === flow.id;
+                      const flowLabel = formatConsoleMessage(flow.label);
+                      const flowDescription = formatConsoleMessage(flow.description);
+                      const flowBadge = flow.badge
+                        ? formatConsoleMessage(flow.badge)
+                        : "";
                       return (
                         <button
-                          aria-label={flow.label}
+                          aria-label={flowLabel}
                           aria-pressed={active}
                           className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                           key={flow.id}
@@ -1269,9 +1347,9 @@ export function ChatAdvancedConsole({
                                   fontWeight: 700,
                                 }}
                               >
-                                {flow.label}
+                                {flowLabel}
                               </span>
-                              {flow.badge ? (
+                              {flowBadge ? (
                                 <span
                                   style={{
                                     background:
@@ -1290,7 +1368,7 @@ export function ChatAdvancedConsole({
                                     textTransform: "uppercase",
                                   }}
                                 >
-                                  {flow.badge}
+                                  {flowBadge}
                                 </span>
                               ) : null}
                             </div>
@@ -1307,8 +1385,7 @@ export function ChatAdvancedConsole({
                                   textTransform: "uppercase",
                                 }}
                               >
-                                Active
-                              </span>
+                                {t("pages.chat.chatadvancedconsole.active", "Active")}</span>
                             ) : null}
                           </div>
                           <div
@@ -1318,7 +1395,7 @@ export function ChatAdvancedConsole({
                               lineHeight: 1.6,
                             }}
                           >
-                            {flow.description}
+                            {flowDescription}
                           </div>
                         </button>
                       );
@@ -1331,8 +1408,12 @@ export function ChatAdvancedConsole({
 
           {activeConsoleFlow ? (
             <Alert
-              description={activeConsoleFlow.description}
-              message={`Current task: ${activeConsoleFlow.label}`}
+              description={formatConsoleMessage(activeConsoleFlow.description)}
+              message={t(
+                "pages.chat.chatadvancedconsole.current.task",
+                "Current task: {task}",
+                { task: formatConsoleMessage(activeConsoleFlow.label) },
+              )}
               showIcon
               type="info"
             />
@@ -1341,7 +1422,7 @@ export function ChatAdvancedConsole({
           {activeTab === "query" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={drawerSectionStyle}>
-                <Typography.Text strong>Query Scope State</Typography.Text>
+                <Typography.Text strong>{t("pages.chat.chatadvancedconsole.query.workspace.state", "Query Workspace State")}</Typography.Text>
                 <div
                   style={{
                     display: "grid",
@@ -1349,52 +1430,57 @@ export function ChatAdvancedConsole({
                     gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
                   }}
                 >
-                  {queryTargets.map((target) => (
-                    <button
-                      aria-pressed={queryTarget === target.id}
-                      className={AEVATAR_INTERACTIVE_CHIP_CLASS}
-                      key={target.id}
-                      onClick={() => {
-                        setQueryTarget(target.id);
-                        setQueryResult(null);
-                      }}
-                      style={{
-                        background:
-                          queryTarget === target.id ? "#f5f5f4" : "#ffffff",
-                        border:
-                          queryTarget === target.id
-                            ? "1px solid #111827"
-                            : "1px solid #e7e5e4",
-                        borderRadius: 12,
-                        cursor: "pointer",
-                        minHeight: 88,
-                        padding: 14,
-                        textAlign: "left",
-                      }}
-                      type="button"
-                    >
-                      <div
-                        style={{
-                          color: "#111827",
-                          fontSize: 13,
-                          fontWeight: 700,
-                          marginBottom: 6,
+                  {queryTargets.map((target) => {
+                    const targetLabel = formatConsoleMessage(target.label);
+                    const targetDescription = formatConsoleMessage(target.description);
+
+                    return (
+                      <button
+                        aria-pressed={queryTarget === target.id}
+                        className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+                        key={target.id}
+                        onClick={() => {
+                          setQueryTarget(target.id);
+                          setQueryResult(null);
                         }}
+                        style={{
+                          background:
+                            queryTarget === target.id ? "#f5f5f4" : "#ffffff",
+                          border:
+                            queryTarget === target.id
+                              ? "1px solid #111827"
+                              : "1px solid #e7e5e4",
+                          borderRadius: 12,
+                          cursor: "pointer",
+                          minHeight: 88,
+                          padding: 14,
+                          textAlign: "left",
+                        }}
+                        type="button"
                       >
-                        {target.label}
-                      </div>
-                      <div style={{ color: "#6b7280", fontSize: 12, lineHeight: 1.5 }}>
-                        {target.description}
-                      </div>
-                    </button>
-                  ))}
+                        <div
+                          style={{
+                            color: "#111827",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            marginBottom: 6,
+                          }}
+                        >
+                          {targetLabel}
+                        </div>
+                        <div style={{ color: "#6b7280", fontSize: 12, lineHeight: 1.5 }}>
+                          {targetDescription}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {queryTarget === "actor" ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <span style={fieldLabelStyle}>Actor ID</span>
+                    <span style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.actor.id", "Actor ID")}</span>
                     <input
-                      aria-label="Advanced query actor ID"
+                      aria-label={t("pages.chat.chatadvancedconsole.advanced.query.actor.id", "Advanced query actor ID")}
                       onChange={(event) => setQueryActorId(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter") {
@@ -1424,18 +1510,31 @@ export function ChatAdvancedConsole({
                     type="button"
                   >
                     {queryLoading
-                      ? "Loading..."
-                      : `Query ${
-                          queryTargets.find((target) => target.id === queryTarget)
-                            ?.label || "Scope"
-                        }`}
+                      ? t("pages.chat.chatadvancedconsole.loading", "Loading...")
+                      : t(
+                          "pages.chat.chatadvancedconsole.query.target",
+                          "Query {target}",
+                          {
+                            target: queryTargets.find(
+                              (target) => target.id === queryTarget,
+                            )?.label
+                              ? formatConsoleMessage(
+                                  queryTargets.find(
+                                    (target) => target.id === queryTarget,
+                                  )!.label,
+                                )
+                              : t("pages.chat.chatadvancedconsole.workspace", "Workspace"),
+                          },
+                        )}
                   </button>
                 </div>
               </div>
 
               {queryResult
-                ? createResultPanel("Query Result", queryResult, () =>
-                    handleCopy(queryResult)
+                ? createResultPanel(
+                    t("pages.chat.chatadvancedconsole.query.result", "Query Result"),
+                    queryResult,
+                    () => handleCopy(queryResult),
                   )
                 : null}
             </div>
@@ -1444,12 +1543,12 @@ export function ChatAdvancedConsole({
           {activeTab === "execute" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={drawerSectionStyle}>
-                <Typography.Text strong>Execute Service Endpoint</Typography.Text>
+                <Typography.Text strong>{t("pages.chat.chatadvancedconsole.execute.service.endpoint", "Execute Service Endpoint")}</Typography.Text>
                 <div style={{ display: "grid", gap: 12 }}>
                   <label style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <span style={fieldLabelStyle}>Service</span>
+                    <span style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.service", "Service")}</span>
                     <select
-                      aria-label="Advanced execute service"
+                      aria-label={t("pages.chat.chatadvancedconsole.advanced.execute.service", "Advanced execute service")}
                       onChange={(event) => setExecuteServiceId(event.target.value)}
                       style={selectStyle}
                       value={activeExecuteService?.serviceId || ""}
@@ -1463,9 +1562,9 @@ export function ChatAdvancedConsole({
                   </label>
 
                   <label style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <span style={fieldLabelStyle}>Endpoint</span>
+                    <span style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.endpoint", "Endpoint")}</span>
                     <select
-                      aria-label="Advanced execute endpoint"
+                      aria-label={t("pages.chat.chatadvancedconsole.advanced.execute.endpoint", "Advanced execute endpoint")}
                       onChange={(event) => setExecuteEndpointId(event.target.value)}
                       style={selectStyle}
                       value={activeExecuteEndpoint?.endpointId || ""}
@@ -1479,11 +1578,11 @@ export function ChatAdvancedConsole({
                   </label>
 
                   <label style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <span style={fieldLabelStyle}>Prompt</span>
+                    <span style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.prompt", "Prompt")}</span>
                     <textarea
-                      aria-label="Advanced execute prompt"
+                      aria-label={t("pages.chat.chatadvancedconsole.advanced.execute.prompt", "Advanced execute prompt")}
                       onChange={(event) => setExecutePrompt(event.target.value)}
-                      placeholder="Describe the call you want to make."
+                      placeholder={t("pages.chat.chatadvancedconsole.describe.the.call.you.want", "Describe the call you want to make.")}
                       style={textareaStyle}
                       value={executePrompt}
                     />
@@ -1495,9 +1594,9 @@ export function ChatAdvancedConsole({
                       <label
                         style={{ display: "flex", flexDirection: "column", gap: 8 }}
                       >
-                        <span style={fieldLabelStyle}>Payload Type URL</span>
+                        <span style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.payload.type.url", "Payload Type URL")}</span>
                         <input
-                          aria-label="Advanced execute payload type URL"
+                          aria-label={t("pages.chat.chatadvancedconsole.advanced.execute.payload.type.url", "Advanced execute payload type URL")}
                           onChange={(event) =>
                             setExecutePayloadTypeUrl(event.target.value)
                           }
@@ -1509,13 +1608,13 @@ export function ChatAdvancedConsole({
                       <label
                         style={{ display: "flex", flexDirection: "column", gap: 8 }}
                       >
-                        <span style={fieldLabelStyle}>Payload Base64</span>
+                        <span style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.payload.base64", "Payload Base64")}</span>
                         <textarea
-                          aria-label="Advanced execute payload base64"
+                          aria-label={t("pages.chat.chatadvancedconsole.advanced.execute.payload.base64", "Advanced execute payload base64")}
                           onChange={(event) =>
                             setExecutePayloadBase64(event.target.value)
                           }
-                          placeholder="Optional protobuf payload in base64."
+                          placeholder={t("pages.chat.chatadvancedconsole.optional.protobuf.payload.in.base64", "Optional protobuf payload in base64.")}
                           style={textareaStyle}
                           value={executePayloadBase64}
                         />
@@ -1540,7 +1639,7 @@ export function ChatAdvancedConsole({
                       )}
                       type="button"
                     >
-                      {executeStatus === "running" ? "Running..." : "Run"}
+                      {executeStatus === "running" ? t("pages.chat.chatadvancedconsole.running", "Running...") : t("pages.chat.chatadvancedconsole.run", "Run")}
                     </button>
                     <button
                       className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1552,8 +1651,7 @@ export function ChatAdvancedConsole({
                       )}
                       type="button"
                     >
-                      Stop
-                    </button>
+                      {t("pages.chat.chatadvancedconsole.stop", "Stop")}</button>
                   </Space>
                 </div>
               </div>
@@ -1564,7 +1662,7 @@ export function ChatAdvancedConsole({
 
               {executeActorId || executeCommandId || executeRunId ? (
                 <div style={drawerSectionStyle}>
-                  <Typography.Text strong>Execution Metadata</Typography.Text>
+                  <Typography.Text strong>{t("pages.chat.chatadvancedconsole.execution.metadata", "Execution Metadata")}</Typography.Text>
                   <Space wrap>
                     <button
                       className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1572,8 +1670,7 @@ export function ChatAdvancedConsole({
                       style={actionButtonStyle("secondary")}
                       type="button"
                     >
-                      Open Runs
-                    </button>
+                      {t("pages.chat.chatadvancedconsole.open.runs", "Open Runs")}</button>
                     <button
                       className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       disabled={!executeActorId && !executeRunId}
@@ -1584,8 +1681,7 @@ export function ChatAdvancedConsole({
                       )}
                       type="button"
                     >
-                      Open Explorer
-                    </button>
+                      {t("pages.chat.chatadvancedconsole.open.explorer", "Open Explorer")}</button>
                     <button
                       className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       disabled={!executeRunId || executeAuditLoading}
@@ -1597,10 +1693,10 @@ export function ChatAdvancedConsole({
                       type="button"
                     >
                       {executeAuditLoading
-                        ? "Loading Audit..."
+                        ? t("pages.chat.chatadvancedconsole.loading.audit", "Loading Audit...")
                         : executeAuditSnapshot
-                          ? "Refresh Audit"
-                          : "Load Audit"}
+                          ? t("pages.chat.chatadvancedconsole.refresh.audit", "Refresh Audit")
+                          : t("pages.chat.chatadvancedconsole.load.audit", "Load Audit")}
                     </button>
                   </Space>
                   <div
@@ -1612,21 +1708,21 @@ export function ChatAdvancedConsole({
                     }}
                   >
                     <div>
-                      <div style={fieldLabelStyle}>Actor</div>
+                      <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.actor", "Actor")}</div>
                       <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
-                        {executeActorId || "Unavailable"}
+                        {executeActorId || t("pages.chat.chatadvancedconsole.unavailable", "Unavailable")}
                       </div>
                     </div>
                     <div>
-                      <div style={fieldLabelStyle}>Command</div>
+                      <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.command", "Command")}</div>
                       <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
-                        {executeCommandId || "Unavailable"}
+                        {executeCommandId || t("pages.chat.chatadvancedconsole.unavailable", "Unavailable")}
                       </div>
                     </div>
                     <div>
-                      <div style={fieldLabelStyle}>Run</div>
+                      <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.run", "Run")}</div>
                       <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
-                        {executeRunId || "Unavailable"}
+                        {executeRunId || t("pages.chat.chatadvancedconsole.unavailable", "Unavailable")}
                       </div>
                     </div>
                   </div>
@@ -1639,7 +1735,7 @@ export function ChatAdvancedConsole({
 
               {executeAuditSnapshot ? (
                 <div style={drawerSectionStyle}>
-                  <Typography.Text strong>Run Audit</Typography.Text>
+                  <Typography.Text strong>{t("pages.chat.chatadvancedconsole.run.audit", "Run Audit")}</Typography.Text>
                   <div
                     style={{
                       display: "grid",
@@ -1648,26 +1744,26 @@ export function ChatAdvancedConsole({
                     }}
                   >
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Completion</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.completion", "Completion")}</Typography.Text>
                       <Typography.Text strong>
                         {executeAuditSnapshot.audit.completionStatus}
                       </Typography.Text>
                     </div>
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Duration</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.duration", "Duration")}</Typography.Text>
                       <Typography.Text strong>
                         {Math.round(executeAuditSnapshot.audit.durationMs)} ms
                       </Typography.Text>
                     </div>
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Steps</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.steps", "Steps")}</Typography.Text>
                       <Typography.Text strong>
                         {executeAuditSummary?.completedSteps ?? 0}/
                         {executeAuditSummary?.totalSteps ?? 0}
                       </Typography.Text>
                     </div>
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Role replies</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.role.replies", "Role replies")}</Typography.Text>
                       <Typography.Text strong>
                         {executeAuditSummary?.roleReplyCount ?? 0}
                       </Typography.Text>
@@ -1676,7 +1772,7 @@ export function ChatAdvancedConsole({
 
                   {executeAuditSnapshot.audit.input ? (
                     createResultPanel(
-                      "Audit Input",
+                      t("pages.chat.chatadvancedconsole.audit.input", "Audit Input"),
                       executeAuditSnapshot.audit.input,
                       () => handleCopy(executeAuditSnapshot.audit.input)
                     )
@@ -1686,7 +1782,7 @@ export function ChatAdvancedConsole({
                     <Alert
                       description={executeAuditSnapshot.audit.finalOutput}
                       showIcon
-                      title="Final output"
+                      title={t("pages.chat.chatadvancedconsole.final.output", "Final output")}
                       type="success"
                     />
                   ) : null}
@@ -1695,7 +1791,7 @@ export function ChatAdvancedConsole({
                     <Alert
                       description={executeAuditSnapshot.audit.finalError}
                       showIcon
-                      title="Final error"
+                      title={t("pages.chat.chatadvancedconsole.final.error", "Final error")}
                       type="error"
                     />
                   ) : null}
@@ -1708,7 +1804,7 @@ export function ChatAdvancedConsole({
                     }}
                   >
                     <div style={drawerSectionStyle}>
-                      <Typography.Text strong>Timeline Highlights</Typography.Text>
+                      <Typography.Text strong>{t("pages.chat.chatadvancedconsole.timeline.highlights", "Timeline Highlights")}</Typography.Text>
                       {executeAuditTimeline.length > 0 ? (
                         <div
                           style={{
@@ -1722,7 +1818,7 @@ export function ChatAdvancedConsole({
                             .map((event, index) =>
                               renderAuditPreviewCard(
                                 event.stage || event.eventType || "event",
-                                event.message || "No message",
+                                event.message || t("pages.chat.chatadvancedconsole.no.message", "No message"),
                                 event.timestamp,
                                 String(index)
                               )
@@ -1730,14 +1826,14 @@ export function ChatAdvancedConsole({
                         </div>
                       ) : (
                         <Empty
-                          description="No timeline events were captured."
+                          description={t("pages.chat.chatadvancedconsole.no.timeline.events.were.captured", "No timeline events were captured.")}
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
                         />
                       )}
                     </div>
 
                     <div style={drawerSectionStyle}>
-                      <Typography.Text strong>Step Highlights</Typography.Text>
+                      <Typography.Text strong>{t("pages.chat.chatadvancedconsole.step.highlights", "Step Highlights")}</Typography.Text>
                       {executeAuditSteps.length > 0 ? (
                         <div
                           style={{
@@ -1759,7 +1855,7 @@ export function ChatAdvancedConsole({
                         </div>
                       ) : (
                         <Empty
-                          description="No step audit records were captured."
+                          description={t("pages.chat.chatadvancedconsole.no.step.audit.records.were", "No step audit records were captured.")}
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
                         />
                       )}
@@ -1767,7 +1863,7 @@ export function ChatAdvancedConsole({
                   </div>
 
                   <div style={drawerSectionStyle}>
-                    <Typography.Text strong>Reply Highlights</Typography.Text>
+                    <Typography.Text strong>{t("pages.chat.chatadvancedconsole.reply.highlights", "Reply Highlights")}</Typography.Text>
                     {executeAuditReplies.length > 0 ? (
                       <div
                         style={{
@@ -1779,7 +1875,7 @@ export function ChatAdvancedConsole({
                         {executeAuditReplies.slice(0, 4).map((reply, index) =>
                           renderAuditPreviewCard(
                             reply.roleId || `reply-${index + 1}`,
-                            reply.content || "No content",
+                            reply.content || t("pages.chat.chatadvancedconsole.no.content", "No content"),
                             reply.timestamp,
                             String(index)
                           )
@@ -1787,7 +1883,7 @@ export function ChatAdvancedConsole({
                       </div>
                     ) : (
                       <Empty
-                        description="No role replies were captured."
+                        description={t("pages.chat.chatadvancedconsole.no.role.replies.were.captured", "No role replies were captured.")}
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                       />
                     )}
@@ -1796,13 +1892,13 @@ export function ChatAdvancedConsole({
               ) : null}
 
               {executeAssistantText
-                ? createResultPanel("Streaming Output", executeAssistantText, () =>
+                ? createResultPanel(t("pages.chat.chatadvancedconsole.streaming.output", "Streaming Output"), executeAssistantText, () =>
                     handleCopy(executeAssistantText)
                   )
                 : null}
 
               {executeResponseText
-                ? createResultPanel("Invoke Response", executeResponseText, () =>
+                ? createResultPanel(t("pages.chat.chatadvancedconsole.invoke.response", "Invoke Response"), executeResponseText, () =>
                     handleCopy(executeResponseText)
                   )
                 : null}
@@ -1818,16 +1914,14 @@ export function ChatAdvancedConsole({
           {activeTab === "timeline" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={drawerSectionStyle}>
-                <Typography.Text strong>Actor Timeline</Typography.Text>
+                <Typography.Text strong>{t("pages.chat.chatadvancedconsole.actor.timeline", "Actor Timeline")}</Typography.Text>
                 <Typography.Text type="secondary">
-                  Inspect the current actor snapshot, recent runtime stages, and
-                  any blocking gate without leaving chat.
-                </Typography.Text>
+                  {t("pages.chat.chatadvancedconsole.inspect.the.current.actor.snapshot", "Inspect the current actor snapshot, recent runtime stages, and any blocking gate without leaving chat.")}</Typography.Text>
 
                 <label style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <span style={fieldLabelStyle}>Actor ID</span>
+                  <span style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.actor.id.2", "Actor ID")}</span>
                   <input
-                    aria-label="Advanced timeline actor ID"
+                    aria-label={t("pages.chat.chatadvancedconsole.advanced.timeline.actor.id", "Advanced timeline actor ID")}
                     onChange={(event) => setTimelineActorInput(event.target.value)}
                     placeholder={
                       executeActorId || sessionActorId || "actor://..."
@@ -1848,7 +1942,7 @@ export function ChatAdvancedConsole({
                     )}
                     type="button"
                   >
-                    {timelineLoading ? "Refreshing..." : "Refresh Timeline"}
+                    {timelineLoading ? t("pages.chat.chatadvancedconsole.refreshing", "Refreshing...") : t("pages.chat.chatadvancedconsole.refresh.timeline", "Refresh Timeline")}
                   </button>
                   <button
                     className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1861,10 +1955,10 @@ export function ChatAdvancedConsole({
                     type="button"
                   >
                     {executeAuditLoading
-                      ? "Loading Audit..."
+                      ? t("pages.chat.chatadvancedconsole.loading.audit", "Loading Audit...")
                       : executeAuditSnapshot
-                        ? "Refresh Audit"
-                        : "Load Audit for Timeline"}
+                        ? t("pages.chat.chatadvancedconsole.refresh.audit", "Refresh Audit")
+                        : t("pages.chat.chatadvancedconsole.load.audit.for.timeline", "Load Audit for Timeline")}
                   </button>
                   <button
                     className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1876,8 +1970,7 @@ export function ChatAdvancedConsole({
                     )}
                     type="button"
                   >
-                    Open Explorer
-                  </button>
+                    {t("pages.chat.chatadvancedconsole.open.explorer.2", "Open Explorer")}</button>
                   <button
                     className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                     disabled={!executeLaunchContext}
@@ -1885,15 +1978,14 @@ export function ChatAdvancedConsole({
                     style={actionButtonStyle("secondary", !executeLaunchContext)}
                     type="button"
                   >
-                    Open Runs
-                  </button>
+                    {t("pages.chat.chatadvancedconsole.open.runs.2", "Open Runs")}</button>
                 </Space>
 
                 {!effectiveTimelineActorId ? (
                   <Alert
-                    description="Run a service endpoint or provide an actor ID to inspect runtime state."
+                    description={t("pages.chat.chatadvancedconsole.run.service.endpoint.or.provide", "Run a service endpoint or provide an actor ID to inspect runtime state.")}
                     showIcon
-                    title="No actor is currently selected."
+                    title={t("pages.chat.chatadvancedconsole.no.actor.is.currently.selected", "No actor is currently selected.")}
                     type="info"
                   />
                 ) : null}
@@ -1909,15 +2001,15 @@ export function ChatAdvancedConsole({
                     }}
                   >
                     <div>
-                      <div style={fieldLabelStyle}>Effective actor</div>
+                      <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.effective.actor", "Effective actor")}</div>
                       <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
                         {effectiveTimelineActorId}
                       </div>
                     </div>
                     <div>
-                      <div style={fieldLabelStyle}>Run</div>
+                      <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.run.2", "Run")}</div>
                       <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
-                        {executeRunId || "Unavailable"}
+                        {executeRunId || t("pages.chat.chatadvancedconsole.unavailable", "Unavailable")}
                       </div>
                     </div>
                   </div>
@@ -1930,7 +2022,7 @@ export function ChatAdvancedConsole({
 
               {timelineSnapshot ? (
                 <div style={drawerSectionStyle}>
-                  <Typography.Text strong>Snapshot</Typography.Text>
+                  <Typography.Text strong>{t("pages.chat.chatadvancedconsole.snapshot", "Snapshot")}</Typography.Text>
                   <div
                     style={{
                       display: "grid",
@@ -1940,38 +2032,38 @@ export function ChatAdvancedConsole({
                     }}
                   >
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Workflow</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.workflow", "Workflow")}</Typography.Text>
                       <Typography.Text strong>
                         {timelineSnapshot.workflowName || "n/a"}
                       </Typography.Text>
                     </div>
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Completion</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.completion.2", "Completion")}</Typography.Text>
                       <Typography.Text strong>
                         {describeActorCompletionStatus(timelineSnapshot)}
                       </Typography.Text>
                     </div>
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">State version</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.state.version", "State version")}</Typography.Text>
                       <Typography.Text strong>
                         {timelineSnapshot.stateVersion}
                       </Typography.Text>
                     </div>
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Completed steps</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.completed.steps", "Completed steps")}</Typography.Text>
                       <Typography.Text strong>
                         {timelineSnapshot.completedSteps}/
                         {timelineSnapshot.totalSteps}
                       </Typography.Text>
                     </div>
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Role replies</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.role.replies.2", "Role replies")}</Typography.Text>
                       <Typography.Text strong>
                         {timelineSnapshot.roleReplyCount}
                       </Typography.Text>
                     </div>
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Last update</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.last.update", "Last update")}</Typography.Text>
                       <Typography.Text strong>
                         {formatDateTime(timelineSnapshot.lastUpdatedAt)}
                       </Typography.Text>
@@ -1982,7 +2074,7 @@ export function ChatAdvancedConsole({
 
               {timelineGraph ? (
                 <div style={drawerSectionStyle}>
-                  <Typography.Text strong>Topology Digest</Typography.Text>
+                  <Typography.Text strong>{t("pages.chat.chatadvancedconsole.topology.digest", "Topology Digest")}</Typography.Text>
                   <div
                     style={{
                       display: "grid",
@@ -1992,21 +2084,21 @@ export function ChatAdvancedConsole({
                     }}
                   >
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Nodes</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.nodes", "Nodes")}</Typography.Text>
                       <Typography.Text strong>
                         {timelineGraph.subgraph.nodes.length}
                       </Typography.Text>
                     </div>
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Edges</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.edges", "Edges")}</Typography.Text>
                       <Typography.Text strong>
                         {timelineGraph.subgraph.edges.length}
                       </Typography.Text>
                     </div>
                     <div style={drawerSectionStyle}>
-                      <Typography.Text type="secondary">Root node</Typography.Text>
+                      <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.root.node", "Root node")}</Typography.Text>
                       <Typography.Text strong>
-                        {timelineGraph.subgraph.rootNodeId || "Unavailable"}
+                        {timelineGraph.subgraph.rootNodeId || t("pages.chat.chatadvancedconsole.unavailable", "Unavailable")}
                       </Typography.Text>
                     </div>
                   </div>
@@ -2042,7 +2134,7 @@ export function ChatAdvancedConsole({
 
               {timelineBlockingSummary ? (
                 <div style={drawerSectionStyle}>
-                  <Typography.Text strong>Blocking State</Typography.Text>
+                  <Typography.Text strong>{t("pages.chat.chatadvancedconsole.blocking.state", "Blocking State")}</Typography.Text>
                   <div
                     style={{
                       background: "#fffbeb",
@@ -2074,10 +2166,10 @@ export function ChatAdvancedConsole({
                           }}
                         >
                           {timelineBlockingSummary.kind === "wait_signal"
-                            ? "Waiting on signal"
+                            ? t("pages.chat.chatadvancedconsole.waiting.on.signal", "Waiting on signal")
                             : timelineBlockingSummary.kind === "human_approval"
-                              ? "Approval required"
-                              : "Input required"}
+                              ? t("pages.chat.chatadvancedconsole.approval.required", "Approval required")
+                              : t("pages.chat.chatadvancedconsole.input.required", "Input required")}
                         </span>
                         <Typography.Text strong style={{ fontSize: 16 }}>
                           {timelineBlockingSummary.title}
@@ -2109,7 +2201,7 @@ export function ChatAdvancedConsole({
                               padding: "4px 8px",
                             }}
                           >
-                            Signal {timelineBlockingSummary.signalName}
+                            {t("pages.chat.chatadvancedconsole.signal", "Signal")}{timelineBlockingSummary.signalName}
                           </span>
                         ) : null}
                         {timelineBlockingSummary.timeoutLabel ? (
@@ -2143,7 +2235,7 @@ export function ChatAdvancedConsole({
                           <span>{timelineBlockingSummary.prompt}</span>
                         </div>
                       }
-                      message="Current runtime gate"
+                      message={t("pages.chat.chatadvancedconsole.current.runtime.gate", "Current runtime gate")}
                       showIcon
                       type="warning"
                     />
@@ -2163,13 +2255,13 @@ export function ChatAdvancedConsole({
                           padding: 12,
                         }}
                       >
-                        <div style={fieldLabelStyle}>Recommended next step</div>
+                        <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.recommended.next.step", "Recommended next step")}</div>
                         <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
                           {timelineBlockingSummary.kind === "wait_signal"
-                            ? "Send the signal payload that the runtime is waiting for."
+                            ? t("pages.chat.chatadvancedconsole.send.the.signal.payload.that.the.runtime.is.waiting.for", "Send the signal payload that the runtime is waiting for.")
                             : timelineBlockingSummary.kind === "human_approval"
-                              ? "Review the gate and approve or reject it."
-                              : "Provide the missing value, then resume the run."}
+                              ? t("pages.chat.chatadvancedconsole.review.the.gate.and.approve.or.reject.it", "Review the gate and approve or reject it.")
+                              : t("pages.chat.chatadvancedconsole.provide.the.missing.value.then.resume.the.run", "Provide the missing value, then resume the run.")}
                         </div>
                       </div>
                       <div
@@ -2180,13 +2272,13 @@ export function ChatAdvancedConsole({
                           padding: 12,
                         }}
                       >
-                        <div style={fieldLabelStyle}>Action context</div>
+                        <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.action.context", "Action context")}</div>
                         <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
                           {timelineBlockingSummary.kind === "wait_signal"
-                            ? "Signal payload is optional unless your workflow expects a value."
+                            ? t("pages.chat.chatadvancedconsole.signal.payload.is.optional.unless.your.workflow.expects.a.value", "Signal payload is optional unless your workflow expects a value.")
                             : timelineBlockingSummary.kind === "human_approval"
-                              ? "Approval notes are optional and will be sent with the decision."
-                              : "Input is required before the workflow can continue."}
+                              ? t("pages.chat.chatadvancedconsole.approval.notes.are.optional.and.will.be.sent.with.the.decision", "Approval notes are optional and will be sent with the decision.")
+                              : t("pages.chat.chatadvancedconsole.input.is.required.before.the.workflow.can.continue", "Input is required before the workflow can continue.")}
                         </div>
                       </div>
                     </div>
@@ -2196,23 +2288,23 @@ export function ChatAdvancedConsole({
                   >
                     <span style={fieldLabelStyle}>
                       {timelineBlockingSummary.kind === "wait_signal"
-                        ? "Signal payload"
+                        ? t("pages.chat.chatadvancedconsole.signal.payload", "Signal payload")
                         : timelineBlockingSummary.kind === "human_approval"
-                          ? "Approval note"
-                          : "Operator input"}
+                          ? t("pages.chat.chatadvancedconsole.approval.note", "Approval note")
+                          : t("pages.chat.chatadvancedconsole.operator.input", "Operator input")}
                     </span>
                     <textarea
-                      aria-label="Advanced timeline action input"
+                      aria-label={t("pages.chat.chatadvancedconsole.advanced.timeline.action.input", "Advanced timeline action input")}
                       disabled={timelineActionLoading}
                       onChange={(event) =>
                         setTimelineActionInput(event.target.value)
                       }
                       placeholder={
                         timelineBlockingSummary.kind === "wait_signal"
-                          ? "Optional signal payload"
+                          ? t("pages.chat.chatadvancedconsole.optional.signal.payload", "Optional signal payload")
                           : timelineBlockingSummary.kind === "human_approval"
-                            ? "Optional approval note"
-                            : "Provide the requested input"
+                            ? t("pages.chat.chatadvancedconsole.optional.approval.note", "Optional approval note")
+                            : t("pages.chat.chatadvancedconsole.provide.the.requested.input", "Provide the requested input")
                       }
                       style={textareaStyle}
                       value={timelineActionInput}
@@ -2237,7 +2329,7 @@ export function ChatAdvancedConsole({
                         )}
                         type="button"
                       >
-                        {timelineActionLoading ? "Sending..." : "Send Signal"}
+                        {timelineActionLoading ? t("pages.chat.chatadvancedconsole.sending", "Sending...") : t("pages.chat.chatadvancedconsole.send.signal", "Send Signal")}
                       </button>
                     ) : (
                       <>
@@ -2268,10 +2360,10 @@ export function ChatAdvancedConsole({
                           type="button"
                         >
                           {timelineActionLoading
-                            ? "Applying..."
+                            ? t("pages.chat.chatadvancedconsole.applying", "Applying...")
                             : timelineBlockingSummary.kind === "human_approval"
-                              ? "Approve"
-                              : "Resume"}
+                              ? t("pages.chat.chatadvancedconsole.approve", "Approve")
+                              : t("pages.chat.chatadvancedconsole.resume", "Resume")}
                         </button>
                         {timelineBlockingSummary.kind === "human_approval" ? (
                           <button
@@ -2290,8 +2382,7 @@ export function ChatAdvancedConsole({
                             )}
                             type="button"
                           >
-                            Reject
-                          </button>
+                            {t("pages.chat.chatadvancedconsole.reject", "Reject")}</button>
                         ) : null}
                       </>
                     )}
@@ -2299,9 +2390,7 @@ export function ChatAdvancedConsole({
 
                   {!executeRunId || !effectiveTimelineServiceId ? (
                     <Typography.Text type="secondary">
-                      Run actions become available after the console has a run
-                      ID and service context.
-                    </Typography.Text>
+                      {t("pages.chat.chatadvancedconsole.run.actions.become.available.after", "Run actions become available after the console has a run ID and service context.")}</Typography.Text>
                   ) : null}
 
                   {timelineActionError ? (
@@ -2315,7 +2404,7 @@ export function ChatAdvancedConsole({
               ) : null}
 
               <div style={drawerSectionStyle}>
-                <Typography.Text strong>Timeline Filters</Typography.Text>
+                <Typography.Text strong>{t("pages.chat.chatadvancedconsole.timeline.filters", "Timeline Filters")}</Typography.Text>
                 <div
                   style={{
                     display: "grid",
@@ -2327,11 +2416,11 @@ export function ChatAdvancedConsole({
                   <label
                     style={{ display: "flex", flexDirection: "column", gap: 8 }}
                   >
-                    <span style={fieldLabelStyle}>Search</span>
+                    <span style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.search", "Search")}</span>
                     <input
-                      aria-label="Advanced timeline search"
+                      aria-label={t("pages.chat.chatadvancedconsole.advanced.timeline.search", "Advanced timeline search")}
                       onChange={(event) => setTimelineSearch(event.target.value)}
-                      placeholder="Filter by stage, step, message, or agent"
+                      placeholder={t("pages.chat.chatadvancedconsole.filter.by.stage.step.message", "Filter by stage, step, message, or agent")}
                       style={inputStyle}
                       value={timelineSearch}
                     />
@@ -2340,16 +2429,16 @@ export function ChatAdvancedConsole({
                   <label
                     style={{ display: "flex", flexDirection: "column", gap: 8 }}
                   >
-                    <span style={fieldLabelStyle}>Stage</span>
+                    <span style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.stage", "Stage")}</span>
                     <select
-                      aria-label="Advanced timeline stage"
+                      aria-label={t("pages.chat.chatadvancedconsole.advanced.timeline.stage", "Advanced timeline stage")}
                       onChange={(event) =>
                         setTimelineSelectedStage(event.target.value)
                       }
                       style={selectStyle}
                       value={timelineSelectedStage}
                     >
-                      <option value="">All stages</option>
+                      <option value="">{t("pages.chat.chatadvancedconsole.all.stages", "All stages")}</option>
                       {timelineStageOptions.map((stage) => (
                         <option key={stage} value={stage}>
                           {stage}
@@ -2367,7 +2456,7 @@ export function ChatAdvancedConsole({
                     }}
                   >
                     <input
-                      aria-label="Advanced timeline errors only"
+                      aria-label={t("pages.chat.chatadvancedconsole.advanced.timeline.errors.only", "Advanced timeline errors only")}
                       checked={timelineOnlyErrors}
                       onChange={(event) =>
                         setTimelineOnlyErrors(event.target.checked)
@@ -2375,8 +2464,7 @@ export function ChatAdvancedConsole({
                       type="checkbox"
                     />
                     <span style={{ color: "#4b5563", fontSize: 13 }}>
-                      Errors only
-                    </span>
+                      {t("pages.chat.chatadvancedconsole.errors.only", "Errors only")}</span>
                   </label>
                 </div>
               </div>
@@ -2389,12 +2477,12 @@ export function ChatAdvancedConsole({
                 }}
               >
                 <div style={drawerSectionStyle}>
-                  <Typography.Text strong>Timeline Events</Typography.Text>
+                  <Typography.Text strong>{t("pages.chat.chatadvancedconsole.timeline.events", "Timeline Events")}</Typography.Text>
                   {timelineLoading && !timelineRows.length ? (
                     <Alert
-                      description="Loading the latest actor timeline."
+                      description={t("pages.chat.chatadvancedconsole.loading.the.latest.actor.timeline", "Loading the latest actor timeline.")}
                       showIcon
-                      title="Fetching runtime evidence"
+                      title={t("pages.chat.chatadvancedconsole.fetching.runtime.evidence", "Fetching runtime evidence")}
                       type="info"
                     />
                   ) : timelineRows.length > 0 ? (
@@ -2476,8 +2564,7 @@ export function ChatAdvancedConsole({
                                     padding: "3px 8px",
                                   }}
                                 >
-                                  Audit linked
-                                </span>
+                                  {t("pages.chat.chatadvancedconsole.audit.linked", "Audit linked")}</span>
                               ) : null}
                             </div>
                             <div
@@ -2488,7 +2575,7 @@ export function ChatAdvancedConsole({
                                 marginBottom: 6,
                               }}
                             >
-                              {row.message || "No message"}
+                              {row.message || t("pages.chat.chatadvancedconsole.no.message", "No message")}
                             </div>
                             <div
                               style={{
@@ -2497,7 +2584,7 @@ export function ChatAdvancedConsole({
                                 lineHeight: 1.6,
                               }}
                             >
-                              {row.dataSummary || "No structured data"}
+                              {row.dataSummary || t("pages.chat.chatadvancedconsole.no.structured.data", "No structured data")}
                             </div>
                             <div
                               style={{
@@ -2508,8 +2595,8 @@ export function ChatAdvancedConsole({
                               }}
                             >
                               {formatDateTime(row.timestamp)}
-                              {row.stepType ? ` · ${row.stepType}` : ""}
-                              {row.agentId ? ` · ${row.agentId}` : ""}
+                              {row.stepType ? t("pages.chat.chatadvancedconsole.copy.4", "· {value1}", { value1: row.stepType }) : ""}
+                              {row.agentId ? t("pages.chat.chatadvancedconsole.copy.5", "· {value1}", { value1: row.agentId }) : ""}
                             </div>
                           </button>
                         );
@@ -2517,7 +2604,7 @@ export function ChatAdvancedConsole({
                     </div>
                   ) : (
                     <Empty
-                      description="No timeline items matched the current filters."
+                      description={t("pages.chat.chatadvancedconsole.no.timeline.items.matched.the", "No timeline items matched the current filters.")}
                       image={Empty.PRESENTED_IMAGE_SIMPLE}
                     />
                   )}
@@ -2526,7 +2613,7 @@ export function ChatAdvancedConsole({
                 <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                   {selectedTimelineRow ? (
                     <div style={drawerSectionStyle}>
-                      <Typography.Text strong>Selected Event</Typography.Text>
+                      <Typography.Text strong>{t("pages.chat.chatadvancedconsole.selected.event", "Selected Event")}</Typography.Text>
                       <div
                         style={{
                           color: "#4b5563",
@@ -2536,15 +2623,15 @@ export function ChatAdvancedConsole({
                         }}
                       >
                         <div>
-                          <div style={fieldLabelStyle}>Stage</div>
+                          <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.stage.2", "Stage")}</div>
                           <div>{selectedTimelineRow.stage || "n/a"}</div>
                         </div>
                         <div>
-                          <div style={fieldLabelStyle}>Message</div>
-                          <div>{selectedTimelineRow.message || "No message"}</div>
+                          <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.message", "Message")}</div>
+                          <div>{selectedTimelineRow.message || t("pages.chat.chatadvancedconsole.no.message", "No message")}</div>
                         </div>
                         <div>
-                          <div style={fieldLabelStyle}>Timestamp</div>
+                          <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.timestamp", "Timestamp")}</div>
                           <div>{formatDateTime(selectedTimelineRow.timestamp)}</div>
                         </div>
                       </div>
@@ -2556,7 +2643,7 @@ export function ChatAdvancedConsole({
 
                   {relatedAuditStep ? (
                     <div style={drawerSectionStyle}>
-                      <Typography.Text strong>Related Audit Step</Typography.Text>
+                      <Typography.Text strong>{t("pages.chat.chatadvancedconsole.related.audit.step", "Related Audit Step")}</Typography.Text>
                       <div
                         style={{
                           display: "flex",
@@ -2573,7 +2660,7 @@ export function ChatAdvancedConsole({
                           <Alert
                             description={relatedAuditStep.outputPreview}
                             showIcon
-                            title="Output preview"
+                            title={t("pages.chat.chatadvancedconsole.output.preview", "Output preview")}
                             type="success"
                           />
                         ) : null}
@@ -2581,7 +2668,7 @@ export function ChatAdvancedConsole({
                           <Alert
                             description={relatedAuditStep.suspensionPrompt}
                             showIcon
-                            title="Suspension prompt"
+                            title={t("pages.chat.chatadvancedconsole.suspension.prompt", "Suspension prompt")}
                             type="warning"
                           />
                         ) : null}
@@ -2589,9 +2676,9 @@ export function ChatAdvancedConsole({
                     </div>
                   ) : executeRunId && !executeAuditSnapshot ? (
                     <div style={drawerSectionStyle}>
-                      <Typography.Text strong>Related Audit Step</Typography.Text>
+                      <Typography.Text strong>{t("pages.chat.chatadvancedconsole.related.audit.step.2", "Related Audit Step")}</Typography.Text>
                       <Empty
-                        description="Load the run audit to correlate timeline events with structured step details."
+                        description={t("pages.chat.chatadvancedconsole.load.the.run.audit.to", "Load the run audit to correlate timeline events with structured step details.")}
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                       />
                     </div>
@@ -2604,7 +2691,7 @@ export function ChatAdvancedConsole({
           {activeTab === "raw" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={drawerSectionStyle}>
-                <Typography.Text strong>Raw API Console</Typography.Text>
+                <Typography.Text strong>{t("pages.chat.chatadvancedconsole.raw.api.console", "Raw API Console")}</Typography.Text>
                 <Space wrap>
                   {rawShortcuts.map((shortcut) => (
                     <button
@@ -2630,7 +2717,7 @@ export function ChatAdvancedConsole({
                   }}
                 >
                   <select
-                    aria-label="Advanced raw method"
+                    aria-label={t("pages.chat.chatadvancedconsole.advanced.raw.method", "Advanced raw method")}
                     onChange={(event) => setRawMethod(event.target.value)}
                     style={selectStyle}
                     value={rawMethod}
@@ -2642,9 +2729,9 @@ export function ChatAdvancedConsole({
                     ))}
                   </select>
                   <input
-                    aria-label="Advanced raw path"
+                    aria-label={t("pages.chat.chatadvancedconsole.advanced.raw.path", "Advanced raw path")}
                     onChange={(event) => setRawPath(event.target.value)}
-                    placeholder="/scopes/{scopeId}/binding"
+                    placeholder={t("pages.chat.chatadvancedconsole.scopes.binding", "/scopes/{scopeId}/binding")}
                     style={{ ...inputStyle, fontFamily: monoFontFamily }}
                     value={rawPath}
                   />
@@ -2654,11 +2741,11 @@ export function ChatAdvancedConsole({
                   <label
                     style={{ display: "flex", flexDirection: "column", gap: 8 }}
                   >
-                    <span style={fieldLabelStyle}>Request Body</span>
+                    <span style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.request.body", "Request Body")}</span>
                     <textarea
-                      aria-label="Advanced raw body"
+                      aria-label={t("pages.chat.chatadvancedconsole.advanced.raw.body", "Advanced raw body")}
                       onChange={(event) => setRawBody(event.target.value)}
-                      placeholder='{"key":"value"}'
+                      placeholder={t("pages.chat.chatadvancedconsole.copy", "{\"key\":\"value\"}")}
                       style={textareaStyle}
                       value={rawBody}
                     />
@@ -2676,7 +2763,7 @@ export function ChatAdvancedConsole({
                     )}
                     type="button"
                   >
-                    {rawLoading ? "Sending..." : "Send Request"}
+                    {rawLoading ? t("pages.chat.chatadvancedconsole.sending", "Sending...") : t("pages.chat.chatadvancedconsole.send.request", "Send Request")}
                   </button>
                 </div>
               </div>
@@ -2692,7 +2779,7 @@ export function ChatAdvancedConsole({
                     }}
                   >
                     <Typography.Text strong>
-                      Response · {rawResult.status} {rawResult.statusText}
+                      {t("pages.chat.chatadvancedconsole.response", "Response ·")}{rawResult.status} {rawResult.statusText}
                     </Typography.Text>
                     <button
                       className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -2700,8 +2787,7 @@ export function ChatAdvancedConsole({
                       style={actionButtonStyle("secondary")}
                       type="button"
                     >
-                      Copy
-                    </button>
+                      {t("pages.chat.chatadvancedconsole.copy.3", "Copy")}</button>
                   </div>
                   <pre style={monoBlockStyle}>{rawResult.body}</pre>
                 </div>

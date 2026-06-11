@@ -8,6 +8,9 @@ namespace Aevatar.Studio.Hosting.Controllers;
 
 [ApiController]
 [Route("api/executions")]
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public sealed class ExecutionsController : ControllerBase
 {
     private readonly ExecutionService _executionService;

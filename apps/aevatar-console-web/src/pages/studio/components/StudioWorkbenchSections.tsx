@@ -10,8 +10,6 @@ import {
 import {
   Button,
   Empty,
-  Input,
-  Modal,
   Space,
   Tag,
   Typography,
@@ -52,6 +50,7 @@ import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
   AEVATAR_PRESSABLE_CARD_CLASS,
 } from '@/shared/ui/interactionStandards';
+import { t } from "@/shared/i18n/messages";
 
 type QueryState<T> = {
   readonly isLoading: boolean;
@@ -63,6 +62,12 @@ type QueryState<T> = {
 type StudioNoticeLike = {
   readonly type: 'success' | 'info' | 'warning' | 'error';
   readonly message: string;
+};
+
+type StudioCompactNoticeLike = {
+  readonly description?: React.ReactNode;
+  readonly title: React.ReactNode;
+  readonly type: StudioNoticeLike['type'] | 'default';
 };
 
 function readWorkflowSortTimestamp(value: string): number {
@@ -127,31 +132,31 @@ function getStudioNoticeAccent(
       return {
         border: 'rgba(82, 196, 26, 0.28)',
         background: 'rgba(246, 255, 237, 0.96)',
-        label: '成功',
+        label: t("pages.studio.studioworkbenchsections.success", "success"),
       };
     case 'warning':
       return {
         border: 'rgba(250, 173, 20, 0.28)',
         background: 'rgba(255, 251, 230, 0.96)',
-        label: '注意',
+        label: t("pages.studio.studioworkbenchsections.notice", "Notice"),
       };
     case 'error':
       return {
         border: 'rgba(255, 77, 79, 0.28)',
         background: 'rgba(255, 241, 240, 0.96)',
-        label: '错误',
+        label: t("pages.studio.studioworkbenchsections.mistake", "mistake"),
       };
     case 'info':
       return {
         border: 'rgba(22, 119, 255, 0.24)',
         background: 'rgba(240, 245, 255, 0.96)',
-        label: '提示',
+        label: t("pages.studio.studioworkbenchsections.hint", "hint"),
       };
     default:
       return {
         border: 'var(--ant-color-border-secondary)',
         background: 'var(--ant-color-fill-quaternary)',
-        label: '状态',
+        label: t("pages.studio.studioworkbenchsections.state", "state"),
       };
   }
 }
@@ -162,6 +167,30 @@ const studioNoticeCardStyle: React.CSSProperties = {
   display: 'grid',
   gap: 10,
   padding: 14,
+};
+
+const studioCompactNoticeStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+};
+
+const studioCompactNoticeStyle: React.CSSProperties = {
+  alignItems: 'center',
+  border: '1px solid',
+  borderRadius: 8,
+  display: 'flex',
+  gap: 10,
+  minHeight: 40,
+  padding: '8px 12px',
+};
+
+const studioCompactNoticeBodyStyle: React.CSSProperties = {
+  alignItems: 'baseline',
+  display: 'flex',
+  flex: 1,
+  flexWrap: 'wrap',
+  gap: 8,
+  minWidth: 0,
 };
 
 const studioEmptyPanelStyle: React.CSSProperties = {
@@ -219,15 +248,10 @@ const executionTextareaStyle: React.CSSProperties = {
   width: '100%',
 };
 
-const observeSummaryGridStyle: React.CSSProperties = {
+const observeDetailsGridStyle: React.CSSProperties = {
   display: 'grid',
   gap: 16,
-  gridTemplateColumns: 'minmax(0, 1fr) minmax(300px, 340px)',
-};
-
-const observeSummaryStackStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 16,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
 };
 
 const observeMetricGridStyle: React.CSSProperties = {
@@ -238,10 +262,73 @@ const observeMetricGridStyle: React.CSSProperties = {
 
 const observeMetricCardStyle: React.CSSProperties = {
   border: '1px solid #eef2f7',
-  borderRadius: 12,
+  borderRadius: 8,
   display: 'grid',
   gap: 4,
+  minWidth: 0,
   padding: 12,
+};
+
+const observeRunHeaderStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  background: '#ffffff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  display: 'grid',
+  gap: 14,
+  gridTemplateColumns: 'minmax(0, 1fr) auto',
+  padding: 16,
+};
+
+const observeRunTitleStyle: React.CSSProperties = {
+  color: '#111827',
+  fontSize: 18,
+  fontWeight: 700,
+  lineHeight: '24px',
+  margin: 0,
+};
+
+const observeRunSubtitleStyle: React.CSSProperties = {
+  color: '#4b5563',
+  fontSize: 13,
+  lineHeight: '20px',
+  margin: 0,
+  overflowWrap: 'anywhere',
+};
+
+const observeRunMetricGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+};
+
+const observeRunMetricStyle: React.CSSProperties = {
+  background: '#f9fafb',
+  border: '1px solid #eef2f7',
+  borderRadius: 8,
+  display: 'grid',
+  gap: 3,
+  minWidth: 0,
+  padding: '10px 12px',
+};
+
+const observeStageShellStyle: React.CSSProperties = {
+  background: '#ffffff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: 'calc(100vh - 244px)',
+  overflow: 'hidden',
+};
+
+const observeStageBarStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 12,
+  minHeight: 42,
+  padding: '8px 16px',
 };
 
 type ObserveCompareRow = {
@@ -297,6 +384,36 @@ const StudioNoticeCard: React.FC<{
   );
 };
 
+const StudioCompactNotice: React.FC<StudioCompactNoticeLike> = ({
+  description,
+  title,
+  type,
+}) => {
+  const accent = getStudioNoticeAccent(type);
+
+  return (
+    <div
+      style={{
+        ...studioCompactNoticeStyle,
+        background: accent.background,
+        borderColor: accent.border,
+      }}
+    >
+      <Tag color={type === 'default' ? 'default' : type}>{accent.label}</Tag>
+      <div style={studioCompactNoticeBodyStyle}>
+        <Typography.Text strong>{title}</Typography.Text>
+        {description ? (
+          typeof description === 'string' ? (
+            <Typography.Text type="secondary">{description}</Typography.Text>
+          ) : (
+            description
+          )
+        ) : null}
+      </div>
+    </div>
+  );
+};
+
 function StudioCatalogEmptyPanel(props: {
   readonly icon: React.ReactNode;
   readonly title: string;
@@ -311,10 +428,36 @@ function StudioCatalogEmptyPanel(props: {
   );
 }
 
+function formatObserveNotAvailable(): string {
+  return t("pages.studio.studioworkbenchsections.not.available", "n/a");
+}
+
+function formatObserveCoverageLogs(coverage: string, count: number): string {
+  return t(
+    "pages.studio.studioworkbenchsections.coverage.logs",
+    "{coverage} · {count} logs",
+    {
+      count,
+      coverage,
+    },
+  );
+}
+
+function formatObserveCoverageReplies(coverage: string, count: number): string {
+  return t(
+    "pages.studio.studioworkbenchsections.coverage.replies",
+    "{coverage} · {count} replies",
+    {
+      count,
+      coverage,
+    },
+  );
+}
+
 function trimObserveText(value: string | null | undefined, limit = 84): string {
   const trimmed = String(value || '').trim();
   if (!trimmed) {
-    return 'n/a';
+    return formatObserveNotAvailable();
   }
 
   return trimmed.length > limit ? `${trimmed.slice(0, limit - 3)}...` : trimmed;
@@ -356,7 +499,7 @@ function readObserveStepCoverage(
       : fallbackTotal ?? null;
 
   if (completedSteps === null && totalSteps === null) {
-    return 'n/a';
+    return formatObserveNotAvailable();
   }
 
   return `${completedSteps ?? 0}/${totalSteps ?? 0}`;
@@ -367,7 +510,7 @@ function resolveObserveDelta(input: {
   baseline: string;
   regressionWhen?: boolean;
 }): ObserveCompareRow['delta'] {
-  if (!input.baseline || input.baseline === 'n/a') {
+  if (!input.baseline || input.baseline === formatObserveNotAvailable()) {
     return 'current-only';
   }
 
@@ -391,14 +534,14 @@ function buildObserveCompareRows(input: {
     ? formatDurationBetween(
         baselineExecution.startedAtUtc,
         baselineExecution.completedAtUtc,
-      ) || 'n/a'
-    : 'n/a';
+      ) || formatObserveNotAvailable()
+    : formatObserveNotAvailable();
   const currentDurationLabel = selectedExecution
     ? formatDurationBetween(
         selectedExecution.startedAtUtc,
         selectedExecution.completedAtUtc,
-      ) || 'n/a'
-    : 'n/a';
+      ) || formatObserveNotAvailable()
+    : formatObserveNotAvailable();
 
   const compare = (
     label: string,
@@ -414,15 +557,30 @@ function buildObserveCompareRows(input: {
 
   if (!selectedExecution) {
     return [
-      compare('status', 'no run selected', 'n/a', 'current-only'),
-      compare('duration', 'n/a', 'n/a', 'current-only'),
-      compare('actor', 'n/a', 'n/a', 'current-only'),
+      compare(
+        t("pages.studio.studioworkbenchsections.status", "status"),
+        t("pages.studio.studioworkbenchsections.no.run.selected.lower", "no run selected"),
+        formatObserveNotAvailable(),
+        'current-only',
+      ),
+      compare(
+        t("pages.studio.studioworkbenchsections.duration", "duration"),
+        formatObserveNotAvailable(),
+        formatObserveNotAvailable(),
+        'current-only',
+      ),
+      compare(
+        t("pages.studio.studioworkbenchsections.actor.lower", "actor"),
+        formatObserveNotAvailable(),
+        formatObserveNotAvailable(),
+        'current-only',
+      ),
     ];
   }
 
   const rows: ObserveCompareRow[] = [
     compare(
-      'status',
+      t("pages.studio.studioworkbenchsections.status", "status"),
       trimObserveText(selectedExecution.status),
       trimObserveText(baselineExecution?.status),
       resolveObserveDelta({
@@ -434,7 +592,7 @@ function buildObserveCompareRows(input: {
       }),
     ),
     compare(
-      'revision',
+      t("pages.studio.studioworkbenchsections.revision.lower", "revision"),
       trimObserveText(selectedExecution.revisionId),
       trimObserveText(baselineExecution?.revisionId),
       resolveObserveDelta({
@@ -443,36 +601,36 @@ function buildObserveCompareRows(input: {
       }),
     ),
     compare(
-      'state version',
+      t("pages.studio.studioworkbenchsections.state.version.lower", "state version"),
       trimObserveText(
         selectedExecution.stateVersion !== null &&
           selectedExecution.stateVersion !== undefined
           ? `v${selectedExecution.stateVersion}`
-          : 'n/a',
+          : formatObserveNotAvailable(),
       ),
       trimObserveText(
         baselineExecution?.stateVersion !== null &&
           baselineExecution?.stateVersion !== undefined
           ? `v${baselineExecution.stateVersion}`
-          : 'n/a',
+          : formatObserveNotAvailable(),
       ),
       resolveObserveDelta({
         current: trimObserveText(
           selectedExecution.stateVersion !== null &&
             selectedExecution.stateVersion !== undefined
             ? `v${selectedExecution.stateVersion}`
-            : 'n/a',
+            : formatObserveNotAvailable(),
         ),
         baseline: trimObserveText(
           baselineExecution?.stateVersion !== null &&
             baselineExecution?.stateVersion !== undefined
             ? `v${baselineExecution.stateVersion}`
-            : 'n/a',
+            : formatObserveNotAvailable(),
         ),
       }),
     ),
     compare(
-      'duration',
+      t("pages.studio.studioworkbenchsections.duration", "duration"),
       currentDurationLabel,
       baselineDurationLabel,
       resolveObserveDelta({
@@ -483,30 +641,32 @@ function buildObserveCompareRows(input: {
       }),
     ),
     compare(
-      'steps',
-      `${readObserveStepCoverage(
-        selectedExecution,
-        executedStepCount,
-      )} · ${traceLogCount} logs`,
+      t("pages.studio.studioworkbenchsections.steps.lower", "steps"),
+      formatObserveCoverageLogs(
+        readObserveStepCoverage(selectedExecution, executedStepCount),
+        traceLogCount,
+      ),
       baselineExecution
-        ? `${readObserveStepCoverage(baselineExecution)} · ${
-            baselineExecution.roleReplyCount ?? 0
-          } replies`
-        : 'n/a',
+        ? formatObserveCoverageReplies(
+            readObserveStepCoverage(baselineExecution),
+            baselineExecution.roleReplyCount ?? 0,
+          )
+        : formatObserveNotAvailable(),
       resolveObserveDelta({
-        current: `${readObserveStepCoverage(
-          selectedExecution,
-          executedStepCount,
-        )} · ${traceLogCount} logs`,
+        current: formatObserveCoverageLogs(
+          readObserveStepCoverage(selectedExecution, executedStepCount),
+          traceLogCount,
+        ),
         baseline: baselineExecution
-          ? `${readObserveStepCoverage(baselineExecution)} · ${
-              baselineExecution.roleReplyCount ?? 0
-            } replies`
-          : 'n/a',
+          ? formatObserveCoverageReplies(
+              readObserveStepCoverage(baselineExecution),
+              baselineExecution.roleReplyCount ?? 0,
+            )
+          : formatObserveNotAvailable(),
       }),
     ),
     compare(
-      'actor',
+      t("pages.studio.studioworkbenchsections.actor.lower", "actor"),
       trimObserveText(selectedExecution.actorId),
       trimObserveText(baselineExecution?.actorId),
       resolveObserveDelta({
@@ -515,7 +675,7 @@ function buildObserveCompareRows(input: {
       }),
     ),
     compare(
-      'output',
+      t("pages.studio.studioworkbenchsections.output", "output"),
       trimObserveText(selectedExecution.output),
       trimObserveText(baselineExecution?.output),
       resolveObserveDelta({
@@ -528,9 +688,15 @@ function buildObserveCompareRows(input: {
   if (selectedExecution.error || baselineExecution?.error) {
     rows.push(
       compare(
-        'error',
-        trimObserveText(selectedExecution.error || 'none'),
-        trimObserveText(baselineExecution?.error || 'none'),
+        t("pages.studio.studioworkbenchsections.error.lower", "error"),
+        trimObserveText(
+          selectedExecution.error ||
+            t("pages.studio.studioworkbenchsections.none", "none"),
+        ),
+        trimObserveText(
+          baselineExecution?.error ||
+            t("pages.studio.studioworkbenchsections.none", "none"),
+        ),
         baselineExecution
           ? selectedExecution.error === baselineExecution.error
             ? 'same'
@@ -571,20 +737,27 @@ function buildObserveHealthItems(input: {
   const auditReady = selectedExecution?.auditSource === 'run-audit';
   const humanGateValue = activeExecutionInteraction
     ? activeExecutionInteraction.kind === 'human_approval'
-      ? 'awaiting approval'
+      ? t("pages.studio.studioworkbenchsections.awaiting.approval", "awaiting approval")
       : activeExecutionInteraction.kind === 'wait_signal'
-        ? 'awaiting signal'
-        : 'awaiting input'
-    : 'clear';
+        ? t("pages.studio.studioworkbenchsections.awaiting.signal", "awaiting signal")
+        : t("pages.studio.studioworkbenchsections.awaiting.input", "awaiting input")
+    : t("pages.studio.studioworkbenchsections.clear", "clear");
 
   return [
     {
-      label: 'runtime',
+      label: t("pages.studio.studioworkbenchsections.runtime", "runtime"),
       note: selectedExecution
-        ? `Selected run ${trimObserveText(selectedExecution.executionId)} · updated ${formatDateTime(
-            selectedExecution.updatedAtUtc || selectedExecution.startedAtUtc,
-          )}`
-        : 'No workflow run selected yet.',
+        ? t(
+            "pages.studio.studioworkbenchsections.selected.run.updated",
+            "Selected run {executionId} · updated {updatedAt}",
+            {
+              executionId: trimObserveText(selectedExecution.executionId),
+              updatedAt: formatDateTime(
+                selectedExecution.updatedAtUtc || selectedExecution.startedAtUtc,
+              ),
+            },
+          )
+        : t("pages.studio.studioworkbenchsections.no.workflow.run.selected.yet", "No workflow run selected yet."),
       status: selectedExecution
         ? runtimeStatus.includes('fail')
           ? 'blocked'
@@ -594,62 +767,91 @@ function buildObserveHealthItems(input: {
             ? 'active'
             : 'pending'
         : 'pending',
-      value: selectedExecution ? trimObserveText(selectedExecution.status) : 'idle',
+      value: selectedExecution
+        ? trimObserveText(selectedExecution.status)
+        : t("pages.studio.studioworkbenchsections.idle", "idle"),
     },
     {
-      label: 'recent runs',
-      note: `${failedCount} failed, ${stoppedCount} stopped in the latest ${
-        recentExecutions.length || 0
-      } runs.`,
+      label: t("pages.studio.studioworkbenchsections.recent.runs", "recent runs"),
+      note: t(
+        "pages.studio.studioworkbenchsections.recent.run.failures",
+        "{failedCount} failed, {stoppedCount} stopped in the latest {runCount} runs.",
+        {
+          failedCount,
+          runCount: recentExecutions.length || 0,
+          stoppedCount,
+        },
+      ),
       status: failedCount > 0 || stoppedCount > 0 ? 'warning' : 'active',
-      value: recentExecutions.length ? `${recentExecutions.length} tracked` : 'warming up',
+      value: recentExecutions.length
+        ? t("pages.studio.studioworkbenchsections.tracked.count", "{count} tracked", {
+            count: recentExecutions.length,
+          })
+        : t("pages.studio.studioworkbenchsections.warming.up", "warming up"),
     },
     {
-      label: 'human gate',
+      label: t("pages.studio.studioworkbenchsections.human.gate", "human gate"),
       note: activeExecutionInteraction
         ? activeExecutionInteraction.prompt
-        : 'No human approval or input is currently blocking this run.',
+        : t("pages.studio.studioworkbenchsections.no.human.approval.or.input", "No human approval or input is currently blocking this run."),
       status: activeExecutionInteraction ? 'warning' : 'active',
       value: humanGateValue,
     },
     {
-      label: 'audit fidelity',
+      label: t("pages.studio.studioworkbenchsections.audit.fidelity", "audit fidelity"),
       note:
         selectedExecution
           ? auditReady
-            ? `Run audit updated ${formatDateTime(
-                selectedExecution.auditUpdatedAtUtc || selectedExecution.updatedAtUtc,
-              )}.`
-            : 'Only the run summary is available so far.'
-          : 'No run selected yet.',
+            ? t("pages.studio.studioworkbenchsections.run.audit.updated", "Run audit updated {updatedAt}.", {
+                updatedAt: formatDateTime(
+                  selectedExecution.auditUpdatedAtUtc ||
+                    selectedExecution.updatedAtUtc,
+                ),
+              })
+            : t("pages.studio.studioworkbenchsections.only.run.summary.available", "Only the run summary is available so far.")
+          : t("pages.studio.studioworkbenchsections.no.run.selected.yet", "No run selected yet."),
       status: selectedExecution ? (auditReady ? 'active' : 'pending') : 'pending',
-      value: auditReady ? 'run audit ready' : 'summary only',
+      value: auditReady
+        ? t("pages.studio.studioworkbenchsections.run.audit.ready", "run audit ready")
+        : t("pages.studio.studioworkbenchsections.summary.only", "summary only"),
     },
     {
-      label: 'coverage',
+      label: t("pages.studio.studioworkbenchsections.coverage", "coverage"),
       note:
         selectedExecution
-          ? `${selectedCoverage} steps completed · ${
-              selectedExecution.roleReplyCount ?? 0
-            } role replies · ${traceLogCount} trace logs.`
-          : 'No run selected yet.',
+          ? t(
+              "pages.studio.studioworkbenchsections.coverage.detail",
+              "{coverage} steps completed · {replyCount} role replies · {logCount} trace logs.",
+              {
+                coverage: selectedCoverage,
+                logCount: traceLogCount,
+                replyCount: selectedExecution.roleReplyCount ?? 0,
+              },
+            )
+          : t("pages.studio.studioworkbenchsections.no.run.selected.yet", "No run selected yet."),
       status:
         selectedExecution && traceLogCount > 0
           ? 'active'
           : selectedExecution
             ? 'warning'
             : 'pending',
-      value: selectedExecution ? selectedCoverage : 'n/a',
+      value: selectedExecution ? selectedCoverage : formatObserveNotAvailable(),
     },
     {
-      label: 'baseline',
+      label: t("pages.studio.studioworkbenchsections.baseline", "baseline"),
       note: baselineExecution
-        ? `Comparing against ${trimObserveText(
-            baselineExecution.executionId,
-          )} from the same member service.`
-        : 'Observe becomes more trustworthy after another member run lands and a baseline exists.',
+        ? t(
+            "pages.studio.studioworkbenchsections.comparing.against.baseline",
+            "Comparing against {executionId} from the same member service.",
+            {
+              executionId: trimObserveText(baselineExecution.executionId),
+            },
+          )
+        : t("pages.studio.studioworkbenchsections.observe.trustworthy.after.baseline", "Observe becomes more trustworthy after another member run lands and a baseline exists."),
       status: baselineExecution ? 'active' : 'pending',
-      value: baselineExecution ? 'available' : 'warming up',
+      value: baselineExecution
+        ? t("pages.studio.studioworkbenchsections.available", "available")
+        : t("pages.studio.studioworkbenchsections.warming.up", "warming up"),
     },
   ];
 }
@@ -707,11 +909,6 @@ export type StudioExecutionPageProps = {
     readonly title: string;
     readonly description: string;
   } | null;
-  readonly savePending: boolean;
-  readonly canSaveWorkflow: boolean;
-  readonly runPending: boolean;
-  readonly canOpenRunWorkflow: boolean;
-  readonly canRunWorkflow: boolean;
   readonly executionCanStop: boolean;
   readonly executionStopPending: boolean;
   readonly runPrompt: string;
@@ -719,12 +916,6 @@ export type StudioExecutionPageProps = {
   readonly logsPopoutMode?: boolean;
   readonly logsDetached?: boolean;
   readonly onOpenExecution: (executionId: string) => void;
-  readonly onSaveDraft: () => void;
-  readonly onExportDraft: () => void;
-  readonly onSetDraftWorkflowName: (value: string) => void;
-  readonly onSetWorkflowDescription: (value: string) => void;
-  readonly onRunPromptChange: (value: string) => void;
-  readonly onStartExecution: () => void;
   readonly onResumeExecution: (
     interaction: ExecutionInteractionState,
     action: 'submit' | 'approve' | 'reject' | 'signal',
@@ -746,8 +937,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   currentImplementationLabel,
   currentImplementationKind = 'unknown',
   emptyState = null,
-  runPending,
-  canRunWorkflow,
   executionCanStop,
   executionStopPending,
   runPrompt,
@@ -755,8 +944,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   logsPopoutMode = false,
   logsDetached = false,
   onOpenExecution,
-  onRunPromptChange,
-  onStartExecution,
   onResumeExecution,
   onStopExecution,
   onPopOutLogs,
@@ -771,7 +958,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   const [executionActionInput, setExecutionActionInput] = React.useState('');
   const [executionActionPendingKey, setExecutionActionPendingKey] =
     React.useState('');
-  const [runModalOpen, setRunModalOpen] = React.useState(false);
 
   const selectedExecutionDetail = selectedExecution.data;
   const executionTrace = React.useMemo(
@@ -852,14 +1038,14 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     .toLowerCase();
   const executionStatusLabel =
     executionStatusKey === 'running'
-      ? '运行中'
+      ? t("pages.studio.studioworkbenchsections.running", "Running")
       : executionStatusKey === 'completed'
-        ? '已完成'
+        ? t("pages.studio.studioworkbenchsections.completed", "Completed")
         : executionStatusKey === 'failed'
-          ? '执行失败'
+          ? t("pages.studio.studioworkbenchsections.execution.failed", "Execution failed")
           : selectedExecutionDetail
-            ? '等待执行'
-            : '未开始';
+            ? t("pages.studio.studioworkbenchsections.waiting.for.execution", "Waiting for execution")
+            : t("pages.studio.studioworkbenchsections.not.started", "Not started");
   const executionAccentColor =
     executionStatusKey === 'running'
       ? '#1890ff'
@@ -939,27 +1125,27 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     switch (currentImplementationKind) {
       case 'script':
         return {
-          title: 'Script members do not expose a workflow graph.',
+          title: t("pages.studio.studioworkbenchsections.script.members.do.not.expose", "Script members do not expose a workflow graph."),
           copy:
-            'Observe still shows runtime logs, audit facts, and run controls below. Workflow graph playback is available for workflow-backed members only.',
+            t("pages.studio.studioworkbenchsections.observe.still.shows.runtime.logs", "Observe still shows runtime logs, audit facts, and run controls below. Workflow graph playback is available for workflow-backed members only."),
         };
       case 'gagent':
         return {
-          title: 'GAgent members do not expose a workflow graph.',
+          title: t("pages.studio.studioworkbenchsections.gagent.members.do.not.expose", "GAgent members do not expose a workflow graph."),
           copy:
-            'Observe still shows runtime logs, audit facts, and run controls below. Workflow graph playback is available for workflow-backed members only.',
+            t("pages.studio.studioworkbenchsections.observe.still.shows.runtime.logs.2", "Observe still shows runtime logs, audit facts, and run controls below. Workflow graph playback is available for workflow-backed members only."),
         };
       case 'workflow':
         return {
-          title: 'Workflow graph unavailable for this member.',
+          title: t("pages.studio.studioworkbenchsections.workflow.graph.unavailable.for.this", "Workflow graph unavailable for this member."),
           copy:
-            'Studio could not resolve a matching workflow document for the current member context right now. Logs, audit facts, and run controls are still available below.',
+            t("pages.studio.studioworkbenchsections.studio.could.not.resolve.matching", "Studio could not resolve a matching workflow document for the current member context right now. Logs, audit facts, and run controls are still available below."),
         };
       default:
         return {
-          title: 'Workflow graph unavailable.',
+          title: t("pages.studio.studioworkbenchsections.workflow.graph.unavailable", "Workflow graph unavailable."),
           copy:
-            'Observe still shows runtime logs, audit facts, and run controls below.',
+            t("pages.studio.studioworkbenchsections.observe.still.shows.runtime.logs.3", "Observe still shows runtime logs, audit facts, and run controls below."),
         };
     }
   }, [currentImplementationKind]);
@@ -1058,11 +1244,9 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
         >
           <div style={{ display: 'grid', gap: 2 }}>
             <Typography.Text strong style={{ fontSize: 12, margin: 0 }}>
-              执行日志
-            </Typography.Text>
+              {t("pages.studio.studioworkbenchsections.execution.log", "execution log")}</Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 11, margin: 0 }}>
-              {executionLogCount} 个事件
-            </Typography.Text>
+              {executionLogCount} {t("pages.studio.studioworkbenchsections.events", "events")}</Typography.Text>
           </div>
 
           <div
@@ -1076,7 +1260,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           >
             {hasRuns ? (
               <select
-                aria-label="选择测试运行"
+                aria-label={t("pages.studio.studioworkbenchsections.select.run.record", "Select run record")}
                 value={selectedExecutionDetail?.executionId || ''}
                 onChange={(event) => {
                   if (event.target.value) {
@@ -1094,8 +1278,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               >
                 <option value="">
                   {selectedExecutionDetail
-                    ? `${formatDateTime(selectedExecutionDetail.startedAtUtc)} · ${selectedExecutionDetail.status}`
-                    : `${currentMemberExecutions.length} 次运行`}
+                    ? t("pages.studio.studioworkbenchsections.copy", "{value1} · {value2}", { value1: formatDateTime(selectedExecutionDetail.startedAtUtc), value2: selectedExecutionDetail.status })
+                    : t("pages.studio.studioworkbenchsections.runs", "{value1} runs", { value1: currentMemberExecutions.length })}
                 </option>
                 {currentMemberExecutions.map((execution) => (
                   <option key={execution.executionId} value={execution.executionId}>
@@ -1110,8 +1294,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 type="button"
                 style={panelIconButtonStyle}
-                title="复制全部执行日志"
-                aria-label="Copy all execution logs."
+                title={t("pages.studio.studioworkbenchsections.copy.all.execution.logs", "Copy all execution logs")}
+                aria-label={t("pages.studio.studioworkbenchsections.copy.all.execution.logs.2", "Copy all execution logs.")}
                 onClick={() => void handleCopyAllExecutionLogs()}
               >
                 {copiedAllExecutionLogs ? <CheckOutlined /> : <CopyOutlined />}
@@ -1121,8 +1305,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
             {selectedExecutionActorId ? (
               <>
                 <Typography.Text type="secondary" style={{ fontSize: 11, margin: 0 }}>
-                  Actor ID
-                </Typography.Text>
+                  {t("pages.studio.studioworkbenchsections.actor.id", "Actor ID")}</Typography.Text>
                 <code
                   title={selectedExecutionActorId}
                   style={{
@@ -1140,8 +1323,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                   className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   type="button"
                   style={panelIconButtonStyle}
-                  title="复制 Actor ID"
-                  aria-label="Copy Actor ID."
+                  title={t("pages.studio.studioworkbenchsections.copy.actor.id", "Copy actor ID")}
+                  aria-label={t("pages.studio.studioworkbenchsections.copy.actor.id.2", "Copy Actor ID.")}
                   onClick={() =>
                     void handleCopyExecutionActorId(selectedExecutionActorId)
                   }
@@ -1165,8 +1348,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                   borderColor: logsDetached ? '#1677ff' : '#e5e7eb',
                   color: logsDetached ? '#1677ff' : '#4b5563',
                 }}
-                title={logsDetached ? '聚焦日志窗口' : '弹出日志窗口'}
-                aria-label="Pop out execution logs."
+                title={logsDetached ? t("pages.studio.studioworkbenchsections.focus.log.window", "Focus log window") : t("pages.studio.studioworkbenchsections.pop.up.log.window", "Pop up log window")}
+                aria-label={t("pages.studio.studioworkbenchsections.pop.out.execution.logs", "Pop out execution logs.")}
                 onClick={onPopOutLogs}
               >
                 <ExpandOutlined />
@@ -1178,8 +1361,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 type="button"
                 style={panelIconButtonStyle}
-                title="关闭窗口"
-                aria-label="Close logs window."
+                title={t("pages.studio.studioworkbenchsections.close.window", "close window")}
+                aria-label={t("pages.studio.studioworkbenchsections.close.logs.window", "Close logs window.")}
                 onClick={() => {
                   if (typeof window !== 'undefined') {
                     window.close();
@@ -1213,17 +1396,17 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               <div>
                 <Typography.Text strong>
                   {activeExecutionInteraction.kind === 'human_approval'
-                    ? '等待人工审批'
+                    ? t("pages.studio.studioworkbenchsections.waiting.for.manual.approval", "Waiting for manual approval")
                     : activeExecutionInteraction.kind === 'wait_signal'
-                      ? '等待外部信号'
-                    : '等待人工输入'}
+                      ? t("pages.studio.studioworkbenchsections.wait.for.external.signal", "wait for external signal")
+                    : t("pages.studio.studioworkbenchsections.waiting.for.manual.input", "Waiting for manual input")}
                 </Typography.Text>
                 <div style={{ color: '#6b7280', fontSize: 12, marginTop: 4 }}>
                   {activeExecutionInteraction.kind === 'human_approval'
-                    ? '查看当前关卡并决定通过或驳回。'
+                    ? t("pages.studio.studioworkbenchsections.view.the.current.level", "View the current level and decide whether to pass or reject.")
                     : activeExecutionInteraction.kind === 'wait_signal'
-                      ? '发送当前步骤等待的信号后，运行会继续执行。'
-                    : '补充缺失信息后，当前步骤会继续执行。'}
+                      ? t("pages.studio.studioworkbenchsections.after.sending.the.signal", "After sending the signal that the current step is waiting for, execution continues.")
+                    : t("pages.studio.studioworkbenchsections.after.filling.in.the", "After filling in the missing information, the current step continues.")}
                 </div>
               </div>
               <span
@@ -1256,16 +1439,16 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
             ) : null}
 
             <textarea
-              aria-label="执行交互输入"
+              aria-label={t("pages.studio.studioworkbenchsections.perform.interactive.input", "Perform interactive input")}
               value={executionActionInput}
               onChange={(event) => setExecutionActionInput(event.target.value)}
               style={executionTextareaStyle}
               placeholder={
                 activeExecutionInteraction.kind === 'human_approval'
-                  ? '可选补充说明'
+                  ? t("pages.studio.studioworkbenchsections.optional.additional.information", "Optional additional information")
                   : activeExecutionInteraction.kind === 'wait_signal'
-                    ? '可选 signal payload'
-                  : '输入继续执行所需的内容'
+                    ? t("pages.studio.studioworkbenchsections.optional.signal.payload", "Optional signal payload")
+                  : t("pages.studio.studioworkbenchsections.enter.what.you.need", "Enter what you need to continue")
               }
             />
 
@@ -1295,8 +1478,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                   >
                     {executionActionPendingKey ===
                     `${executionActionKeyBase}:reject`
-                      ? '驳回中...'
-                      : '驳回'}
+                      ? t("pages.studio.studioworkbenchsections.rejecting", "Rejecting...")
+                      : t("pages.studio.studioworkbenchsections.turn.down", "turn down")}
                   </Button>
                   <Button
                     type="primary"
@@ -1314,8 +1497,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                   >
                     {executionActionPendingKey ===
                     `${executionActionKeyBase}:approve`
-                      ? '通过中...'
-                      : '通过'}
+                      ? t("pages.studio.studioworkbenchsections.passing", "Passing...")
+                      : t("pages.studio.studioworkbenchsections.pass", "pass")}
                   </Button>
                 </>
               ) : activeExecutionInteraction.kind === 'wait_signal' ? (
@@ -1335,8 +1518,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 >
                   {executionActionPendingKey ===
                   `${executionActionKeyBase}:signal`
-                    ? '发送中...'
-                    : '发送信号'}
+                    ? t("pages.studio.studioworkbenchsections.sending", "Sending...")
+                    : t("pages.studio.studioworkbenchsections.send.signal", "send signal")}
                 </Button>
               ) : (
                 <Button
@@ -1355,8 +1538,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 >
                   {executionActionPendingKey ===
                   `${executionActionKeyBase}:submit`
-                    ? '提交中...'
-                    : '提交'}
+                    ? t("pages.studio.studioworkbenchsections.submitting", "Submitting...")
+                    : t("pages.studio.studioworkbenchsections.submit", "submit")}
                 </Button>
               )}
             </div>
@@ -1374,8 +1557,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           {!hasRuns ? (
             <StudioCatalogEmptyPanel
               icon={<CaretRightFilled style={{ color: '#CBD5E1' }} />}
-              title="暂无运行记录"
-              copy="开始一次测试运行后，这里会显示执行日志。"
+              title={t("pages.studio.studioworkbenchsections.no.running.records.yet", "No running records yet")}
+              copy={t("pages.studio.studioworkbenchsections.after.member.is.triggered", "After a member is triggered to run, the execution log will be displayed here.")}
             />
           ) : executionTrace?.logs?.length ? (
             executionTrace.logs.map((log, index) => (
@@ -1391,7 +1574,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                   borderColor:
                     activeExecutionLogIndex === index ? '#91caff' : '#eef2f7',
                 }}
-                title="点击复制这条日志"
+                title={t("pages.studio.studioworkbenchsections.click.to.copy.this", "Click to copy this post")}
               >
                 <div
                   style={{
@@ -1415,8 +1598,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                   >
                     {copiedExecutionLogIndex === index ? (
                       <span style={{ color: '#1677ff' }}>
-                        <CheckOutlined /> Copied
-                      </span>
+                        <CheckOutlined /> {t("pages.studio.studioworkbenchsections.copied", "Copied")}</span>
                     ) : null}
                     {formatDateTime(log.timestamp)}
                   </div>
@@ -1434,8 +1616,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           ) : (
             <StudioCatalogEmptyPanel
               icon={<FileTextOutlined style={{ color: '#CBD5E1' }} />}
-              title="还没有日志"
-              copy="选择一条测试运行后，这里会显示步骤执行和状态变化。"
+              title={t("pages.studio.studioworkbenchsections.no.logs.yet", "No logs yet")}
+              copy={t("pages.studio.studioworkbenchsections.after.selecting.running.record", "After selecting a running record, step execution and status changes will be displayed here.")}
             />
           )}
         </div>
@@ -1447,9 +1629,9 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     return (
       <div style={{ ...fillCardStyle, height: '100%' }}>
         {selectedExecution.isError ? (
-          <StudioNoticeCard
+          <StudioCompactNotice
             type="error"
-            title="读取执行详情失败"
+            title={t("pages.studio.studioworkbenchsections.failed.to.read.execution", "Failed to read execution details")}
             description={describeError(selectedExecution.error)}
           />
         ) : selectedExecution.data ? (
@@ -1457,369 +1639,184 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
         ) : (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="选择一条测试运行后，这里会显示执行日志。"
+            description={t("pages.studio.studioworkbenchsections.after.selecting.running.record.2", "After selecting a running record, the execution log will be displayed here.")}
           />
         )}
       </div>
     );
   }
 
+  const compactNotices: StudioCompactNoticeLike[] = [];
+  if (executions.isError) {
+    compactNotices.push({
+      description: describeError(executions.error),
+      title: t("pages.studio.studioworkbenchsections.failed.to.read.run", "Failed to read run list"),
+      type: 'error',
+    });
+  }
+  if (selectedExecution.isError) {
+    compactNotices.push({
+      description: describeError(selectedExecution.error),
+      title: t("pages.studio.studioworkbenchsections.failed.to.read.execution.2", "Failed to read execution details"),
+      type: 'error',
+    });
+  }
+  if (executionNotice) {
+    compactNotices.push({
+      description: executionNotice.message,
+      title:
+        executionNotice.type === 'error'
+          ? t("pages.studio.studioworkbenchsections.operation.failed", "Operation failed")
+          : executionNotice.type === 'info'
+            ? t("pages.studio.studioworkbenchsections.requested.to.stop.running", "Requested to stop running")
+            : t("pages.studio.studioworkbenchsections.execution.status.updated", "Execution status updated"),
+      type: executionNotice.type,
+    });
+  }
+  if (selectedExecutionDetail?.error) {
+    compactNotices.push({
+      description: selectedExecutionDetail.error,
+      title: t("pages.studio.studioworkbenchsections.execution.exception", "Execution exception"),
+      type: 'error',
+    });
+  }
+  if (emptyState) {
+    compactNotices.push({
+      description: emptyState.description,
+      title: emptyState.title,
+      type: 'info',
+    });
+  }
+
   return (
     <div style={cardStackStyle}>
-      {executions.isError ? (
-        <StudioNoticeCard
-          type="error"
-          title="读取测试运行列表失败"
-          description={describeError(executions.error)}
-        />
-      ) : null}
-      {selectedExecution.isError ? (
-        <StudioNoticeCard
-          type="error"
-          title="读取执行详情失败"
-          description={describeError(selectedExecution.error)}
-        />
-      ) : null}
-      {executionNotice ? (
-        <StudioNoticeCard
-          type={executionNotice.type}
-          title={
-            executionNotice.type === 'error'
-              ? '执行操作失败'
-              : executionNotice.type === 'info'
-                ? '已请求停止运行'
-                : '执行状态已更新'
-          }
-          description={executionNotice.message}
-        />
-      ) : null}
-      {selectedExecutionDetail?.error ? (
-        <StudioNoticeCard
-          type="error"
-          title="执行异常"
-          description={selectedExecutionDetail.error}
-        />
-      ) : null}
-      {emptyState ? (
-        <StudioNoticeCard
-          type="info"
-          title={emptyState.title}
-          description={emptyState.description}
-        />
+      {compactNotices.length > 0 ? (
+        <div style={studioCompactNoticeStackStyle}>
+          {compactNotices.map((notice, index) => (
+            <StudioCompactNotice
+              key={`${notice.type}-${index}`}
+              {...notice}
+            />
+          ))}
+        </div>
       ) : null}
 
-      <div style={observeSummaryGridStyle}>
-        <div style={observeSummaryStackStyle}>
-          <AevatarPanel
-            title="Run Compare"
-            titleHelp="Observe should answer what changed between the selected run and the nearest baseline before operators dive into logs."
-            extra={
-              baselineExecution ? (
-                <Tag>{`${baselineExecution.executionId} baseline`}</Tag>
-              ) : (
-                <Tag>no baseline yet</Tag>
-              )
-            }
-          >
-            <div style={{ display: 'grid', gap: 10 }}>
-              {observeCompareRows.map((row) => (
-                <div
-                  key={row.label}
-                  style={{
-                    alignItems: 'center',
-                    borderBottom: '1px solid #f3f4f6',
-                    display: 'grid',
-                    gap: 12,
-                    gridTemplateColumns: '120px minmax(0, 1fr) minmax(0, 1fr) auto',
-                    paddingBottom: 10,
-                  }}
-                >
-                  <Typography.Text type="secondary">{row.label}</Typography.Text>
-                  <Typography.Text>{row.current}</Typography.Text>
-                  <Typography.Text type="secondary">{row.baseline}</Typography.Text>
-                  <AevatarStatusTag
-                    domain="observation"
-                    label="delta"
-                    status={row.delta}
-                  />
-                </div>
-              ))}
-            </div>
-          </AevatarPanel>
-
-          <AevatarPanel
-            title="Human Escalation Playback"
-            titleHelp="Keep waiting approvals, submitted answers, and recent human hand-offs visible before the operator scrolls into the raw event log."
-          >
-            {observePlaybackEntries.length > 0 ? (
-              <div style={{ display: 'grid', gap: 10 }}>
-                {observePlaybackEntries.map((entry) => (
-                  <div
-                    key={`${entry.timestamp}-${entry.label}`}
-                    style={{
-                      borderBottom: '1px solid #f3f4f6',
-                      display: 'grid',
-                      gap: 4,
-                      paddingBottom: 10,
-                    }}
-                  >
-                    <div
-                      style={{
-                        alignItems: 'center',
-                        display: 'flex',
-                        gap: 8,
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <Typography.Text strong>{entry.label}</Typography.Text>
-                      <AevatarStatusTag
-                        domain="observation"
-                        label="playback"
-                        status={entry.status}
-                      />
-                    </div>
-                    <Typography.Text type="secondary">{entry.detail}</Typography.Text>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {entry.timestamp}
-                    </Typography.Text>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <StudioCatalogEmptyPanel
-                icon={<UserOutlined style={{ color: '#CBD5E1' }} />}
-                title="暂无人工介入"
-                copy="当前选择的运行还没有出现 approval、input 或 replay 片段。"
-              />
-            )}
-          </AevatarPanel>
-
-          <AevatarPanel
-            title="Member Snapshot"
-            titleHelp="Observe keeps the current member identity, active actor, and selected run provenance visible without sending operators back into Bind."
-          >
-            <div style={observeMetricGridStyle}>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Member</Typography.Text>
-                <Typography.Text strong>
-                  {selectedMemberLabel || activeWorkflowName || draftWorkflowName || 'Current member'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Implementation</Typography.Text>
-                <Typography.Text strong>
-                  {currentImplementationLabel ||
-                    activeWorkflowName ||
-                    draftWorkflowName ||
-                    'Current implementation'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Workspace</Typography.Text>
-                <Typography.Text strong>{activeDirectoryLabel || 'Workspace'}</Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Execution</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail?.executionId || 'No run selected'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Service</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail?.serviceId || 'n/a'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Revision</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail?.revisionId || 'n/a'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Actor</Typography.Text>
-                <Typography.Text strong>{selectedExecutionActorId || 'n/a'}</Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">State Version</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail?.stateVersion !== null &&
-                  selectedExecutionDetail?.stateVersion !== undefined
-                    ? `v${selectedExecutionDetail.stateVersion}`
-                    : 'n/a'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Started</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail
-                    ? formatDateTime(selectedExecutionDetail.startedAtUtc)
-                    : 'n/a'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Updated</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail?.updatedAtUtc
-                    ? formatDateTime(selectedExecutionDetail.updatedAtUtc)
-                    : 'n/a'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Prompt</Typography.Text>
-                <Typography.Text strong>
-                  {trimObserveText(executionPromptPreview || 'No prompt yet.', 72)}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Output</Typography.Text>
-                <Typography.Text strong>
-                  {trimObserveText(selectedExecutionDetail?.output || 'No output yet.', 72)}
-                </Typography.Text>
-              </div>
-            </div>
-          </AevatarPanel>
+      <section style={observeRunHeaderStyle}>
+        <div style={{ display: 'grid', gap: 10, minWidth: 0 }}>
+          <Space wrap size={[8, 8]}>
+            <AevatarStatusTag
+              domain="run"
+              label="run"
+              status={executionStatusKey || 'idle'}
+            />
+            <Tag>
+              {currentImplementationKind === 'workflow'
+                ? 'workflow'
+                : currentImplementationKind === 'script'
+                  ? 'script'
+                  : currentImplementationKind === 'gagent'
+                    ? 'gagent'
+                    : 'member'}
+            </Tag>
+            <Tag color={selectedExecutionDetail?.auditSource === 'run-audit' ? 'green' : 'default'}>
+              {selectedExecutionDetail?.auditSource === 'run-audit'
+                ? t("pages.studio.studioworkbenchsections.audit.ready", "audit ready")
+                : t("pages.studio.studioworkbenchsections.summary.only", "summary only")}
+            </Tag>
+            <Tag color={baselineExecution ? 'blue' : 'default'}>
+              {baselineExecution
+                ? t("pages.studio.studioworkbenchsections.baseline.ready", "baseline ready")
+                : t("pages.studio.studioworkbenchsections.baseline.warming", "baseline warming")}
+            </Tag>
+          </Space>
+          <h2 style={observeRunTitleStyle}>
+            {selectedMemberLabel ||
+              activeWorkflowName ||
+              draftWorkflowName ||
+              t("pages.studio.studioworkbenchsections.current.member", "Current member")}
+          </h2>
+          <p style={observeRunSubtitleStyle}>
+            {currentImplementationLabel ||
+              activeWorkflowName ||
+              draftWorkflowName ||
+              t("pages.studio.studioworkbenchsections.current.implementation", "Current implementation")}{' '}
+            · {selectedExecutionDetail?.executionId ||
+              t("pages.studio.studioworkbenchsections.no.run.selected", "No run selected")}
+            {executionDurationLabel ? t("pages.studio.studioworkbenchsections.copy.2", "· {value1}", { value1: executionDurationLabel }) : ''}
+          </p>
+          {executionPromptPreview ? (
+            <Typography.Paragraph
+              ellipsis={{ rows: 2, expandable: true, symbol: 'more' }}
+              style={{ margin: 0 }}
+              type="secondary"
+            >
+              {t("pages.studio.studioworkbenchsections.input.preview", "Input: {preview}", {
+                preview: executionPromptPreview,
+              })}
+            </Typography.Paragraph>
+          ) : null}
         </div>
 
-        <div style={observeSummaryStackStyle}>
-          <AevatarPanel
-            title="Health & Trust"
-            titleHelp="Observe should quickly answer whether the current member looks healthy, whether humans are blocked, and whether the trace can be trusted."
+        {executionCanStop ? (
+          <Button
+            danger
+            loading={executionStopPending}
+            disabled={executionStopPending}
+            onClick={onStopExecution}
           >
-            <div style={{ display: 'grid', gap: 12 }}>
-              {observeHealthItems.map((item) => (
-                <div
-                  key={item.label}
-                  style={{
-                    borderBottom: '1px solid #f3f4f6',
-                    display: 'grid',
-                    gap: 6,
-                    paddingBottom: 10,
-                  }}
-                >
-                  <div
-                    style={{
-                      alignItems: 'center',
-                      display: 'flex',
-                      gap: 8,
-                      justifyContent: 'space-between',
-                    }}
-                  >
-                    <Typography.Text type="secondary">{item.label}</Typography.Text>
-                    <AevatarStatusTag
-                      domain="observation"
-                      label="health"
-                      status={item.status}
-                    />
-                  </div>
-                  <Typography.Text strong>{item.value}</Typography.Text>
-                  <Typography.Text type="secondary">{item.note}</Typography.Text>
-                </div>
-              ))}
-            </div>
-          </AevatarPanel>
+            {t("pages.studio.studioworkbenchsections.stop.run", "Stop run")}</Button>
+        ) : null}
 
-          <AevatarPanel
-            title="Provenance"
-            titleHelp="Be explicit about what is live, what is inferred from the selected execution, and what still needs another run or baseline."
-          >
-            <div style={{ display: 'grid', gap: 12 }}>
-              <Space wrap size={[8, 8]}>
-                <Tag
-                  color={
-                    selectedExecutionDetail?.auditSource === 'run-audit'
-                      ? 'green'
-                      : 'default'
-                  }
-                >
-                  {selectedExecutionDetail?.auditSource === 'run-audit'
-                    ? 'run audit ready'
-                    : 'summary only'}
-                </Tag>
-                <Tag
-                  color={
-                    workflowGraphAvailable
-                      ? 'green'
-                      : currentImplementationKind === 'workflow'
-                        ? 'gold'
-                        : 'default'
-                  }
-                >
-                  {workflowGraphAvailable
-                    ? 'workflow graph ready'
-                    : currentImplementationKind === 'workflow'
-                      ? 'workflow graph unavailable'
-                      : 'workflow-only graph'}
-                </Tag>
-                <Tag color={baselineExecution ? 'blue' : 'default'}>
-                  {baselineExecution ? 'baseline available' : 'baseline warming up'}
-                </Tag>
-              </Space>
-              <div style={observeMetricGridStyle}>
-                <div style={observeMetricCardStyle}>
-                  <Typography.Text type="secondary">Definition Actor</Typography.Text>
-                  <Typography.Text strong>
-                    {selectedExecutionDetail?.definitionActorId || 'n/a'}
-                  </Typography.Text>
-                </div>
-                <div style={observeMetricCardStyle}>
-                  <Typography.Text type="secondary">Last Event</Typography.Text>
-                  <Typography.Text strong>
-                    {selectedExecutionDetail?.lastEventId || 'n/a'}
-                  </Typography.Text>
-                </div>
-                <div style={observeMetricCardStyle}>
-                  <Typography.Text type="secondary">Audit Updated</Typography.Text>
-                  <Typography.Text strong>
-                    {selectedExecutionDetail?.auditUpdatedAtUtc
-                      ? formatDateTime(selectedExecutionDetail.auditUpdatedAtUtc)
-                      : 'n/a'}
-                  </Typography.Text>
-                </div>
-              </div>
-              <Typography.Text type="secondary">
-                {selectedExecutionDetail
-                  ? `Selected run facts are coming from service ${trimObserveText(
-                      selectedExecutionDetail.serviceId,
-                    )}, revision ${trimObserveText(
-                      selectedExecutionDetail.revisionId,
-                    )}, actor ${trimObserveText(selectedExecutionDetail.actorId)}.`
-                  : activeWorkflowDescription ||
-                    '当前 Observe 页只展示当前 member 的运行事实；契约与发布信息留在 Bind。'}
-              </Typography.Text>
-              <Typography.Text type="secondary">
-                {baselineExecution
-                  ? `The compare baseline is ${baselineExecution.executionId} on revision ${trimObserveText(
-                      baselineExecution.revisionId,
-                    )}, started ${formatDateTime(baselineExecution.startedAtUtc)}.`
-                  : 'Observe can compare more meaningfully after the next run lands and a baseline exists.'}
+        <div style={{ gridColumn: '1 / -1' }}>
+          <div style={observeRunMetricGridStyle}>
+            <div style={observeRunMetricStyle}>
+              <Typography.Text type="secondary">{t("pages.studio.studioworkbenchsections.progress", "Progress")}</Typography.Text>
+              <Typography.Text strong>
+                {executionExecutedSteps}/{executionTotalSteps || 0} {t("pages.studio.studioworkbenchsections.steps", "steps")}</Typography.Text>
+            </div>
+            <div style={observeRunMetricStyle}>
+              <Typography.Text type="secondary">{t("pages.studio.studioworkbenchsections.events.2", "Events")}</Typography.Text>
+              <Typography.Text strong>{executionLogCount} {t("pages.studio.studioworkbenchsections.logs", "logs")}</Typography.Text>
+            </div>
+            <div style={observeRunMetricStyle}>
+              <Typography.Text type="secondary">{t("pages.studio.studioworkbenchsections.actor", "Actor")}</Typography.Text>
+              <Typography.Text
+                strong
+                ellipsis={{
+                  tooltip: selectedExecutionActorId || formatObserveNotAvailable(),
+                }}
+              >
+                {selectedExecutionActorId || formatObserveNotAvailable()}
               </Typography.Text>
             </div>
-          </AevatarPanel>
+            <div style={observeRunMetricStyle}>
+              <Typography.Text type="secondary">{t("pages.studio.studioworkbenchsections.state.version", "State Version")}</Typography.Text>
+              <Typography.Text strong>
+                {selectedExecutionDetail?.stateVersion !== null &&
+                selectedExecutionDetail?.stateVersion !== undefined
+                  ? `v${selectedExecutionDetail.stateVersion}`
+                  : formatObserveNotAvailable()}
+              </Typography.Text>
+            </div>
+            <div style={observeRunMetricStyle}>
+              <Typography.Text type="secondary">{t("pages.studio.studioworkbenchsections.updated", "Updated")}</Typography.Text>
+              <Typography.Text strong>
+                {selectedExecutionDetail?.updatedAtUtc
+                  ? formatDateTime(selectedExecutionDetail.updatedAtUtc)
+                  : formatObserveNotAvailable()}
+              </Typography.Text>
+            </div>
+          </div>
         </div>
-      </div>
+      </section>
 
       <div
-        style={{
-          background: '#FFFFFF',
-          border: '1px solid #E6E3DE',
-          borderRadius: 28,
-          boxShadow: '0 30px 72px rgba(15,23,42,0.08)',
-          display: 'flex',
-          flexDirection: 'column',
-          minHeight: 'calc(100vh - 176px)',
-          overflow: 'hidden',
-        }}
+        style={observeStageShellStyle}
       >
         <div
           style={{
             ...executionBarStyle,
-            alignItems: 'center',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 12,
-            minHeight: 36,
-            padding: '0 16px',
+            ...observeStageBarStyle,
           }}
         >
           <span
@@ -1837,44 +1834,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
             {executionStatusLabel}
           </Typography.Text>
           <Typography.Text type="secondary" style={{ margin: 0 }}>
-            {(activeWorkflowName || draftWorkflowName || '当前流程').trim() || '当前流程'} ·
-            已执行 {executionExecutedSteps}/{executionTotalSteps || 0} 步骤
-            {executionDurationLabel ? ` · 耗时 ${executionDurationLabel}` : ''}
+            {(activeWorkflowName || draftWorkflowName || t("pages.studio.studioworkbenchsections.current.process", "current process")).trim() || t("pages.studio.studioworkbenchsections.current.process.2", "current process")} {t("pages.studio.studioworkbenchsections.executed", "· Executed")}{executionExecutedSteps}/{executionTotalSteps || 0} {t("pages.studio.studioworkbenchsections.step", "step")}{executionDurationLabel ? t("pages.studio.studioworkbenchsections.time.spent", "· Time spent {value1}", { value1: executionDurationLabel }) : ''}
           </Typography.Text>
-          {executionPromptPreview ? (
-            <Typography.Text
-              type="secondary"
-              style={{
-                marginLeft: 'auto',
-                maxWidth: 380,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              输入: "{executionPromptPreview}"
-            </Typography.Text>
-          ) : null}
-          <Button
-            type="primary"
-            size="small"
-            loading={runPending}
-            disabled={!canRunWorkflow || runPending}
-            onClick={() => setRunModalOpen(true)}
-          >
-            重新运行
-          </Button>
-          {executionCanStop ? (
-            <Button
-              danger
-              size="small"
-              loading={executionStopPending}
-              disabled={executionStopPending}
-              onClick={onStopExecution}
-            >
-              停止
-            </Button>
-          ) : null}
         </div>
 
         <div
@@ -1940,34 +1901,179 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
         </div>
       </div>
 
-      <Modal
-        open={runModalOpen}
-        title="测试运行"
-        onCancel={() => setRunModalOpen(false)}
-        onOk={() => {
-          void onStartExecution();
-          setRunModalOpen(false);
-        }}
-        okText="开始运行"
-        okButtonProps={{
-          disabled: !canRunWorkflow,
-          loading: runPending,
-          icon: <CaretRightFilled />,
-        }}
-      >
-        <div style={cardStackStyle}>
-          <Typography.Text type="secondary">
-            这段输入会作为 <Typography.Text code>$input</Typography.Text> 传入当前行为定义。
-          </Typography.Text>
-          <Input.TextArea
-            aria-label="Studio execution prompt"
-            autoSize={{ minRows: 6, maxRows: 10 }}
-            placeholder="这次运行要做什么？"
-            value={runPrompt}
-            onChange={(event) => onRunPromptChange(event.target.value)}
-          />
-        </div>
-      </Modal>
+      <div style={observeDetailsGridStyle}>
+        <AevatarPanel
+          title={t("pages.studio.studioworkbenchsections.run.compare", "Run Compare")}
+          titleHelp={t("pages.studio.studioworkbenchsections.compare.the.selected.run.with", "Compare the selected run with the nearest previous run from this member.")}
+          extra={
+            baselineExecution ? (
+              <Tag>
+                {t("pages.studio.studioworkbenchsections.baseline.execution.label", "{executionId} baseline", {
+                  executionId: baselineExecution.executionId,
+                })}
+              </Tag>
+            ) : (
+              <Tag>{t("pages.studio.studioworkbenchsections.no.baseline.yet", "no baseline yet")}</Tag>
+            )
+          }
+        >
+          <div style={{ display: 'grid', gap: 10 }}>
+            {observeCompareRows.map((row) => (
+              <div
+                key={row.label}
+                style={{
+                  alignItems: 'center',
+                  borderBottom: '1px solid #f3f4f6',
+                  display: 'grid',
+                  gap: 10,
+                  gridTemplateColumns: '104px minmax(0, 1fr) minmax(0, 1fr) auto',
+                  paddingBottom: 10,
+                }}
+              >
+                <Typography.Text type="secondary">{row.label}</Typography.Text>
+                <Typography.Text ellipsis={{ tooltip: row.current }}>
+                  {row.current}
+                </Typography.Text>
+                <Typography.Text type="secondary" ellipsis={{ tooltip: row.baseline }}>
+                  {row.baseline}
+                </Typography.Text>
+                <AevatarStatusTag
+                  domain="observation"
+                  label="delta"
+                  status={row.delta}
+                />
+              </div>
+            ))}
+          </div>
+        </AevatarPanel>
+
+        <AevatarPanel
+          title={t("pages.studio.studioworkbenchsections.human.playback", "Human Playback")}
+          titleHelp={t("pages.studio.studioworkbenchsections.show.approvals.inputs.signals.and", "Show approvals, inputs, signals, and recent human hand-offs from the selected run.")}
+        >
+          {observePlaybackEntries.length > 0 ? (
+            <div style={{ display: 'grid', gap: 10 }}>
+              {observePlaybackEntries.map((entry) => (
+                <div
+                  key={`${entry.timestamp}-${entry.label}`}
+                  style={{
+                    borderBottom: '1px solid #f3f4f6',
+                    display: 'grid',
+                    gap: 4,
+                    paddingBottom: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      alignItems: 'center',
+                      display: 'flex',
+                      gap: 8,
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Typography.Text strong>{entry.label}</Typography.Text>
+                    <AevatarStatusTag
+                      domain="observation"
+                      label="playback"
+                      status={entry.status}
+                    />
+                  </div>
+                  <Typography.Text type="secondary">{entry.detail}</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {entry.timestamp}
+                  </Typography.Text>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <StudioCatalogEmptyPanel
+              icon={<UserOutlined style={{ color: '#CBD5E1' }} />}
+              title={t("pages.studio.studioworkbenchsections.no.manual.intervention.yet", "No manual intervention yet")}
+              copy={t("pages.studio.studioworkbenchsections.the.currently.selected.run", "The currently selected run does not yet have an approval, input, or replay fragment.")}
+            />
+          )}
+        </AevatarPanel>
+
+        <AevatarPanel
+          title={t("pages.studio.studioworkbenchsections.observation.facts", "Observation Facts")}
+          titleHelp={t("pages.studio.studioworkbenchsections.keep.identity.provenance.and.trace", "Keep identity, provenance, and trace trust visible without sending operators back to Bind.")}
+        >
+          <div style={{ display: 'grid', gap: 14 }}>
+            <div style={observeMetricGridStyle}>
+              {observeHealthItems.map((item) => (
+                <div key={item.label} style={observeMetricCardStyle}>
+                  <div
+                    style={{
+                      alignItems: 'center',
+                      display: 'flex',
+                      gap: 8,
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Typography.Text type="secondary">{item.label}</Typography.Text>
+                    <AevatarStatusTag
+                      domain="observation"
+                      label="health"
+                      status={item.status}
+                    />
+                  </div>
+                  <Typography.Text strong>{item.value}</Typography.Text>
+                  <Typography.Text type="secondary">{item.note}</Typography.Text>
+                </div>
+              ))}
+            </div>
+            <Space wrap size={[8, 8]}>
+              <Tag>
+                {t("pages.studio.studioworkbenchsections.service", "Service")}{selectedExecutionDetail?.serviceId ||
+                  formatObserveNotAvailable()}
+              </Tag>
+              <Tag>
+                {t("pages.studio.studioworkbenchsections.revision", "Revision")}{selectedExecutionDetail?.revisionId ||
+                  formatObserveNotAvailable()}
+              </Tag>
+              <Tag>
+                {t("pages.studio.studioworkbenchsections.definition", "Definition")}{selectedExecutionDetail?.definitionActorId ||
+                  formatObserveNotAvailable()}
+              </Tag>
+              <Tag>
+                {t("pages.studio.studioworkbenchsections.last.event", "Last event")}{selectedExecutionDetail?.lastEventId ||
+                  formatObserveNotAvailable()}
+              </Tag>
+              <Tag>
+                {t("pages.studio.studioworkbenchsections.workspace", "Workspace")}{activeDirectoryLabel ||
+                  t("pages.studio.studioworkbenchsections.workspace", "Workspace")}
+              </Tag>
+            </Space>
+            <Typography.Text type="secondary">
+              {selectedExecutionDetail
+                ? t(
+                    "pages.studio.studioworkbenchsections.selected.facts.come.from",
+                    "Selected facts come from service {serviceId}, revision {revisionId}, actor {actorId}.",
+                    {
+                      actorId: trimObserveText(selectedExecutionDetail.actorId),
+                      revisionId: trimObserveText(selectedExecutionDetail.revisionId),
+                      serviceId: trimObserveText(selectedExecutionDetail.serviceId),
+                    },
+                  )
+                : activeWorkflowDescription ||
+                  t("pages.studio.studioworkbenchsections.the.current.observe.page", "The current Observe page only displays the running facts of the current member; contract and release information remain in Bind.")}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              {baselineExecution
+                ? t(
+                    "pages.studio.studioworkbenchsections.baseline.detail",
+                    "Baseline: {executionId}, revision {revisionId}, started {startedAt}.",
+                    {
+                      executionId: baselineExecution.executionId,
+                      revisionId: trimObserveText(baselineExecution.revisionId),
+                      startedAt: formatDateTime(baselineExecution.startedAtUtc),
+                    },
+                  )
+                : t("pages.studio.studioworkbenchsections.observe.can.compare.more", "Observe can compare more meaningfully after another run lands.")}
+            </Typography.Text>
+          </div>
+        </AevatarPanel>
+      </div>
     </div>
   );
 };

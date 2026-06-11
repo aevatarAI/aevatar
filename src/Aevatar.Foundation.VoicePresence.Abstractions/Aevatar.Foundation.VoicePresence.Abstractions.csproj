@@ -7,6 +7,7 @@
     <RootNamespace>Aevatar.Foundation.VoicePresence.Abstractions</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>

@@ -1,0 +1,432 @@
+syntax = "proto3";
+
+package aevatar.gagents.nyxid_chat;
+
+option csharp_namespace = "Aevatar.GAgents.NyxidChat";
+
+import "chat_activity.proto";
+import "conversation_events.proto";
+import "ai_messages.proto";
+
+enum AgentRunStatus {
+  AGENT_RUN_STATUS_UNSPECIFIED = 0;
+  AGENT_RUN_STATUS_STARTED = 1;
+  // The LLM run has produced an immutable reply payload (success or failure
+  // terminal state) and persisted it, but the LlmReplyReadyEvent has not yet
+  // been accepted by the target conversation actor. Output-dispatch retries
+  // that happen in this status must re-deliver the persisted payload rather
+  // than re-run the LLM / tool chain.
+  AGENT_RUN_STATUS_REPLY_PRODUCED = 2;
+  AGENT_RUN_STATUS_DROPPED = 3;
+  AGENT_RUN_STATUS_FAILED = 4;
+  // The LlmReplyReadyEvent has been accepted by the target conversation
+  // actor. This is the AgentRunGAgent-side terminal: from here on the run
+  // actor only schedules cleanup; it never re-runs the LLM or re-dispatches.
+  // NOTE: REPLY_HANDED_OFF != chain.delivered. The chain-level delivered
+  // phase (user-visible) is owned by ConversationGAgent and observed via
+  // ConversationGAgentState.last_reply_delivery; REPLY_HANDED_OFF is a
+  // necessary-not-sufficient precondition. See ADR-0021.
+  AGENT_RUN_STATUS_REPLY_HANDED_OFF = 5;
+  // The run actor has committed the generation request and handed the
+  // transient LLM/tool/streaming work to the stateless generation executor.
+  // Duplicate starts in this status must not start a second executor. The
+  // executor reports back through typed completion/failure commands; the run
+  // actor remains the sole owner of produced/dispatched/terminal facts.
+  AGENT_RUN_STATUS_REPLY_GENERATION_REQUESTED = 6;
+}
+
+message AgentRunGAgentState {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  AgentRunStatus status = 4;
+  int64 started_at_unix_ms = 5;
+  int64 completed_at_unix_ms = 6;
+  string error_code = 7;
+  string error_summary = 8;
+  // Produced LLM reply payload, persisted before dispatch so output-dispatch
+  // retries never re-invoke the LLM/tool chain.
+  string produced_reply_text = 9;
+  aevatar.gagents.channel.abstractions.MessageContent produced_outbound = 10;
+  aevatar.gagents.channel.runtime.LlmReplyTerminalState produced_terminal_state = 11;
+  // Field 12 (`reply_dispatched`) was a bool flag promoted to the explicit
+  // AGENT_RUN_STATUS_REPLY_HANDED_OFF status in ADR-0021. Reserved here so
+  // accidental reuse of the field number, or a stale serializer built before
+  // the split, fails loudly instead of silently masking the new status.
+  reserved 12;
+  reserved "reply_dispatched";
+  // Wall-clock when the terminal-state cleanup callback completed. Combined
+  // with status ∈ {DROPPED, FAILED, REPLY_HANDED_OFF}, a non-zero value
+  // marks the run as finalized (chain.finalized) — late ready/dropped/failed
+  // /cleanup signals must no-op from this point.
+  int64 cleanup_completed_at_unix_ms = 13;
+  // Generation stage request facts. Runtime-only credentials remain outside
+  // this state; the values here only gate duplicate starts and stale
+  // completion/timeout continuations.
+  int64 generation_requested_at_unix_ms = 14;
+  int32 generation_attempt = 15;
+  // Drop notification outbox facts. AgentRunDroppedEvent is persisted before
+  // notifying the target actor; retry callbacks carry only stable IDs and the
+  // actor replays the DeferredLlmReplyDroppedEvent from these state fields.
+  string pending_drop_notification_run_id = 16;
+  string pending_drop_notification_correlation_id = 17;
+  string pending_drop_notification_target_actor_id = 18;
+  string pending_drop_notification_reason = 19;
+  int64 pending_drop_notification_dropped_at_unix_ms = 20;
+  int64 drop_notification_dispatched_at_unix_ms = 21;
+  AgentRunReplyStepState generation_step = 22;
+  // Immutable history entries produced by the LLM run. Output-dispatch retries
+  // re-deliver these entries without re-running the LLM/tool chain.
+  repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry produced_appended_history = 23;
+}
+
+enum AgentRunReplyStepKind {
+  AGENT_RUN_REPLY_STEP_KIND_UNSPECIFIED = 0;
+  AGENT_RUN_REPLY_STEP_KIND_LLM = 1;
+  AGENT_RUN_REPLY_STEP_KIND_TOOL = 2;
+}
+
+message AgentRunReplyTokenUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message AgentRunToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments_json = 3;
+}
+
+message AgentRunChatMessage {
+  string role = 1;
+  string content = 2;
+  string reasoning_content = 3;
+  repeated aevatar.ai.ChatContentPart content_parts = 4;
+  string tool_call_id = 5;
+  repeated AgentRunToolCall tool_calls = 6;
+}
+
+message AgentRunReplyStepState {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int32 next_step_index = 5;
+  int32 round = 6;
+  int32 max_tool_rounds = 7;
+  int32 length_recovery_count = 8;
+  bool has_streamed_text_content = 9;
+  string accumulated_text = 10;
+  AgentRunReplyTokenUsage aggregated_usage = 11;
+  string last_finish_reason = 12;
+  repeated AgentRunChatMessage messages = 13;
+  repeated AgentRunChatMessage pending_history_messages = 14;
+  repeated AgentRunToolCall pending_tool_calls = 15;
+  bool final_no_tools_step = 16;
+  aevatar.ai.LLMControlContextPayload llm_control = 17;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 18;
+  map<string, string> external_metadata = 19;
+  aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 20;
+  repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 21;
+}
+
+// Typed LLM IO facts returned by the executor. The run actor reconciles these
+// facts with its current AgentRunReplyStepState before persisting the next
+// waterline.
+message AgentRunLlmStepResult {
+  string accumulated_text = 1;
+  string content = 2;
+  string reasoning_content = 3;
+  repeated AgentRunToolCall tool_calls = 4;
+  AgentRunReplyTokenUsage usage = 5;
+  string finish_reason = 6;
+  aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 7;
+  bool has_streamed_text_content = 8;
+}
+
+// Typed tool IO facts returned by the executor. The run actor owns round
+// advancement and message/state persistence.
+message AgentRunToolStepResult {
+  repeated AgentRunChatMessage result_messages = 1;
+  bool advance_round = 2;
+}
+
+// Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
+// a short-lived relay reply_token; AgentRunGAgent must never persist that
+// credential into AgentRunGAgentState, AgentRun*Event facts, or durable
+// scheduler callback payloads.
+message AgentRunStartRequested {
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 1;
+  // Refactor (iter101/cluster-105):
+  //   Old pattern: derive run_id by parsing AgentRun actor id prefix.
+  //   New principle: start command carries run_id as typed data; actor id remains opaque.
+  string run_id = 2;
+}
+
+// Durable output-dispatch retry signal emitted by the callback scheduler.
+// Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
+//   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
+//   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
+message AgentRunOutputDispatchRetryRequested {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int64 generation = 5;
+  int64 requested_at_unix_ms = 6;
+  bool requires_runtime_reply_token = 7;
+}
+
+// Durable drop-notification retry signal emitted by the callback scheduler.
+// Refactor (iter99/cluster-605-drop-outbox):
+//   Old pattern: drop notification failure reused the ready-output retry command, which had different state and credential semantics.
+//   New principle: callback payload carries only stable drop IDs; AgentRunGAgent replays the drop notification from actor-owned state.
+message AgentRunDropNotificationRetryRequested {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int64 requested_at_unix_ms = 5;
+}
+
+message AgentRunCleanupRequested {
+  string run_id = 1;
+  int64 requested_at_unix_ms = 2;
+}
+
+message AgentRunStartedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 started_at_unix_ms = 4;
+}
+
+message AgentRunReplyProducedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  aevatar.gagents.channel.runtime.LlmReplyTerminalState terminal_state = 4;
+  string error_code = 5;
+  string error_summary = 6;
+  int64 produced_at_unix_ms = 7;
+  // Immutable reply payload produced by the LLM run. Persisting these lets the
+  // dispatch retry path re-deliver the same reply without re-running the LLM
+  // chain (which would otherwise repeat tool side-effects like SSH exec or
+  // external API calls and incur duplicate billing).
+  string reply_text = 8;
+  aevatar.gagents.channel.abstractions.MessageContent outbound = 9;
+  repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 10;
+}
+
+// Persisted after admission gates pass and before the transient generation
+// executor is asked to start. This event intentionally carries no reply_token,
+// user access token, Activity, or other runtime-only credentials.
+message AgentRunReplyGenerationRequestedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 requested_at_unix_ms = 4;
+  int32 attempt = 5;
+}
+
+// Persisted per-step waterline owned by AgentRunGAgent. Runtime-only
+// credentials remain only on the transient self-message request.
+message AgentRunReplyStepStateUpdatedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  AgentRunReplyStepState step_state = 5;
+}
+
+// Typed self-message: request the next single LLM IO step. The nested request
+// may carry command-only relay credentials and must not be persisted.
+message AgentRunNextLlmStepRequestedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int32 step_index = 5;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 6;
+  reserved 7;
+  reserved "step_state";
+  AgentRunLlmStepResult llm_step_result = 8;
+}
+
+// Typed self-message: request the next single tool IO step. The nested request
+// may carry command-only relay credentials and must not be persisted.
+message AgentRunNextToolStepRequestedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int32 step_index = 5;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 6;
+  reserved 7;
+  reserved "step_state";
+  AgentRunToolStepResult tool_step_result = 8;
+}
+
+// Transient command for executor failures that did not produce a normal reply
+// payload. It is not a persisted fact; the run actor converts it into its
+// existing failed/produced terminal facts.
+message AgentRunReplyGenerationFailed {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int64 failed_at_unix_ms = 6;
+  int32 attempt = 7;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 8;
+}
+
+// Transient timeout signal emitted by the callback scheduler. It carries only
+// stable identifiers so runtime-only credentials are never written into the
+// scheduler backend.
+message AgentRunReplyGenerationTimedOut {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 timed_out_at_unix_ms = 4;
+  int32 attempt = 5;
+}
+
+// Persisted after the LlmReplyReadyEvent has been successfully delivered to
+// the target conversation actor. Until this event lands, output-dispatch
+// retries must re-deliver the persisted produced payload from
+// AgentRunGAgentState rather than re-run the LLM / tool chain.
+message AgentRunReplyDispatchedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 dispatched_at_unix_ms = 4;
+}
+
+message AgentRunDroppedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string reason = 4;
+  int64 dropped_at_unix_ms = 5;
+}
+
+message AgentRunDropNotificationDispatchedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 dispatched_at_unix_ms = 4;
+}
+
+message AgentRunFailedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int64 failed_at_unix_ms = 6;
+}
+
+// Persisted by the terminal-state cleanup callback after it has finished its
+// idempotent work (in-memory token eviction, scheduler unregistration, etc.).
+// Combined with terminal status, this event drives
+// AgentRunGAgentState.cleanup_completed_at_unix_ms to a non-zero value and
+// marks the run as finalized (chain.finalized) per ADR-0021.
+message AgentRunCleanupCompletedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  int64 completed_at_unix_ms = 3;
+}
+
+message NyxIdChatConversationCreationCompensationRequested {
+  string scope_id = 1;
+  string actor_id = 2;
+  bool destroy_actor = 3;
+  string reason = 4;
+}
+
+message NyxIdChatConversationDeletionCompensationRequested {
+  string scope_id = 1;
+  string actor_id = 2;
+  string reason = 3;
+}
+
+message NyxIdChatConversationCreateCommand {
+  string scope_id = 1;
+  bool created_locally = 2;
+}
+
+message NyxIdChatConversationDeleteCommand {
+  string scope_id = 1;
+  string actor_id = 2;
+}
+
+enum NyxIdChatConversationCreationOutcomeStatus {
+  NYX_ID_CHAT_CONVERSATION_CREATION_OUTCOME_STATUS_UNSPECIFIED = 0;
+  NYX_ID_CHAT_CONVERSATION_CREATION_OUTCOME_STATUS_ACCEPTED = 1;
+  NYX_ID_CHAT_CONVERSATION_CREATION_OUTCOME_STATUS_REGISTRATION_UNAVAILABLE = 2;
+}
+
+message NyxIdChatConversationCreationOutcome {
+  string scope_id = 1;
+  string actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+  NyxIdChatConversationCreationOutcomeStatus status = 5;
+  string reason = 6;
+  bool destroyed_actor = 7;
+}
+
+message NyxIdChatConversationCreationStartedEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  bool created_locally = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+}
+
+message NyxIdChatConversationRegistrationAcceptedEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+}
+
+message NyxIdChatConversationRegistrationUnavailableEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  bool destroy_actor = 3;
+  string reason = 4;
+  string command_id = 5;
+  string correlation_id = 6;
+}
+
+message NyxIdChatConversationDeletionStartedEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+}
+
+message NyxIdChatConversationUnregisteredEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+}
+
+message NyxIdChatConversationHistoryDeletedEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+}
+
+message NyxIdChatConversationDeletionCompensationStartedEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  string reason = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+}

@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 
 namespace Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -21,6 +23,8 @@ public sealed record GAgentDraftRunInputPart
     public string? Name { get; init; }
 }
 
+// Refactor (iter1353/cluster-001): Old pattern: draft-run commands rebuilt trusted caller/control facts from headers and legacy scalars.
+// New principle: commands carry typed ToolContext and LlmControl as the authoritative internal control fields.
 public sealed record GAgentDraftRunCommand(
     string ScopeId,
     string ActorTypeName,
@@ -32,11 +36,16 @@ public sealed record GAgentDraftRunCommand(
     string? PreferredLlmRoute = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
-    bool UseCorrelationIdAsFallbackSessionId = true) : ICommandContextSeed
+    bool UseCorrelationIdAsFallbackSessionId = true,
+    string? AgentKind = null,
+    AgentToolExecutionContext? ToolContext = null,
+    LLMControlContext? LlmControl = null,
+    string? CommandIdSeed = null,
+    string? CorrelationIdSeed = null) : ICommandContextSeed
 {
-    public string? CommandId => null;
+    public string? CommandId => CommandIdSeed;
 
-    public string? CorrelationId => null;
+    public string? CorrelationId => CorrelationIdSeed;
 }
 
 public enum GAgentDraftRunStartError
@@ -44,6 +53,7 @@ public enum GAgentDraftRunStartError
     None = 0,
     UnknownActorType = 1,
     ActorTypeMismatch = 2,
+    ProjectionUnavailable = 3,
 }
 
 public enum GAgentDraftRunCompletionStatus
@@ -58,7 +68,8 @@ public sealed record GAgentDraftRunAcceptedReceipt(
     string ActorId,
     string ActorTypeName,
     string CommandId,
-    string CorrelationId);
+    string CorrelationId,
+    string SessionId = "");
 
 public sealed record GAgentApprovalCommand(
     string ActorId,
@@ -77,6 +88,7 @@ public enum GAgentApprovalStartError
 {
     None = 0,
     ActorNotFound = 1,
+    ProjectionUnavailable = 2,
 }
 
 public enum GAgentApprovalCompletionStatus
@@ -90,4 +102,5 @@ public enum GAgentApprovalCompletionStatus
 public sealed record GAgentApprovalAcceptedReceipt(
     string ActorId,
     string CommandId,
-    string CorrelationId);
+    string CorrelationId,
+    string SessionId);

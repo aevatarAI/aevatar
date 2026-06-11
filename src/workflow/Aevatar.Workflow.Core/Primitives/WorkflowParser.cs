@@ -5,7 +5,6 @@
 
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
-using Aevatar.AI.Abstractions.Agents;
 using System.Collections;
 using System.Globalization;
 using System.Text.Json;
@@ -61,6 +60,7 @@ public sealed class WorkflowParser
         {
             Name = raw.Name ?? throw new InvalidOperationException("缺少 name"),
             Description = raw.Description ?? "",
+            WhenToUse = NormalizeText(raw.WhenToUse),
             Roles = (raw.Roles ?? []).Select(MapRole).ToList(),
             Steps = (raw.Steps ?? []).Select(MapStep).ToList(),
             Configuration = new WorkflowRuntimeConfiguration
@@ -72,41 +72,29 @@ public sealed class WorkflowParser
 
     private static RoleDefinition MapRole(RawRole role)
     {
+        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+        //   Old pattern: workflow steps chose actor implementation with raw agent_type/agent_id parameters
+        //   New principle: role agent_kind is the stable typed lifecycle input; steps only target roles
         var eventModules = PreferTopLevelText(role.EventModules, role.Extensions?.EventModules);
         var eventRoutes = PreferTopLevelText(role.EventRoutes, role.Extensions?.EventRoutes);
 
-        var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
+        var roleId = NormalizeText(role.Id);
+        var roleName = NormalizeText(role.Name);
+        return new RoleDefinition
         {
-            Id = role.Id,
-            Name = role.Name,
-            SystemPrompt = role.SystemPrompt,
-            Provider = role.Provider,
-            Model = role.Model,
+            Id = roleId ?? throw new InvalidOperationException("role 缺 id"),
+            Name = roleName ?? roleId ?? throw new InvalidOperationException("role 缺 name"),
+            AgentKind = NormalizeText(role.AgentKind),
+            SystemPrompt = NormalizeText(role.SystemPrompt) ?? string.Empty,
+            Provider = NormalizeText(role.Provider),
+            Model = NormalizeText(role.Model),
             Temperature = role.Temperature,
             MaxTokens = role.MaxTokens,
             MaxToolRounds = role.MaxToolRounds,
             MaxHistoryMessages = role.MaxHistoryMessages,
-            StreamBufferCapacity = role.StreamBufferCapacity,
             EventModules = eventModules,
             EventRoutes = eventRoutes,
-            Connectors = role.Connectors,
-        });
-
-        return new RoleDefinition
-        {
-            Id = normalized.Id,
-            Name = normalized.Name,
-            SystemPrompt = normalized.SystemPrompt,
-            Provider = normalized.Provider,
-            Model = normalized.Model,
-            Temperature = normalized.Temperature,
-            MaxTokens = normalized.MaxTokens,
-            MaxToolRounds = normalized.MaxToolRounds,
-            MaxHistoryMessages = normalized.MaxHistoryMessages,
-            StreamBufferCapacity = normalized.StreamBufferCapacity,
-            EventModules = normalized.EventModules,
-            EventRoutes = normalized.EventRoutes,
-            Connectors = normalized.Connectors.ToList(),
+            Connectors = role.Connectors?.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Distinct(StringComparer.Ordinal).ToList() ?? [],
         };
     }
 
@@ -375,11 +363,15 @@ public sealed class WorkflowParser
             DefaultOutput = e.DefaultOutput,
         };
 
-    private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } }
+    private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public string? WhenToUse { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } }
     private sealed class RawRole
     {
+        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+        //   Old pattern: raw YAML exposed step-level CLR lifecycle selectors
+        //   New principle: raw YAML accepts role-level agent_kind and maps it to RoleDefinition.AgentKind
         public string? Id { get; set; }
         public string? Name { get; set; }
+        public string? AgentKind { get; set; }
         public string? SystemPrompt { get; set; }
         public string? Provider { get; set; }
         public string? Model { get; set; }
@@ -387,7 +379,6 @@ public sealed class WorkflowParser
         public int? MaxTokens { get; set; }
         public int? MaxToolRounds { get; set; }
         public int? MaxHistoryMessages { get; set; }
-        public int? StreamBufferCapacity { get; set; }
         public string? EventModules { get; set; }
         public string? EventRoutes { get; set; }
         public RawRoleExtensions? Extensions { get; set; }

@@ -1,13 +1,14 @@
 using System.Security.Cryptography;
 using System.Text;
+using Aevatar.GAgentService.Abstractions.Services;
 
 namespace Aevatar.GAgentService.Application.Workflows;
 
 public sealed class ScopeWorkflowCapabilityOptions
 {
     public const string SectionName = "ScopeWorkflowServices";
-    public const string FixedServiceAppId = "default";
-    public const string FixedServiceNamespace = "default";
+    public const string FixedServiceAppId = ScopeServiceIdentityDefaults.ServiceAppId;
+    public const string FixedServiceNamespace = ScopeServiceIdentityDefaults.ServiceNamespace;
 
     // Keep the setter for configuration binding/object initializers, but pin the runtime identity.
     public string ServiceAppId

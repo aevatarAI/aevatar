@@ -1,9 +1,12 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Abstractions;
@@ -11,9 +14,12 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Scripting.Infrastructure.Ports;
+using Aevatar.Scripting.Projection.Orchestration;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Collections.Concurrent;
 
 namespace Aevatar.Integration.Tests;
@@ -30,13 +36,31 @@ internal static class ScriptEvolutionIntegrationTestKit
         services.AddAevatarRuntime();
         configure?.Invoke(services);
         services.AddScriptCapability();
-        services.AddSingleton<IScriptEvolutionApplicationService>(sp =>
-            new AuthorityActivatingScriptEvolutionApplicationService(
-                new ScriptEvolutionApplicationService(sp.GetRequiredService<IScriptEvolutionProposalPort>()),
-                sp.GetRequiredService<IScriptAuthorityReadModelActivationPort>(),
-                sp.GetRequiredService<IScriptingActorAddressResolver>()));
+        services.AddAttachOnlyScriptEvolutionApplicationService();
         return services.BuildServiceProvider();
     }
+
+    public static IServiceCollection AddAttachOnlyScriptEvolutionApplicationService(
+        this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.Replace(ServiceDescriptor.Singleton<IScriptEvolutionApplicationService>(sp =>
+            new AttachOnlyScriptEvolutionApplicationService(
+                new ScriptEvolutionApplicationService(sp.GetRequiredService<IScriptEvolutionProposalPort>()),
+                sp.GetRequiredService<IProjectionScopeActivationService<ScriptEvolutionRuntimeLease>>(),
+                sp.GetRequiredService<IScriptingActorAddressResolver>())));
+        services.Replace(ServiceDescriptor.Singleton<IScriptEvolutionProposalPort>(sp =>
+            new AttachOnlyScriptEvolutionProposalPort(
+                sp.GetRequiredService<RuntimeScriptEvolutionInteractionService>(),
+                sp.GetRequiredService<IProjectionScopeActivationService<ScriptEvolutionRuntimeLease>>(),
+                sp.GetRequiredService<IScriptingActorAddressResolver>())));
+        return services;
+    }
+
+    public static IServiceCollection AddAuthorityActivatingScriptEvolutionApplicationService(
+        this IServiceCollection services) =>
+        services.AddAttachOnlyScriptEvolutionApplicationService();
 
     public static async Task<string> UpsertDefinitionAsync(
         IServiceProvider provider,
@@ -65,14 +89,11 @@ internal static class ScriptEvolutionIntegrationTestKit
         var resolvedDefinitionActorId = string.IsNullOrWhiteSpace(definitionActorId)
             ? addressResolver.GetDefinitionActorId(scriptId)
             : definitionActorId;
-        await ActivateAuthorityReadModelAsync(provider, resolvedDefinitionActorId, ct);
-
         var result = await provider.GetRequiredService<IScriptDefinitionCommandPort>()
             .UpsertDefinitionWithSnapshotAsync(
                 scriptId,
                 revision,
-                sourceText,
-                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(sourceText),
+                ScriptPackageSpecExtensions.CreateSingleSource(sourceText),
                 resolvedDefinitionActorId,
                 ct);
         RememberDefinitionSnapshot(result.ActorId, result.Snapshot);
@@ -101,7 +122,6 @@ internal static class ScriptEvolutionIntegrationTestKit
         ScriptDefinitionSnapshot? definitionSnapshot,
         CancellationToken ct)
     {
-        await ActivateAuthorityReadModelAsync(provider, definitionActorId, ct);
         var resolvedSnapshot = definitionSnapshot
             ?? ResolveDefinitionSnapshot(definitionActorId, revision)
             ?? await provider.GetRequiredService<IScriptDefinitionSnapshotPort>()
@@ -109,6 +129,60 @@ internal static class ScriptEvolutionIntegrationTestKit
         return await provider.GetRequiredService<IScriptRuntimeProvisioningPort>()
             .EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, resolvedSnapshot, ct);
     }
+
+    public static async Task WaitForScriptBindingAsync(
+        IServiceProvider provider,
+        string runtimeActorId,
+        string definitionActorId,
+        string revision,
+        CancellationToken ct)
+    {
+        var eventStore = provider.GetRequiredService<IEventStore>();
+        await WaitForAsync(
+            token => eventStore.GetEventsAsync(runtimeActorId, ct: token),
+            events => events.Any(evt =>
+                evt.EventData?.Is(ScriptBehaviorBoundEvent.Descriptor) == true &&
+                MatchesBinding(evt.EventData.Unpack<ScriptBehaviorBoundEvent>(), definitionActorId, revision)),
+            $"Script runtime binding not committed. actor_id={runtimeActorId}",
+            ct);
+    }
+
+    public static async Task<TState> WaitForStateAsync<TState>(
+        IServiceProvider provider,
+        string runtimeActorId,
+        Func<TState, bool> isReady,
+        CancellationToken ct)
+        where TState : class, IMessage<TState>, new()
+    {
+        ArgumentNullException.ThrowIfNull(isReady);
+
+        return await WaitForAsync(
+            token => TryGetStateAsync<TState>(provider, runtimeActorId, token),
+            state => state != null && isReady(state),
+            $"Script runtime state not ready. actor_id={runtimeActorId}",
+            ct) ?? throw new InvalidOperationException($"Script runtime state not ready. actor_id={runtimeActorId}");
+    }
+
+    private static async Task<TState?> TryGetStateAsync<TState>(
+        IServiceProvider provider,
+        string runtimeActorId,
+        CancellationToken ct)
+        where TState : class, IMessage<TState>, new()
+    {
+        var runtime = provider.GetRequiredService<IActorRuntime>();
+        var actor = await runtime.GetAsync(runtimeActorId);
+        if (actor?.Agent is not ScriptBehaviorGAgent agent || agent.State.StateRoot == null)
+            return null;
+
+        return agent.State.StateRoot.Unpack<TState>();
+    }
+
+    private static bool MatchesBinding(
+        ScriptBehaviorBoundEvent evt,
+        string definitionActorId,
+        string revision) =>
+        string.Equals(evt.DefinitionActorId, definitionActorId, StringComparison.Ordinal) &&
+        string.Equals(evt.Revision, revision, StringComparison.Ordinal);
 
     private static void RememberDefinitionSnapshot(
         string definitionActorId,
@@ -150,10 +224,10 @@ internal static class ScriptEvolutionIntegrationTestKit
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
 
-        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct)
+        var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
         await using var sink = new EventChannel<EventEnvelope>(capacity: 64);
-        await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
+        var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
 
         try
         {
@@ -172,7 +246,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         }
         finally
         {
-            await projectionPort.DetachLiveSinkAsync(lease, sink, ct);
+            await projectionPort.DetachLiveSinkAsync(liveSinkLease, ct);
             await projectionPort.ReleaseActorProjectionAsync(lease, ct);
         }
     }
@@ -183,40 +257,14 @@ internal static class ScriptEvolutionIntegrationTestKit
         string requestId,
         CancellationToken ct)
     {
-        var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
-        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct)
+        var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
 
         try
         {
-            static bool IsReady(ScriptReadModelSnapshot? snapshot) =>
-                snapshot != null &&
-                !string.IsNullOrWhiteSpace(snapshot.DefinitionActorId) &&
-                !string.IsNullOrWhiteSpace(snapshot.Revision) &&
-                snapshot.ReadModelPayload != null;
-
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
-            if (!IsReady(snapshot))
-            {
-                await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-                await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
-                try
-                {
-                    snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
-                    while (!IsReady(snapshot))
-                    {
-                        await ScriptRunCommittedObservationTestHelper.WaitForAnyCommittedAsync(sink, ct);
-                        snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
-                    }
-                }
-                finally
-                {
-                    await projectionPort.DetachLiveSinkAsync(lease, sink, ct);
-                }
-            }
-
-            return snapshot!.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
+            var snapshot = await WaitForSnapshotAsync(provider, runtimeActorId, ct);
+            return snapshot.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
         }
         finally
         {
@@ -349,8 +397,6 @@ internal static class ScriptEvolutionIntegrationTestKit
         CancellationToken ct,
         string? expectedRevision = null)
     {
-        var addressResolver = provider.GetRequiredService<IScriptingActorAddressResolver>();
-        await ActivateAuthorityReadModelAsync(provider, addressResolver.GetCatalogActorId(), ct);
         var queryPort = provider.GetRequiredService<IScriptCatalogQueryPort>();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(ObservationTimeout);
@@ -383,7 +429,6 @@ internal static class ScriptEvolutionIntegrationTestKit
         string revision,
         CancellationToken ct)
     {
-        await ActivateAuthorityReadModelAsync(provider, definitionActorId, ct);
         var snapshotPort = provider.GetRequiredService<IScriptDefinitionSnapshotPort>();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(ObservationTimeout);
@@ -416,23 +461,13 @@ internal static class ScriptEvolutionIntegrationTestKit
             if (string.IsNullOrWhiteSpace(actorId))
                 continue;
 
-            await ActivateAuthorityReadModelAsync(provider, actorId, ct);
+            _ = actorId;
         }
     }
 
-    private static async Task ActivateAuthorityReadModelAsync(
-        IServiceProvider provider,
-        string actorId,
-        CancellationToken ct)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        await provider.GetRequiredService<IScriptAuthorityReadModelActivationPort>()
-            .ActivateAsync(actorId, ct);
-    }
-
-    private sealed class AuthorityActivatingScriptEvolutionApplicationService(
+    private sealed class AttachOnlyScriptEvolutionApplicationService(
         IScriptEvolutionApplicationService inner,
-        IScriptAuthorityReadModelActivationPort activationPort,
+        IProjectionScopeActivationService<ScriptEvolutionRuntimeLease> evolutionProjectionActivation,
         IScriptingActorAddressResolver addressResolver)
         : IScriptEvolutionApplicationService
     {
@@ -442,11 +477,94 @@ internal static class ScriptEvolutionIntegrationTestKit
         {
             ArgumentNullException.ThrowIfNull(request);
 
-            await activationPort.ActivateAsync(addressResolver.GetCatalogActorId(request.ScopeId), ct);
-            await activationPort.ActivateAsync(
-                addressResolver.GetDefinitionActorId(request.ScriptId, request.ScopeId),
+            var normalizedScopeId = request.ScopeId?.Trim() ?? string.Empty;
+            var normalizedProposalId = string.IsNullOrWhiteSpace(request.ProposalId)
+                ? Guid.NewGuid().ToString("N")
+                : request.ProposalId.Trim();
+            if (!string.IsNullOrWhiteSpace(normalizedScopeId) &&
+                !normalizedProposalId.StartsWith($"{normalizedScopeId}:", StringComparison.Ordinal))
+            {
+                normalizedProposalId = $"{normalizedScopeId}:{normalizedProposalId}";
+            }
+            var normalizedRequest = request with
+            {
+                ScopeId = normalizedScopeId,
+                ProposalId = normalizedProposalId,
+            };
+
+            var sessionActorId = addressResolver.GetEvolutionSessionActorId(
+                normalizedProposalId,
+                normalizedScopeId);
+            var lease = await EnsureEvolutionProjectionAsync(
+                evolutionProjectionActivation,
+                sessionActorId,
+                normalizedProposalId,
                 ct);
-            return await inner.ProposeAsync(request, ct);
+            if (lease == null)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to ensure script evolution projection. actor_id={sessionActorId}, proposal_id={normalizedProposalId}");
+            }
+
+            return await inner.ProposeAsync(normalizedRequest, ct);
         }
+    }
+
+    private sealed class AttachOnlyScriptEvolutionProposalPort(
+        IScriptEvolutionProposalPort inner,
+        IProjectionScopeActivationService<ScriptEvolutionRuntimeLease> evolutionProjectionActivation,
+        IScriptingActorAddressResolver addressResolver)
+        : IScriptEvolutionProposalPort
+    {
+        public async Task<ScriptPromotionDecision> ProposeAsync(
+            ScriptEvolutionProposal proposal,
+            CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(proposal);
+
+            var normalizedProposalId = string.IsNullOrWhiteSpace(proposal.ProposalId)
+                ? Guid.NewGuid().ToString("N")
+                : proposal.ProposalId;
+            var normalizedScopeId = proposal.ScopeId?.Trim() ?? string.Empty;
+            var normalizedProposal = proposal with
+            {
+                ProposalId = normalizedProposalId,
+                ScopeId = normalizedScopeId,
+            };
+            var sessionActorId = addressResolver.GetEvolutionSessionActorId(
+                normalizedProposalId,
+                normalizedScopeId);
+            var lease = await EnsureEvolutionProjectionAsync(
+                evolutionProjectionActivation,
+                sessionActorId,
+                normalizedProposalId,
+                ct);
+            if (lease == null)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to ensure script evolution projection. actor_id={sessionActorId}, proposal_id={normalizedProposalId}");
+            }
+
+            return await inner.ProposeAsync(normalizedProposal, ct);
+        }
+    }
+
+    private static async Task<IScriptEvolutionProjectionLease?> EnsureEvolutionProjectionAsync(
+        IProjectionScopeActivationService<ScriptEvolutionRuntimeLease> activationService,
+        string sessionActorId,
+        string proposalId,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(activationService);
+
+        return await activationService.EnsureAsync(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = sessionActorId,
+                ProjectionKind = ScriptProjectionKinds.EvolutionSession,
+                Mode = ProjectionRuntimeMode.SessionObservation,
+                SessionId = proposalId,
+            },
+            ct);
     }
 }

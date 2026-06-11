@@ -34,6 +34,9 @@ public interface IEventSourcingBehavior<TState> where TState : class, IMessage
     /// <summary>Replay events from IEventStore to rebuild state.</summary>
     Task<TState?> ReplayAsync(string agentId, CancellationToken ct = default);
 
+    /// <summary>Discard all uncommitted pending events. Used during OCC recovery to prevent stale events from blocking deactivation.</summary>
+    void DiscardPendingEvents();
+
     /// <summary>Pure function: apply event to state and return new state.</summary>
     TState TransitionState(TState current, IMessage evt);
 }

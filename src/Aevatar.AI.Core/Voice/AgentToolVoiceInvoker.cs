@@ -13,7 +13,7 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 {
     private readonly IEnumerable<IAgentToolSource> _toolSources;
     private readonly ILogger _logger;
-    private volatile Task<IReadOnlyDictionary<string, IAgentTool>>? _toolIndex;
+    private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _toolIndex;
 
     public AgentToolVoiceInvoker(
         IEnumerable<IAgentToolSource> toolSources,
@@ -42,14 +42,42 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
         while (true)
         {
             var current = _toolIndex;
-            if (current != null && !current.IsFaulted && !current.IsCanceled)
-                return current;
+            if (TryGetReusableTask(current, out var cached))
+                return cached;
 
-            var discoveryTask = DiscoverAllToolsAsync(_toolSources, _logger, ct);
-            var winner = Interlocked.CompareExchange(ref _toolIndex, discoveryTask, current);
-            if (winner == current)
-                return discoveryTask;
+            // Refactor (iter88/cluster-088):
+            // Old: first-use discovery started before CompareExchange, so losing callers still
+            // discovered all sources.
+            // New: publish a non-started Lazy<Task<T>> and evaluate only the winning value.
+            var candidate = new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
+                () => DiscoverAllToolsAsync(_toolSources, _logger, ct),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            var winner = Interlocked.CompareExchange(ref _toolIndex, candidate, current);
+            if (ReferenceEquals(winner, current))
+                return candidate.Value;
         }
+    }
+
+    private static bool TryGetReusableTask(
+        Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? current,
+        out Task<IReadOnlyDictionary<string, IAgentTool>> task)
+    {
+        task = null!;
+        if (current == null)
+            return false;
+
+        if (!current.IsValueCreated)
+        {
+            task = current.Value;
+            return true;
+        }
+
+        var existing = current.Value;
+        if (existing.IsFaulted || existing.IsCanceled)
+            return false;
+
+        task = existing;
+        return true;
     }
 
     private static async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverAllToolsAsync(
