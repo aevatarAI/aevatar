@@ -72,7 +72,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
         services.TryAddSingleton<IAgentKindVerifier, DefaultAgentKindVerifier>();
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
-        services.TryAddSingleton<IActorRuntimeCallbackScheduler, OrleansActorRuntimeDurableCallbackScheduler>();
+        // Replace (not TryAdd): the shared local runtime extension registers the in-memory
+        // callback scheduler first, so a TryAdd here is silently a no-op and production
+        // (Provider=Orleans) keeps the in-memory scheduler — durable timeouts/reminders then
+        // live in process memory and are lost on every pod restart. Replace guarantees the
+        // durable Orleans scheduler wins, consistent with IActorRuntime/IActorDispatchPort/IActorKindProbe.
+        services.Replace(ServiceDescriptor.Singleton<IActorRuntimeCallbackScheduler, OrleansActorRuntimeDurableCallbackScheduler>());
         services.Replace(ServiceDescriptor.Singleton<IActorKindProbe, OrleansActorKindProbe>());
         // Kind-token identity registry. Modules contribute their kinds in
         // their own DI extensions; the runtime guarantees the registry is
