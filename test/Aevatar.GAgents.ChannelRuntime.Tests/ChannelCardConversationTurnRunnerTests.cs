@@ -214,6 +214,9 @@ public sealed class ChannelCardConversationTurnRunnerTests
         public Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
+        public Task<string> CreateBitableRecordAsync(string token, LarkBitableRecordCreateRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 

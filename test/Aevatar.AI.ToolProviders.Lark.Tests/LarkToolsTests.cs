@@ -859,6 +859,175 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkBitableRecordsCreateTool_CreatesRecordAndNormalizesResponse()
+    {
+        var client = new StubLarkNyxClient
+        {
+            BitableRecordCreateResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "record": {
+                      "record_id": "rec_123",
+                      "fields": {
+                        "Task": "Call customer",
+                        "Done": false
+                      }
+                    }
+                  }
+                }
+                """,
+        };
+        var tool = new LarkBitableRecordsCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var result = await tool.ExecuteAsync(
+            """
+            {
+              "app_token": "base_123",
+              "table_id": "tbl_456",
+              "fields_json": {
+                "Task": "Call customer",
+                "Done": false
+              },
+              "client_token": "fe599b60-450f-46ff-b2ef-9f6675625b97"
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("app_token").GetString().Should().Be("base_123");
+        document.RootElement.GetProperty("table_id").GetString().Should().Be("tbl_456");
+        document.RootElement.GetProperty("record_id").GetString().Should().Be("rec_123");
+
+        using var fieldsDocument = JsonDocument.Parse(document.RootElement.GetProperty("fields_json").GetString()!);
+        fieldsDocument.RootElement.GetProperty("Task").GetString().Should().Be("Call customer");
+        fieldsDocument.RootElement.GetProperty("Done").GetBoolean().Should().BeFalse();
+
+        client.LastBitableRecordCreateToken.Should().Be("token-123");
+        client.LastBitableRecordCreateRequest.Should().NotBeNull();
+        client.LastBitableRecordCreateRequest!.AppToken.Should().Be("base_123");
+        client.LastBitableRecordCreateRequest.TableId.Should().Be("tbl_456");
+        client.LastBitableRecordCreateRequest.FieldsJson.Should().Contain("\"Task\"");
+        client.LastBitableRecordCreateRequest.ClientToken.Should().Be("fe599b60-450f-46ff-b2ef-9f6675625b97");
+    }
+
+    [Fact]
+    public async Task LarkBitableRecordsCreateTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var validationClient = new StubLarkNyxClient();
+        var tool = new LarkBitableRecordsCreateTool(validationClient);
+
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"app_token":"base_123","table_id":"tbl_456","fields_json":{"Task":"Call"}}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{"table_id":"tbl_456","fields_json":{"Task":"Call"}}"""))
+                .Should().Contain("app_token is required");
+            (await tool.ExecuteAsync("""{"app_token":"base_123","fields_json":{"Task":"Call"}}"""))
+                .Should().Contain("table_id is required");
+            (await tool.ExecuteAsync("""{"app_token":"base_123","table_id":"tbl_456"}"""))
+                .Should().Contain("fields_json is required");
+            (await tool.ExecuteAsync("""{"app_token":"base_123","table_id":"tbl_456","fields_json":[]}"""))
+                .Should().Contain("fields_json must be a JSON object");
+            (await tool.ExecuteAsync("""{"app_token":"base_123","table_id":"tbl_456","fields_json":"not-object"}"""))
+                .Should().Contain("fields_json must be a JSON object");
+            (await tool.ExecuteAsync("""{"app_token":"base_123","table_id":"tbl_456","fields_json":{"Task":"Call"}"""))
+                .Should().Contain("Invalid parameters");
+        }
+
+        validationClient.LastBitableRecordCreateRequest.Should().BeNull();
+
+        var errorTool = new LarkBitableRecordsCreateTool(new StubLarkNyxClient
+        {
+            BitableRecordCreateResponse = """{"error":true,"status":403,"message":"forbidden"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await errorTool.ExecuteAsync(
+                """{"app_token":"base_123","table_id":"tbl_456","fields_json":{"Task":"Call"}}""");
+
+            result.Should().Contain("nyx_proxy_error status=403");
+            result.Should().Contain("\"app_token\":\"base_123\"");
+            result.Should().Contain("\"table_id\":\"tbl_456\"");
+        }
+    }
+
+    [Theory]
+    [InlineData("""{"code":0,"data":{"record":{"fields":{"Task":"Call"}}}}""", "missing_record_id")]
+    [InlineData("""{"code":99991672,"msg":"invalid app token"}""", "lark_code=99991672")]
+    [InlineData("""{not-json""", "invalid_lark_response_json")]
+    public async Task LarkBitableRecordsCreateTool_ShouldReturnFailure_WithAppAndTableContext_WhenResponseCannotCreateRecord(
+        string response,
+        string expectedError)
+    {
+        var tool = new LarkBitableRecordsCreateTool(new StubLarkNyxClient
+        {
+            BitableRecordCreateResponse = response,
+        });
+
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var result = await tool.ExecuteAsync(
+            """{"app_token":"base_123","table_id":"tbl_456","fields_json":{"Task":"Call"}}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Contain(expectedError);
+        document.RootElement.GetProperty("app_token").GetString().Should().Be("base_123");
+        document.RootElement.GetProperty("table_id").GetString().Should().Be("tbl_456");
+    }
+
+    [Fact]
+    public async Task LarkBitableRecordsCreateTool_DoesNotLetPayloadOrExternalMetadataOverrideCallerScope()
+    {
+        var client = new StubLarkNyxClient
+        {
+            BitableRecordCreateResponse = """{"code":0,"data":{"record":{"record_id":"rec_123"}}}""",
+        };
+        var tool = new LarkBitableRecordsCreateTool(client);
+        using var _ = new AgentToolRequestContextScope(new AgentToolExecutionContext(
+            AgentToolRequestIdentity.Empty,
+            new AgentToolCredentials("trusted-caller-token", null, null),
+            AgentToolCallerContext.Empty,
+            AgentToolChannelContext.Empty,
+            AgentToolSenderBindingContext.Empty,
+            LLMRequestRoutingContext.Empty,
+            AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "external-metadata-token",
+            }));
+
+        var result = await tool.ExecuteAsync(
+            """
+            {
+              "app_token": "base_123",
+              "table_id": "tbl_456",
+              "fields_json": {
+                "Task": "Call customer"
+              },
+              "nyx_id_access_token": "payload-token",
+              "headers": {
+                "x-nyxid-access-token": "payload-header-token"
+              },
+              "metadata": {
+                "nyx_id_access_token": "payload-metadata-token"
+              }
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        client.LastBitableRecordCreateToken.Should().Be("trusted-caller-token");
+    }
+
+    [Fact]
     public async Task LarkApprovalsListTool_NormalizesTopicAndResponse()
     {
         var client = new StubLarkNyxClient
@@ -1169,7 +1338,7 @@ public class LarkToolsTests
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().HaveCount(11);
+        tools.Should().HaveCount(12);
         tools.Should().Contain(tool => tool is LarkMessagesSendTool);
         tools.Should().Contain(tool => tool is LarkMessagesReplyTool);
         tools.Should().Contain(tool => tool is LarkMessagesReactTool);
@@ -1179,7 +1348,29 @@ public class LarkToolsTests
         tools.Should().Contain(tool => tool is LarkMessagesBatchGetTool);
         tools.Should().Contain(tool => tool is LarkChatsLookupTool);
         tools.Should().Contain(tool => tool is LarkSheetsAppendRowsTool);
+        tools.Should().Contain(tool => tool is LarkBitableRecordsCreateTool);
         tools.Should().Contain(tool => tool is LarkApprovalsListTool);
+        tools.Should().Contain(tool => tool is LarkApprovalsActTool);
+    }
+
+    [Fact]
+    public async Task LarkAgentToolSource_SkipsBitableRecordCreate_WhenDisabled()
+    {
+        var options = new LarkToolOptions();
+        var property = typeof(LarkToolOptions).GetProperty("EnableBitableRecordsCreate");
+        property.Should().NotBeNull();
+        property!.SetValue(options, false);
+
+        var source = new LarkAgentToolSource(
+            options,
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new StubLarkNyxClient());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().HaveCount(11);
+        tools.Should().NotContain(tool => tool is LarkBitableRecordsCreateTool);
+        tools.Should().Contain(tool => tool is LarkMessagesSendTool);
         tools.Should().Contain(tool => tool is LarkApprovalsActTool);
     }
 
@@ -1421,6 +1612,40 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkNyxClient_CreateBitableRecord_ShapesProxyRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"record":{"record_id":"rec_123"}}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.CreateBitableRecordAsync(
+            "token-123",
+            new LarkBitableRecordCreateRequest(
+                "base_123",
+                "tbl_456",
+                """{"Task":"Call customer","Done":false}""",
+                "fe599b60-450f-46ff-b2ef-9f6675625b97"),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/bitable/v1/apps/base_123/tables/tbl_456/records?client_token=fe599b60-450f-46ff-b2ef-9f6675625b97");
+        handler.LastRequest.Headers.Authorization!.Parameter.Should().Be("token-123");
+
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        var fields = body.RootElement.GetProperty("fields");
+        fields.GetProperty("Task").GetString().Should().Be("Call customer");
+        fields.GetProperty("Done").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
     public async Task LarkNyxClient_ListApprovalTasks_ShapesProxyRequest()
     {
         var handler = new RecordingHandler(_ =>
@@ -1493,10 +1718,12 @@ public class LarkToolsTests
         public string MessagesBatchGetResponse { get; set; } = """{"code":0,"data":{"items":[]}}""";
         public string SearchResponse { get; set; } = """{"code":0,"data":{"items":[],"total":0}}""";
         public string AppendSheetResponse { get; set; } = """{"code":0,"data":{"updates":{}}}""";
+        public string BitableRecordCreateResponse { get; set; } = """{"code":0,"data":{"record":{}}}""";
         public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
         public string ApprovalActionResponse { get; set; } = """{"code":0,"data":{}}""";
 
         public string? LastSendToken { get; private set; }
+        public string? LastBitableRecordCreateToken { get; private set; }
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
         public LarkReplyMessageRequest? LastReplyRequest { get; private set; }
         public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
@@ -1506,6 +1733,7 @@ public class LarkToolsTests
         public LarkMessagesBatchGetRequest? LastBatchGetRequest { get; private set; }
         public LarkChatSearchRequest? LastSearchRequest { get; private set; }
         public LarkSheetAppendRowsRequest? LastSheetAppendRequest { get; private set; }
+        public LarkBitableRecordCreateRequest? LastBitableRecordCreateRequest { get; private set; }
         public LarkApprovalTaskQueryRequest? LastApprovalQueryRequest { get; private set; }
         public LarkApprovalTaskActionRequest? LastApprovalActionRequest { get; private set; }
 
@@ -1562,6 +1790,13 @@ public class LarkToolsTests
         {
             LastSheetAppendRequest = request;
             return Task.FromResult(AppendSheetResponse);
+        }
+
+        public Task<string> CreateBitableRecordAsync(string token, LarkBitableRecordCreateRequest request, CancellationToken ct)
+        {
+            LastBitableRecordCreateToken = token;
+            LastBitableRecordCreateRequest = request;
+            return Task.FromResult(BitableRecordCreateResponse);
         }
 
         public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct)

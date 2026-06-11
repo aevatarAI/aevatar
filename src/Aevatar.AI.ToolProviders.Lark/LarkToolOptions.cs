@@ -12,6 +12,7 @@ public sealed class LarkToolOptions
     public bool EnableMessageBatchGet { get; set; } = true;
     public bool EnableChatLookup { get; set; } = true;
     public bool EnableSheetsAppendRows { get; set; } = true;
+    public bool EnableBitableRecordsCreate { get; set; } = true;
     public bool EnableApprovalsList { get; set; } = true;
     public bool EnableApprovalsAct { get; set; } = true;
 }

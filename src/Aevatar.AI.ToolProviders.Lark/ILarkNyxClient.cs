@@ -11,6 +11,7 @@ public interface ILarkNyxClient
     Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct);
     Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct);
     Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct);
+    Task<string> CreateBitableRecordAsync(string token, LarkBitableRecordCreateRequest request, CancellationToken ct);
     Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct);
     Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct);
 }
@@ -74,6 +75,12 @@ public sealed record LarkSheetAppendRowsRequest(
     string SpreadsheetToken,
     string Range,
     IReadOnlyList<IReadOnlyList<string?>> Rows);
+
+public sealed record LarkBitableRecordCreateRequest(
+    string AppToken,
+    string TableId,
+    string FieldsJson,
+    string? ClientToken);
 
 public sealed record LarkApprovalTaskQueryRequest(
     string Topic,

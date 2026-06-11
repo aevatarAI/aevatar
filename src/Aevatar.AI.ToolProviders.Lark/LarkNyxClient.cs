@@ -243,6 +243,31 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
+    public Task<string> CreateBitableRecordAsync(string token, LarkBitableRecordCreateRequest request, CancellationToken ct)
+    {
+        using var fieldsDocument = JsonDocument.Parse(request.FieldsJson);
+        var body = new Dictionary<string, object?>
+        {
+            ["fields"] = fieldsDocument.RootElement.Clone(),
+        };
+
+        var path = $"open-apis/bitable/v1/apps/{Uri.EscapeDataString(request.AppToken)}/tables/{Uri.EscapeDataString(request.TableId)}/records";
+        var queryParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(request.ClientToken))
+            queryParts.Add($"client_token={Uri.EscapeDataString(request.ClientToken.Trim())}");
+        if (queryParts.Count > 0)
+            path += $"?{string.Join("&", queryParts)}";
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            path,
+            "POST",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
     public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct)
     {
         var queryParts = new List<string>

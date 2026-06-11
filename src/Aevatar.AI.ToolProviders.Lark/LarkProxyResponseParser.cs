@@ -243,6 +243,24 @@ internal static class LarkProxyResponseParser
             UpdatedCells: TryReadInt(updates, "updatedCells") ?? TryReadInt(updates, "updated_cells"));
     }
 
+    public static LarkBitableRecordCreateResult ParseBitableRecordCreateSuccess(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        var data = ResolveDataRoot(document.RootElement);
+        var record = data.TryGetProperty("record", out var recordProp) && recordProp.ValueKind == JsonValueKind.Object
+            ? recordProp
+            : data;
+
+        var fieldsJson = record.TryGetProperty("fields", out var fieldsProp) && fieldsProp.ValueKind == JsonValueKind.Object
+            ? fieldsProp.GetRawText()
+            : null;
+
+        return new LarkBitableRecordCreateResult(
+            RecordId: TryReadString(record, "record_id"),
+            Revision: TryReadInt(record, "revision"),
+            FieldsJson: fieldsJson);
+    }
+
     public static LarkApprovalTaskQueryResult ParseApprovalTaskQuerySuccess(string response)
     {
         using var document = JsonDocument.Parse(response);
@@ -443,6 +461,11 @@ internal sealed record LarkSheetAppendResult(
     int? UpdatedRows,
     int? UpdatedColumns,
     int? UpdatedCells);
+
+internal sealed record LarkBitableRecordCreateResult(
+    string? RecordId,
+    int? Revision,
+    string? FieldsJson);
 
 internal sealed record LarkApprovalTaskField(
     string? Key,
