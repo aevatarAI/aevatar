@@ -1098,8 +1098,11 @@ public sealed class WorkflowInfrastructureCoverageTests
             transform.Parameters.Single(parameter => parameter.Name == "op")
                 .Enum.Should().Contain(["sum", "subtract", "multiply", "divide", "round", "min", "max", "group_by"]);
             var aggregateParameter = transform.Parameters.Single(parameter => parameter.Name == "aggregate");
-            aggregateParameter.Default.Should().Be("sum");
-            aggregateParameter.Enum.Should().Equal("sum", "min", "max", "count");
+            aggregateParameter.Default.Should().BeEmpty();
+            aggregateParameter.Enum.Should().Equal("sum", "count", "avg");
+            var precisionParameter = transform.Parameters.Single(parameter => parameter.Name == "precision");
+            precisionParameter.Default.Should().BeEmpty();
+            precisionParameter.Description.Should().Contain("scale, digits, places");
             typeof(WorkflowPrimitiveCapability)
                 .GetProperty("ClosedWorldBlocked")
                 .Should().BeNull();
