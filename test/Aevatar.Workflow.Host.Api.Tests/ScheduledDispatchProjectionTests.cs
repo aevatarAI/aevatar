@@ -14,7 +14,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class WorkflowScheduleProjectionTests
+public sealed class ScheduledDispatchProjectionTests
 {
     [Fact]
     public async Task CurrentStateProjector_ShouldMapScheduledDispatchStateAndServiceInvocationTarget()
@@ -301,7 +301,7 @@ public sealed class WorkflowScheduleProjectionTests
     }
 
     [Fact]
-    public void WorkflowScheduleReadModelsAndMetadata_ShouldNormalizeNullableTimestampsAndMaps()
+    public void ScheduledDispatchReadModelsAndMetadata_ShouldNormalizeNullableTimestampsAndMaps()
     {
         var localTime = new DateTimeOffset(2026, 5, 29, 17, 0, 0, TimeSpan.FromHours(8));
         var document = new ScheduledDispatchDocument();

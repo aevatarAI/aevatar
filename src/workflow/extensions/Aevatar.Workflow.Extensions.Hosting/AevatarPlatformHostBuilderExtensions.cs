@@ -95,7 +95,7 @@ public static class AevatarPlatformHostBuilderExtensions
             builder.Services.AddScheduledDispatchCapability(builder.Configuration);
             builder.AddWorkflowCapabilityBundle();
             builder.AddAevatarCapability(
-                "workflow-schedules",
+                "scheduled-dispatch",
                 static (_, _) => { },
                 static app => app.MapScheduledDispatchEndpoints());
         }

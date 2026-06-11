@@ -114,7 +114,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void AddAevatarPlatform_ShouldMapUnifiedScheduleRoutesWithoutWorkflowScheduleRoutes()
+    public void AddAevatarPlatform_ShouldMapUnifiedScheduleRoutesWithoutLegacyScheduleRoutes()
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddLogging();
@@ -141,7 +141,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void MapGAgentServiceEndpoints_ShouldMapUnifiedScheduleRoutesWithoutWorkflowScheduleRoutes()
+    public void MapGAgentServiceEndpoints_ShouldMapUnifiedScheduleRoutesWithoutLegacyScheduleRoutes()
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddLogging();
@@ -162,7 +162,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void AddScheduledDispatchCapability_ShouldSupplyScheduleDependenciesWithoutWorkflowScheduleFacade()
+    public void AddScheduledDispatchCapability_ShouldSupplyScheduleDependenciesWithoutLegacyScheduleFacade()
     {
         var services = new ServiceCollection();
         services.AddLogging();

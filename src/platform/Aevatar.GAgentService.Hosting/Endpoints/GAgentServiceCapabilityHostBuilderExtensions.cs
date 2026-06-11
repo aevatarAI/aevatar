@@ -22,6 +22,8 @@ public static class GAgentServiceCapabilityHostBuilderExtensions
                 "/api/scopes/{scopeId}/binding",
                 "/api/scopes/{scopeId}/workflows",
                 "/api/scopes/{scopeId}/scripts",
+                "/api/schedules",
+                "/api/schedules/{scheduleId}",
             ],
             ProbeAsync = static async (serviceProvider, cancellationToken) =>
             {
