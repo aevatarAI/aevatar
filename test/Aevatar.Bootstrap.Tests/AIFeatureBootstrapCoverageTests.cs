@@ -647,8 +647,10 @@ public class AIFeatureBootstrapCoverageTests
         services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
 
         await using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IToolApprovalHandler>().Should().BeOfType<YieldApprovalHandler>();
-        provider.GetServices<IToolCallMiddleware>().Should().ContainSingle(x => x is ToolApprovalMiddleware);
+        // Yield capability follows the actor, never the container (#2004): bootstrap must
+        // not hand a yielding handler to surfaces without a pending-approval continuation.
+        provider.GetService<IToolApprovalHandler>().Should().BeNull();
+        provider.GetServices<IToolCallMiddleware>().Should().NotContain(x => x is ToolApprovalMiddleware);
 
         var workflowSource = provider.GetServices<IWorkflowToolSource>()
             .Should()

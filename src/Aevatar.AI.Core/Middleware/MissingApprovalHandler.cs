@@ -13,6 +13,9 @@ public sealed class MissingApprovalHandler : IToolApprovalHandler
     public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(ToolApprovalResult.Denied("No tool approval handler is registered."));
+        return Task.FromResult(ToolApprovalResult.Denied(
+            "This execution surface has no approval channel, so approval-gated tools cannot run here. " +
+            "Tell the user plainly that this tool is unavailable in this context and suggest an " +
+            "alternative path; do not claim an approval request was sent or is pending."));
     }
 }

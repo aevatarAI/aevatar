@@ -51,7 +51,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         NyxIdRelayOptions? relayOptions = null,
         TimeProvider? timeProvider = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
-               approvalHandler: new YieldApprovalHandler(),
                remoteToolApprovalPort: remoteToolApprovalPort,
                remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
     {

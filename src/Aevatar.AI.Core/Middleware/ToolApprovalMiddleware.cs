@@ -205,6 +205,8 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
             tool_name = request.ToolName,
             tool_call_id = request.ToolCallId,
             arguments = request.ArgumentsJson,
-            message = "This tool requires user approval before execution. An approval request has been sent.",
+            message = "This tool requires user approval before execution. Execution is paused; " +
+                      "the approval request will be submitted for review and the run resumes only " +
+                      "after it is approved. Do not claim the tool has executed.",
         });
 }

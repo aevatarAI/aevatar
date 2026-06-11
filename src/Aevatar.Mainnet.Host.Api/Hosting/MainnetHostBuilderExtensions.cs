@@ -240,7 +240,6 @@ public static class MainnetHostBuilderExtensions
                 o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
             o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
         });
-        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IToolCallMiddleware, ToolApprovalMiddleware>());
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
