@@ -1,6 +1,7 @@
 import {
   ArrowLeftOutlined,
   CloudUploadOutlined,
+  CodeOutlined,
   DeleteOutlined,
   EditOutlined,
   FileTextOutlined,
@@ -13,7 +14,6 @@ import {
   Breadcrumb,
   Button,
   Input,
-  Modal,
   Space,
   Tag,
   Tooltip,
@@ -31,6 +31,7 @@ type WorkflowStudioHeaderProps = {
   readonly publishTone: "default" | "processing" | "success" | "warning" | "error";
   readonly canRunActiveMember: boolean;
   readonly canSave: boolean;
+  readonly canViewYaml: boolean;
   readonly dirty: boolean;
   readonly activeMemberRunPending: boolean;
   readonly activeMemberRunPlaceholderReason?: string;
@@ -39,7 +40,8 @@ type WorkflowStudioHeaderProps = {
   readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
   readonly onOpenRunOptions: () => void;
-  readonly onPasteYaml: (yaml: string) => Promise<void>;
+  readonly onOpenPasteYaml: () => void;
+  readonly onViewYaml: () => void;
   readonly onRunActiveMember: () => void;
   readonly onNavigateBack: () => void;
   readonly onNavigateToTeam: () => void;
@@ -283,11 +285,13 @@ type HeaderPrimaryActionsProps = {
   readonly activeMemberRunPending: boolean;
   readonly activeMemberRunPlaceholderReason?: string;
   readonly canRunActiveMember: boolean;
+  readonly canViewYaml: boolean;
   readonly onAddNode: () => void;
   readonly onOpenRunOptions: () => void;
   readonly onPasteYamlClick: () => void;
   readonly onPublishMember: () => void;
   readonly onRunActiveMember: () => void;
+  readonly onViewYaml: () => void;
   readonly pasteYamlPending: boolean;
   readonly publishDisabled: boolean;
   readonly publishPending: boolean;
@@ -299,11 +303,13 @@ const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
   activeMemberRunPending,
   activeMemberRunPlaceholderReason,
   canRunActiveMember,
+  canViewYaml,
   onAddNode,
   onOpenRunOptions,
   onPasteYamlClick,
   onPublishMember,
   onRunActiveMember,
+  onViewYaml,
   pasteYamlPending,
   publishDisabled,
   publishPending,
@@ -385,6 +391,22 @@ const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
       size="small"
     >
       {t("teamMemberWorkflowStudio.header.pasteYaml", "Paste YAML")}
+    </Button>
+    <Button
+      disabled={!canViewYaml}
+      icon={<CodeOutlined />}
+      onClick={onViewYaml}
+      size="small"
+      title={
+        canViewYaml
+          ? t("teamMemberWorkflowStudio.header.viewYaml", "View YAML")
+          : t(
+              "teamMemberWorkflowStudio.header.viewYamlUnavailable",
+              "Load the workflow draft before viewing YAML.",
+            )
+      }
+    >
+      {t("teamMemberWorkflowStudio.header.viewYaml", "View YAML")}
     </Button>
     <Button icon={<PlusOutlined />} onClick={onAddNode} size="small">
       {t("teamMemberWorkflowStudio.header.addNode", "Add node")}
@@ -471,6 +493,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   publishTone,
   canRunActiveMember,
   canSave,
+  canViewYaml,
   dirty,
   activeMemberRunPending,
   activeMemberRunPlaceholderReason,
@@ -479,7 +502,8 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   onDeleteConnection,
   onDeleteNode,
   onOpenRunOptions,
-  onPasteYaml,
+  onOpenPasteYaml,
+  onViewYaml,
   onRunActiveMember,
   onNavigateBack,
   onNavigateToTeam,
@@ -496,8 +520,6 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   teamsHref,
   workflowTitle,
 }) => {
-  const [yamlModalOpen, setYamlModalOpen] = React.useState(false);
-  const [yamlText, setYamlText] = React.useState("");
   const publishStatusLabel = formatPublishStatusLabel({
     checked: memberPublished,
     pending: publishPending,
@@ -513,130 +535,85 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
     dirty ||
     !memberPublished ||
     !publishDisabled;
-  const closeYamlModal = React.useCallback(() => {
-    if (pasteYamlPending) {
-      return;
-    }
-    setYamlModalOpen(false);
-  }, [pasteYamlPending]);
-  const submitYaml = React.useCallback(async () => {
-    await onPasteYaml(yamlText);
-    setYamlText("");
-    setYamlModalOpen(false);
-  }, [onPasteYaml, yamlText]);
-
   return (
-    <>
-      <header
+    <header
+      style={{
+        background: "#ffffff",
+        borderBottom: "1px solid #e5e7eb",
+        display: "grid",
+        flex: "0 0 auto",
+        gap: 12,
+        padding: "14px 22px 12px",
+      }}
+    >
+      <div
+        data-testid="workflow-header-main-row"
         style={{
-          background: "#ffffff",
-          borderBottom: "1px solid #e5e7eb",
-          display: "grid",
-          flex: "0 0 auto",
-          gap: 12,
-          padding: "14px 22px 12px",
+          alignItems: "center",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "12px 24px",
+          justifyContent: "space-between",
+          minWidth: 0,
         }}
       >
-        <div
-          data-testid="workflow-header-main-row"
-          style={{
-            alignItems: "center",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "12px 24px",
-            justifyContent: "space-between",
-            minWidth: 0,
-          }}
-        >
-          <HeaderIdentity
-            dirty={dirty}
-            onNavigateBack={onNavigateBack}
-            onNavigateToTeam={onNavigateToTeam}
-            onNavigateToTeams={onNavigateToTeams}
-            onTitleChange={onTitleChange}
-            publishStatusColor={publishTone}
-            publishStatusLabel={publishStatusLabel}
-            publishStatusTitle={publishStatusTitle}
-            teamHref={teamHref}
-            teamName={teamName}
-            teamsHref={teamsHref}
-            workflowTitle={workflowTitle}
-          />
-          <HeaderPrimaryActions
-            activeMemberRunPending={activeMemberRunPending}
-            activeMemberRunPlaceholderReason={activeMemberRunPlaceholderReason}
-            canRunActiveMember={canRunActiveMember}
-            onAddNode={onAddNode}
-            onOpenRunOptions={onOpenRunOptions}
-            onPasteYamlClick={() => setYamlModalOpen(true)}
-            onPublishMember={onPublishMember}
-            onRunActiveMember={onRunActiveMember}
-            pasteYamlPending={pasteYamlPending}
-            publishDisabled={publishDisabled}
-            publishPending={publishPending}
-            publishPlaceholderReason={publishPlaceholderReason}
-            showPublishButton={showPublishButton}
-          />
-        </div>
-        <div
-          data-testid="workflow-header-context-row"
-          style={{
-            alignItems: "center",
-            borderTop: "1px solid #f3f4f6",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "10px 16px",
-            justifyContent: "flex-end",
-            minWidth: 0,
-            paddingTop: 10,
-          }}
-        >
-          <HeaderNodeActions
-            canSave={canSave}
-            onDeleteConnection={onDeleteConnection}
-            onDeleteNode={onDeleteNode}
-            onSave={onSave}
-            savePending={savePending}
-            savePlaceholderReason={savePlaceholderReason}
-            selectedEdgeId={selectedEdgeId}
-            selectedNodeId={selectedNodeId}
-          />
-        </div>
-      </header>
-      <Modal
-        cancelButtonProps={{ disabled: pasteYamlPending }}
-        destroyOnHidden
-        okButtonProps={{
-          disabled: !yamlText.trim(),
-          loading: pasteYamlPending,
-        }}
-        okText={t("teamMemberWorkflowStudio.yamlModal.import", "Import")}
-        onCancel={closeYamlModal}
-        onOk={() => void submitYaml()}
-        open={yamlModalOpen}
-        title={t("teamMemberWorkflowStudio.yamlModal.title", "Paste workflow YAML")}
-      >
-        <Input.TextArea
-          aria-label={t(
-            "teamMemberWorkflowStudio.yamlModal.textareaAria",
-            "Workflow YAML",
-          )}
-          autoFocus
-          onChange={(event) => setYamlText(event.target.value)}
-          placeholder={t(
-            "teamMemberWorkflowStudio.yamlModal.placeholder",
-            "name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call",
-          )}
-          rows={12}
-          style={{
-            fontFamily:
-              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-            fontSize: 12,
-          }}
-          value={yamlText}
+        <HeaderIdentity
+          dirty={dirty}
+          onNavigateBack={onNavigateBack}
+          onNavigateToTeam={onNavigateToTeam}
+          onNavigateToTeams={onNavigateToTeams}
+          onTitleChange={onTitleChange}
+          publishStatusColor={publishTone}
+          publishStatusLabel={publishStatusLabel}
+          publishStatusTitle={publishStatusTitle}
+          teamHref={teamHref}
+          teamName={teamName}
+          teamsHref={teamsHref}
+          workflowTitle={workflowTitle}
         />
-      </Modal>
-    </>
+        <HeaderPrimaryActions
+          activeMemberRunPending={activeMemberRunPending}
+          activeMemberRunPlaceholderReason={activeMemberRunPlaceholderReason}
+          canRunActiveMember={canRunActiveMember}
+          canViewYaml={canViewYaml}
+          onAddNode={onAddNode}
+          onOpenRunOptions={onOpenRunOptions}
+          onPasteYamlClick={onOpenPasteYaml}
+          onPublishMember={onPublishMember}
+          onRunActiveMember={onRunActiveMember}
+          onViewYaml={onViewYaml}
+          pasteYamlPending={pasteYamlPending}
+          publishDisabled={publishDisabled}
+          publishPending={publishPending}
+          publishPlaceholderReason={publishPlaceholderReason}
+          showPublishButton={showPublishButton}
+        />
+      </div>
+      <div
+        data-testid="workflow-header-context-row"
+        style={{
+          alignItems: "center",
+          borderTop: "1px solid #f3f4f6",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "10px 16px",
+          justifyContent: "flex-end",
+          minWidth: 0,
+          paddingTop: 10,
+        }}
+      >
+        <HeaderNodeActions
+          canSave={canSave}
+          onDeleteConnection={onDeleteConnection}
+          onDeleteNode={onDeleteNode}
+          onSave={onSave}
+          savePending={savePending}
+          savePlaceholderReason={savePlaceholderReason}
+          selectedEdgeId={selectedEdgeId}
+          selectedNodeId={selectedNodeId}
+        />
+      </div>
+    </header>
   );
 };
 

@@ -13,6 +13,7 @@ import {
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
+import { rememberTeamMemberDraftWorkflowHint } from "@/shared/navigation/teamRoutes";
 
 async function openTeamTestDialog() {
   fireEvent.click(await screen.findByRole("button", { name: "测试团队" }));
@@ -802,6 +803,7 @@ describe("TeamDetailPage", () => {
   beforeEach(() => {
     setLocale("zh-CN", false);
     window.history.replaceState({}, "", "/scopes/scope-1/teams/t-alpha");
+    window.sessionStorage.clear();
     (scopesApi.listWorkflows as jest.Mock).mockClear();
     (scopesApi.listScripts as jest.Mock).mockClear();
     (runtimeGAgentApi.listActors as jest.Mock).mockClear();
@@ -1741,6 +1743,68 @@ describe("TeamDetailPage", () => {
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
+  });
+
+  it("preserves the route draft workflow hint when reopening Workflow Studio from Team members", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&workflowId=wf-team-alpha&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-team-alpha",
+    );
+  });
+
+  it("recovers the last member draft workflow hint when the Team members URL has no query", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
+    );
+    rememberTeamMemberDraftWorkflowHint({
+      memberId: "member-team-alpha",
+      publishedServiceId: "alpha-service",
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      workflowId: "wf-team-alpha",
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-team-alpha",
+    );
+  });
+
+  it("does not reuse a route draft workflow hint for another Team member row", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-other&workflowId=wf-other&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBeNull();
   });
 
   it("routes workflow member invoke actions into the member invoke page", async () => {

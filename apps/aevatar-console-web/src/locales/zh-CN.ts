@@ -595,7 +595,7 @@ const zhCNMessages = {
   'pages.teammemberinvoke.workflow.only.description':
     '这个页面只运行 Workflow 成员。其他实现类型请使用对应成员自己的入口。',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
-    '当前 Phase 1 页面只会通过稳定 Workflow 引用加载成员。请先补齐后端或 ReadModel 引用，再在这里编辑这个成员。',
+    '你可以在这里搭建或粘贴 workflow。保存时会创建可恢复的 workflow 草稿，直到成员关联完成物化。',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     '这个成员还没有关联 Workflow 草稿。',
   'teamMemberWorkflowStudio.common.close': '关闭',
@@ -670,6 +670,9 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.publishMemberShort': '发布成员',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': '团队',
   'teamMemberWorkflowStudio.header.unsavedChanges': '有未保存更改',
+  'teamMemberWorkflowStudio.header.viewYaml': '查看 YAML',
+  'teamMemberWorkflowStudio.header.viewYamlUnavailable':
+    '加载 Workflow 草稿后才能查看 YAML。',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow 视图',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow 标题',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
@@ -730,11 +733,28 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': '成员运行记录',
   'teamMemberWorkflowStudio.runsPanel.title': '成员运行记录',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': '未知',
-  'teamMemberWorkflowStudio.yamlModal.import': '导入',
-  'teamMemberWorkflowStudio.yamlModal.placeholder':
+  'teamMemberWorkflowStudio.yamlImportPanel.cancel': '取消',
+  'teamMemberWorkflowStudio.yamlImportPanel.closeAria':
+    '关闭粘贴 YAML 面板',
+  'teamMemberWorkflowStudio.yamlImportPanel.import': '导入',
+  'teamMemberWorkflowStudio.yamlImportPanel.placeholder':
     'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
-  'teamMemberWorkflowStudio.yamlModal.textareaAria': 'Workflow YAML',
-  'teamMemberWorkflowStudio.yamlModal.title': '粘贴 Workflow YAML',
+  'teamMemberWorkflowStudio.yamlImportPanel.sectionAria':
+    '粘贴 Workflow YAML 面板',
+  'teamMemberWorkflowStudio.yamlImportPanel.subtitle':
+    '导入到当前草稿',
+  'teamMemberWorkflowStudio.yamlImportPanel.textareaAria': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlImportPanel.title': '粘贴 YAML',
+  'teamMemberWorkflowStudio.yamlPanel.closeAria': '关闭 YAML 面板',
+  'teamMemberWorkflowStudio.yamlPanel.copy': '复制',
+  'teamMemberWorkflowStudio.yamlPanel.copyFailed': '复制 YAML 失败。',
+  'teamMemberWorkflowStudio.yamlPanel.copySuccess': '已复制 YAML。',
+  'teamMemberWorkflowStudio.yamlPanel.empty': '当前草稿没有可用 YAML。',
+  'teamMemberWorkflowStudio.yamlPanel.retry': '重试',
+  'teamMemberWorkflowStudio.yamlPanel.sectionAria': 'Workflow YAML 面板',
+  'teamMemberWorkflowStudio.yamlPanel.subtitle': '当前草稿源码',
+  'teamMemberWorkflowStudio.yamlPanel.textareaAria': '当前 Workflow YAML',
+  'teamMemberWorkflowStudio.yamlPanel.title': 'Workflow YAML',
   'pages.studio.studiomembercurrentrunpanel.details': '详情',
   'pages.studio.studiomemberinvokepanel.endpoint': '端点',
 };
