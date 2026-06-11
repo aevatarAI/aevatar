@@ -176,7 +176,7 @@ public sealed class StudioMemberEndpointsTests
             ScopeId,
             "m-1",
             new UpdateStudioMemberBindingRequest(
-                Workflow: new StudioMemberWorkflowBindingSpec(["w:"])),
+                Workflow: new StudioMemberWorkflowBindingSpec("workflow-stable-id", ["w:"])),
             service,
             CancellationToken.None);
 
@@ -621,7 +621,13 @@ public sealed class StudioMemberEndpointsTests
         DefaultSmokePrompt: "Hello from Studio Bind.",
         SampleRequestJson: null,
         DeploymentStatus: "Active",
-        RevisionId: "rev-1");
+        RevisionId: "rev-1",
+        InvocationReadiness: new StudioMemberInvocationReadinessResponse(
+            CanInvoke: true,
+            Status: StudioMemberInvocationReadinessStatusNames.Ready,
+            ReasonCode: StudioMemberInvocationReadinessStatusNames.Ready,
+            Message: "Member endpoint is ready for invocation.",
+            RevisionId: "rev-1"));
 
     private static StudioMemberSummaryResponse NewSummary() => new(
         MemberId: "m-1",

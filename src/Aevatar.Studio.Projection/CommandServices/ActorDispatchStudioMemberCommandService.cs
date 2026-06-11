@@ -273,7 +273,10 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         switch (implementationKindName)
         {
             case MemberImplementationKindNames.Workflow:
-                request.Workflow = new StudioMemberWorkflowBindingRequest();
+                request.Workflow = new StudioMemberWorkflowBindingRequest
+                {
+                    WorkflowId = binding.Workflow?.WorkflowId ?? string.Empty,
+                };
                 request.Workflow.WorkflowYamls.Add(binding.Workflow?.WorkflowYamls ?? []);
                 break;
             case MemberImplementationKindNames.Script:

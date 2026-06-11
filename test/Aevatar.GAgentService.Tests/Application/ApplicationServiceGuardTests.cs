@@ -107,12 +107,26 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpRolloutQueryReader(),
                 new NoOpRolloutCommandObservationQueryReader(),
                 new NoOpTrafficViewQueryReader()),
+            new NoOpRevisionCatalogQueryReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions()));
         Action nullServingPort = () => new ScopeBindingReadinessQueryService(
             new ServiceLifecycleQueryApplicationService(
                 new NoOpCatalogQueryReader(),
                 new NoOpRevisionCatalogQueryReader(),
                 new NoOpDeploymentCatalogQueryReader()),
+            null!,
+            new NoOpRevisionCatalogQueryReader(),
+            Options.Create(new ScopeWorkflowCapabilityOptions()));
+        Action nullRevisionCatalogReader = () => new ScopeBindingReadinessQueryService(
+            new ServiceLifecycleQueryApplicationService(
+                new NoOpCatalogQueryReader(),
+                new NoOpRevisionCatalogQueryReader(),
+                new NoOpDeploymentCatalogQueryReader()),
+            new ServiceServingQueryApplicationService(
+                new NoOpServingSetQueryReader(),
+                new NoOpRolloutQueryReader(),
+                new NoOpRolloutCommandObservationQueryReader(),
+                new NoOpTrafficViewQueryReader()),
             null!,
             Options.Create(new ScopeWorkflowCapabilityOptions()));
         Action nullOptions = () => new ScopeBindingReadinessQueryService(
@@ -125,10 +139,12 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpRolloutQueryReader(),
                 new NoOpRolloutCommandObservationQueryReader(),
                 new NoOpTrafficViewQueryReader()),
+            new NoOpRevisionCatalogQueryReader(),
             null!);
 
         nullLifecyclePort.Should().Throw<ArgumentNullException>();
         nullServingPort.Should().Throw<ArgumentNullException>();
+        nullRevisionCatalogReader.Should().Throw<ArgumentNullException>();
         nullOptions.Should().Throw<ArgumentNullException>();
     }
 
