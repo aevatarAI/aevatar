@@ -358,6 +358,56 @@ public class WorkflowParserConfigurationTests
         step.TransformOperation.Precision.Should().Be(2);
     }
 
+    [Theory]
+    [InlineData("digits", "3")]
+    [InlineData("places", "4")]
+    public void Parse_WhenTransformPrecisionAliasProvidedAtRoot_ShouldLiftTypedSpecAndPreserveMap(
+        string precisionAlias,
+        string precision)
+    {
+        var yaml = $$"""
+            name: transform_precision_alias_lift
+            roles: []
+            steps:
+              - id: round_amount
+                type: transform
+                op: round
+                {{precisionAlias}}: {{precision}}
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+
+        step.Parameters["op"].Should().Be("round");
+        step.Parameters[precisionAlias].Should().Be(precision);
+        step.TransformOperation.Should().NotBeNull();
+        step.TransformOperation!.Kind.Should().Be(TransformOperationKind.Round);
+        step.TransformOperation.Precision.Should().Be(int.Parse(precision));
+    }
+
+    [Fact]
+    public void Parse_WhenTransformNumbersParameterProvided_ShouldPreserveMapAndTypedSpec()
+    {
+        var yaml = """
+            name: transform_numbers_parameter
+            roles: []
+            steps:
+              - id: sum_amounts
+                type: transform
+                parameters:
+                  op: sum
+                  numbers: "1.10, 2.20, 3.30"
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+
+        step.Parameters["op"].Should().Be("sum");
+        step.Parameters["numbers"].Should().Be("1.10, 2.20, 3.30");
+        step.TransformOperation.Should().NotBeNull();
+        step.TransformOperation!.Kind.Should().Be(TransformOperationKind.Sum);
+    }
+
     [Fact]
     public void Parse_WhenBranchesProvidedAsList_ShouldNormalizeToDictionary()
     {

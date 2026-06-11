@@ -75,10 +75,11 @@ roles:
 
 ### `transform`
 
-- 作用：对输入做确定性变换，既支持纯文本操作（如 `trim`/`uppercase`/`count_words`/`split`），也支持 `json_extract` 这类 JSON 投影。
+- 作用：对输入做确定性变换，既支持纯文本操作（如 `trim`/`uppercase`/`count_words`/`split`），也支持 `json_extract` 这类 JSON 投影，并提供 decimal-only 数值主链。
 - 常用参数：`op`、`n`、`separator`；当 `op=json_extract` 时，还可用 `path`、`field`、`sort_by`、`order`。
 - 金额级确定性操作：`sum`、`subtract`、`multiply`、`divide`、`round`、`min`、`max`、`group_by`。这些操作会被解析为 typed `transform_operation`，同时保留 legacy `parameters` map；识别到的数值/分组操作解析或运行失败时发布失败的 `StepCompletedEvent`，不会包装成成功文本。
-- `group_by` v1 只接受 JSON array of objects，支持单个 `key`/`group_by`、单个 `value`/`value_field`，`aggregate` 仅支持 `sum`、`count`、`avg`。这不是脚本、表达式、SQL 或 LLM 数据处理入口。
+- 标量数值操作默认从输入读取数字列表，也可用 `values`/`numbers` 传入逗号、换行或 JSON array；`round` 可用 `precision`/`digits`/`scale`/`places` 指定小数位。
+- `group_by` v1 只接受 JSON array of objects，支持单个 `key`/`group_by`、单个 `value`/`value_field`/`field`，`aggregate` 仅支持 `sum`、`count`、`avg`。这不是脚本、表达式、SQL 或 LLM 数据处理入口。
 - `rss_extract_items` 是唯一 RSS/Atom 解析 op 名称，不提供 `rss_extract` alias。输入为 RSS 2.0 或 Atom XML，输出 JSON array，每个 item 只包含 `source_id`、`source_url`、`id`、`title`、`link`、`published_at`、`summary`。
 
 ```yaml
@@ -100,6 +101,27 @@ steps:
       sort_by: createdAt
       order: desc
       n: "50"
+```
+
+```yaml
+steps:
+  - id: sum_invoice_lines
+    type: transform
+    parameters:
+      op: sum
+      values: "12.10, 0.20, 3.005"
+```
+
+```yaml
+steps:
+  - id: total_by_currency
+    type: transform
+    parameters:
+      op: group_by
+      group_by: currency
+      field: amount
+      aggregate: sum
+      precision: "2"
 ```
 
 ```yaml

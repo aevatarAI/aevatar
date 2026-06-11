@@ -926,6 +926,8 @@ public sealed class WorkflowParser
 
         AddIfMissing(parameters, "op", s.Op);
         AddIfMissing(parameters, "precision", s.Precision);
+        AddIfMissing(parameters, "digits", s.Digits);
+        AddIfMissing(parameters, "places", s.Places);
         AddIfMissing(parameters, "group_by", s.GroupBy);
         AddIfMissing(parameters, "value", s.Value);
         AddIfMissing(parameters, "value_field", s.ValueField);
@@ -946,14 +948,14 @@ public sealed class WorkflowParser
             return null;
 
         var spec = new TransformOperationSpec { Kind = kind };
-        if (TryGetParameter(parameters, out var precision, "precision", "scale") &&
+        if (TryGetParameter(parameters, out var precision, "precision", "scale", "digits", "places") &&
             !string.IsNullOrWhiteSpace(precision) &&
             !int.TryParse(precision.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
         {
             return null;
         }
 
-        if (TryGetParameter(parameters, out precision, "precision", "scale") &&
+        if (TryGetParameter(parameters, out precision, "precision", "scale", "digits", "places") &&
             int.TryParse(precision.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPrecision))
         {
             spec.Precision = parsedPrecision;
@@ -1257,6 +1259,8 @@ public sealed class WorkflowParser
         public string? HolderTokenVariable { get; set; }
         public string? Op { get; set; }
         public object? Precision { get; set; }
+        public object? Digits { get; set; }
+        public object? Places { get; set; }
         public string? GroupBy { get; set; }
         public string? Value { get; set; }
         public string? ValueField { get; set; }
