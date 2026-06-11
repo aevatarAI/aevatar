@@ -10,12 +10,18 @@ namespace Aevatar.GAgents.Authoring.Lark;
 internal sealed class ScheduledAgentCreateRequestMapper
 {
     private static readonly TimeZoneResolver ScheduleTimeZoneResolver = new();
+    internal static readonly TimeSpan MinimumOneShotDelay = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan MaximumOneShotDelay = TimeSpan.FromDays(366);
 
     private static readonly HashSet<string> AllowedProperties = new(StringComparer.Ordinal)
     {
         "skill_ref",
         "schedule_cron",
         "schedule_timezone",
+        "schedule_mode",
+        "delay_seconds",
+        "run_at_utc",
+        "one_shot_message",
         "display_name",
         "execution_prompt",
         "provider_name",
@@ -44,24 +50,53 @@ internal sealed class ScheduledAgentCreateRequestMapper
         if (unknown.Length > 0)
             return ScheduledAgentCreatePlanResult.Failed($"unsupported_fields:{string.Join(",", unknown)}");
 
-        var referenceParse = ScheduledSkillReference.Parse(args.Str("skill_ref"));
+        if (!TryParseScheduleMode(args.Str("schedule_mode"), out var scheduleMode, out var scheduleModeError))
+            return ScheduledAgentCreatePlanResult.Failed(scheduleModeError);
+
+        var skillRefText = Normalize(args.Str("skill_ref"));
+        var hasSkillRef = skillRefText is not null;
+        if (scheduleMode == SkillRunnerScheduleMode.Cron && !hasSkillRef)
+            return ScheduledAgentCreatePlanResult.Failed("skill_ref is required");
+
+        var referenceParse = hasSkillRef
+            ? ScheduledSkillReference.Parse(skillRefText)
+            : new ScheduledSkillReferenceParseResult(new ScheduledSkillReference(string.Empty), null, null);
         if (referenceParse.ErrorJson is not null)
             return ScheduledAgentCreatePlanResult.RawError(referenceParse.ErrorJson);
 
         var reference = referenceParse.Reference!;
-        var cron = Normalize(args.Str("schedule_cron"));
-        if (cron is null)
-            return ScheduledAgentCreatePlanResult.Failed("schedule_cron is required");
+        var nowUtc = DateTimeOffset.UtcNow;
+        var cron = Normalize(args.Str("schedule_cron")) ?? string.Empty;
+        var timezone = Normalize(args.Str("schedule_timezone")) ?? SkillRunnerDefaults.DefaultTimezone;
+        DateTimeOffset? oneShotRunAt = null;
+        string? oneShotMessage = Normalize(args.Str("one_shot_message"));
 
-        var timezone = Normalize(args.Str("schedule_timezone"));
-        if (timezone is null)
-            return ScheduledAgentCreatePlanResult.Failed("schedule_timezone is required");
+        if (scheduleMode == SkillRunnerScheduleMode.OneShot)
+        {
+            if (args.Bool("run_immediately") == true)
+                return ScheduledAgentCreatePlanResult.Failed("run_immediately is not supported for one_shot schedules");
 
-        if (!ScheduleTimeZoneResolver.TryResolve(timezone, out var scheduleTimeZone, out var timezoneError))
-            return ScheduledAgentCreatePlanResult.Failed($"invalid_schedule_timezone: {timezoneError}");
+            if (!TryResolveOneShotRunAt(args, nowUtc, out var resolvedRunAt, out var runAtError))
+                return ScheduledAgentCreatePlanResult.Failed(runAtError);
+            oneShotRunAt = resolvedRunAt;
 
-        if (!ChannelScheduleCalculator.TryGetNextOccurrence(cron, scheduleTimeZone, DateTimeOffset.UtcNow, out _, out var cronError))
-            return ScheduledAgentCreatePlanResult.Failed($"invalid_schedule_cron: {cronError}");
+            if (string.IsNullOrWhiteSpace(oneShotMessage) && !hasSkillRef)
+                return ScheduledAgentCreatePlanResult.Failed("one_shot_message is required when skill_ref is omitted");
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(cron))
+                return ScheduledAgentCreatePlanResult.Failed("schedule_cron is required");
+
+            if (string.IsNullOrWhiteSpace(args.Str("schedule_timezone")))
+                return ScheduledAgentCreatePlanResult.Failed("schedule_timezone is required");
+
+            if (!ScheduleTimeZoneResolver.TryResolve(timezone, out var scheduleTimeZone, out var timezoneError))
+                return ScheduledAgentCreatePlanResult.Failed($"invalid_schedule_timezone: {timezoneError}");
+
+            if (!ChannelScheduleCalculator.TryGetNextOccurrence(cron, scheduleTimeZone, nowUtc, out _, out var cronError))
+                return ScheduledAgentCreatePlanResult.Failed($"invalid_schedule_cron: {cronError}");
+        }
 
         var scopeId = Normalize(AgentToolRequestContext.ScopeId ?? AgentToolRequestContext.ChannelRegistrationScopeId);
         if (scopeId is null)
@@ -106,6 +141,9 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 ExecutionPrompt: Normalize(args.Str("execution_prompt")),
                 ScheduleCron: cron,
                 ScheduleTimezone: timezone,
+                ScheduleMode: scheduleMode,
+                OneShotRunAtUtc: oneShotRunAt,
+                OneShotMessage: oneShotMessage,
                 ScopeId: scopeId,
                 ProviderName: Normalize(args.Str("provider_name")),
                 Model: Normalize(args.Str("model")),
@@ -122,7 +160,11 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 FailureNotificationSlug: failureSlug,
                 ReceiveTarget: target,
                 Caller: caller.Clone()),
-            ServiceSlugs: new ScheduledAgentServiceSlugs(primarySlug, failureSlug, requiredServiceSlugs),
+            ServiceSlugs: new ScheduledAgentServiceSlugs(
+                primarySlug,
+                failureSlug,
+                requiredServiceSlugs,
+                RequiresOrnnService: hasSkillRef),
             ErrorJson: null);
     }
 
@@ -140,15 +182,22 @@ internal sealed class ScheduledAgentCreateRequestMapper
         {
             SkillName = request.Reference.Name,
             TemplateName = request.DisplayName ?? request.Reference.Name,
-            SkillRef = new SkillRunnerSkillReference
-            {
-                Name = request.Reference.Name,
-                Source = SkillRunnerSkillSource.Ornn,
-            },
+            SkillRef = string.IsNullOrWhiteSpace(request.Reference.Name)
+                ? null
+                : new SkillRunnerSkillReference
+                {
+                    Name = request.Reference.Name,
+                    Source = SkillRunnerSkillSource.Ornn,
+                },
             ExecutionPrompt = request.ExecutionPrompt ??
-                              "Execute the configured Ornn skill and return plain text only.",
+                              ResolveDefaultExecutionPrompt(request),
             ScheduleCron = request.ScheduleCron,
             ScheduleTimezone = request.ScheduleTimezone,
+            ScheduleMode = request.ScheduleMode,
+            OneShotRunAt = request.OneShotRunAtUtc.HasValue
+                ? Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(request.OneShotRunAtUtc.Value)
+                : null,
+            OneShotMessage = request.OneShotMessage ?? string.Empty,
             Enabled = true,
             ScopeId = request.ScopeId,
             ProviderName = request.ProviderName ?? string.Empty,
@@ -193,6 +242,113 @@ internal sealed class ScheduledAgentCreateRequestMapper
         var trimmed = value?.Trim();
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
     }
+
+    private static bool TryParseScheduleMode(
+        string? value,
+        out SkillRunnerScheduleMode scheduleMode,
+        out string error)
+    {
+        error = string.Empty;
+        var normalized = Normalize(value);
+        if (normalized is null || normalized.Equals("cron", StringComparison.OrdinalIgnoreCase))
+        {
+            scheduleMode = SkillRunnerScheduleMode.Cron;
+            return true;
+        }
+
+        if (normalized.Equals("one_shot", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("one-shot", StringComparison.OrdinalIgnoreCase))
+        {
+            scheduleMode = SkillRunnerScheduleMode.OneShot;
+            return true;
+        }
+
+        scheduleMode = SkillRunnerScheduleMode.Unspecified;
+        error = "schedule_mode must be one of: cron, one_shot";
+        return false;
+    }
+
+    private static bool TryResolveOneShotRunAt(
+        CreatorArgs args,
+        DateTimeOffset nowUtc,
+        out DateTimeOffset runAtUtc,
+        out string error)
+    {
+        runAtUtc = default;
+        error = string.Empty;
+
+        var hasDelay = args.HasProperty("delay_seconds");
+        var hasRunAt = args.HasProperty("run_at_utc");
+        if (hasDelay == hasRunAt)
+        {
+            error = "provide exactly one of delay_seconds or run_at_utc for one_shot";
+            return false;
+        }
+
+        if (hasDelay)
+        {
+            if (!args.TryLong("delay_seconds", out var seconds) || seconds <= 0)
+            {
+                error = "delay_seconds must be a positive integer";
+                return false;
+            }
+
+            if (seconds < (long)MinimumOneShotDelay.TotalSeconds)
+            {
+                error = $"one-shot delay must be at least {(int)MinimumOneShotDelay.TotalSeconds} seconds";
+                return false;
+            }
+
+            if (seconds > (long)MaximumOneShotDelay.TotalSeconds)
+            {
+                error = $"one-shot delay must be at most {(int)MaximumOneShotDelay.TotalDays} days";
+                return false;
+            }
+
+            var delay = TimeSpan.FromSeconds(seconds);
+            runAtUtc = nowUtc.Add(delay);
+            return true;
+        }
+
+        var raw = Normalize(args.Str("run_at_utc"));
+        if (raw is null || !DateTimeOffset.TryParse(raw, out var parsed))
+        {
+            error = "run_at_utc must be an ISO-8601 UTC timestamp";
+            return false;
+        }
+
+        if (parsed.Offset != TimeSpan.Zero)
+        {
+            error = "run_at_utc must use UTC offset Z or +00:00";
+            return false;
+        }
+
+        runAtUtc = parsed.ToUniversalTime();
+        return ValidateOneShotDelay(runAtUtc - nowUtc, out error);
+    }
+
+    private static bool ValidateOneShotDelay(TimeSpan delay, out string error)
+    {
+        if (delay < MinimumOneShotDelay)
+        {
+            error = $"one-shot delay must be at least {(int)MinimumOneShotDelay.TotalSeconds} seconds";
+            return false;
+        }
+
+        if (delay > MaximumOneShotDelay)
+        {
+            error = $"one-shot delay must be at most {(int)MaximumOneShotDelay.TotalDays} days";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static string ResolveDefaultExecutionPrompt(ScheduledAgentCreatePlannedRequest request) =>
+        request.ScheduleMode == SkillRunnerScheduleMode.OneShot && string.IsNullOrWhiteSpace(request.Reference.Name)
+            ? "Send the configured one-shot reminder message exactly as written."
+            : "Execute the configured Ornn skill and return plain text only.";
 
     private static bool TryParseOutputFormat(
         string? value,
@@ -269,6 +425,8 @@ internal sealed class ScheduledAgentCreateRequestMapper
             };
         }
 
+        public bool HasProperty(string name) => Properties.ContainsKey(name);
+
         public bool? Bool(string name)
         {
             if (!Properties.TryGetValue(name, out var value))
@@ -293,6 +451,18 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 return true;
 
             return element.ValueKind == JsonValueKind.String && int.TryParse(element.GetString(), out value);
+        }
+
+        public bool TryLong(string name, out long value)
+        {
+            value = 0;
+            if (!Properties.TryGetValue(name, out var element))
+                return false;
+
+            if (element.ValueKind == JsonValueKind.Number && element.TryGetInt64(out value))
+                return true;
+
+            return element.ValueKind == JsonValueKind.String && long.TryParse(element.GetString(), out value);
         }
 
         public bool TryDouble(string name, out double value)
@@ -451,6 +621,9 @@ internal sealed record ScheduledAgentCreatePlannedRequest(
     string? ExecutionPrompt,
     string ScheduleCron,
     string ScheduleTimezone,
+    SkillRunnerScheduleMode ScheduleMode,
+    DateTimeOffset? OneShotRunAtUtc,
+    string? OneShotMessage,
     string ScopeId,
     string? ProviderName,
     string? Model,

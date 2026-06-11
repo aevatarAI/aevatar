@@ -371,6 +371,12 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusError,
                 ErrorCount = 2,
                 LastError = "tool failed",
+                ScheduleMode = SkillRunnerScheduleMode.OneShot,
+                RunAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 6, 11, 10, 30, 0, TimeSpan.Zero)),
+                RetiredAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 6, 11, 10, 31, 0, TimeSpan.Zero)),
+                RetirementReason = SkillRunnerDefaults.OneShotRetirementReasonFailed,
             }));
 
         var services = new ServiceCollection();
@@ -402,6 +408,11 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-join");
             doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusError);
             doc.RootElement.GetProperty("output_format").GetString().Should().Be("feishu_doc");
+            doc.RootElement.GetProperty("schedule_mode").GetString().Should().Be("one_shot");
+            doc.RootElement.GetProperty("run_at_utc").ValueKind.Should().Be(JsonValueKind.Object);
+            doc.RootElement.GetProperty("retired_at_utc").ValueKind.Should().Be(JsonValueKind.Object);
+            doc.RootElement.GetProperty("retirement_reason").GetString()
+                .Should().Be(SkillRunnerDefaults.OneShotRetirementReasonFailed);
             doc.RootElement.GetProperty("error_count").GetInt32().Should().Be(2);
             doc.RootElement.GetProperty("last_error").GetString().Should().Be("tool failed");
 
@@ -449,6 +460,9 @@ public sealed class AgentBuilderToolTests
                         LastEventId = "runner-4",
                         Status = SkillRunnerDefaults.StatusRunning,
                         ErrorCount = 1,
+                        ScheduleMode = SkillRunnerScheduleMode.OneShot,
+                        RunAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                            new DateTimeOffset(2026, 6, 11, 10, 30, 0, TimeSpan.Zero)),
                     },
                 }));
 
@@ -477,6 +491,8 @@ public sealed class AgentBuilderToolTests
             agent.GetProperty("agent_id").GetString().Should().Be("skill-runner-list");
             agent.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
             agent.GetProperty("output_format").GetString().Should().Be("text");
+            agent.GetProperty("schedule_mode").GetString().Should().Be("one_shot");
+            agent.GetProperty("run_at_utc").ValueKind.Should().Be(JsonValueKind.Object);
             agent.GetProperty("error_count").GetInt32().Should().Be(1);
 
             await queryPort.Received(1).QueryByCallerAsync(

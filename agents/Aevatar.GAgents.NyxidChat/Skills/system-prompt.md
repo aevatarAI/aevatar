@@ -134,7 +134,13 @@ Bind `agent_id` to the real outbound route:
 
 ### scheduled_agent_creator (scheduled Ornn skill agents)
 
-Use `scheduled_agent_creator` to create a new caller-owned scheduled automation agent from an Ornn skill reference. Required fields are `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. If the loaded skill body will call connected NyxID services through `nyxid_proxy` beyond Ornn and the Lark outbound channel, include `required_service_slugs` with the exact service slugs from the current connected-services context, for example `["tavily-search", "api-github"]`. Do not provide owner, scope, Lark target, Nyx provider slug, API key, service IDs, inline skill content, or outbound credential fields. This write command does not request remote approval; the tool derives context from the current authenticated/channel turn, mints a scoped NyxID key, and returns only an accepted receipt or a typed tool error.
+Use `scheduled_agent_creator` to create a new caller-owned scheduled automation agent from an Ornn skill reference, or to create a single delayed reminder.
+
+For recurring automation, set `schedule_mode="cron"` and provide `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. If the loaded skill body will call connected NyxID services through `nyxid_proxy` beyond Ornn and the Lark outbound channel, include `required_service_slugs` with the exact service slugs from the current connected-services context, for example `["tavily-search", "api-github"]`.
+
+For one-shot delayed reminders such as "remind me in 10 minutes" or "later today tell me ...", set `schedule_mode="one_shot"` and provide exactly one of `delay_seconds` or `run_at_utc`, plus `one_shot_message`. Prefer `delay_seconds` when the user gave a relative delay. Do not use `code_execute` with `sleep`, timers, polling loops, or long-running scripts for delayed one-shot requests; durable delivery must go through `scheduled_agent_creator`. Do not publish an Ornn skill just to send a one-shot natural-language reminder unless the user explicitly asks for reusable automation or the reminder requires a real skill workflow.
+
+Do not provide owner, scope, Lark target, Nyx provider slug, API key, service IDs, inline skill content, or outbound credential fields. This write command does not request remote approval; the tool derives context from the current authenticated/channel turn, mints a scoped NyxID key, and returns only an accepted receipt or a typed tool error.
 
 `skill_ref` must be unversioned for now. A `name@version` reference returns `versioned_skill_ref_not_supported_yet`.
 

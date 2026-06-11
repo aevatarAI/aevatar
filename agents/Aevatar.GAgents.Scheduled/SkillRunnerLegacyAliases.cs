@@ -16,6 +16,7 @@ internal static class SkillRunnerLegacyAliases
     internal const string CompletedEventProto = ProtoPrefix + "SkillRunnerExecutionCompletedEvent";
     internal const string FailedEventProto = ProtoPrefix + "SkillRunnerExecutionFailedEvent";
     internal const string RejectedEventProto = ProtoPrefix + "SkillRunnerExecutionRejectedEvent";
+    internal const string OneShotRetiredEventProto = ProtoPrefix + "SkillRunnerOneShotRetiredEvent";
     internal const string DisableCommandProto = ProtoPrefix + "DisableSkillRunnerCommand";
     internal const string EnableCommandProto = ProtoPrefix + "EnableSkillRunnerCommand";
     internal const string DisabledEventProto = ProtoPrefix + "SkillRunnerDisabledEvent";
@@ -51,6 +52,9 @@ public sealed partial class SkillRunnerExecutionFailedEvent;
 
 [LegacyProtoFullName(SkillRunnerLegacyAliases.RejectedEventProto)]
 public sealed partial class SkillRunnerExecutionRejectedEvent;
+
+[LegacyProtoFullName(SkillRunnerLegacyAliases.OneShotRetiredEventProto)]
+public sealed partial class SkillRunnerOneShotRetiredEvent;
 
 [LegacyProtoFullName(SkillRunnerLegacyAliases.DisableCommandProto)]
 public sealed partial class DisableSkillRunnerCommand;

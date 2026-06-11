@@ -32,8 +32,9 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
     public string Name => "scheduled_agent_creator";
 
     public string Description =>
-        "Create a caller-owned scheduled automation agent from an Ornn skill reference. " +
-        "Requires skill_ref, schedule_cron, and schedule_timezone. " +
+        "Create a caller-owned scheduled automation agent or one-shot reminder. " +
+        "Recurring mode requires skill_ref, schedule_cron, and schedule_timezone. " +
+        "One-shot mode requires delay_seconds or run_at_utc; one_shot_message can send a reminder without an Ornn skill. " +
         "Creation mints a scoped NyxID API key and returns an accepted dispatch receipt only.";
 
     public string ParametersSchema => """
@@ -43,15 +44,32 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
           "properties": {
             "skill_ref": {
               "type": "string",
-              "description": "Unversioned Ornn skill name. name@version is not supported yet."
+              "description": "Unversioned Ornn skill name. Required for recurring cron schedules. Optional for one-shot reminders. name@version is not supported yet."
+            },
+            "schedule_mode": {
+              "type": "string",
+              "enum": ["cron", "one_shot"],
+              "description": "cron for recurring scheduled skill agents; one_shot for a single delayed reminder or one-time skill run."
             },
             "schedule_cron": {
               "type": "string",
-              "description": "Standard 5-field cron expression (minute hour day-of-month month day-of-week). Seconds fields are not supported."
+              "description": "Standard 5-field cron expression (minute hour day-of-month month day-of-week). Required only when schedule_mode is cron. Seconds fields are not supported."
             },
             "schedule_timezone": {
               "type": "string",
-              "description": "IANA timezone name for schedule evaluation."
+              "description": "IANA timezone name for cron schedule evaluation. Required only when schedule_mode is cron."
+            },
+            "delay_seconds": {
+              "type": "integer",
+              "description": "One-shot delay in seconds. Use this instead of calculating cron or sleeping in code_execute. Mutually exclusive with run_at_utc."
+            },
+            "run_at_utc": {
+              "type": "string",
+              "description": "One-shot UTC instant as ISO-8601 with Z or +00:00. Mutually exclusive with delay_seconds."
+            },
+            "one_shot_message": {
+              "type": "string",
+              "description": "Message to send when a one-shot reminder fires. Required for one-shot reminders that do not use skill_ref."
             },
             "display_name": {
               "type": "string",
@@ -130,7 +148,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
               "description": "When true, trigger the first run after initialization is accepted."
             }
           },
-          "required": ["skill_ref", "schedule_cron", "schedule_timezone"]
+          "required": []
         }
         """;
 
