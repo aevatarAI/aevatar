@@ -35,6 +35,17 @@ public interface IStudioMemberService
         CancellationToken ct = default);
 
     /// <summary>
+    /// Applies partial member authority updates. This patch path updates
+    /// the member-owned implementation reference only; it does not bind,
+    /// publish, start runtime lifecycle, or create service revisions.
+    /// </summary>
+    Task<StudioMemberDetailResponse> PatchAsync(
+        string scopeId,
+        string memberId,
+        PatchStudioMemberRequest request,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Binds the given member to its own stable <c>publishedServiceId</c>
     /// (never the scope default service). Resolves the member, builds a
     /// scope binding request with <c>ServiceId = publishedServiceId</c>,

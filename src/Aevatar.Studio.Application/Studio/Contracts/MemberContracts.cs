@@ -97,6 +97,9 @@ public sealed record CreateStudioMemberRequest(
     string? Description = null,
     string? MemberId = null);
 
+public sealed record PatchStudioMemberRequest(
+    StudioMemberImplementationRefResponse? ImplementationRef = null);
+
 /// <summary>
 /// Centralized input bounds applied at the create boundary so a single
 /// request cannot push 10MB of displayName / description / memberId all the

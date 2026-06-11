@@ -43,6 +43,8 @@ internal static class StudioMemberEndpoints
             .WithTags("StudioMembers");
         app.MapGet("/api/scopes/{scopeId}/members/{memberId}", HandleGetAsync)
             .WithTags("StudioMembers");
+        app.MapPatch("/api/scopes/{scopeId}/members/{memberId}", HandlePatchAsync)
+            .WithTags("StudioMembers");
         app.MapPut("/api/scopes/{scopeId}/members/{memberId}/binding", HandleBindAsync)
             .WithTags("StudioMembers");
         app.MapGet("/api/scopes/{scopeId}/members/{memberId}/binding", HandleGetBindingAsync)
@@ -127,6 +129,31 @@ internal static class StudioMemberEndpoints
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
+        }
+    }
+
+    internal static async Task<IResult> HandlePatchAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        PatchStudioMemberRequest request,
+        [FromServices] IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            return Results.Ok(await memberService.PatchAsync(scopeId, memberId, request, ct));
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_PATCH", ex.Message);
         }
     }
 
