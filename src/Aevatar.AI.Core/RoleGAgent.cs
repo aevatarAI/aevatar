@@ -55,7 +55,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             toolMiddlewares,
             llmMiddlewares,
             toolSources,
-            approvalHandler)
+            // RoleGAgent owns the pending-approval continuation (persisted state +
+            // remote escalation + timeout), so yielding is its capability default.
+            // Surfaces without that continuation must NOT wire a yielding handler;
+            // they fall through to MissingApprovalHandler and fail closed.
+            approvalHandler ?? new YieldApprovalHandler())
     {
         RemoteToolApprovalPort = remoteToolApprovalPort;
         RemoteToolApprovalNotificationPort = remoteToolApprovalNotificationPort;

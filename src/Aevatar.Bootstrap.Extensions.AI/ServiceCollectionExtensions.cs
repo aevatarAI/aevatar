@@ -104,8 +104,10 @@ public static class ServiceCollectionExtensions
             .ScanAssemblies(typeof(RoleGAgent).Assembly)
             .Register<WorkflowRoleGAgent>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
-        services.TryAddSingleton<IToolApprovalHandler, YieldApprovalHandler>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IToolCallMiddleware, ToolApprovalMiddleware>());
+        // No container-level IToolApprovalHandler: a yielding handler is only valid on
+        // actors that implement the pending-approval continuation (RoleGAgent wires its
+        // own). Surfaces without that capability fall back to MissingApprovalHandler and
+        // fail closed instead of stranding a dead-letter approval (#2004).
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();

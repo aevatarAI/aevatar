@@ -129,10 +129,14 @@ public sealed class MainnetHostCompositionTests
         toolSources.Should().Contain(source => source is TelegramAgentToolSource);
         toolSources.Should().Contain(source => source is SkillsAgentToolSource);
         toolSources.Should().Contain(source => source is OrnnAgentToolSource);
-        app.Services.GetServices<IToolApprovalHandler>()
+        // Yield capability follows the actor, never the container (#2004): a DI-global
+        // yielding handler hands "I will resume you" to surfaces with no pending-approval
+        // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;
+        // every other surface must fall through to MissingApprovalHandler and fail closed.
+        app.Services.GetServices<IToolApprovalHandler>().Should().BeEmpty();
+        app.Services.GetServices<IToolCallMiddleware>()
             .Should()
-            .ContainSingle(handler => handler is YieldApprovalHandler);
-        app.Services.GetServices<IToolCallMiddleware>().Should().ContainSingle(middleware => middleware is ToolApprovalMiddleware);
+            .NotContain(middleware => middleware is ToolApprovalMiddleware);
 
         await app.StopAsync();
     }
