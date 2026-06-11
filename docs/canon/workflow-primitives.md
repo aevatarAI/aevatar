@@ -709,11 +709,13 @@ steps:
 事件对照：
 
 - `human_input` / `human_approval`：`WorkflowSuspendedEvent` -> `WorkflowResumedEvent`
+- `tool_call` 工具审批：`WorkflowSuspendedEvent(suspension_type="tool_approval", tool_approval=...)` -> `WorkflowResumedEvent(execution_id, approval_request_id, approved)`
 - `wait_signal`：`WaitingForSignalEvent(run_id, step_id, signal_name, ...)` -> `SignalReceivedEvent`
 
 约束补充：
 
 - `WorkflowResumedEvent` 与 `SignalReceivedEvent` 都必须显式携带 `run_id`；运行时不再对缺失 `run_id` 做 best-effort 猜测。
+- `tool_call` 工具审批恢复必须同时携带 `run_id + step_id + execution_id + approval_request_id`，运行时只按这些 typed 字段命中挂起审批，不从 `metadata` 或工具结果 JSON 中恢复审批状态。
 - `SignalReceivedEvent.step_id` 在“同一 run + 同一 signal_name”存在多个 waiter 时必填，用于精确命中 waiter。
 
 建议的请求契约（以 Web API 为例）：
@@ -724,6 +726,8 @@ POST /api/workflows/resume
   "actorId": "wf-2f3f...",
   "runId": "c7e0...",
   "stepId": "approval_gate",
+  "executionId": "exec-optional-for-tool-approval",
+  "approvalRequestId": "approval-optional-for-tool-approval",
   "approved": true,
   "userInput": "approved by oncall",
   "metadata": { "operator": "alice" }

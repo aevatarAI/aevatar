@@ -127,7 +127,9 @@ public sealed class WorkflowRunControlCommandTests
                     ["source"] = "tests",
                 },
                 "edited draft",
-                "minor note"),
+                "minor note",
+                ExecutionId: "exec-1",
+                ApprovalRequestId: "approval-1"),
             new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
         var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
@@ -142,6 +144,8 @@ public sealed class WorkflowRunControlCommandTests
         resumed.UserInput.Should().Be("approved");
         resumed.EditedContent.Should().Be("edited draft");
         resumed.Feedback.Should().Be("minor note");
+        resumed.ExecutionId.Should().Be("exec-1");
+        resumed.ApprovalRequestId.Should().Be("approval-1");
         resumed.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
     }
 

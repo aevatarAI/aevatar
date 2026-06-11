@@ -10,6 +10,7 @@ public static class WorkflowCustomEventNames
     public const string StepRequest = "aevatar.step.request";
     public const string StepCompleted = "aevatar.step.completed";
     public const string HumanInputRequest = "aevatar.human_input.request";
+    public const string ToolApprovalPending = "aevatar.tool_approval.pending";
     public const string WaitingSignal = "aevatar.workflow.waiting_signal";
     public const string SignalBuffered = "aevatar.workflow.signal.buffered";
     public const string LlmReasoning = "aevatar.llm.reasoning";
@@ -58,6 +59,17 @@ public sealed record WorkflowHumanInputRequestEventData
     public bool? Secure { get; init; }
     public string? RedactedOutput { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
+}
+
+public sealed record WorkflowToolApprovalPendingEventData
+{
+    public string? RunId { get; init; }
+    public string? StepId { get; init; }
+    public string? ExecutionId { get; init; }
+    public string? ToolName { get; init; }
+    public string? ToolCallId { get; init; }
+    public string? ApprovalRequestId { get; init; }
+    public string? ArgumentsJson { get; init; }
 }
 
 public sealed record WorkflowWaitingSignalEventData
@@ -163,6 +175,32 @@ public static class WorkflowCustomEventParser
                 Secure = payload.Secure,
                 RedactedOutput = payload.RedactedOutput,
                 Metadata = FilterReservedHumanInputMetadata(payload.Metadata),
+            };
+            return true;
+        }
+
+        data = default!;
+        return false;
+    }
+
+    public static bool TryParseToolApprovalPending(
+        WorkflowRunEventEnvelope frame,
+        out WorkflowToolApprovalPendingEventData data)
+    {
+        if (TryUnpackCustomPayload<WorkflowToolApprovalSuspensionCustomPayload>(
+                frame,
+                WorkflowCustomEventNames.ToolApprovalPending,
+                out var payload))
+        {
+            data = new WorkflowToolApprovalPendingEventData
+            {
+                RunId = payload.RunId,
+                StepId = payload.StepId,
+                ExecutionId = payload.ExecutionId,
+                ToolName = payload.ToolName,
+                ToolCallId = payload.ToolCallId,
+                ApprovalRequestId = payload.ApprovalRequestId,
+                ArgumentsJson = payload.ArgumentsJson,
             };
             return true;
         }

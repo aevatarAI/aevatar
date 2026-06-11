@@ -503,6 +503,8 @@ message WorkflowResumedEvent
   map<string, string> metadata = 5;
   string edited_content = 6;
   string feedback = 7;
+  string execution_id = 8;
+  string approval_request_id = 9;
 }
 message WorkflowHumanApprovalResolvedEvent
 {

@@ -224,6 +224,130 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_WhenToolApprovalPending_ShouldPersistPendingApprovalAndSuspendWithoutCompletingStep()
+    {
+        var tool = new ApprovalPendingWorkflowTool("dangerous_tool");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, input: """{"danger":true}""", executionId: "exec-1");
+
+        ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallStartedEvent>().Should().ContainSingle();
+        ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Should().BeEmpty();
+        ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
+        var suspended = ctx.Published.Single(x => x.Event is WorkflowSuspendedEvent).Event
+            .Should().BeOfType<WorkflowSuspendedEvent>().Subject;
+        suspended.RunId.Should().Be("run-1");
+        suspended.StepId.Should().Be("call_proxy");
+        suspended.SuspensionType.Should().Be("tool_approval");
+        suspended.ToolApproval.Should().NotBeNull();
+        suspended.ToolApproval.ExecutionId.Should().Be("exec-1");
+        suspended.ToolApproval.ToolName.Should().Be(tool.Name);
+        suspended.ToolApproval.ToolCallId.Should().Be("workflow:run-1:call_proxy:exec-1");
+        suspended.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
+        suspended.ToolApproval.ArgumentsJson.Should().Be("""{"danger":true}""");
+        ctx.Published.Single(x => x.Event is WorkflowSuspendedEvent).Direction
+            .Should().Be(TopologyAudience.ParentAndChildren);
+        var state = ctx.LoadState<ToolCallModuleState>("tool_call");
+        state.PendingApprovals.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenApprovalResumeApproved_ShouldReplayOriginalToolWithGrantAndCompleteStep()
+    {
+        var tool = new ApprovalPendingWorkflowTool("dangerous_tool");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, input: """{"danger":true}""", executionId: "exec-1");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-1",
+                StepId = "call_proxy",
+                ExecutionId = "exec-1",
+                ApprovalRequestId = "approval-1",
+                Approved = true,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(2);
+        tool.LastRequest.Should().NotBeNull();
+        tool.LastRequest!.ApprovalGrant.Should().NotBeNull();
+        tool.LastRequest.ApprovalGrant!.ApprovalRequestId.Should().Be("approval-1");
+        tool.LastRequest.ApprovalGrant.Approved.Should().BeTrue();
+        tool.LastRequest.ArgumentsJson.Should().Be("""{"danger":true}""");
+        var completed = ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single();
+        completed.Success.Should().BeTrue();
+        completed.ResultJson.Should().Be("""{"approved":true}""");
+        LastCompleted(ctx).Success.Should().BeTrue();
+        LastCompleted(ctx).ExecutionId.Should().Be("exec-1");
+        LastCompleted(ctx).Output.Should().Be("""{"approved":true}""");
+        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenApprovalResumeRejected_ShouldClearStateAndPublishFailedCompletion()
+    {
+        var tool = new ApprovalPendingWorkflowTool("dangerous_tool");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-1");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-1",
+                StepId = "call_proxy",
+                ExecutionId = "exec-1",
+                ApprovalRequestId = "approval-1",
+                Approved = false,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        var toolCompleted = ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single();
+        toolCompleted.Success.Should().BeFalse();
+        toolCompleted.Error.Should().Contain("tool approval rejected");
+        var completed = LastCompleted(ctx);
+        completed.Success.Should().BeFalse();
+        completed.ExecutionId.Should().Be("exec-1");
+        completed.Error.Should().Contain("tool approval rejected");
+        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenApprovalResumeMissingTypedKeys_ShouldIgnoreResumeAndKeepPendingState()
+    {
+        var tool = new ApprovalPendingWorkflowTool("dangerous_tool");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-1");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-1",
+                StepId = "call_proxy",
+                Approved = true,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().ContainSingle();
+        tool.ExecuteCalls.Should().Be(1);
+    }
+
+    [Fact]
     public void IWorkflowTool_ShouldExposeOnlyTypedWorkflowExecutionMethod()
     {
         var executeMethods = typeof(IWorkflowTool)
@@ -313,6 +437,30 @@ public sealed class ToolCallModuleContextTests
             ct.ThrowIfCancellationRequested();
             LastRequest = request;
             return Task.FromResult(WorkflowToolExecutionResult.Success("""{"typed":true}"""));
+        }
+    }
+
+    private sealed class ApprovalPendingWorkflowTool(string name) : IWorkflowTool
+    {
+        public string Name { get; } = name;
+
+        public int ExecuteCalls { get; private set; }
+
+        public WorkflowToolExecutionRequest? LastRequest { get; private set; }
+
+        public Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecuteCalls++;
+            LastRequest = request;
+            if (request.ApprovalGrant?.Approved == true)
+                return Task.FromResult(WorkflowToolExecutionResult.Success("""{"approved":true}"""));
+
+            return Task.FromResult(WorkflowToolExecutionResult.PendingApproval(new WorkflowToolApprovalPendingOutcome(
+                "approval-1",
+                Name,
+                request.CallId,
+                request.ArgumentsJson)));
         }
     }
 

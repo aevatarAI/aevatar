@@ -82,6 +82,30 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
             return;
         }
 
+        if (context.ApprovalGrant is { } grant)
+        {
+            if (grant.Approved)
+            {
+                context.Items[DenialCountItemKey] = 0;
+                await next();
+                return;
+            }
+
+            context.Items[DenialCountItemKey] = denialCount + 1;
+            context.Terminate = true;
+            context.TerminationKind = ToolCallTerminationKind.ApprovalDenied;
+            context.TerminationReason = "Tool approval rejected.";
+            context.Result = $"Tool '{context.ToolName}' execution denied by approval decision.";
+            context.Receipt = AgentToolReceiptFactory.CreateDenied(
+                context.Tool,
+                context.ToolCallId,
+                context.ToolName,
+                context.Result,
+                grant.ApprovalRequestId,
+                context.TerminationReason);
+            return;
+        }
+
         // 请求审批
         var request = new ToolApprovalRequest
         {

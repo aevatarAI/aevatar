@@ -909,6 +909,8 @@ public sealed class ChatEndpointsInternalTests
                 ActorId = "actor-1",
                 RunId = "run-1",
                 StepId = "step-1",
+                ExecutionId = "exec-1",
+                ApprovalRequestId = "approval-1",
                 CommandId = "cmd-1",
                 Approved = true,
                 UserInput = "approved",
@@ -929,11 +931,15 @@ public sealed class ChatEndpointsInternalTests
         http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/actor-1/current-state");
         var body = await ReadBodyAsync(http.Response);
         body.Should().Contain("\"acceptedCommandId\":\"cmd-1\"");
+        body.Should().Contain("\"executionId\":\"exec-1\"");
+        body.Should().Contain("\"approvalRequestId\":\"approval-1\"");
         body.Should().Contain("\"statusUrl\":\"/api/workflow-actors/actor-1/current-state\"");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be("actor-1");
         service.Commands.Single().RunId.Should().Be("run-1");
         service.Commands.Single().StepId.Should().Be("step-1");
+        service.Commands.Single().ExecutionId.Should().Be("exec-1");
+        service.Commands.Single().ApprovalRequestId.Should().Be("approval-1");
         service.Commands.Single().CommandId.Should().Be("cmd-1");
         service.Commands.Single().Approved.Should().BeTrue();
         service.Commands.Single().UserInput.Should().Be("approved");

@@ -168,6 +168,8 @@ public sealed record WorkflowResumeInput
     public required string ActorId { get; init; }
     public required string RunId { get; init; }
     public required string StepId { get; init; }
+    public string? ExecutionId { get; init; }
+    public string? ApprovalRequestId { get; init; }
     public string? CommandId { get; init; }
     public bool Approved { get; init; }
     public string? UserInput { get; init; }

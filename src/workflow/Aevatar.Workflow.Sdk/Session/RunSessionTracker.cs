@@ -11,6 +11,8 @@ public sealed record RunSessionSnapshot
     public string? CommandId { get; init; }
     public string? RunId { get; init; }
     public string? StepId { get; init; }
+    public string? ExecutionId { get; init; }
+    public string? ApprovalRequestId { get; init; }
     public string? SuspensionType { get; init; }
     public string? LastSignalName { get; init; }
 
@@ -30,6 +32,8 @@ public sealed class RunSessionTracker
     private string? _commandId;
     private string? _runId;
     private string? _stepId;
+    private string? _executionId;
+    private string? _approvalRequestId;
     private string? _suspensionType;
     private string? _lastSignalName;
 
@@ -40,6 +44,8 @@ public sealed class RunSessionTracker
         CommandId = _commandId,
         RunId = _runId,
         StepId = _stepId,
+        ExecutionId = _executionId,
+        ApprovalRequestId = _approvalRequestId,
         SuspensionType = _suspensionType,
         LastSignalName = _lastSignalName,
     };
@@ -90,6 +96,8 @@ public sealed class RunSessionTracker
             ActorId = _actorId,
             RunId = _runId!,
             StepId = _stepId!,
+            ExecutionId = _executionId,
+            ApprovalRequestId = _approvalRequestId,
             Approved = approved,
             UserInput = userInput,
             EditedContent = editedContent,
@@ -163,6 +171,16 @@ public sealed class RunSessionTracker
             _runId = humanInput.RunId ?? _runId;
             _stepId = humanInput.StepId ?? _stepId;
             _suspensionType = humanInput.SuspensionType ?? _suspensionType;
+            return;
+        }
+
+        if (WorkflowCustomEventParser.TryParseToolApprovalPending(frame, out var toolApproval))
+        {
+            _runId = toolApproval.RunId ?? _runId;
+            _stepId = toolApproval.StepId ?? _stepId;
+            _executionId = toolApproval.ExecutionId ?? _executionId;
+            _approvalRequestId = toolApproval.ApprovalRequestId ?? _approvalRequestId;
+            _suspensionType = "tool_approval";
             return;
         }
 

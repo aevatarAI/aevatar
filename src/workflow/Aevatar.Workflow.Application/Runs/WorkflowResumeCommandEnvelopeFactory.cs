@@ -22,6 +22,8 @@ internal sealed class WorkflowResumeCommandEnvelopeFactory : ICommandEnvelopeFac
             UserInput = command.UserInput ?? string.Empty,
             EditedContent = command.EditedContent ?? string.Empty,
             Feedback = command.Feedback ?? string.Empty,
+            ExecutionId = NormalizeOptional(command.ExecutionId),
+            ApprovalRequestId = NormalizeOptional(command.ApprovalRequestId),
         };
         AppendMetadata(resumed.Metadata, command.Metadata);
 
@@ -67,4 +69,7 @@ internal sealed class WorkflowResumeCommandEnvelopeFactory : ICommandEnvelopeFac
             ? throw new ArgumentException("Value is required.", paramName)
             : normalized;
     }
+
+    private static string NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }

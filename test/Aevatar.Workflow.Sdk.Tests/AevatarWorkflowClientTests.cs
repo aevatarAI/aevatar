@@ -55,6 +55,8 @@ data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflo
             using var doc = JsonDocument.Parse(body);
             doc.RootElement.GetProperty("actorId").GetString().Should().Be("actor-1");
             doc.RootElement.GetProperty("stepId").GetString().Should().Be("approval-1");
+            doc.RootElement.GetProperty("executionId").GetString().Should().Be("exec-1");
+            doc.RootElement.GetProperty("approvalRequestId").GetString().Should().Be("approval-1");
             doc.RootElement.GetProperty("editedContent").GetString().Should().Be("Final draft");
             doc.RootElement.GetProperty("feedback").GetString().Should().Be("Looks good");
             doc.RootElement.GetProperty("metadata").GetProperty("source").GetString().Should().Be("sdk");
@@ -62,7 +64,7 @@ data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflo
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    """{"accepted":true,"actorId":"actor-1","runId":"run-1","stepId":"approval-1","commandId":"cmd-1"}""",
+                    """{"accepted":true,"actorId":"actor-1","runId":"run-1","stepId":"approval-1","executionId":"exec-1","approvalRequestId":"approval-1","commandId":"cmd-1"}""",
                     Encoding.UTF8,
                     "application/json"),
             };
@@ -75,6 +77,8 @@ data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflo
             ActorId = "actor-1",
             RunId = "run-1",
             StepId = "approval-1",
+            ExecutionId = "exec-1",
+            ApprovalRequestId = "approval-1",
             Approved = true,
             CommandId = "cmd-1",
             EditedContent = "Final draft",
@@ -87,6 +91,8 @@ data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflo
 
         result.Accepted.Should().BeTrue();
         result.ActorId.Should().Be("actor-1");
+        result.ExecutionId.Should().Be("exec-1");
+        result.ApprovalRequestId.Should().Be("approval-1");
         result.CommandId.Should().Be("cmd-1");
     }
 

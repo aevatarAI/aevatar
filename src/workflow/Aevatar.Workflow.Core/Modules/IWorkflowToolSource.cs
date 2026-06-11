@@ -9,13 +9,34 @@ public interface IWorkflowTool
     Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default);
 }
 
+public enum WorkflowToolExecutionOutcome
+{
+    Success = 0,
+    ApprovalPending = 1,
+}
+
 public sealed record WorkflowToolExecutionResult(
     string ResultJson,
-    WorkflowManagedHandoffOutcome? ManagedHandoff = null)
+    WorkflowManagedHandoffOutcome? ManagedHandoff = null,
+    WorkflowToolApprovalPendingOutcome? ApprovalPending = null,
+    WorkflowToolExecutionOutcome Outcome = WorkflowToolExecutionOutcome.Success)
 {
     public static WorkflowToolExecutionResult Success(string resultJson) =>
         new(resultJson ?? string.Empty);
+
+    public static WorkflowToolExecutionResult PendingApproval(WorkflowToolApprovalPendingOutcome approvalPending) =>
+        new(string.Empty, ApprovalPending: approvalPending, Outcome: WorkflowToolExecutionOutcome.ApprovalPending);
 }
+
+public sealed record WorkflowToolApprovalPendingOutcome(
+    string ApprovalRequestId,
+    string ToolName,
+    string ToolCallId,
+    string ArgumentsJson);
+
+public sealed record WorkflowToolApprovalGrant(
+    string ApprovalRequestId,
+    bool Approved);
 
 public sealed record WorkflowToolExecutionRequest(
     string ArgumentsJson,
@@ -25,7 +46,8 @@ public sealed record WorkflowToolExecutionRequest(
     string CallId,
     string ScopeId,
     WorkflowCallerCredential CallerCredential,
-    WorkflowToolRuntimeContext RuntimeContext)
+    WorkflowToolRuntimeContext RuntimeContext,
+    WorkflowToolApprovalGrant? ApprovalGrant = null)
 {
     public WorkflowToolExecutionRequest(
         string ArgumentsJson,
@@ -43,7 +65,30 @@ public sealed record WorkflowToolExecutionRequest(
             CallId,
             ScopeId,
             CallerCredential,
-            WorkflowToolRuntimeContext.Empty)
+            WorkflowToolRuntimeContext.Empty,
+            null)
+    {
+    }
+
+    public WorkflowToolExecutionRequest(
+        string ArgumentsJson,
+        string RunId,
+        string StepId,
+        string ExecutionId,
+        string CallId,
+        string ScopeId,
+        WorkflowCallerCredential CallerCredential,
+        WorkflowToolApprovalGrant? ApprovalGrant)
+        : this(
+            ArgumentsJson,
+            RunId,
+            StepId,
+            ExecutionId,
+            CallId,
+            ScopeId,
+            CallerCredential,
+            WorkflowToolRuntimeContext.Empty,
+            ApprovalGrant)
     {
     }
 }

@@ -55,6 +55,8 @@ public sealed record WorkflowResumeRequest
     public required string ServiceId { get; init; }
     public required string RunId { get; init; }
     public required string StepId { get; init; }
+    public string? ExecutionId { get; init; }
+    public string? ApprovalRequestId { get; init; }
     public string? ActorId { get; init; }
     public string? CommandId { get; init; }
     public bool Approved { get; init; }
@@ -82,6 +84,8 @@ public sealed record WorkflowResumeResponse
     public string? ActorId { get; init; }
     public string? RunId { get; init; }
     public string? StepId { get; init; }
+    public string? ExecutionId { get; init; }
+    public string? ApprovalRequestId { get; init; }
     public string? CommandId { get; init; }
 }
 

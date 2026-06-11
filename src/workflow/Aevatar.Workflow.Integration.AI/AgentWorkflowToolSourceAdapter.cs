@@ -77,6 +77,11 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 ToolCallId = Normalize(request.CallId) ?? string.Empty,
                 ArgumentsJson = request.ArgumentsJson,
                 CancellationToken = ct,
+                ApprovalGrant = request.ApprovalGrant == null
+                    ? null
+                    : new ToolApprovalGrantContext(
+                        Normalize(request.ApprovalGrant.ApprovalRequestId) ?? string.Empty,
+                        request.ApprovalGrant.Approved),
             };
 
             await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
@@ -86,6 +91,18 @@ public sealed class AgentWorkflowToolSourceAdapter(
 
                 toolCallContext.Result = await _tool.ExecuteAsync(toolCallContext.ArgumentsJson, ct).ConfigureAwait(false);
             }).ConfigureAwait(false);
+
+            if (toolCallContext.Terminate &&
+                toolCallContext.TerminationKind == ToolCallTerminationKind.ApprovalPending &&
+                toolCallContext.PendingApproval != null)
+            {
+                var pending = toolCallContext.PendingApproval;
+                return WorkflowToolExecutionResult.PendingApproval(new WorkflowToolApprovalPendingOutcome(
+                    pending.ApprovalRequestId,
+                    pending.ToolName,
+                    pending.ToolCallId,
+                    pending.ArgumentsJson));
+            }
 
             if (toolCallContext.Terminate)
                 throw new InvalidOperationException(FormatMiddlewareTermination(toolCallContext));

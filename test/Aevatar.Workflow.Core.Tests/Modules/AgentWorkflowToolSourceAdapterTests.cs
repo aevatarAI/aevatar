@@ -96,7 +96,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     }
 
     [Fact]
-    public async Task WorkflowTool_WhenApprovalPending_ShouldFailClosedWithoutReturningPendingPayload()
+    public async Task WorkflowTool_WhenApprovalPending_ShouldReturnTypedPendingOutcome()
     {
         var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
         var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Yielded("approval-1"));
@@ -105,22 +105,55 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             approvalHandler: approvalHandler);
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
-        await FluentActions.Awaiting(() => tool.ExecuteAsync(
-                new WorkflowToolExecutionRequest(
-                    ArgumentsJson: "{}",
-                    RunId: "run-1",
-                    StepId: "step-1",
-                    ExecutionId: "exec-1",
-                    CallId: "call-1",
-                    ScopeId: "scope-1",
-                    CallerCredential: new WorkflowCallerCredential()),
-                CancellationToken.None))
-            .Should()
-            .ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ApprovalPending*approval-1*");
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
 
+        result.Outcome.Should().Be(WorkflowToolExecutionOutcome.ApprovalPending);
+        result.ApprovalPending.Should().NotBeNull();
+        result.ApprovalPending!.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        result.ApprovalPending.ToolCallId.Should().Be("call-1");
+        result.ApprovalPending.ToolName.Should().Be(agentTool.Name);
+        result.ApprovalPending.ArgumentsJson.Should().Be("{}");
+        result.ResultJson.Should().BeEmpty();
         agentTool.ExecuteCount.Should().Be(0);
         approvalHandler.Requests.Should().ContainSingle();
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowTool_WhenApprovalGrantApproved_ShouldExecuteAgentToolWithoutRequestingApprovalAgain()
+    {
+        var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
+        var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Denied("would-loop"));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            approvalHandler: approvalHandler);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential(),
+                ApprovalGrant: new WorkflowToolApprovalGrant("approval-1", true)),
+            CancellationToken.None);
+
+        result.ResultJson.Should().Be("""{"observed":true}""");
+        result.Outcome.Should().Be(WorkflowToolExecutionOutcome.Success);
+        agentTool.ExecuteCount.Should().Be(1);
+        approvalHandler.Requests.Should().BeEmpty();
         AgentToolRequestContext.Current.Should().BeNull();
     }
 

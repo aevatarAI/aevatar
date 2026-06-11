@@ -107,6 +107,42 @@ public sealed class RunSessionTrackerTests
     }
 
     [Fact]
+    public void Track_ShouldCaptureToolApprovalPendingContextForResumeRequest()
+    {
+        var tracker = new RunSessionTracker();
+
+        tracker.Track(CustomFrame("aevatar.run.context", new WorkflowRunContextPayload
+        {
+            ActorId = "actor-1",
+            WorkflowName = "auto",
+        }));
+        tracker.Track(CustomFrame(WorkflowCustomEventNames.ToolApprovalPending, new WorkflowToolApprovalSuspensionCustomPayload
+        {
+            RunId = "run-1",
+            StepId = "tool-step",
+            ExecutionId = "exec-1",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ApprovalRequestId = "approval-1",
+            ArgumentsJson = "{}",
+        }));
+
+        var snapshot = tracker.Snapshot;
+        snapshot.RunId.Should().Be("run-1");
+        snapshot.StepId.Should().Be("tool-step");
+        snapshot.ExecutionId.Should().Be("exec-1");
+        snapshot.ApprovalRequestId.Should().Be("approval-1");
+        snapshot.SuspensionType.Should().Be("tool_approval");
+
+        var resume = tracker.CreateResumeRequest("scope-a", approved: true, serviceId: "orders");
+        resume.ActorId.Should().Be("actor-1");
+        resume.RunId.Should().Be("run-1");
+        resume.StepId.Should().Be("tool-step");
+        resume.ExecutionId.Should().Be("exec-1");
+        resume.ApprovalRequestId.Should().Be("approval-1");
+    }
+
+    [Fact]
     public void CreateSignalRequest_ShouldAllowExplicitStepOverride()
     {
         var tracker = new RunSessionTracker();

@@ -101,6 +101,8 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
             {
                 actorId = NormalizeOptional(request.ActorId),
                 stepId = request.StepId,
+                executionId = NormalizeOptional(request.ExecutionId),
+                approvalRequestId = NormalizeOptional(request.ApprovalRequestId),
                 commandId = NormalizeOptional(request.CommandId),
                 approved = request.Approved,
                 userInput = NormalizeOptional(request.UserInput),

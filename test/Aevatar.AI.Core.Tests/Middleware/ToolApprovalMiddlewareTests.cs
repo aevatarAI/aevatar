@@ -342,6 +342,47 @@ public class ToolApprovalMiddlewareTests
     }
 
     [Fact]
+    public async Task ApprovedGrant_ExecutesNextWithoutRequestingApprovalAgain()
+    {
+        var handler = new ScriptedApprovalHandler(ToolApprovalResult.Denied("would-loop"));
+        var middleware = new ToolApprovalMiddleware(handler);
+        var ctx = NewContext("danger", "tc-grant-1", new ToolApprovalGrantContext("approval-1", true));
+
+        var nextExecuted = false;
+        await middleware.InvokeAsync(ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeTrue();
+        ctx.Terminate.Should().BeFalse();
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RejectedGrant_FailsClosedWithoutRequestingApprovalAgain()
+    {
+        var handler = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
+        var middleware = new ToolApprovalMiddleware(handler);
+        var ctx = NewContext("danger", "tc-grant-2", new ToolApprovalGrantContext("approval-2", false));
+
+        var nextExecuted = false;
+        await middleware.InvokeAsync(ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeFalse();
+        ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.Receipt.Should().NotBeNull();
+        ctx.Receipt!.ApprovalRequestId.Should().Be("approval-2");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RequestScopedDenialCountBlocksExecutionWithoutCallingHandler()
     {
         var handler = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
@@ -393,12 +434,16 @@ public class ToolApprovalMiddlewareTests
         handler.Requests.Should().HaveCount(3);
     }
 
-    private static ToolCallContext NewContext(string toolName, string callId) => new()
+    private static ToolCallContext NewContext(
+        string toolName,
+        string callId,
+        ToolApprovalGrantContext? approvalGrant = null) => new()
     {
         Tool = new FakeAgentTool(toolName, ToolApprovalMode.AlwaysRequire) { IsDestructive = true },
         ToolName = toolName,
         ToolCallId = callId,
         ArgumentsJson = "{}",
+        ApprovalGrant = approvalGrant,
     };
 
     private static Task InvokeChainAsync(

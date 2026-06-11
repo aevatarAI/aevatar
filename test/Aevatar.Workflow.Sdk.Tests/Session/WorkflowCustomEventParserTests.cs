@@ -194,6 +194,32 @@ public sealed class WorkflowCustomEventParserTests
     }
 
     [Fact]
+    public void TryParseToolApprovalPending_ShouldReturnTypedContinuationFields()
+    {
+        var frame = CustomFrame(WorkflowCustomEventNames.ToolApprovalPending, new WorkflowToolApprovalSuspensionCustomPayload
+        {
+            RunId = "run-tool",
+            StepId = "step-tool",
+            ExecutionId = "exec-tool",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-tool",
+            ApprovalRequestId = "approval-tool",
+            ArgumentsJson = """{"danger":true}""",
+        });
+
+        var ok = WorkflowCustomEventParser.TryParseToolApprovalPending(frame, out var data);
+
+        ok.Should().BeTrue();
+        data.RunId.Should().Be("run-tool");
+        data.StepId.Should().Be("step-tool");
+        data.ExecutionId.Should().Be("exec-tool");
+        data.ToolName.Should().Be("dangerous_tool");
+        data.ToolCallId.Should().Be("call-tool");
+        data.ApprovalRequestId.Should().Be("approval-tool");
+        data.ArgumentsJson.Should().Be("""{"danger":true}""");
+    }
+
+    [Fact]
     public void TryParseSignalBuffered_ShouldReturnTypedPayload()
     {
         var frame = CustomFrame(WorkflowCustomEventNames.SignalBuffered, new WorkflowSignalBufferedCustomPayload

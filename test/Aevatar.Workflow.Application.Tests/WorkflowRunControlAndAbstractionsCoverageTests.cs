@@ -265,6 +265,8 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         resumed.UserInput.Should().BeEmpty();
         resumed.EditedContent.Should().BeEmpty();
         resumed.Feedback.Should().BeEmpty();
+        resumed.ExecutionId.Should().BeEmpty();
+        resumed.ApprovalRequestId.Should().BeEmpty();
 
         var actOnCommand = () => factory.CreateEnvelope(null!, context);
         var actOnContext = () => factory.CreateEnvelope(

@@ -207,6 +207,8 @@ public static class WorkflowCapabilityEndpoints
             var actorId = (input.ActorId ?? string.Empty).Trim();
             var runId = (input.RunId ?? string.Empty).Trim();
             var stepId = (input.StepId ?? string.Empty).Trim();
+            var executionId = NormalizeOptional(input.ExecutionId);
+            var approvalRequestId = NormalizeOptional(input.ApprovalRequestId);
             var commandId = NormalizeOptional(input.CommandId);
             if (string.IsNullOrWhiteSpace(actorId) ||
                 string.IsNullOrWhiteSpace(runId) ||
@@ -226,7 +228,9 @@ public static class WorkflowCapabilityEndpoints
                     input.UserInput,
                     NormalizeMetadata(input.Metadata),
                     input.EditedContent,
-                    input.Feedback),
+                    input.Feedback,
+                    ExecutionId: executionId,
+                    ApprovalRequestId: approvalRequestId),
                 ct);
             if (!dispatch.Succeeded || dispatch.Receipt == null)
             {
@@ -243,6 +247,8 @@ public static class WorkflowCapabilityEndpoints
                 actorId = dispatch.Receipt.ActorId,
                 runId = dispatch.Receipt.RunId,
                 stepId,
+                executionId,
+                approvalRequestId,
                 acceptedCommandId = dispatch.Receipt.CommandId,
                 correlationId = dispatch.Receipt.CorrelationId,
                 statusUrl,
