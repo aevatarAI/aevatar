@@ -576,7 +576,7 @@ const StudioMemberInvokeInspector: React.FC<
 
   const inspectorTitle = t(
     "pages.studio.studiomemberinvokeinspector.title",
-    "Invoke Inspector",
+    "Details",
   );
 
   const inspectorContent = (
@@ -585,7 +585,7 @@ const StudioMemberInvokeInspector: React.FC<
         <Typography.Text style={helperTextStyle} type="secondary">
           {t(
             "pages.studio.studiomemberinvokeinspector.copy",
-            "Endpoint details, typed payloads, and recent runs are available here without changing the main console layout.",
+            "Endpoint, payload, run events, and recent history are available here without taking over the task page.",
           )}
         </Typography.Text>
         <Segmented
@@ -698,7 +698,7 @@ const StudioMemberInvokeInspector: React.FC<
         <div
           aria-label={t(
             "pages.studio.studiomemberinvokeinspector.drag.handle",
-            "Drag invoke inspector",
+            "Drag details panel",
           )}
           data-testid="studio-invoke-inspector-drag-handle"
           onPointerDown={(event) => startDesktopInteraction('move', event)}
@@ -714,7 +714,7 @@ const StudioMemberInvokeInspector: React.FC<
           <Button
             aria-label={t(
               "pages.studio.studiomemberinvokeinspector.close",
-              "Close invoke inspector",
+              "Close details",
             )}
             icon={<CloseOutlined />}
             type="text"
@@ -725,7 +725,7 @@ const StudioMemberInvokeInspector: React.FC<
         <div
           aria-label={t(
             "pages.studio.studiomemberinvokeinspector.resize.handle",
-            "Resize invoke inspector",
+            "Resize details panel",
           )}
           data-testid="studio-invoke-inspector-resize-handle"
           role="separator"

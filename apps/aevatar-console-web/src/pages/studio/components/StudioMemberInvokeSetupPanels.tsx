@@ -117,8 +117,10 @@ export const StudioMemberInvokeComposerPanel: React.FC<
 }) => {
   const isRunning = invokeStatus === 'running';
   const promptPlaceholder =
-    defaultPrompt || t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke", "Enter a prompt to start an independent Invoke.");
-  const primaryButtonLabel = isRunning ? 'Stop' : 'Invoke';
+    defaultPrompt || t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke", "Describe what the workflow should do.");
+  const primaryButtonLabel = isRunning
+    ? t("pages.studio.studiomemberinvokesetuppanels.stop.current.run", "Stop")
+    : t("pages.studio.studiomemberinvokesetuppanels.run.workflow", "Run workflow");
   const primaryButtonIcon = isRunning ? (
     <StopOutlined />
   ) : (
@@ -132,10 +134,10 @@ export const StudioMemberInvokeComposerPanel: React.FC<
     >
       <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
         <div style={promptLabelRowStyle}>
-          <span style={promptKickerStyle}>{t("pages.studio.studiomemberinvokesetuppanels.prompt.3", "Prompt")}</span>
+          <span style={promptKickerStyle}>{t("pages.studio.studiomemberinvokesetuppanels.prompt.3", "Request")}</span>
           {layout === 'dock' ? (
             <Typography.Text style={promptDockHintStyle} type="secondary">
-              {t("pages.studio.studiomemberinvokesetuppanels.new.run.per.invoke.2", "New run per Invoke")}</Typography.Text>
+              {t("pages.studio.studiomemberinvokesetuppanels.new.run.per.request", "Each request starts a new run")}</Typography.Text>
           ) : null}
         </div>
         {layout === 'dock' ? (
@@ -144,7 +146,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={dockComposerRowStyle}
           >
             <Input.TextArea
-              aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy", "Invocation request input")}
+              aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy", "Workflow request input")}
               autoSize={{ minRows: 1, maxRows: 4 }}
               placeholder={promptPlaceholder}
               style={dockComposerInputStyle}
@@ -173,7 +175,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
           </div>
         ) : (
           <Input.TextArea
-            aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy.2", "Invocation request input")}
+            aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy.2", "Workflow request input")}
             autoSize={{ minRows: 4, maxRows: 8 }}
             placeholder={promptPlaceholder}
             value={prompt}
@@ -188,7 +190,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={composerGuidanceStyle}
           >
             <Typography.Text style={promptDockHintStyle} type="secondary">
-              {t("pages.studio.studiomemberinvokesetuppanels.historical.run.is.read.only", "Historical run is read-only. Sending this prompt creates a new independent Run and fresh Observe handoff.")}</Typography.Text>
+              {t("pages.studio.studiomemberinvokesetuppanels.historical.run.is.read.only", "Historical run is read-only. Sending this request starts a new run and fresh Observe handoff.")}</Typography.Text>
           </div>
         ) : !canInvoke ? (
           <div
@@ -196,7 +198,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={composerGuidanceStyle}
           >
             <Typography.Text style={promptDockHintStyle} type="secondary">
-              {blockedReason || t("pages.studio.studiomemberinvokesetuppanels.team.member.endpoint", "Select a callable Team member and endpoint.")}
+              {blockedReason || t("pages.studio.studiomemberinvokesetuppanels.team.member.endpoint", "Select a runnable Team member and endpoint.")}
             </Typography.Text>
           </div>
         ) : isChatEndpoint ? (
@@ -204,10 +206,10 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
             type="secondary"
           >
-            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run", "Enter a prompt to start an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
+            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run", "Describe the work this workflow should perform. Each request starts a new run.")}</Typography.Text>
         ) : (
           <Typography.Text style={promptDockHintStyle} type="secondary">
-            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run.2", "Enter a prompt to start an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
+            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run.2", "Describe the work this workflow should perform. Each request starts a new run.")}</Typography.Text>
         )}
       </div>
 
@@ -241,8 +243,8 @@ export const StudioMemberInvokeComposerPanel: React.FC<
     <AevatarPanel
       layoutMode="document"
       padding={14}
-      title={t("pages.studio.studiomemberinvokesetuppanels.copy.3", "Debug console")}
-      titleHelp={t("pages.studio.studiomemberinvokesetuppanels.prompt.2", "Enter a prompt or payload first, then invoke the current member directly.")}
+      title={t("pages.studio.studiomemberinvokesetuppanels.copy.3", "Request")}
+      titleHelp={t("pages.studio.studiomemberinvokesetuppanels.prompt.2", "Describe the work to run against this workflow member.")}
     >
       {content}
     </AevatarPanel>

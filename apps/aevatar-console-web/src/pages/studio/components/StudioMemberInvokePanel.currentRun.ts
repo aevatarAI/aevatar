@@ -133,7 +133,7 @@ export function getStudioInvokeObserveHandoffText(input: {
   if (input.status === 'running') {
     return t(
       'pages.studio.studiomemberinvokepanelcurrentrun.observe.will.follow.the.latest',
-      'Observe will follow the latest run context after backend events arrive. Keep Invoke open while this stream updates.',
+      'Observe will follow the latest run context after backend events arrive. Keep this page open while the response updates.',
     );
   }
 
@@ -141,13 +141,13 @@ export function getStudioInvokeObserveHandoffText(input: {
     if (input.mode === 'invoke') {
       return t(
         'pages.studio.studiomemberinvokepanelcurrentrun.invoke.receipt.was.captured',
-        'Invoke receipt was captured. Switch to Observe to watch backend events and read-model materialization catch up for this member.',
+        'The workflow run was accepted. Switch to Observe to watch backend events and read-model materialization catch up for this member.',
       );
     }
 
     return t(
       'pages.studio.studiomemberinvokepanelcurrentrun.this.run.is.ready.for.observe',
-      'This run is ready for Observe. Switch to Observe to inspect backend events, audit frames, and the runtime trail for this member.',
+      'This run is ready for Observe. Switch to Observe when you need backend events, audit frames, or the runtime trail for this member.',
     );
   }
 

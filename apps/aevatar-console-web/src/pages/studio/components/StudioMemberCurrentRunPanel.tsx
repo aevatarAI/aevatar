@@ -95,10 +95,10 @@ function getRunMarker(input: {
   }
 
   if (input.status === 'running') {
-    return 'Running run';
+    return 'Running';
   }
 
-  return 'Latest run';
+  return 'Latest response';
 }
 
 function buildStatusSummary(input: {
@@ -231,7 +231,7 @@ const tabPaneStyle: React.CSSProperties = {
 
 const outputPaneStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 12,
+  gap: 10,
   minWidth: 0,
 };
 
@@ -243,6 +243,13 @@ const sectionStyle: React.CSSProperties = {
   gap: 8,
   minWidth: 0,
   padding: '12px 14px',
+};
+
+const responseSectionStyle: React.CSSProperties = {
+  ...sectionStyle,
+  background: studioInvokeColors.panel,
+  borderColor: studioInvokeColors.borderStrong,
+  padding: '16px 18px',
 };
 
 const sectionLabelStyle: React.CSSProperties = {
@@ -266,6 +273,9 @@ const bodyTextStyle: React.CSSProperties = {
 
 const emptyStateStyle: React.CSSProperties = {
   alignItems: 'center',
+  background: studioInvokeColors.surface,
+  border: `1px dashed ${studioInvokeColors.borderStrong}`,
+  borderRadius: 8,
   color: studioInvokeColors.muted,
   display: 'flex',
   flex: 1,
@@ -611,7 +621,7 @@ const StudioMemberCurrentRunPanel: React.FC<
   const tabItems = [
     {
       key: 'output' as const,
-      label: t("pages.studio.studiomembercurrentrunpanel.output", "Output"),
+      label: t("pages.studio.studiomembercurrentrunpanel.output", "Response"),
     },
     {
       key: 'timeline' as const,
@@ -642,10 +652,10 @@ const StudioMemberCurrentRunPanel: React.FC<
       return (
           <div style={outputPaneStyle}>
             <div style={sectionStyle}>
-              <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input", "Input")}</span>
+              <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input", "Request")}</span>
             <p style={bodyTextStyle}>
               {inputText ||
-                t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No prompt captured.")}
+                t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No request captured.")}
             </p>
             </div>
           <div style={isCancelled ? warningCardStyle : errorCardStyle}>
@@ -680,7 +690,7 @@ const StudioMemberCurrentRunPanel: React.FC<
           ) : null}
           {outputText ? (
             <div style={sectionStyle}>
-              <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output", "Output")}</span>
+              <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output", "Response")}</span>
               <p style={bodyTextStyle}>{outputText}</p>
             </div>
           ) : null}
@@ -688,8 +698,8 @@ const StudioMemberCurrentRunPanel: React.FC<
             <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.recovery.path", "Recovery path")}</span>
             <Typography.Text style={helperTextStyle}>
               {isCancelled
-                ? t("pages.studio.studiomembercurrentrunpanel.this.stopped.run.stays.in.history", "This stopped run stays in history. Retry as a new run when you want fresh output, or switch to Observe to inspect the latest backend events.")
-                : t("pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run", "This failed only the Invoke run. Retry with a smaller prompt, inspect Events for backend signals, or return to Build/Bind if the member contract needs changes.")}
+                ? t("pages.studio.studiomembercurrentrunpanel.this.stopped.run.stays.in.history", "This stopped run stays in history. Retry as a new run when you want a fresh response, or open Details for backend events.")
+                : t("pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run", "This run failed. Retry with a smaller request, open Details for backend signals, or return to Build/Bind if the member contract needs changes.")}
             </Typography.Text>
           </div>
           <div style={errorActionsStyle}>
@@ -699,7 +709,7 @@ const StudioMemberCurrentRunPanel: React.FC<
                 onOpenInspector ? onOpenInspector() : onTabChange('events')
               }
             >
-              {t("pages.studio.studiomembercurrentrunpanel.view.events", "View events")}</Button>
+              {t("pages.studio.studiomembercurrentrunpanel.view.events", "Open Details")}</Button>
             <Button icon={<CopyOutlined />} onClick={onCopyError}>
               {t("pages.studio.studiomembercurrentrunpanel.copy.error", "Copy error")}</Button>
             <Button icon={<ReloadOutlined />} onClick={onRetryAsNewRun}>
@@ -716,33 +726,33 @@ const StudioMemberCurrentRunPanel: React.FC<
         style={outputPaneStyle}
       >
         <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.status.summary", "Status summary")}</span>
+          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.status.summary", "Run status")}</span>
           <div style={summaryStyle}>{statusSummary}</div>
         </div>
         <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input.2", "Input")}</span>
+          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input.2", "Request")}</span>
           <p style={bodyTextStyle}>
             {inputText ||
-              t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No prompt captured.")}
+              t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No request captured.")}
           </p>
         </div>
-        <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output.2", "Output")}</span>
+        <div style={responseSectionStyle}>
+          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output.2", "Response")}</span>
           {invokeResult.status === 'running' && !outputText ? (
             <Typography.Text style={helperTextStyle} type="secondary">
-              {t("pages.studio.studiomembercurrentrunpanel.waiting.for.output", "Waiting for output...")}</Typography.Text>
+              {t("pages.studio.studiomembercurrentrunpanel.waiting.for.output", "Waiting for a response...")}</Typography.Text>
           ) : outputText ? (
             <p style={bodyTextStyle}>{outputText}</p>
           ) : invokeResult.status === 'success' ? (
             <div style={helperTextStyle}>
-              <div>{t("pages.studio.studiomembercurrentrunpanel.no.displayable.content.returned", "No displayable content returned.")}</div>
+              <div>{t("pages.studio.studiomembercurrentrunpanel.no.displayable.content.returned", "No readable response returned.")}</div>
               <div>
-                {t("pages.studio.studiomembercurrentrunpanel.the.run.ended.successfully", "The Run ended successfully but no user-visible Output was returned.")}</div>
-              <div>{t("pages.studio.studiomembercurrentrunpanel.you.can.view.events", "You can view Events or Details to troubleshoot the cause.")}</div>
+                {t("pages.studio.studiomembercurrentrunpanel.the.run.ended.successfully", "The run ended successfully, but it did not return user-visible content.")}</div>
+              <div>{t("pages.studio.studiomembercurrentrunpanel.you.can.view.events", "Open Details when you need event or payload evidence.")}</div>
             </div>
           ) : (
             <Typography.Text style={helperTextStyle} type="secondary">
-              {t("pages.studio.studiomembercurrentrunpanel.waiting.for.output.2", "Waiting for output...")}</Typography.Text>
+              {t("pages.studio.studiomembercurrentrunpanel.waiting.for.output.2", "Waiting for a response...")}</Typography.Text>
           )}
         </div>
         {observeHandoffText ? (
@@ -889,7 +899,7 @@ const StudioMemberCurrentRunPanel: React.FC<
       </div>
       {showDebugTabs ? (
         <div style={tabsStyle}>
-          <div aria-label={t("pages.studio.studiomembercurrentrunpanel.run.output.views", "Run output views")} role="tablist" style={tabListStyle}>
+          <div aria-label={t("pages.studio.studiomembercurrentrunpanel.run.output.views", "Run detail views")} role="tablist" style={tabListStyle}>
             {tabItems.map((item) => {
               const selected = item.key === activeTab;
               return (

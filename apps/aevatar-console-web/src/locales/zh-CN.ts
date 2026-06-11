@@ -585,7 +585,7 @@ const zhCNMessages = {
   'pages.teammemberinvoke.service.pending': '发布服务暂不可见。',
   'pages.teammemberinvoke.service.pending.description':
     '成员绑定已经存在，但服务目录还没有暴露它的可调用端点。',
-  'pages.teammemberinvoke.title': '运行成员',
+  'pages.teammemberinvoke.title': '运行工作流成员',
   'pages.teammemberinvoke.revision.ready': '就绪',
   'pages.teammemberinvoke.service.bound': '已绑定服务',
   'pages.teammemberinvoke.unbound': '这个 Workflow 成员尚未绑定。',
@@ -739,8 +739,8 @@ const zhCNMessages = {
   'pages.studio.studiomemberinvokeinspector.copy':
     '端点详情、类型化载荷和最近运行记录会在这里按需打开，不改变主控制台布局。',
   'pages.studio.studiomemberinvokeinspector.current.run': '当前运行',
-  'pages.studio.studiomemberinvokeinspector.close': '关闭调用检查器',
-  'pages.studio.studiomemberinvokeinspector.drag.handle': '拖拽调用检查器',
+  'pages.studio.studiomemberinvokeinspector.close': '关闭详情',
+  'pages.studio.studiomemberinvokeinspector.drag.handle': '拖拽详情面板',
   'pages.studio.studiomemberinvokeinspector.endpoint': '端点',
   'pages.studio.studiomemberinvokeinspector.endpoint.2': '端点',
   'pages.studio.studiomemberinvokeinspector.history': '历史',
@@ -759,9 +759,9 @@ const zhCNMessages = {
     '调整调用检查器宽度',
   'pages.studio.studiomemberinvokeinspector.run': '运行',
   'pages.studio.studiomemberinvokeinspector.service.target': '服务目标',
-  'pages.studio.studiomemberinvokeinspector.title': '调用检查器',
+  'pages.studio.studiomemberinvokeinspector.title': '详情',
   'pages.studio.studiomemberinvokepanel.endpoint': '端点',
-  'pages.studio.studiomemberinvokepanel.inspector': '检查器',
+  'pages.studio.studiomemberinvokepanel.inspector': '详情',
 };
 
 export default zhCNMessages;

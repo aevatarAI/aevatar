@@ -26,7 +26,6 @@ import {
 } from '@/shared/runs/scopeConsole';
 import { studioApi } from '@/shared/studio/api';
 import {
-  describeStudioMemberBindingRevisionContext,
   normalizeStudioMemberBindingImplementationKind,
   type StudioMemberBindingRevision,
 } from '@/shared/studio/models';
@@ -256,7 +255,9 @@ function createPendingHistoryEntry(input: {
     serviceId: input.serviceId,
     startedAt: input.startedAt,
     status: 'running',
-    summary: trimPreview(input.prompt, 72) || 'Running run',
+    summary:
+      trimPreview(input.prompt, 72) ||
+      t("pages.studio.studiomemberinvokepanel.running.workflow", "Running workflow"),
     snapshot: {
       chatMessages: cloneChatMessages(input.chatMessages),
       result: cloneInvokeResult(input.result),
@@ -284,17 +285,7 @@ const surfaceStyle: React.CSSProperties = {
   display: 'flex',
   flex: '0 0 auto',
   flexDirection: 'column',
-  gap: 12,
-  minHeight: 0,
-  minWidth: 0,
-  overflow: 'visible',
-};
-
-const runConsolePanelStyle: React.CSSProperties = {
-  display: 'flex',
-  flex: '0 0 auto',
-  flexDirection: 'column',
-  gap: 0,
+  gap: 16,
   minHeight: 0,
   minWidth: 0,
   overflow: 'visible',
@@ -304,15 +295,14 @@ const targetSummaryStyle: React.CSSProperties = {
   alignItems: 'center',
   background: studioInvokeColors.panel,
   border: `1px solid ${studioInvokeColors.border}`,
-  borderRadius: 10,
+  borderRadius: 8,
   display: 'flex',
   flex: '0 0 auto',
   flexWrap: 'wrap',
-  gap: 8,
+  gap: 12,
   justifyContent: 'space-between',
-  marginBottom: 10,
   minWidth: 0,
-  padding: '10px 12px',
+  padding: '14px 16px',
 };
 
 const targetTitleStyle: React.CSSProperties = {
@@ -371,10 +361,19 @@ const targetPillStyle: React.CSSProperties = {
   padding: '3px 9px',
 };
 
+const targetActionStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flex: '0 0 auto',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'flex-end',
+};
+
 const invokeSectionPanelBaseStyle: React.CSSProperties = {
   background: studioInvokeColors.panel,
   border: `1px solid ${studioInvokeColors.border}`,
-  borderRadius: 10,
+  borderRadius: 8,
   boxShadow: '0 8px 20px rgba(15, 23, 42, 0.06)',
   display: 'flex',
   flexDirection: 'column',
@@ -385,9 +384,16 @@ const invokeSectionPanelBaseStyle: React.CSSProperties = {
 
 const invokeSectionTitleStyle: React.CSSProperties = {
   color: studioInvokeColors.text,
-  fontSize: 15,
+  fontSize: 16,
   fontWeight: 800,
+  lineHeight: '22px',
+};
+
+const invokeSectionHelpStyle: React.CSSProperties = {
+  color: studioInvokeColors.muted,
+  fontSize: 13,
   lineHeight: '20px',
+  marginTop: 2,
 };
 
 const invokeSectionBodyStyle: React.CSSProperties = {
@@ -404,31 +410,52 @@ const invokeWorkspaceStyle: React.CSSProperties = {
   display: 'flex',
   flex: '0 0 auto',
   flexDirection: 'column',
+  gap: 14,
   minHeight: 0,
   minWidth: 0,
   overflow: 'visible',
 };
 
-const mainConsoleAreaStyle: React.CSSProperties = {
+const workflowRunSurfaceStyle: React.CSSProperties = {
   display: 'flex',
   flex: '0 0 auto',
   flexDirection: 'column',
-  gap: 10,
+  gap: 14,
   minHeight: 0,
   minWidth: 0,
   overflow: 'visible',
 };
 
-const invokeRunOutputSectionStyle: React.CSSProperties = {
+const invokeRequestSectionStyle: React.CSSProperties = {
   ...invokeSectionPanelBaseStyle,
   flex: '0 0 auto',
   minHeight: 0,
   minWidth: 0,
 };
 
-const invokeRunOutputBodyStyle: React.CSSProperties = {
+const invokeResponseSectionStyle: React.CSSProperties = {
+  ...invokeSectionPanelBaseStyle,
+  boxShadow: 'none',
+  flex: '0 0 auto',
+  minHeight: 0,
+  minWidth: 0,
+};
+
+const invokeSectionHeaderStyle: React.CSSProperties = {
+  flex: '0 0 auto',
+  padding: '16px 18px 0',
+};
+
+const invokeRequestBodyStyle: React.CSSProperties = {
   ...invokeSectionBodyStyle,
   gap: 10,
+  padding: '14px 18px 18px',
+};
+
+const invokeResponseBodyStyle: React.CSSProperties = {
+  ...invokeSectionBodyStyle,
+  gap: 10,
+  padding: '14px 18px 18px',
 };
 
 const currentRunViewportStyle: React.CSSProperties = {
@@ -442,13 +469,9 @@ const currentRunViewportStyle: React.CSSProperties = {
 
 const invokeComposerDockStyle: React.CSSProperties = {
   background: studioInvokeColors.panel,
-  border: `1px solid ${studioInvokeColors.border}`,
-  borderRadius: 10,
   flex: '0 0 auto',
-  marginBottom: 10,
   minWidth: 0,
-  overflow: 'hidden',
-  padding: '8px 10px',
+  overflow: 'visible',
 };
 
 const runStatusDotBaseStyle: React.CSSProperties = {
@@ -606,8 +629,6 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const endpointSummaryLabel =
     selectedEndpoint?.displayName ||
     t("pages.studio.studiomemberinvokepanel.endpoint", "Endpoint");
-  const currentPublishedContext =
-    describeStudioMemberBindingRevisionContext(memberRevision) || '';
   const currentImplementationKind =
     normalizeStudioMemberBindingImplementationKind(
       memberRevision?.implementationKind,
@@ -621,12 +642,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       return [
         {
           key: 'endpoint',
-          label: 'Endpoint',
+          label: t("pages.studio.studiomemberinvokepanel.endpoint", "Endpoint"),
           value: endpointSummaryLabel,
         },
         {
           key: 'status',
-          label: 'Status',
+          label: t("pages.studio.studiomemberinvokepanel.status", "Status"),
           value: lifecycleLabel,
         },
       ];
@@ -637,26 +658,26 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ? [
             {
               key: 'team',
-              label: 'Team',
+              label: t("pages.studio.studiomemberinvokepanel.team", "Team"),
               value: t("pages.studio.studiomemberinvokepanel.team.context", "Team context"),
             },
           ]
         : []),
       {
         key: 'member',
-        label: 'Member',
+        label: t("pages.studio.studiomemberinvokepanel.member", "Member"),
         value: currentMemberLabel,
       },
       {
         key: 'service',
-        label: 'Service',
+        label: t("pages.studio.studiomemberinvokepanel.service", "Service"),
         value:
           selectedService?.displayName ||
           t("pages.studio.studiomemberinvokepanel.bound.service", "Bound service"),
       },
       {
         key: 'endpoint',
-        label: 'Endpoint',
+        label: t("pages.studio.studiomemberinvokepanel.endpoint", "Endpoint"),
         value: endpointSummaryLabel,
       },
       {
@@ -665,7 +686,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       },
       {
         key: 'lifecycle',
-        label: 'Lifecycle',
+        label: t("pages.studio.studiomemberinvokepanel.lifecycle", "Lifecycle"),
         value: lifecycleLabel,
       },
     ];
@@ -683,9 +704,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     : !normalizedMemberId
       ? t("pages.studio.studiomemberinvokepanel.missing.team.member.target", "Missing Team member target.")
       : !selectedService
-        ? t("pages.studio.studiomemberinvokepanel.select.published.member.service", "Select a published member service before invoking.")
+        ? t("pages.studio.studiomemberinvokepanel.select.published.member.service", "Select a published member service before running.")
         : !selectedEndpoint
-          ? t("pages.studio.studiomemberinvokepanel.select.endpoint.before.invoking", "Select an endpoint before invoking.")
+          ? t("pages.studio.studiomemberinvokepanel.select.endpoint.before.invoking", "Select an endpoint before running.")
           : '';
   const runViewMode = selectedHistoryId ? 'historical' : 'latest';
 
@@ -988,7 +1009,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ?.focus();
     }, 0);
     void message.info(
-      t("pages.studio.studiomemberinvokepanel.prompt.restored.click.invoke", "Prompt restored. Click Invoke to create a new Run."),
+      t("pages.studio.studiomemberinvokepanel.prompt.restored.click.invoke", "Request restored. Run workflow to create a new run."),
     );
   }, []);
 
@@ -1048,7 +1069,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       : 'invoke';
 
     if (isChatServiceEndpoint(selectedEndpoint) && !trimmedPrompt) {
-      setFormError(t("pages.studio.studiomemberinvokepanel.please.enter.prompt.before", "Please enter Prompt before initiating Invoke."));
+      setFormError(t("pages.studio.studiomemberinvokepanel.please.enter.prompt.before", "Enter a request before running this workflow."));
       return;
     }
 
@@ -1057,7 +1078,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       !trimmedPrompt &&
       !trimmedPayloadBase64
     ) {
-      setFormError(t("pages.studio.studiomemberinvokepanel.please.enter.prompt.before.2", "Please enter Prompt before initiating Invoke."));
+      setFormError(t("pages.studio.studiomemberinvokepanel.please.enter.prompt.before.2", "Enter a request before running this workflow."));
       return;
     }
 
@@ -1575,90 +1596,116 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 ) : null}
               </div>
             </div>
-            <div style={targetPillStyle}>
-              <span
-                style={{
-                  ...runStatusDotBaseStyle,
-                  background: getInvokeStatusTone(invokeResult.status).dot,
-                }}
-              />
-              {getRunStatusLabel(invokeResult.status)}
+            <div style={targetActionStyle}>
+              <div style={targetPillStyle}>
+                <span
+                  style={{
+                    ...runStatusDotBaseStyle,
+                    background: getInvokeStatusTone(invokeResult.status).dot,
+                  }}
+                />
+                {getRunStatusLabel(invokeResult.status)}
+              </div>
+              <Button
+                icon={<InfoCircleOutlined />}
+                onClick={() => setIsInspectorOpen(true)}
+              >
+                {t("pages.studio.studiomemberinvokepanel.inspector", "Details")}
+              </Button>
             </div>
-            <Button
-              icon={<InfoCircleOutlined />}
-              onClick={() => setIsInspectorOpen(true)}
-            >
-              {t("pages.studio.studiomemberinvokepanel.inspector", "Inspector")}
-            </Button>
           </div>
 
           <div
             data-testid="studio-invoke-main-console"
-            style={mainConsoleAreaStyle}
+            style={workflowRunSurfaceStyle}
           >
             <div
-              data-testid="studio-invoke-run-output-section"
-              style={invokeRunOutputSectionStyle}
+              data-testid="studio-invoke-request-section"
+              style={invokeRequestSectionStyle}
             >
-              <div style={{ flex: '0 0 auto', padding: '12px 14px 0' }}>
-                <span style={invokeSectionTitleStyle}>{t("pages.studio.studiomemberinvokepanel.run.output", "Run output")}</span>
+              <div
+                data-testid="studio-invoke-request-header"
+                style={invokeSectionHeaderStyle}
+              >
+                <div style={invokeSectionTitleStyle}>
+                  {t("pages.studio.studiomemberinvokepanel.request.title", "Request")}
+                </div>
+                <div style={invokeSectionHelpStyle}>
+                  {t("pages.studio.studiomemberinvokepanel.request.help", "Describe the task for this workflow member, then run it against the published service.")}
+                </div>
               </div>
               <div
-                data-testid="studio-invoke-run-output-body"
-                style={invokeRunOutputBodyStyle}
+                data-testid="studio-invoke-request-body"
+                style={invokeRequestBodyStyle}
               >
-                <div style={runConsolePanelStyle}>
-                  <div
-                    data-testid="studio-invoke-current-run-viewport"
-                    style={currentRunViewportStyle}
-                  >
-                    <StudioMemberCurrentRunPanel
-                      activeRunCompletedAt={activeRunCompletedAt}
-                      activeTab={consoleTab}
-                      chatMessages={chatMessages}
-                      currentRawOutput={currentRawOutput}
-                      currentRunHasData={currentRunHasData}
-                      currentRunRequest={currentRunRequest}
-                      endpointLabel={endpointLabel}
-                      invokeResult={invokeResult}
-                      runElapsedLabel={runElapsedLabel}
-                      runViewMode={runViewMode}
-                      showDebugTabs={false}
-                      transcriptViewportRef={transcriptViewportRef}
-                      onCopyError={() =>
-                        writeClipboardText(invokeResult.error, 'Error')
-                      }
-                      onOpenInspector={() => setIsInspectorOpen(true)}
-                      onRetryAsNewRun={() => {
-                        restorePromptForNewRun(currentRunRequest?.prompt || '');
-                      }}
-                      onTabChange={setConsoleTab}
-                    />
-                  </div>
+                <div
+                  data-testid="studio-invoke-composer-dock"
+                  ref={composerDockRef}
+                  style={invokeComposerDockStyle}
+                >
+                  <StudioMemberInvokeComposerPanel
+                    blockedReason={invokeBlockedReason}
+                    canInvoke={canInvoke}
+                    defaultPrompt={effectiveDefaultPrompt}
+                    formError={formError}
+                    invokeStatus={invokeResult.status}
+                    isHistoricalRunSelected={runViewMode === 'historical'}
+                    isChatEndpoint={isChatEndpoint}
+                    layout="dock"
+                    prompt={prompt}
+                    onAbort={handleAbort}
+                    onClear={handleClear}
+                    onInvoke={() => void handleInvoke()}
+                    onPromptChange={setPrompt}
+                  />
                 </div>
               </div>
             </div>
 
             <div
-              data-testid="studio-invoke-composer-dock"
-              ref={composerDockRef}
-              style={invokeComposerDockStyle}
+              data-testid="studio-invoke-run-output-section"
+              style={invokeResponseSectionStyle}
             >
-              <StudioMemberInvokeComposerPanel
-                blockedReason={invokeBlockedReason}
-                canInvoke={canInvoke}
-                defaultPrompt={effectiveDefaultPrompt}
-                formError={formError}
-                invokeStatus={invokeResult.status}
-                isHistoricalRunSelected={runViewMode === 'historical'}
-                isChatEndpoint={isChatEndpoint}
-                layout="dock"
-                prompt={prompt}
-                onAbort={handleAbort}
-                onClear={handleClear}
-                onInvoke={() => void handleInvoke()}
-                onPromptChange={setPrompt}
-              />
+              <div style={invokeSectionHeaderStyle}>
+                <div style={invokeSectionTitleStyle}>
+                  {t("pages.studio.studiomemberinvokepanel.run.output", "Response")}
+                </div>
+                <div style={invokeSectionHelpStyle}>
+                  {t("pages.studio.studiomemberinvokepanel.response.help", "Read the workflow response here. Details stays available for events, history, and payload fields.")}
+                </div>
+              </div>
+              <div
+                data-testid="studio-invoke-run-output-body"
+                style={invokeResponseBodyStyle}
+              >
+                <div
+                  data-testid="studio-invoke-current-run-viewport"
+                  style={currentRunViewportStyle}
+                >
+                  <StudioMemberCurrentRunPanel
+                    activeRunCompletedAt={activeRunCompletedAt}
+                    activeTab={consoleTab}
+                    chatMessages={chatMessages}
+                    currentRawOutput={currentRawOutput}
+                    currentRunHasData={currentRunHasData}
+                    currentRunRequest={currentRunRequest}
+                    endpointLabel={endpointLabel}
+                    invokeResult={invokeResult}
+                    runElapsedLabel={runElapsedLabel}
+                    runViewMode={runViewMode}
+                    showDebugTabs={false}
+                    transcriptViewportRef={transcriptViewportRef}
+                    onCopyError={() =>
+                      writeClipboardText(invokeResult.error, 'Error')
+                    }
+                    onOpenInspector={() => setIsInspectorOpen(true)}
+                    onRetryAsNewRun={() => {
+                      restorePromptForNewRun(currentRunRequest?.prompt || '');
+                    }}
+                    onTabChange={setConsoleTab}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
