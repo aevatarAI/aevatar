@@ -189,6 +189,7 @@ function trimOptional(value: string | null | undefined): string {
 }
 
 function readPathSegments(): {
+  canonicalHref: string;
   memberId: string;
   mode: TeamMemberWorkflowStudioMode;
   scopeId: string;
@@ -203,17 +204,52 @@ function readPathSegments(): {
     typeof window === "undefined"
       ? new URLSearchParams()
       : new URLSearchParams(window.location.search);
-  const scopeId = trimOptional(segments[1]);
-  const teamId = trimOptional(segments[2]);
-  const routeMemberId = trimOptional(segments[4]);
+  const pathname =
+    typeof window === "undefined" ? "" : window.location.pathname;
+  const currentHref =
+    typeof window === "undefined"
+      ? pathname
+      : `${window.location.pathname}${window.location.search}`;
+  const hasScopedTeamPath =
+    segments[0] === "scopes" && segments[2] === "teams";
+  const scopedTeamsIndex = hasScopedTeamPath ? 2 : -1;
+  const membersIndex =
+    scopedTeamsIndex >= 0
+      ? segments.indexOf("members", scopedTeamsIndex + 2)
+      : -1;
+  const scopeId =
+    hasScopedTeamPath
+      ? trimOptional(segments[1])
+      : "";
+  const teamId =
+    scopedTeamsIndex >= 0
+      ? trimOptional(segments[scopedTeamsIndex + 1])
+      : "";
+  const routeMemberId =
+    membersIndex >= 0 ? trimOptional(segments[membersIndex + 1]) : "";
+  const routeSurface =
+    membersIndex >= 0 ? trimOptional(segments[membersIndex + 2]) : "";
+  const isWorkflowEditorRoute = routeSurface === "workflow";
   const mode = routeMemberId === "new" ? "new" : "existing";
+  const workflowId = trimOptional(params.get("workflowId"));
+  const canonicalHref =
+    isWorkflowEditorRoute && scopeId && teamId
+      ? buildTeamMemberWorkflowStudioHref({
+          memberId: mode === "existing" ? routeMemberId : undefined,
+          mode: mode === "new" ? "create-member" : "edit-member",
+          scopeId,
+          teamId,
+          workflowId,
+        })
+      : currentHref;
 
   return {
+    canonicalHref,
     memberId: mode === "existing" ? routeMemberId : "",
     mode,
     scopeId,
     teamId,
-    workflowId: trimOptional(params.get("workflowId")),
+    workflowId,
   };
 }
 
@@ -326,29 +362,21 @@ function resolveWorkflowDraftReloadIds(
   const memberId = resolveMemberWorkflowOwnerId(memberDetail, routeMemberId);
   const publishedServiceId = trimOptional(memberDetail?.summary.publishedServiceId);
   const routeDraftWorkflowId = trimOptional(routeWorkflowId);
-  const routeIsPublishedService = isPublishedServiceWorkflowIdentity({
+  const routeIsReloadableWorkflowId = isReloadWorkflowIdAllowed({
     memberId,
     publishedServiceId,
     workflowId: routeDraftWorkflowId,
   });
-  const explicitIsPublishedService = isPublishedServiceWorkflowIdentity({
+  const explicitIsReloadableWorkflowId = isReloadWorkflowIdAllowed({
     memberId,
     publishedServiceId,
     workflowId: explicitWorkflowId,
   });
-  const ids = routeIsPublishedService || explicitIsPublishedService
-    ? [
-        trimOptional(recoveredWorkflowId),
-        routeIsPublishedService ? "" : routeDraftWorkflowId,
-        explicitIsPublishedService ? "" : explicitWorkflowId,
-        routeIsPublishedService ? routeDraftWorkflowId : "",
-        explicitIsPublishedService ? explicitWorkflowId : "",
-      ]
-    : [
-        routeDraftWorkflowId,
-        trimOptional(recoveredWorkflowId),
-        explicitWorkflowId,
-      ];
+  const ids = [
+    trimOptional(recoveredWorkflowId),
+    explicitIsReloadableWorkflowId ? explicitWorkflowId : "",
+    routeIsReloadableWorkflowId ? routeDraftWorkflowId : "",
+  ];
 
   return Array.from(new Set(ids.filter(Boolean)));
 }
@@ -369,6 +397,34 @@ function selectPublishedService(
   );
 }
 
+function readServiceIdFromServiceKey(serviceKey: string): string {
+  const normalized = trimOptional(serviceKey);
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.split(":").filter(Boolean).at(-1) ?? normalized;
+}
+
+function serviceKeysReferToSameService(
+  leftServiceKey?: string | null,
+  rightServiceKey?: string | null,
+): boolean {
+  const left = trimOptional(leftServiceKey);
+  const right = trimOptional(rightServiceKey);
+  if (!left || !right) {
+    return false;
+  }
+
+  if (left === right) {
+    return true;
+  }
+
+  const leftServiceId = readServiceIdFromServiceKey(left);
+  const rightServiceId = readServiceIdFromServiceKey(right);
+  return Boolean(leftServiceId && leftServiceId === rightServiceId);
+}
+
 function workflowMatchesPublishedService(
   workflow: WorkflowBindingCandidate,
   service: ServiceCatalogSnapshot,
@@ -383,31 +439,52 @@ function workflowMatchesPublishedService(
   }
 
   const workflowServiceKey = trimOptional(workflow.serviceKey);
-  return Boolean(
-    workflowServiceKey && workflowServiceKey === trimOptional(service.serviceKey),
+  return serviceKeysReferToSameService(workflowServiceKey, service.serviceKey);
+}
+
+function isReloadWorkflowIdAllowed(input: {
+  readonly memberId: string;
+  readonly publishedServiceId: string;
+  readonly workflowId?: string | null;
+}): boolean {
+  const workflowId = trimOptional(input.workflowId);
+  if (!workflowId) {
+    return false;
+  }
+
+  return !isPublishedServiceWorkflowIdentity({
+    memberId: input.memberId,
+    publishedServiceId: input.publishedServiceId,
+    workflowId,
+  });
+}
+
+function selectWorkflowByRevision<TWorkflow extends WorkflowBindingCandidate>(
+  workflows: readonly TWorkflow[],
+  revisionId: string,
+): TWorkflow | null {
+  const normalizedRevisionId = trimOptional(revisionId);
+  if (!normalizedRevisionId) {
+    return null;
+  }
+
+  return (
+    workflows.find(
+      (workflow) => trimOptional(workflow.activeRevisionId) === normalizedRevisionId,
+    ) ?? null
   );
 }
 
 function selectWorkflowForPublishedMember<TWorkflow extends WorkflowBindingCandidate>(input: {
   readonly boundWorkflowRevisionId: string;
-  readonly memberId: string;
   readonly publishedService: ServiceCatalogSnapshot | null;
   readonly workflows: readonly TWorkflow[];
 }): TWorkflow | null {
-  const normalizedMemberId = trimOptional(input.memberId);
-  if (normalizedMemberId) {
-    const memberOwnedDraft = input.workflows.find(
-      (workflow) => trimOptional(workflow.workflowId) === normalizedMemberId,
-    );
-    if (memberOwnedDraft) {
-      return memberOwnedDraft;
-    }
-  }
-
   const normalizedRevisionId = trimOptional(input.boundWorkflowRevisionId);
   if (normalizedRevisionId) {
-    const revisionMatch = input.workflows.find(
-      (workflow) => trimOptional(workflow.activeRevisionId) === normalizedRevisionId,
+    const revisionMatch = selectWorkflowByRevision(
+      input.workflows,
+      normalizedRevisionId,
     );
     if (revisionMatch) {
       return revisionMatch;
@@ -420,8 +497,9 @@ function selectWorkflowForPublishedMember<TWorkflow extends WorkflowBindingCandi
   const publishedService = input.publishedService;
 
   return (
-    input.workflows.find((workflow) =>
-      workflowMatchesPublishedService(workflow, publishedService),
+    input.workflows.find(
+      (workflow) =>
+        workflowMatchesPublishedService(workflow, publishedService),
     ) ?? null
   );
 }
@@ -799,6 +877,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     getLocationSnapshot,
   );
   const route = React.useMemo(readPathSegments, [locationSnapshot]);
+  React.useEffect(() => {
+    const currentHref = `${window.location.pathname}${window.location.search}`;
+    if (route.canonicalHref && currentHref !== route.canonicalHref) {
+      history.replace(route.canonicalHref);
+    }
+  }, [route.canonicalHref]);
   const [dirty, setDirty] = React.useState(false);
   const [editableDocument, setEditableDocument] =
     React.useState<StudioWorkflowDocument | null>(null);
@@ -907,14 +991,19 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     publishedServiceId: memberPublishedServiceId,
     workflowId: explicitWorkflowId,
   });
+  const hasExplicitWorkflowId = Boolean(
+    explicitWorkflowId && !explicitWorkflowIdIsPublishedService,
+  );
   const shouldResolveWorkflowFromRevision = Boolean(
     route.mode === "existing" &&
       route.scopeId &&
+      !memberQuery.isLoading &&
+      memberQuery.data &&
       (!trimOptional(route.workflowId) || routeWorkflowIdIsPublishedService) &&
       (boundWorkflowRevisionId ||
-        memberPublishedServiceId ||
-        routeWorkflowIdIsPublishedService ||
-        explicitWorkflowIdIsPublishedService),
+        explicitWorkflowIdIsPublishedService ||
+        (!hasExplicitWorkflowId &&
+          (memberPublishedServiceId || routeWorkflowIdIsPublishedService))),
   );
   const workflowRevisionQuery = useQuery({
     enabled: shouldResolveWorkflowFromRevision,
@@ -938,7 +1027,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       );
       return selectWorkflowForPublishedMember({
         boundWorkflowRevisionId,
-        memberId: memberWorkflowOwnerId,
         publishedService,
         workflows,
       });
@@ -948,13 +1036,18 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const recoveredWorkflowId = trimOptional(
     workflowRevisionQuery.data?.workflowId,
   );
+  const recoveredWorkflowIdIsPublishedService = isPublishedServiceWorkflowIdentity({
+    memberId: memberWorkflowOwnerId,
+    publishedServiceId: memberPublishedServiceId,
+    workflowId: recoveredWorkflowId,
+  });
   const workflowDraftReloadIds =
     route.mode === "existing"
       ? resolveWorkflowDraftReloadIds(
           memberQuery.data,
           route.memberId,
           route.workflowId,
-          recoveredWorkflowId,
+          recoveredWorkflowIdIsPublishedService ? "" : recoveredWorkflowId,
         )
       : [];
   const workflowQueryKey = getTeamMemberWorkflowStudioWorkflowQueryKey(
@@ -1189,8 +1282,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         throw new Error("Workflow draft save did not return a stable workflow id.");
       }
 
-      const createdMember = await studioApi.createMember({
+      const createdMember = await studioApi.createMemberWithId({
         scopeId: route.scopeId,
+        memberId: savedWorkflowId,
         displayName: normalizedTitle,
         implementationKind: "workflow",
         teamId: route.teamId,

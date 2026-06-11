@@ -14,7 +14,7 @@ import {
   history,
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
-import { buildScopeHref } from "@/shared/navigation/scopeRoutes";
+import { buildTeamWorkspaceRoute } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
   buildTeamMemberInvokeHref,
@@ -382,7 +382,7 @@ const TeamDetailPage: React.FC = () => {
     hasTeamIdentity && cachedTeamSummary?.teamId === selectedTeamId,
   );
   const teamsListHref = React.useMemo(
-    () => buildScopeHref("/teams", { scopeId }),
+    () => buildTeamWorkspaceRoute(scopeId),
     [scopeId],
   );
   const [preferredMemberId, setPreferredMemberId] = React.useState(routeState.memberId);

@@ -130,7 +130,7 @@ function buildServiceRunCatalog(serviceId: string) {
 
 describe("TeamsHomePage", () => {
   beforeEach(() => {
-    window.history.replaceState({}, "", "/teams?scopeId=scope-a");
+    window.history.replaceState({}, "", "/scopes/scope-a/teams");
     window.sessionStorage.clear();
     clearStoredAuthSession();
     jest.clearAllMocks();
@@ -236,7 +236,7 @@ describe("TeamsHomePage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
 
-    expect(window.location.pathname).toBe("/teams/new");
+    expect(window.location.pathname).toBe("/scopes/scope-a/teams/new");
   });
 
   it("does not show the roster view toggle when only one Team is visible", async () => {
@@ -574,7 +574,7 @@ describe("TeamsHomePage", () => {
 
     await waitFor(() => {
       expect(window.location.pathname).toBe(
-        "/teams/scope-a/t-support/members/member-alpha/workflow",
+        "/scopes/scope-a/teams/t-support/members/member-alpha/workflow",
       );
     });
   });
@@ -614,7 +614,7 @@ describe("TeamsHomePage", () => {
 
     await waitFor(() => {
       expect(window.location.pathname).toBe(
-        "/teams/scope-a/t-support/members/member-entry/workflow",
+        "/scopes/scope-a/teams/t-support/members/member-entry/workflow",
       );
     });
   });
@@ -625,7 +625,7 @@ describe("TeamsHomePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "查看团队" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams/scope-a/t-support");
+      expect(window.location.pathname).toBe("/scopes/scope-a/teams/t-support");
     });
 
     const params = new URLSearchParams(window.location.search);
@@ -640,7 +640,7 @@ describe("TeamsHomePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "查看成员" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams/scope-a/t-support");
+      expect(window.location.pathname).toBe("/scopes/scope-a/teams/t-support");
     });
 
     const params = new URLSearchParams(window.location.search);
@@ -689,7 +689,7 @@ describe("TeamsHomePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "管理成员" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams/scope-a/t-support");
+      expect(window.location.pathname).toBe("/scopes/scope-a/teams/t-support");
     });
 
     const params = new URLSearchParams(window.location.search);
@@ -697,7 +697,7 @@ describe("TeamsHomePage", () => {
   });
 
   it("does not load roster data from a locally restored scope when server auth fails", async () => {
-    window.history.replaceState({}, "", "/teams");
+    window.history.replaceState({}, "", "/scopes");
     persistAuthSession({
       tokens: {
         accessToken: "access-token",
@@ -731,7 +731,8 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText("AI 团队总数")).toBeNull();
 
     await waitFor(() => {
-      expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");
+      expect(window.location.pathname).toBe("/scopes/scope-a/teams");
+      expect(new URLSearchParams(window.location.search).get("scopeId")).toBeNull();
     });
   });
 
@@ -886,7 +887,7 @@ describe("TeamsHomePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "创建工作流成员" }));
     await waitFor(() => {
       expect(window.location.pathname).toBe(
-        "/teams/scope-a/t-new/members/new/workflow",
+        "/scopes/scope-a/teams/t-new/members/new/workflow",
       );
     });
     expect(
@@ -912,6 +913,6 @@ describe("TeamsHomePage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
 
-    expect(window.location.pathname).toBe("/teams/new");
+    expect(window.location.pathname).toBe("/scopes/scope-a/teams/new");
   });
 });

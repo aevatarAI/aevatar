@@ -39,7 +39,8 @@ import {
 import { describeError } from "@/shared/ui/errorText";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
 import {
-  buildScopeHref,
+  buildTeamCreateRoute,
+  buildTeamWorkspaceRoute,
   readScopeQueryDraft,
 } from "../scopes/components/scopeQuery";
 import type { WorkflowOperationalAttention } from "./workflowOperationalUnits";
@@ -1069,7 +1070,7 @@ const TeamsHomePage: React.FC = () => {
       return;
     }
 
-    const nextPath = buildScopeHref("/teams", { scopeId });
+    const nextPath = buildTeamWorkspaceRoute(scopeId);
     const currentPath =
       typeof window === "undefined"
         ? ""
@@ -1266,7 +1267,7 @@ const TeamsHomePage: React.FC = () => {
           <Button
             icon={<PlusOutlined />}
             onClick={() =>
-              history.push(buildScopeHref("/teams/new", { scopeId }))
+              history.push(buildTeamCreateRoute(scopeId))
             }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
@@ -1436,7 +1437,7 @@ const TeamsHomePage: React.FC = () => {
               >
                 <Button
                   onClick={() =>
-                    history.push(buildScopeHref("/teams/new", { scopeId }))
+                    history.push(buildTeamCreateRoute(scopeId))
                   }
                   type="primary"
                 >

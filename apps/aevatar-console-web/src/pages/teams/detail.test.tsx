@@ -801,7 +801,7 @@ function createStudioApiStatusError(message: string, status: number): Error & { 
 describe("TeamDetailPage", () => {
   beforeEach(() => {
     setLocale("zh-CN", false);
-    window.history.replaceState({}, "", "/teams/scope-1/t-alpha");
+    window.history.replaceState({}, "", "/scopes/scope-1/teams/t-alpha");
     (scopesApi.listWorkflows as jest.Mock).mockClear();
     (scopesApi.listScripts as jest.Mock).mockClear();
     (runtimeGAgentApi.listActors as jest.Mock).mockClear();
@@ -882,7 +882,7 @@ describe("TeamDetailPage", () => {
   });
 
   it("renders no-team-selected state without detail data flows for scope-only links", async () => {
-    window.history.replaceState({}, "", "/teams/scope-1");
+    window.history.replaceState({}, "", "/scopes/scope-1/teams");
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -911,7 +911,7 @@ describe("TeamDetailPage", () => {
     });
   });
 
-  it("renders the chinese team-first overview shell", async () => {
+  it("renders the chinese scoped team overview shell", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(
@@ -985,7 +985,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?runId=run-good",
+      "/scopes/scope-1/teams/t-alpha?runId=run-good",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1017,7 +1017,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      `/teams/${longScopeId}/t-alpha`,
+      `/scopes/${longScopeId}/teams/t-alpha`,
     );
     (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
@@ -1122,8 +1122,8 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("link", { name: "团队" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams");
-      expect(window.location.search).toContain("scopeId=scope-1");
+      expect(window.location.pathname).toBe("/scopes/scope-1/teams");
+      expect(window.location.search).not.toContain("scopeId=scope-1");
     });
   });
 
@@ -1134,8 +1134,8 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("link", { name: "Aevatar" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams");
-      expect(window.location.search).toContain("scopeId=scope-1");
+      expect(window.location.pathname).toBe("/scopes/scope-1/teams");
+      expect(window.location.search).not.toContain("scopeId=scope-1");
     });
   });
 
@@ -1154,7 +1154,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?serviceId=default&tab=events",
+      "/scopes/scope-1/teams/t-alpha?serviceId=default&tab=events",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1224,7 +1224,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?memberId=member-team-alpha&tab=members",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=members",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1237,7 +1237,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?memberId=member-team-alpha",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1257,7 +1257,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?memberId=member-team-alpha",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1324,7 +1324,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?tab=members",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
     );
     (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
       ...mockCreateTeamSummary(),
@@ -1501,7 +1501,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?memberId=member-support&testTeam=1",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-support&testTeam=1",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1517,7 +1517,7 @@ describe("TeamDetailPage", () => {
   });
 
   it("auto-opens Team Test from the Team Detail route intent", async () => {
-    window.history.replaceState({}, "", "/teams/scope-1/t-alpha?testTeam=1");
+    window.history.replaceState({}, "", "/scopes/scope-1/teams/t-alpha?testTeam=1");
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -1739,7 +1739,7 @@ describe("TeamDetailPage", () => {
     fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
 
     expect(window.location.pathname).toBe(
-      "/teams/scope-1/t-alpha/members/member-team-alpha/workflow",
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
   });
 
@@ -1751,7 +1751,7 @@ describe("TeamDetailPage", () => {
     fireEvent.click(await screen.findByRole("link", { name: "调用" }));
 
     expect(window.location.pathname).toBe(
-      "/teams/scope-1/t-alpha/members/member-team-alpha/invoke",
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/invoke",
     );
   });
 
@@ -1885,7 +1885,7 @@ describe("TeamDetailPage", () => {
     fireEvent.click(await screen.findByRole("link", { name: "创建工作流成员" }));
 
     expect(window.location.pathname).toBe(
-      "/teams/scope-1/t-alpha/members/new/workflow",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
     );
   });
 
@@ -1903,7 +1903,7 @@ describe("TeamDetailPage", () => {
     fireEvent.click(await screen.findByRole("link", { name: "创建第一个工作流成员" }));
 
     expect(window.location.pathname).toBe(
-      "/teams/scope-1/t-alpha/members/new/workflow",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
     );
   });
 
@@ -1954,7 +1954,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?tab=members",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1974,7 +1974,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2004,7 +2004,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2043,7 +2043,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2071,7 +2071,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2109,7 +2109,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2127,7 +2127,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2149,7 +2149,7 @@ describe("TeamDetailPage", () => {
 
   it("treats a just-created Team 404 as projection syncing and retries", async () => {
     jest.useFakeTimers();
-    window.history.replaceState({}, "", "/teams/scope-1/t-alpha?tab=members");
+    window.history.replaceState({}, "", "/scopes/scope-1/teams/t-alpha?tab=members");
     (studioApi.getTeam as jest.Mock)
       .mockRejectedValueOnce(createStudioApiStatusError("Not Found", 404))
       .mockResolvedValueOnce(mockCreateTeamSummary());
@@ -2182,7 +2182,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?workflowId=workflow-1&serviceId=stale-service&runId=stale-run",
+      "/scopes/scope-1/teams/t-alpha?workflowId=workflow-1&serviceId=stale-service&runId=stale-run",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2200,7 +2200,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?workflowId=workflow-missing",
+      "/scopes/scope-1/teams/t-alpha?workflowId=workflow-missing",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));

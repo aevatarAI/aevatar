@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { history } from "@/shared/navigation/history";
@@ -168,7 +168,7 @@ describe("TeamMemberInvokePage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/team-1/members/member-alpha/invoke",
+      "/scopes/scope-1/teams/team-1/members/member-alpha/invoke",
     );
     (studioApi.getMember as jest.Mock).mockResolvedValue(createWorkflowMember());
     (studioApi.getMemberBinding as jest.Mock).mockResolvedValue(createBinding());
@@ -208,6 +208,19 @@ describe("TeamMemberInvokePage", () => {
     expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
       appId: "default",
     });
+  });
+
+  it("does not read removed legacy Team member invoke links", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/team-1/members/member-alpha/invoke",
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+
+    expect(await screen.findByText("Missing member route")).toBeTruthy();
+    expect(studioApi.getMember).not.toHaveBeenCalled();
   });
 
   it("updates the invoke target when navigating between member invoke routes", async () => {
@@ -257,7 +270,7 @@ describe("TeamMemberInvokePage", () => {
       "service:svc-alpha",
     );
 
-    history.push("/teams/scope-1/team-1/members/member-beta/invoke");
+    history.push("/scopes/scope-1/teams/team-1/members/member-beta/invoke");
 
     await waitFor(() => {
       expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
@@ -306,6 +319,15 @@ describe("TeamMemberInvokePage", () => {
       await screen.findByText("This workflow member is not bound yet."),
     ).toBeTruthy();
     expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
-    expect(screen.getAllByRole("button", { name: "Workflow Studio" })).toHaveLength(1);
+    const workflowStudioButtons = screen.getAllByRole("button", {
+      name: "Workflow Studio",
+    });
+    expect(workflowStudioButtons).toHaveLength(1);
+
+    fireEvent.click(workflowStudioButtons[0]);
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/team-1/members/member-alpha/workflow",
+    );
   });
 });

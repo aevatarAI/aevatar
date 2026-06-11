@@ -55,6 +55,10 @@ export function getNavigationSelectedKeys(pathname: string): string[] {
     return [];
   }
 
+  if (matchedRoute.path === "/*") {
+    return [];
+  }
+
   if (
     !matchedRoute.hideInMenu &&
     !matchedRoute.redirect &&

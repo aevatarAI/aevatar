@@ -9,7 +9,7 @@ import { layout } from "./app";
 describe("layout menu collapse behavior", () => {
   beforeEach(() => {
     setLocale("en-US", false);
-    window.history.replaceState({}, "", "/teams");
+    window.history.replaceState({}, "", "/scopes");
   });
 
   it("keeps grouped navigation titles hidden in collapsed mode", () => {
@@ -61,7 +61,7 @@ describe("layout menu collapse behavior", () => {
   });
 
   it("updates the controlled global menu collapse state after SPA route changes", () => {
-    window.history.replaceState({}, "", "/teams?scopeId=scope-a");
+    window.history.replaceState({}, "", "/scopes/scope-a/teams");
     const teamsLayout = layout({
       initialState: {
         auth: {} as never,

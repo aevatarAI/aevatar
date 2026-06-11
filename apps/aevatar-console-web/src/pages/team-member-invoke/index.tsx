@@ -52,15 +52,23 @@ function readTeamMemberInvokeRouteState(
   pathname = typeof window === "undefined" ? "" : window.location.pathname,
 ): TeamMemberInvokeRouteState {
   const segments = pathname.split("/").filter(Boolean).map(decodePathSegment);
-  const isInvokePath =
-    segments[0] === "teams" &&
-    segments[3] === "members" &&
-    segments[5] === "invoke";
+  const isScopedInvokePath =
+    segments[0] === "scopes" &&
+    segments[2] === "teams" &&
+    segments[4] === "members" &&
+    segments[6] === "invoke";
+  if (isScopedInvokePath) {
+    return {
+      memberId: trimOptional(segments[5]),
+      scopeId: trimOptional(segments[1]),
+      teamId: trimOptional(segments[3]),
+    };
+  }
 
   return {
-    memberId: isInvokePath ? trimOptional(segments[4]) : "",
-    scopeId: isInvokePath ? trimOptional(segments[1]) : "",
-    teamId: isInvokePath ? trimOptional(segments[2]) : "",
+    memberId: "",
+    scopeId: "",
+    teamId: "",
   };
 }
 
