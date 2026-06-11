@@ -192,15 +192,27 @@ public sealed class NyxIdChatSessionEventProjector
             return EmptyEntries;
 
         if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
-            payload?.Is(RoleChatSessionCompletedEvent.Descriptor) != true)
+            payload == null)
         {
             return EmptyEntries;
         }
 
-        var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
-        return NyxIdChatCompletionAguiFrameBuilder.Build(context, completed)
-            .Select(frame => Entry(context, frame))
-            .ToArray();
+        if (payload.Is(PendingToolApprovalPersistedEvent.Descriptor))
+        {
+            var pending = payload.Unpack<PendingToolApprovalPersistedEvent>().Pending;
+            var frame = NyxIdChatCompletionAguiFrameBuilder.BuildPendingApprovalFrame(pending);
+            return frame == null ? EmptyEntries : [Entry(context, frame)];
+        }
+
+        if (payload.Is(RoleChatSessionCompletedEvent.Descriptor))
+        {
+            var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
+            return NyxIdChatCompletionAguiFrameBuilder.Build(context, completed)
+                .Select(frame => Entry(context, frame))
+                .ToArray();
+        }
+
+        return EmptyEntries;
     }
 
     private static ProjectionSessionEventEntry<AGUIEvent> Entry(

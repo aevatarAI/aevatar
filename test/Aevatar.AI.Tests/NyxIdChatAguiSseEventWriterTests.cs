@@ -189,6 +189,23 @@ public class NyxIdChatAguiSseEventWriterTests
         usage.GetProperty("model").GetString().Should().Be("nyxid-model");
     }
 
+    [Fact]
+    public async Task WriteKeepAliveAsync_ShouldEmitRunningCustomFrame()
+    {
+        var sink = new SseFrameSink();
+
+        await sink.WriteKeepAliveAsync("actor-1", "session-1");
+
+        var frame = sink.ReadFrames().Should().ContainSingle().Subject;
+        frame.GetProperty("type").GetString().Should().Be("CUSTOM");
+        var custom = frame.GetProperty("custom");
+        custom.GetProperty("name").GetString().Should().Be("aevatar.nyxid_chat.keepalive");
+        var payload = custom.GetProperty("payload");
+        payload.GetProperty("actorId").GetString().Should().Be("actor-1");
+        payload.GetProperty("sessionId").GetString().Should().Be("session-1");
+        payload.GetProperty("status").GetString().Should().Be("running");
+    }
+
     private sealed class SseFrameSink
     {
         private readonly MemoryStream _body = new();
@@ -203,6 +220,9 @@ public class NyxIdChatAguiSseEventWriterTests
 
         public ValueTask<string?> WriteAsync(AGUIEvent aguiEvent, string messageId) =>
             NyxIdChatAguiSseEventWriter.WriteAsync(aguiEvent, messageId, _writer);
+
+        public ValueTask WriteKeepAliveAsync(string actorId, string sessionId) =>
+            _writer.WriteKeepAliveAsync(actorId, sessionId, CancellationToken.None);
 
         public IReadOnlyList<JsonElement> ReadFrames()
         {
