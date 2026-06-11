@@ -59,6 +59,27 @@ AEVATAR_CONSOLE_PUBLIC_PATH=/
 `ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
 
+## Static Hosting
+
+The console uses HTML5 history routes with runtime-owned IDs, for example
+`/scopes/:scopeId/teams/:teamId/members/:memberId/workflow`. Do not enable Umi
+static route export for this app, because build-time route templates such as
+`/scopes/:scopeId/teams/index.html` cannot match real scope and team IDs.
+
+Production static hosting must serve the built `index.html` as the SPA fallback
+for every frontend deep link, while keeping `/api/*` routed to the backend. When
+the public URL is rooted at `https://aevatar-console.aevatar.ai/`, keep:
+
+```bash
+AEVATAR_CONSOLE_PUBLIC_PATH=/
+```
+
+If the object store keeps files under an internal prefix such as
+`aevatar-console/`, configure the CDN origin path or rewrite target to that
+prefix. Do not expose the internal object-store prefix through
+`AEVATAR_CONSOLE_PUBLIC_PATH` unless the browser-visible URL also includes that
+same prefix.
+
 ## Available scripts
 
 ```bash

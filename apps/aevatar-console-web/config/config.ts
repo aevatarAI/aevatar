@@ -152,7 +152,6 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
   headScripts: [],
   //================ pro 插件配置 =================
   presets: ['umi-presets-pro'],
-  exportStatic: {},
   esbuildMinifyIIFE: true,
   define: {
     'process.env.CI': JSON.stringify(process.env.CI),
