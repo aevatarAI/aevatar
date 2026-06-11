@@ -402,12 +402,14 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         };
         CopyWorkflowResumePayload(action.WorkflowResume, map);
         CopyLlmSelectionPayload(action.LlmSelection, map);
+        CopyNyxIdApprovalPayload(action.NyxIdApproval, map);
 
         foreach (var argument in action.Arguments)
         {
             if (string.Equals(argument.Key, "action_id", StringComparison.Ordinal) ||
                 string.Equals(argument.Key, "value", StringComparison.Ordinal) ||
-                string.Equals(argument.Key, "action_kind", StringComparison.Ordinal))
+                string.Equals(argument.Key, "action_kind", StringComparison.Ordinal) ||
+                IsReservedNyxIdApprovalArgument(action, argument.Key))
                 continue;
 
             map[argument.Key] = CoerceArgumentValue(argument.Value);
@@ -415,6 +417,11 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
 
         return map;
     }
+
+    private static bool IsReservedNyxIdApprovalArgument(ActionElement action, string key) =>
+        action.NyxIdApproval is not null &&
+        (string.Equals(key, "nyxid_approval_request_id", StringComparison.Ordinal) ||
+         string.Equals(key, "nyxid_approval_approved", StringComparison.Ordinal));
 
     private static string ToBoundaryActionKind(ActionElementKind kind) =>
         kind switch
@@ -477,6 +484,18 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             map["page"] = payload.Page;
         if (!string.IsNullOrWhiteSpace(payload.DisplayMode))
             map["display_mode"] = payload.DisplayMode;
+    }
+
+    private static void CopyNyxIdApprovalPayload(
+        NyxIdApprovalActionPayload? payload,
+        IDictionary<string, object?> map)
+    {
+        if (payload is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(payload.RequestId))
+            map["nyxid_approval_request_id"] = payload.RequestId;
+        map["nyxid_approval_approved"] = payload.Approved;
     }
 
     private static object? CoerceArgumentValue(string raw)

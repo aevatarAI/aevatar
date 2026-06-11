@@ -409,6 +409,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         !string.IsNullOrWhiteSpace(context.Channel.RegistrationScopeId) ||
         !string.IsNullOrWhiteSpace(context.Channel.MessageId) ||
         !string.IsNullOrWhiteSpace(context.Channel.PlatformMessageId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.DeliveryTargetId) ||
         !string.IsNullOrWhiteSpace(context.SenderBinding.BindingId) ||
         !string.IsNullOrWhiteSpace(context.Routing.ModelOverride) ||
         !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||

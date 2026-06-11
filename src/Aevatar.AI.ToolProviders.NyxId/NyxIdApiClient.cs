@@ -352,8 +352,12 @@ public sealed class NyxIdApiClient : IDisposable
     public Task<string> ListApprovalsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/approvals/requests", ct);
 
-    public Task<string> DecideApprovalAsync(string token, string id, string decisionBody, CancellationToken ct) =>
-        PostAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}/decide", decisionBody, ct);
+    public Task<string> DecideApprovalAsync(string token, string id, bool approved, CancellationToken ct) =>
+        PostAsync(
+            token,
+            $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}/decide",
+            JsonSerializer.Serialize(new { approved }),
+            ct);
 
     public Task<string> ListApprovalServiceConfigsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/approvals/service-configs", ct);

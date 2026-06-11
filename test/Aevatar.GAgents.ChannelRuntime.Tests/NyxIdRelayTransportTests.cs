@@ -766,6 +766,37 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldMapNyxIdApprovalFields_ToTypedPayloadAndRemoveAuthorityKeys()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-nyx-approval",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"action_id\":\"nyxid-approval-approve\",\"action_kind\":\"button\",\"nyxid_approval_request_id\":\"nyx-approval-1\",\"nyxid_approval_approved\":true,\"external_note\":\"kept\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.ActionId.Should().Be("nyxid-approval-approve");
+        cardAction.ActionKind.Should().Be(ActionElementKind.Button);
+        cardAction.NyxIdApproval.RequestId.Should().Be("nyx-approval-1");
+        cardAction.NyxIdApproval.Approved.Should().BeTrue();
+        cardAction.Arguments.Should().NotContainKey("nyxid_approval_request_id");
+        cardAction.Arguments.Should().NotContainKey("nyxid_approval_approved");
+        cardAction.Arguments.Should().ContainKey("external_note").WhoseValue.Should().Be("kept");
+    }
+
+    [Fact]
     public void Parse_ShouldMapKnownWorkflowCallbackFields_ToTypedPayload()
     {
         var body = """

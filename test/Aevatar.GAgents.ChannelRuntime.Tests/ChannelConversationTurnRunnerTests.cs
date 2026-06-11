@@ -927,6 +927,151 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRouteNyxIdApprovalCardAction_WithCurrentUserToken()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler("""{"id":"nyx-approval-1","status":"approved"}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+        var activity = BuildCardActionActivity("evt-nyx-approval-1");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.NyxIdApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = "nyx-approval-1",
+            Approved = true,
+        };
+
+        var result = await runner.RunInboundAsync(
+            activity,
+            new ConversationTurnRuntimeContext(null, "current-user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("direct-reply:evt-nyx-approval-1");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("approved");
+        result.LlmReplyRequest.Should().BeNull();
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Method.Should().Be("POST");
+        nyxHandler.Requests[0].Path.Should().Be("/api/v1/approvals/requests/nyx-approval-1/decide");
+        nyxHandler.Requests[0].Authorization.Should().Be("Bearer current-user-token-1");
+        nyxHandler.Requests[0].Body.Should().Be("""{"approved":true}""");
+        nyxHandler.Requests[0].Body.Should().NotContain("decision");
+    }
+
+    [Theory]
+    [InlineData(null, "Approval action is missing the NyxID request id.")]
+    [InlineData("   ", "Approval action is missing the NyxID request id.")]
+    public async Task RunInboundAsync_ShouldRejectNyxIdApprovalCardAction_WhenRequestIdMissing(
+        string? requestId,
+        string expectedReply)
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler("""{"id":"unexpected"}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+        var activity = BuildCardActionActivity("evt-nyx-approval-missing-request");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.NyxIdApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = requestId ?? string.Empty,
+            Approved = true,
+        };
+
+        var result = await runner.RunInboundAsync(
+            activity,
+            new ConversationTurnRuntimeContext(null, "current-user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Be(expectedReply);
+        nyxHandler.Requests.Should().BeEmpty();
+        result.LlmReplyRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRejectNyxIdApprovalCardAction_WhenCredentialMissing()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler("""{"id":"unexpected"}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+        var activity = BuildCardActionActivity("evt-nyx-approval-missing-token");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.NyxIdApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = "nyx-approval-1",
+            Approved = false,
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("credential is missing or expired");
+        nyxHandler.Requests.Should().BeEmpty();
+        result.LlmReplyRequest.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("""{"error":true,"status":403,"body":"{\"error\":\"forbidden\",\"message\":\"Approval request expired\"}"}""", "Approval request expired.")]
+    [InlineData("""{"error":true,"status":409,"body":"{\"error\":\"already_decided\"}"}""", "Approval request was already decided.")]
+    [InlineData("""{"error":true,"status":404,"body":"{\"error\":\"not_found\"}"}""", "Approval request was not found or is no longer available.")]
+    [InlineData("""{"error":true,"status":401,"body":"{\"error\":\"unauthorized\"}"}""", "Approval decision requires a valid NyxID user credential. Please sign in again and retry.")]
+    public async Task RunInboundAsync_ShouldMapNyxIdApprovalDecisionErrors(
+        string nyxResponse,
+        string expectedReply)
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler(nyxResponse);
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+        var activity = BuildCardActionActivity("evt-nyx-approval-error");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.NyxIdApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = "nyx-approval-1",
+            Approved = false,
+        };
+
+        var result = await runner.RunInboundAsync(
+            activity,
+            new ConversationTurnRuntimeContext(null, "current-user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Be(expectedReply);
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Body.Should().Be("""{"approved":false}""");
+        result.LlmReplyRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldNotPromoteNyxIdApprovalButtonToLlm_WhenCredentialMissing()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+        var activity = BuildCardActionActivity("evt-card-button-nyx-typed");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.ActionId = "nyxid-approval-approve";
+        activity.Content.CardAction.NyxIdApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = "nyx-approval-1",
+            Approved = true,
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("credential is missing or expired");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldRouteAgentBuilderCardAction_WhenCardPayloadCarriesAgentBuilderAction()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -3365,18 +3510,23 @@ public sealed class ChannelConversationTurnRunnerTests
             relayClient,
             NullLogger<NyxIdRelayOutboundPort>.Instance,
             [new RelayStubComposer("lark")]);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://example.com" },
+            new HttpClient(nyxHandler)
+            {
+                BaseAddress = new Uri("https://example.com"),
+            });
+        var remoteToolApprovalPort = services.GetService<IRemoteToolApprovalPort>() ??
+                                     new NyxIdRemoteToolApprovalPort(
+                                         nyxClient,
+                                         NullLogger<NyxIdRemoteToolApprovalPort>.Instance);
 
         return new ChannelConversationTurnRunner(
             services,
             registrationQueryPort,
             registrationQueryByNyxIdentityPort,
             [adapter],
-            new NyxIdApiClient(
-                new NyxIdToolOptions { BaseUrl = "https://example.com" },
-                new HttpClient(nyxHandler)
-                {
-                    BaseAddress = new Uri("https://example.com"),
-                }),
+            nyxClient,
             relayOutboundPort,
             interactiveReplyDispatcher,
             NullLogger<ChannelConversationTurnRunner>.Instance,
@@ -3394,7 +3544,8 @@ public sealed class ChannelConversationTurnRunnerTests
             userConfigQueryPort: services.GetService<IUserConfigQueryPort>(),
             replyService: services.GetService<ChannelPlatformReplyService>(),
             workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(),
-            workflowDraftRunAdmission: services.GetService<ChannelWorkflowDraftRunAdmission>());
+            workflowDraftRunAdmission: services.GetService<ChannelWorkflowDraftRunAdmission>(),
+            remoteToolApprovalPort: remoteToolApprovalPort);
     }
 
     private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)

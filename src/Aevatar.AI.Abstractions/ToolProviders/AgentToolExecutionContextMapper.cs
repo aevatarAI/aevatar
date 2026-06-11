@@ -44,6 +44,8 @@ public static class AgentToolExecutionContextMapper
         "sender_id",
         "channel.sender_id",
         "registration_scope_id",
+        "delivery_target_id",
+        "channel.delivery_target_id",
         "message_id",
         "channel.message_id",
         "platform_message_id",
@@ -141,7 +143,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Channel?.SenderId),
                 AgentToolExecutionContext.Normalize(payload.Channel?.RegistrationScopeId),
                 AgentToolExecutionContext.Normalize(payload.Channel?.MessageId),
-                AgentToolExecutionContext.Normalize(payload.Channel?.PlatformMessageId)),
+                AgentToolExecutionContext.Normalize(payload.Channel?.PlatformMessageId),
+                AgentToolExecutionContext.Normalize(payload.Channel?.DeliveryTargetId)),
             new AgentToolSenderBindingContext(AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId)),
             new LLMRequestRoutingContext(
                 AgentToolExecutionContext.Normalize(payload.Routing?.ModelOverride),
@@ -185,6 +188,7 @@ public static class AgentToolExecutionContextMapper
                 RegistrationScopeId = context.Channel.RegistrationScopeId ?? string.Empty,
                 MessageId = context.Channel.MessageId ?? string.Empty,
                 PlatformMessageId = context.Channel.PlatformMessageId ?? string.Empty,
+                DeliveryTargetId = context.Channel.DeliveryTargetId ?? string.Empty,
             },
             SenderBinding = new AgentToolSenderBindingContextPayload
             {

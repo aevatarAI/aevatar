@@ -46,7 +46,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         IToolApprovalHandler? approvalHandler = null,
-        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -57,6 +58,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             approvalHandler)
     {
         RemoteToolApprovalPort = remoteToolApprovalPort;
+        RemoteToolApprovalNotificationPort = remoteToolApprovalNotificationPort;
     }
 
     /// <summary>Role name.</summary>
@@ -68,6 +70,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     public string RoleId { get; private set; } = "";
 
     protected IRemoteToolApprovalPort? RemoteToolApprovalPort { get; }
+
+    protected IRemoteToolApprovalNotificationPort? RemoteToolApprovalNotificationPort { get; }
 
     // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
     //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
@@ -245,16 +249,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         try
         {
-            var submission = await RemoteToolApprovalPort.SubmitAsync(
-                new RemoteToolApprovalRequest(
-                    pending.RequestId,
-                    pending.ToolName,
-                    pending.ToolCallId,
-                    pending.ArgumentsJson,
-                    ToolApprovalMode.Auto,
-                    pending.IsDestructive),
-                CancellationToken.None);
-
+            var pendingToolContext = ResolvePendingToolContext(pending);
+            var request = new RemoteToolApprovalRequest(
+                pending.RequestId,
+                pending.ToolName,
+                pending.ToolCallId,
+                pending.ArgumentsJson,
+                ToolApprovalMode.Auto,
+                pending.IsDestructive);
+            var submission = await RemoteToolApprovalPort.SubmitAsync(request, CancellationToken.None);
             var callbackId = BuildRemoteApprovalStatusCallbackId(pending.RequestId, submission.RemoteApprovalId, 1);
             await PersistDomainEventAsync(new RemoteToolApprovalSubmittedEvent
             {
@@ -263,6 +266,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 StatusCheckAttempt = 1,
                 ExpiresAtUnixMs = ResolveRemoteApprovalDeadlineUnixMs(submission.ExpiresAt),
             });
+
+            await TryNotifyRemoteApprovalSubmittedAsync(request, submission, pendingToolContext);
 
             await ScheduleRemoteApprovalStatusCheckAsync(
                 pending.RequestId,
@@ -279,6 +284,32 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 pending,
                 "approval_timeout",
                 $"Remote approval submit failed: {ex.Message}");
+        }
+    }
+
+    private async Task TryNotifyRemoteApprovalSubmittedAsync(
+        RemoteToolApprovalRequest request,
+        RemoteToolApprovalSubmission submission,
+        AgentToolExecutionContext toolContext)
+    {
+        var notificationPort = RemoteToolApprovalNotificationPort;
+        if (notificationPort is null)
+            return;
+
+        try
+        {
+            await notificationPort.NotifyAsync(
+                new RemoteToolApprovalNotification(request, submission, toolContext),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "[{Role}] Remote approval notification failed. request={RequestId}, remote={RemoteApprovalId}",
+                RoleName,
+                request.RequestId,
+                submission.RemoteApprovalId);
         }
     }
 

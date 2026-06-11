@@ -478,6 +478,15 @@ public sealed class NyxIdRelayTransport
                 "page",
                 "display_mode");
         }
+
+        if (TryBuildNyxIdApprovalPayload(submission, out var nyxIdApproval))
+        {
+            submission.NyxIdApproval = nyxIdApproval;
+            RemoveKeys(
+                submission.Arguments,
+                "nyxid_approval_request_id",
+                "nyxid_approval_approved");
+        }
     }
 
     private static ActionElementKind ResolveActionKind(
@@ -631,6 +640,25 @@ public sealed class NyxIdRelayTransport
             payload.DisplayMode = displayMode.Trim();
         }
 
+        return true;
+    }
+
+    private static bool TryBuildNyxIdApprovalPayload(
+        CardActionSubmission submission,
+        out NyxIdApprovalActionPayload payload)
+    {
+        payload = new NyxIdApprovalActionPayload();
+        if (!TryGetRequiredValue(submission.Arguments, "nyxid_approval_request_id", out var requestId))
+            return false;
+
+        if (!submission.Arguments.TryGetValue("nyxid_approval_approved", out var rawApproved) ||
+            !bool.TryParse(rawApproved, out var approved))
+        {
+            return false;
+        }
+
+        payload.RequestId = requestId;
+        payload.Approved = approved;
         return true;
     }
 

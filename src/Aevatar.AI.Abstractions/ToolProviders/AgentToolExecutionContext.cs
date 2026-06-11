@@ -121,9 +121,10 @@ public sealed record AgentToolChannelContext(
     string? SenderId,
     string? RegistrationScopeId,
     string? MessageId,
-    string? PlatformMessageId)
+    string? PlatformMessageId,
+    string? DeliveryTargetId = null)
 {
-    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null);
+    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null);
 }
 
 public sealed record AgentToolSenderBindingContext(string? BindingId)

@@ -357,7 +357,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                     new AgentToolRequestIdentity("req-1", "call-1"),
                     AgentToolCredentials.Empty,
                     new AgentToolCallerContext("scope-a", "owner-a", "response-a"),
-                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a"),
+                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a", "delivery-target-a"),
                     new AgentToolSenderBindingContext("binding-a"),
                     new LLMRequestRoutingContext("model-a", "route-a", 4, "remember-a"),
                     new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
@@ -457,6 +457,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         pendingContext.Credentials.Should().Be(AgentToolCredentials.Empty);
         pendingContext.Caller.ScopeId.Should().Be("scope-a");
         pendingContext.Channel.SenderId.Should().Be("sender-a");
+        pendingContext.Channel.DeliveryTargetId.Should().Be("delivery-target-a");
         pendingContext.SenderBinding.BindingId.Should().Be("binding-a");
         pendingContext.Routing.ModelOverride.Should().Be("model-a");
         pendingContext.Routing.MaxToolRoundsOverride.Should().Be(4);
@@ -545,7 +546,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                 Request = new AgentToolRequestIdentity("req-typed", "call-typed"),
                 Credentials = new AgentToolCredentials("token-should-only-appear-in-this-explicit-roundtrip", null, null),
                 Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
-                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1"),
+                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1", "delivery-target-1"),
                 SenderBinding = new AgentToolSenderBindingContext("binding-1"),
                 Routing = new LLMRequestRoutingContext("model-typed", "route-typed", 4, "memory-typed"),
                 ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),
@@ -560,6 +561,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         pending.ToolContext.Request.RequestId.Should().Be("req-typed");
         pending.ToolContext.Caller.ScopeId.Should().Be("scope-typed");
         pending.ToolContext.Channel.Platform.Should().Be("lark");
+        pending.ToolContext.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
         pending.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
         pending.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
         pending.ToolContext.ConnectedServices.ContextJson.Should().Be("{\"service\":\"ok\"}");

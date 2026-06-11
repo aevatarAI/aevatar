@@ -1258,7 +1258,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 null,
                 State.ScopeId,
                 null,
-                null),
+                null,
+                Id),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
 
