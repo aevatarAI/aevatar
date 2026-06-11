@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -61,11 +62,12 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
     {
         var target = configuration.Target.ServiceInvocation
             ?? throw new ArgumentException("Service invocation scheduled dispatch target is required.", nameof(configuration));
+        var safePayload = StripCredentialBearingLlmControl(target.Payload);
         var invocation = new ServiceInvocationRequest
         {
             Identity = target.Identity.Clone(),
             EndpointId = target.EndpointId,
-            Payload = target.Payload.Clone(),
+            Payload = safePayload.Clone(),
             CommandId = commandId,
             CorrelationId = correlationId,
             RevisionId = target.RevisionId ?? string.Empty,
@@ -78,12 +80,16 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
             correlationId,
             ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
             Any.Pack(invocation));
+        var safeDescriptor = configuration.Target with
+        {
+            ServiceInvocation = target with { Payload = safePayload },
+        };
 
         return new PreparedScheduledDispatchTarget(
             ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
             envelope,
             envelope.Payload.TypeUrl,
-            configuration.Target);
+            safeDescriptor);
     }
 
     private static EventEnvelope CreateAdapterEnvelope(
@@ -102,6 +108,19 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
                 CorrelationId = correlationId,
             },
         };
+
+    private static Any StripCredentialBearingLlmControl(Any payload)
+    {
+        if (!payload.Is(ChatRequestEvent.Descriptor))
+            return payload.Clone();
+
+        var chatRequest = payload.Unpack<ChatRequestEvent>();
+        if (chatRequest.LlmControl == null)
+            return payload.Clone();
+
+        chatRequest.LlmControl = null;
+        return Any.Pack(chatRequest);
+    }
 
     private static string ResolveTargetActorId(string? configuredActorId, EventEnvelope envelope)
     {

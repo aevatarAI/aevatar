@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Application.Schedules;
@@ -56,6 +57,47 @@ public sealed class ScheduledDispatchServiceInvocationTests
         request.CommandId.Should().Be("cmd-1");
         request.CorrelationId.Should().Be("corr-1");
         request.Payload.Unpack<StringValue>().Value.Should().Be("run");
+    }
+
+    [Fact]
+    public async Task PrepareAsync_ShouldStripLlmControlBeforePersistingServiceInvocationTarget()
+    {
+        var service = new ScheduledDispatchTargetPreparationService();
+        var configuration = new ScheduledDispatchConfiguration(
+            "schedule-1",
+            "Daily",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity
+                    {
+                        TenantId = "tenant",
+                        AppId = "app",
+                        Namespace = "default",
+                        ServiceId = "svc",
+                    },
+                    "chat",
+                    Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "run",
+                        LlmControl = new LLMControlContextPayload
+                        {
+                            NyxIdAccessToken = "raw-user-token",
+                            NyxIdOrgToken = "raw-org-token",
+                            SenderNyxIdAccessToken = "raw-sender-token",
+                            ModelOverride = "sonnet",
+                        },
+                    }))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
+
+        var prepared = await service.PrepareAsync(configuration, "cmd-1", "corr-1");
+
+        var request = prepared.TriggerEnvelope.Payload.Unpack<ServiceInvocationRequest>();
+        request.Payload.Unpack<ChatRequestEvent>().LlmControl.Should().BeNull();
+        prepared.Descriptor.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>().LlmControl.Should().BeNull();
     }
 
     [Fact]
