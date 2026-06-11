@@ -12,6 +12,11 @@ public interface IServiceCommandPort
         UpdateServiceDefinitionCommand command,
         CancellationToken ct = default);
 
+    Task<ServiceCommandAcceptedReceipt> UpdateServiceExternalExposureAsync(
+        UpdateServiceExternalExposureCommand command,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
     Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(
         CreateServiceRevisionCommand command,
         CancellationToken ct = default);
