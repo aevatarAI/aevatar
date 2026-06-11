@@ -22,10 +22,14 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
             : completed.SessionId.Trim();
         var content = completed.Content ?? string.Empty;
 
-        if (TryBuildFailureFrame(content, context.SessionId, out var failureFrame))
-            return [failureFrame];
-
         var frames = new List<AGUIEvent>();
+        frames.AddRange(BuildToolFrames(completed));
+        if (TryBuildFailureFrame(content, context.SessionId, out var failureFrame))
+        {
+            frames.Add(failureFrame);
+            return frames;
+        }
+
         if (!string.IsNullOrEmpty(content))
         {
             frames.Add(new AGUIEvent
@@ -66,6 +70,105 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
             },
         });
         return frames;
+    }
+
+    public static AGUIEvent? BuildPendingApprovalFrame(PendingToolApprovalState? pending)
+    {
+        if (pending == null || string.IsNullOrWhiteSpace(pending.RequestId))
+            return null;
+
+        return new AGUIEvent
+        {
+            Custom = new CustomEvent
+            {
+                Name = "TOOL_APPROVAL_REQUEST",
+                Payload = Any.Pack(new Struct
+                {
+                    Fields =
+                    {
+                        ["requestId"] = Value.ForString(pending.RequestId),
+                        ["sessionId"] = Value.ForString(pending.SessionId ?? string.Empty),
+                        ["toolName"] = Value.ForString(pending.ToolName ?? string.Empty),
+                        ["toolCallId"] = Value.ForString(pending.ToolCallId ?? string.Empty),
+                        ["argumentsJson"] = Value.ForString(pending.ArgumentsJson ?? string.Empty),
+                        ["isDestructive"] = Value.ForBool(pending.IsDestructive),
+                        ["timeoutSeconds"] = Value.ForNumber(0),
+                    },
+                }),
+            },
+        };
+    }
+
+    private static IEnumerable<AGUIEvent> BuildToolFrames(RoleChatSessionCompletedEvent completed)
+    {
+        var started = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var toolCall in completed.ToolCalls)
+        {
+            var callId = toolCall.CallId ?? string.Empty;
+            var toolName = toolCall.ToolName ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(callId) && string.IsNullOrWhiteSpace(toolName))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(callId))
+                started.Add(callId);
+
+            yield return new AGUIEvent
+            {
+                ToolCallStart = new ToolCallStartEvent
+                {
+                    ToolCallId = callId,
+                    ToolName = toolName,
+                },
+            };
+        }
+
+        foreach (var receipt in completed.ToolReceipts)
+        {
+            var callId = receipt.CallId ?? string.Empty;
+            var toolName = receipt.ToolName ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(callId) && string.IsNullOrWhiteSpace(toolName))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(callId) && !started.Contains(callId))
+            {
+                started.Add(callId);
+                yield return new AGUIEvent
+                {
+                    ToolCallStart = new ToolCallStartEvent
+                    {
+                        ToolCallId = callId,
+                        ToolName = toolName,
+                    },
+                };
+            }
+
+            yield return new AGUIEvent
+            {
+                ToolCallEnd = new ToolCallEndEvent
+                {
+                    ToolCallId = callId,
+                    Result = ResolveToolResult(receipt),
+                },
+            };
+        }
+    }
+
+    private static string ResolveToolResult(AgentToolReceipt receipt)
+    {
+        if (!string.IsNullOrWhiteSpace(receipt.ResultJson))
+            return receipt.ResultJson;
+
+        if (!string.IsNullOrWhiteSpace(receipt.ErrorMessage))
+            return receipt.ErrorMessage;
+
+        return receipt.Status switch
+        {
+            AgentToolReceiptStatus.Success => "Tool completed.",
+            AgentToolReceiptStatus.ApprovalRequired => "Approval pending.",
+            AgentToolReceiptStatus.Denied => "Approval denied.",
+            AgentToolReceiptStatus.Error => "Tool failed.",
+            _ => string.Empty,
+        };
     }
 
     private static bool TryBuildFailureFrame(string content, string runId, out AGUIEvent failureFrame)
