@@ -320,7 +320,9 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             StudioMemberBindingRequest.ImplementationOneofCase.Workflow => new ScopeBindingUpsertRequest(
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.Workflow,
-                Workflow: new ScopeBindingWorkflowSpec(bindingRequest.Workflow.WorkflowYamls.ToArray()),
+                Workflow: new ScopeBindingWorkflowSpec(
+                    bindingRequest.Workflow.WorkflowId,
+                    bindingRequest.Workflow.WorkflowYamls.ToArray()),
                 DisplayName: request.Admitted.DisplayName,
                 RevisionId: revisionId,
                 ServiceId: request.Admitted.PublishedServiceId,
@@ -437,7 +439,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             {
                 Workflow = new StudioMemberWorkflowRef
                 {
-                    WorkflowId = result.Workflow?.WorkflowName ?? result.WorkflowName,
+                    WorkflowId = ResolveWorkflowId(result),
                     WorkflowRevision = result.RevisionId,
                 },
             },
@@ -458,4 +460,13 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             },
             _ => new StudioMemberImplementationRef(),
         };
+
+    private static string ResolveWorkflowId(ScopeBindingUpsertResult result)
+    {
+        var workflowId = result.Workflow?.WorkflowId?.Trim();
+        if (!string.IsNullOrWhiteSpace(workflowId))
+            return workflowId;
+
+        return result.ServiceId?.Trim() ?? string.Empty;
+    }
 }

@@ -202,17 +202,20 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.Workflow,
                 Binding: new UpdateStudioMemberBindingRequest(
                     RevisionId: "rev-explicit",
-                    Workflow: new StudioMemberWorkflowBindingSpec([
-                        "workflow:\n  name: alpha",
-                        "workflow:\n  name: beta",
-                    ]))),
+                    Workflow: new StudioMemberWorkflowBindingSpec(
+                        "workflow-stable-id",
+                        [
+                            "workflow:\n  name: alpha_runtime",
+                            "workflow:\n  name: beta",
+                        ]))),
             CancellationToken.None);
 
         var evt = dispatch.Dispatches.Should().ContainSingle().Which
             .Envelope.Payload.Unpack<StudioMemberBindingRunRequested>();
         evt.Request.RevisionId.Should().Be("rev-explicit");
+        evt.Request.Workflow.WorkflowId.Should().Be("workflow-stable-id");
         evt.Request.Workflow.WorkflowYamls.Should().Equal(
-            "workflow:\n  name: alpha",
+            "workflow:\n  name: alpha_runtime",
             "workflow:\n  name: beta");
     }
 
