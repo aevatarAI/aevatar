@@ -359,6 +359,43 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
       },
     ],
   },
+  checkpoint: {
+    stepType: 'checkpoint',
+    fields: [
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.checkpoint.name.label',
+          'Checkpoint name',
+        ),
+        name: 'name',
+        parameterName: 'name',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.checkpoint.name.placeholder',
+          'before_publish',
+        ),
+      },
+    ],
+  },
+  conditional: {
+    stepType: 'conditional',
+    fields: [
+      {
+        kind: 'multi-line',
+        label: message(
+          'shared.studio.nodeConfiguration.conditional.condition.label',
+          'Condition',
+        ),
+        name: 'condition',
+        parameterName: 'condition',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.conditional.condition.placeholder',
+          'eq($input, "ok")',
+        ),
+        required: true,
+      },
+    ],
+  },
   connector_call: {
     stepType: 'connector_call',
     fields: [
@@ -505,6 +542,28 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
       },
     ],
   },
+  dynamic_workflow: {
+    stepType: 'dynamic_workflow',
+    fields: [
+      {
+        description: message(
+          'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.description',
+          'Optional input passed into the generated workflow after YAML extraction.',
+        ),
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.label',
+          'Original input',
+        ),
+        name: 'originalInput',
+        parameterName: 'original_input',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.placeholder',
+          '$input',
+        ),
+      },
+    ],
+  },
   emit: {
     stepType: 'emit',
     fields: [
@@ -533,6 +592,105 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
         placeholder: message(
           'shared.studio.nodeConfiguration.emit.payload.placeholder',
           '$input',
+        ),
+      },
+    ],
+  },
+  evaluate: {
+    stepType: 'evaluate',
+    fields: [
+      {
+        kind: 'multi-line',
+        label: message(
+          'shared.studio.nodeConfiguration.evaluate.criteria.label',
+          'Criteria',
+        ),
+        name: 'criteria',
+        parameterName: 'criteria',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.evaluate.criteria.placeholder',
+          'correctness and clarity',
+        ),
+        required: true,
+      },
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.evaluate.scale.label',
+          'Scale',
+        ),
+        name: 'scale',
+        parameterName: 'scale',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.evaluate.scale.placeholder',
+          '1-5',
+        ),
+      },
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.evaluate.threshold.label',
+          'Threshold',
+        ),
+        name: 'threshold',
+        parameterName: 'threshold',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.evaluate.threshold.placeholder',
+          '4',
+        ),
+      },
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.evaluate.onBelow.label',
+          'Below threshold branch',
+        ),
+        name: 'onBelow',
+        parameterName: 'on_below',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.evaluate.onBelow.placeholder',
+          'rewrite',
+        ),
+      },
+    ],
+  },
+  foreach: {
+    stepType: 'foreach',
+    fields: [
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.foreach.delimiter.label',
+          'Delimiter',
+        ),
+        name: 'delimiter',
+        parameterName: 'delimiter',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.foreach.delimiter.placeholder',
+          '\\n---\\n',
+        ),
+      },
+      {
+        kind: 'select',
+        label: message(
+          'shared.studio.nodeConfiguration.foreach.subStepType.label',
+          'Item step',
+        ),
+        name: 'subStepType',
+        options: STEP_TYPE_OPTIONS,
+        parameterName: 'sub_step_type',
+      },
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.foreach.subTargetRole.label',
+          'Item target role',
+        ),
+        name: 'subTargetRole',
+        parameterName: 'sub_target_role',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.foreach.subTargetRole.placeholder',
+          'assistant',
         ),
       },
     ],
@@ -698,6 +856,187 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
       },
     ],
   },
+  map_reduce: {
+    stepType: 'map_reduce',
+    fields: [
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.mapReduce.delimiter.label',
+          'Delimiter',
+        ),
+        name: 'delimiter',
+        parameterName: 'delimiter',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.mapReduce.delimiter.placeholder',
+          '\\n---\\n',
+        ),
+      },
+      {
+        kind: 'select',
+        label: message(
+          'shared.studio.nodeConfiguration.mapReduce.mapStepType.label',
+          'Map step',
+        ),
+        name: 'mapStepType',
+        options: STEP_TYPE_OPTIONS,
+        parameterName: 'map_step_type',
+      },
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.label',
+          'Map target role',
+        ),
+        name: 'mapTargetRole',
+        parameterName: 'map_target_role',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.placeholder',
+          'mapper',
+        ),
+      },
+      {
+        kind: 'select',
+        label: message(
+          'shared.studio.nodeConfiguration.mapReduce.reduceStepType.label',
+          'Reduce step',
+        ),
+        name: 'reduceStepType',
+        options: STEP_TYPE_OPTIONS,
+        parameterName: 'reduce_step_type',
+      },
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.mapReduce.reduceTargetRole.label',
+          'Reduce target role',
+        ),
+        name: 'reduceTargetRole',
+        parameterName: 'reduce_target_role',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.mapReduce.reduceTargetRole.placeholder',
+          'reducer',
+        ),
+      },
+      {
+        kind: 'multi-line',
+        label: message(
+          'shared.studio.nodeConfiguration.mapReduce.reducePromptPrefix.label',
+          'Reduce instruction',
+        ),
+        name: 'reducePromptPrefix',
+        parameterName: 'reduce_prompt_prefix',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.mapReduce.reducePromptPrefix.placeholder',
+          'Merge these chunk summaries:',
+        ),
+      },
+    ],
+  },
+  parallel: {
+    stepType: 'parallel',
+    fields: [
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.parallel.workers.label',
+          'Workers',
+        ),
+        name: 'workers',
+        parameterName: 'workers',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.parallel.workers.placeholder',
+          'agent_a,agent_b,agent_c',
+        ),
+      },
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.parallel.count.label',
+          'Parallel count',
+        ),
+        name: 'parallelCount',
+        parameterName: 'parallel_count',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.parallel.count.placeholder',
+          '3',
+        ),
+      },
+      {
+        kind: 'select',
+        label: message(
+          'shared.studio.nodeConfiguration.parallel.voteStepType.label',
+          'Vote step',
+        ),
+        name: 'voteStepType',
+        options: STEP_TYPE_OPTIONS,
+        parameterName: 'vote_step_type',
+      },
+    ],
+  },
+  race: {
+    stepType: 'race',
+    fields: [
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.race.workers.label',
+          'Workers',
+        ),
+        name: 'workers',
+        parameterName: 'workers',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.race.workers.placeholder',
+          'fast_model,cheap_model',
+        ),
+      },
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.race.count.label',
+          'Winner count',
+        ),
+        name: 'count',
+        parameterName: 'count',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.race.count.placeholder',
+          '2',
+        ),
+      },
+    ],
+  },
+  reflect: {
+    stepType: 'reflect',
+    fields: [
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.reflect.maxRounds.label',
+          'Max rounds',
+        ),
+        name: 'maxRounds',
+        parameterName: 'max_rounds',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.reflect.maxRounds.placeholder',
+          '3',
+        ),
+      },
+      {
+        kind: 'multi-line',
+        label: message(
+          'shared.studio.nodeConfiguration.reflect.criteria.label',
+          'Criteria',
+        ),
+        name: 'criteria',
+        parameterName: 'criteria',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.reflect.criteria.placeholder',
+          'accuracy and conciseness',
+        ),
+        required: true,
+      },
+    ],
+  },
   retrieve_facts: {
     stepType: 'retrieve_facts',
     fields: [
@@ -727,6 +1066,48 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
           'shared.studio.nodeConfiguration.retrieveFacts.topK.placeholder',
           '3',
         ),
+      },
+    ],
+  },
+  switch: {
+    stepType: 'switch',
+    fields: [
+      {
+        description: message(
+          'shared.studio.nodeConfiguration.switch.on.description',
+          'Value matched against branch keys such as bug, feature, or _default.',
+        ),
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.switch.on.label',
+          'Switch on',
+        ),
+        name: 'on',
+        parameterName: 'on',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.switch.on.placeholder',
+          '$input',
+        ),
+        required: true,
+      },
+    ],
+  },
+  tool_call: {
+    stepType: 'tool_call',
+    fields: [
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.toolCall.tool.label',
+          'Tool',
+        ),
+        name: 'tool',
+        parameterName: 'tool',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.toolCall.tool.placeholder',
+          'web_search',
+        ),
+        required: true,
       },
     ],
   },
@@ -817,6 +1198,10 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
       },
     ],
   },
+  vote: {
+    stepType: 'vote',
+    fields: [],
+  },
   wait_signal: {
     stepType: 'wait_signal',
     fields: [
@@ -846,6 +1231,48 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
           'shared.studio.nodeConfiguration.waitSignal.timeout.placeholder',
           '60000',
         ),
+      },
+    ],
+  },
+  while: {
+    stepType: 'while',
+    fields: [
+      {
+        kind: 'select',
+        label: message(
+          'shared.studio.nodeConfiguration.while.step.label',
+          'Loop step',
+        ),
+        name: 'step',
+        options: STEP_TYPE_OPTIONS,
+        parameterName: 'step',
+      },
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.while.maxIterations.label',
+          'Max iterations',
+        ),
+        name: 'maxIterations',
+        parameterName: 'max_iterations',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.while.maxIterations.placeholder',
+          '5',
+        ),
+      },
+      {
+        kind: 'multi-line',
+        label: message(
+          'shared.studio.nodeConfiguration.while.condition.label',
+          'Condition',
+        ),
+        name: 'condition',
+        parameterName: 'condition',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.while.condition.placeholder',
+          'lt(iteration, 5)',
+        ),
+        required: true,
       },
     ],
   },
@@ -892,6 +1319,10 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
         parameterName: 'lifecycle',
       },
     ],
+  },
+  workflow_yaml_validate: {
+    stepType: 'workflow_yaml_validate',
+    fields: [],
   },
 };
 
@@ -1016,6 +1447,10 @@ export function getStudioNodeConfigurationSchema(
   parameters?: Record<string, unknown> | null,
 ): StudioNodeConfigurationSchema {
   return buildConfigurationSchema(stepType, parameters);
+}
+
+export function hasStudioNodeConfigurationSchema(stepType: string): boolean {
+  return SCHEMAS_BY_STEP_TYPE[normalizeStepType(stepType)] !== undefined;
 }
 
 export function readStudioNodeConfigurationValues(

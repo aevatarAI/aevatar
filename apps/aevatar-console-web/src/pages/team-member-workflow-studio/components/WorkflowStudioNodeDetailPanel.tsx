@@ -17,8 +17,8 @@ import {
   formatRawStudioNodeConfiguration,
   getStudioNodeConfigurationSchema,
   readStudioNodeConfigurationValues,
-  type NodeConfigField,
-} from "@/shared/studio/nodeConfiguration";
+  type StudioStructuredNodeConfigField,
+} from "@/shared/studio/nodeConfigFields";
 import { formatConsoleMessage, t } from "@/shared/i18n/messages";
 import type { StudioStepInspectorDraft } from "@/shared/studio/document";
 import { parseInspectorParameters } from "@/shared/studio/document";
@@ -513,7 +513,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     }
   };
 
-  const renderFieldControl = (field: NodeConfigField) => {
+  const renderFieldControl = (field: StudioStructuredNodeConfigField) => {
     const value = configurationValues[field.name] ?? "";
     const control = field.control ?? field.kind;
     if (control === "select") {

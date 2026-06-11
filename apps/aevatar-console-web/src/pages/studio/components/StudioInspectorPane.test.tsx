@@ -134,6 +134,7 @@ describe('StudioInspectorPane', () => {
 
   it('renders step summary cards and keeps node actions wired', () => {
     const onApplyNodeChanges = jest.fn();
+    const onChangeNodeInspectorDraft = jest.fn();
 
     render(
       <StudioInspectorPane
@@ -149,6 +150,7 @@ describe('StudioInspectorPane', () => {
             branchesText: '{\n  "retry": "retry_step"\n}',
             parametersText: '{\n  "connector": "search"\n}',
           },
+          onChangeNodeInspectorDraft,
           onApplyNodeChanges,
         })}
       />,
@@ -162,5 +164,44 @@ describe('StudioInspectorPane', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply node changes' }));
 
     expect(onApplyNodeChanges).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByLabelText('Parameter Operation'), {
+      target: { value: 'query' },
+    });
+    expect(onChangeNodeInspectorDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parametersText: expect.stringContaining('"operation": "query"'),
+      }),
+    );
+  });
+
+  it('blocks node apply when raw parameter JSON is invalid', () => {
+    const onApplyNodeChanges = jest.fn();
+
+    render(
+      <StudioInspectorPane
+        {...createBaseProps({
+          inspectorTab: 'node',
+          selectedGraphStep: workflowStep,
+          nodeInspectorDraft: {
+            kind: 'step',
+            id: 'review_step',
+            type: 'connector_call',
+            targetRole: 'assistant',
+            next: 'publish_step',
+            branchesText: '{\n  "retry": "retry_step"\n}',
+            parametersText: '{ "connector": ',
+          },
+          onApplyNodeChanges,
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Unexpected end of JSON input')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply node changes' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply node changes' }));
+
+    expect(onApplyNodeChanges).not.toHaveBeenCalled();
   });
 });

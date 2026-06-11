@@ -325,6 +325,11 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.cache.key.placeholder': '$input',
   'shared.studio.nodeConfiguration.cache.ttl.label': 'TTL 秒数',
   'shared.studio.nodeConfiguration.cache.ttl.placeholder': '600',
+  'shared.studio.nodeConfiguration.checkpoint.name.label': '检查点名称',
+  'shared.studio.nodeConfiguration.checkpoint.name.placeholder': 'before_publish',
+  'shared.studio.nodeConfiguration.conditional.condition.label': '条件',
+  'shared.studio.nodeConfiguration.conditional.condition.placeholder':
+    'eq($input, "ok")',
   'shared.studio.nodeConfiguration.connectorCall.connector.label': 'Connector',
   'shared.studio.nodeConfiguration.connectorCall.connector.placeholder':
     '已配置的 Connector 名称',
@@ -346,11 +351,32 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.connectorCall.timeout.placeholder': '10000',
   'shared.studio.nodeConfiguration.delay.duration.label': '持续毫秒',
   'shared.studio.nodeConfiguration.delay.duration.placeholder': '1000',
+  'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.description':
+    '提取 YAML 后传给生成 Workflow 的可选输入。',
+  'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.label':
+    '原始输入',
+  'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.placeholder':
+    '$input',
   'shared.studio.nodeConfiguration.emit.eventType.label': '事件类型',
   'shared.studio.nodeConfiguration.emit.eventType.placeholder':
     'workflow.completed',
   'shared.studio.nodeConfiguration.emit.payload.label': 'Payload',
   'shared.studio.nodeConfiguration.emit.payload.placeholder': '$input',
+  'shared.studio.nodeConfiguration.evaluate.criteria.label': '评估标准',
+  'shared.studio.nodeConfiguration.evaluate.criteria.placeholder':
+    'correctness and clarity',
+  'shared.studio.nodeConfiguration.evaluate.onBelow.label': '低于阈值分支',
+  'shared.studio.nodeConfiguration.evaluate.onBelow.placeholder': 'rewrite',
+  'shared.studio.nodeConfiguration.evaluate.scale.label': '评分范围',
+  'shared.studio.nodeConfiguration.evaluate.scale.placeholder': '1-5',
+  'shared.studio.nodeConfiguration.evaluate.threshold.label': '阈值',
+  'shared.studio.nodeConfiguration.evaluate.threshold.placeholder': '4',
+  'shared.studio.nodeConfiguration.foreach.delimiter.label': '分隔符',
+  'shared.studio.nodeConfiguration.foreach.delimiter.placeholder': '\\n---\\n',
+  'shared.studio.nodeConfiguration.foreach.subStepType.label': '条目步骤',
+  'shared.studio.nodeConfiguration.foreach.subTargetRole.label': '条目目标角色',
+  'shared.studio.nodeConfiguration.foreach.subTargetRole.placeholder':
+    'assistant',
   'shared.studio.nodeConfiguration.guard.check.label': '检查',
   'shared.studio.nodeConfiguration.guard.check.option.contains': '包含关键词',
   'shared.studio.nodeConfiguration.guard.check.option.jsonValid':
@@ -379,9 +405,42 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.llmCall.instruction.label': '指令',
   'shared.studio.nodeConfiguration.llmCall.instruction.placeholder':
     '告诉这个角色该步骤要做什么。',
+  'shared.studio.nodeConfiguration.mapReduce.delimiter.label': '分隔符',
+  'shared.studio.nodeConfiguration.mapReduce.delimiter.placeholder': '\\n---\\n',
+  'shared.studio.nodeConfiguration.mapReduce.mapStepType.label': 'Map 步骤',
+  'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.label':
+    'Map 目标角色',
+  'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.placeholder':
+    'mapper',
+  'shared.studio.nodeConfiguration.mapReduce.reducePromptPrefix.label':
+    'Reduce 指令',
+  'shared.studio.nodeConfiguration.mapReduce.reducePromptPrefix.placeholder':
+    'Merge these chunk summaries:',
+  'shared.studio.nodeConfiguration.mapReduce.reduceStepType.label':
+    'Reduce 步骤',
+  'shared.studio.nodeConfiguration.mapReduce.reduceTargetRole.label':
+    'Reduce 目标角色',
+  'shared.studio.nodeConfiguration.mapReduce.reduceTargetRole.placeholder':
+    'reducer',
   'shared.studio.nodeConfiguration.option.onFailure.branch': '进入分支',
   'shared.studio.nodeConfiguration.option.onFailure.fail': '让运行失败',
   'shared.studio.nodeConfiguration.option.onFailure.skip': '跳过这个步骤',
+  'shared.studio.nodeConfiguration.parallel.count.label': '并行数量',
+  'shared.studio.nodeConfiguration.parallel.count.placeholder': '3',
+  'shared.studio.nodeConfiguration.parallel.voteStepType.label': '投票步骤',
+  'shared.studio.nodeConfiguration.parallel.workers.label': 'Workers',
+  'shared.studio.nodeConfiguration.parallel.workers.placeholder':
+    'agent_a,agent_b,agent_c',
+  'shared.studio.nodeConfiguration.race.count.label': '候选数量',
+  'shared.studio.nodeConfiguration.race.count.placeholder': '2',
+  'shared.studio.nodeConfiguration.race.workers.label': 'Workers',
+  'shared.studio.nodeConfiguration.race.workers.placeholder':
+    'fast_model,cheap_model',
+  'shared.studio.nodeConfiguration.reflect.criteria.label': '反思标准',
+  'shared.studio.nodeConfiguration.reflect.criteria.placeholder':
+    'accuracy and conciseness',
+  'shared.studio.nodeConfiguration.reflect.maxRounds.label': '最大轮数',
+  'shared.studio.nodeConfiguration.reflect.maxRounds.placeholder': '3',
   'shared.studio.nodeConfiguration.retrieveFacts.query.label': '查询',
   'shared.studio.nodeConfiguration.retrieveFacts.query.placeholder':
     '这个步骤要检索哪些事实？',
@@ -418,6 +477,12 @@ const zhCNMessages = {
     'Workflow 调用',
   'shared.studio.nodeConfiguration.stepType.option.workflowYamlValidate':
     'Workflow YAML 校验',
+  'shared.studio.nodeConfiguration.switch.on.description':
+    '用于匹配 bug、feature 或 _default 等分支 key 的值。',
+  'shared.studio.nodeConfiguration.switch.on.label': '分支输入',
+  'shared.studio.nodeConfiguration.switch.on.placeholder': '$input',
+  'shared.studio.nodeConfiguration.toolCall.tool.label': '工具',
+  'shared.studio.nodeConfiguration.toolCall.tool.placeholder': 'web_search',
   'shared.studio.nodeConfiguration.transform.operation.label': '操作',
   'shared.studio.nodeConfiguration.transform.operation.option.count': '统计行数',
   'shared.studio.nodeConfiguration.transform.operation.option.identity': '原样传递',
@@ -441,6 +506,12 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder': 'continue',
   'shared.studio.nodeConfiguration.waitSignal.timeout.label': '超时毫秒',
   'shared.studio.nodeConfiguration.waitSignal.timeout.placeholder': '60000',
+  'shared.studio.nodeConfiguration.while.condition.label': '条件',
+  'shared.studio.nodeConfiguration.while.condition.placeholder':
+    'lt(iteration, 5)',
+  'shared.studio.nodeConfiguration.while.maxIterations.label': '最大迭代次数',
+  'shared.studio.nodeConfiguration.while.maxIterations.placeholder': '5',
+  'shared.studio.nodeConfiguration.while.step.label': '循环步骤',
   'shared.studio.nodeConfiguration.workflowCall.lifecycle.label': '生命周期',
   'shared.studio.nodeConfiguration.workflowCall.lifecycle.option.inline':
     '内联调用',
