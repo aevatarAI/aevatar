@@ -113,9 +113,7 @@ internal sealed class SkillRecoveryOrchestrator
         _directiveSequence++;
         var uniqueToolCall = new ToolCall
         {
-            Id = string.IsNullOrWhiteSpace(toolCall.Id)
-                ? $"skill-recovery:{_directiveSequence}"
-                : $"{toolCall.Id}:recovery:{_directiveSequence}",
+            Id = SkillRecoveryPlanner.BuildSequencedCallId(toolCall.Id, _directiveSequence),
             Name = toolCall.Name,
             ArgumentsJson = toolCall.ArgumentsJson,
         };

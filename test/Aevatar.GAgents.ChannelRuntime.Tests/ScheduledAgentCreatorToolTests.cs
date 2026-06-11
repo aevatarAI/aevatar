@@ -38,6 +38,12 @@ public sealed class ScheduledAgentCreatorToolTests
         properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
         properties.TryGetProperty("skill_content", out _).Should().BeFalse();
         properties.TryGetProperty("provider_base_url", out _).Should().BeFalse();
+        properties.TryGetProperty("schedule_mode", out var scheduleMode).Should().BeTrue();
+        scheduleMode.GetProperty("enum").EnumerateArray().Select(static x => x.GetString())
+            .Should().BeEquivalentTo("cron", "one_shot");
+        properties.TryGetProperty("delay_seconds", out _).Should().BeTrue();
+        properties.TryGetProperty("run_at_utc", out _).Should().BeTrue();
+        properties.TryGetProperty("one_shot_message", out _).Should().BeTrue();
         properties.TryGetProperty("required_service_slugs", out var requiredServiceSlugs).Should().BeTrue();
         requiredServiceSlugs.GetProperty("items").GetProperty("type").GetString().Should().Be("string");
         properties.TryGetProperty("output_format", out var outputFormat).Should().BeTrue();
@@ -51,7 +57,7 @@ public sealed class ScheduledAgentCreatorToolTests
             .Select(static x => x.GetString())
             .Should().BeEquivalentTo("webhook", "channel_inbound");
         schema.RootElement.GetProperty("required").EnumerateArray().Select(static x => x.GetString())
-            .Should().BeEquivalentTo("skill_ref", "schedule_cron", "schedule_timezone");
+            .Should().BeEmpty();
     }
 
     [Fact]
@@ -103,6 +109,36 @@ public sealed class ScheduledAgentCreatorToolTests
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
+            harness.Handler.Requests.Should().BeEmpty();
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Theory]
+    [InlineData("""{"schedule_mode":"one_shot","one_shot_message":"Ping me"}""", "provide exactly one of delay_seconds or run_at_utc")]
+    [InlineData("""{"schedule_mode":"one_shot","delay_seconds":1,"one_shot_message":"Ping me"}""", "at least 10 seconds")]
+    [InlineData("""{"schedule_mode":"one_shot","delay_seconds":40000000,"one_shot_message":"Ping me"}""", "at most 366 days")]
+    [InlineData("""{"schedule_mode":"one_shot","delay_seconds":60,"run_at_utc":"2099-01-01T00:00:00Z","one_shot_message":"Ping me"}""", "exactly one")]
+    [InlineData("""{"schedule_mode":"one_shot","delay_seconds":60}""", "one_shot_message is required")]
+    [InlineData("""{"schedule_mode":"instant","delay_seconds":60,"one_shot_message":"Ping me"}""", "schedule_mode")]
+    [InlineData("""{"schedule_mode":"one_shot","delay_seconds":60,"one_shot_message":"Ping me","run_immediately":true}""", "run_immediately is not supported")]
+    public async Task ExecuteAsync_InvalidOneShotRequests_ShouldFailBeforeKeyCreation(
+        string argumentsJson,
+        string expectedDetailFragment)
+    {
+        var harness = CreateHarness();
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(argumentsJson);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
+            document.RootElement.GetProperty("detail").GetString().Should().Contain(expectedDetailFragment);
             harness.Handler.Requests.Should().BeEmpty();
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
@@ -562,6 +598,55 @@ public sealed class ScheduledAgentCreatorToolTests
             preflight.Authorization.Should().NotBeNull();
             preflight.Authorization!.Scheme.Should().Be("Bearer");
             preflight.Authorization.Parameter.Should().Be("full-secret-key");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OneShotReminder_ShouldMintLarkScopedKeyWithoutOrnnPreflight()
+    {
+        var handler = CreateSuccessHandler();
+        var harness = CreateHarness(handler: handler);
+        InitializeSkillRunnerCommand? captured = null;
+        harness.SkillRunnerPort.InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Do<InitializeSkillRunnerCommand>(value => captured = value),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "schedule_mode": "one_shot",
+                  "delay_seconds": 120,
+                  "one_shot_message": "Submit the report",
+                  "display_name": "Report reminder"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+
+            captured.Should().NotBeNull();
+            captured!.ScheduleMode.Should().Be(SkillRunnerScheduleMode.OneShot);
+            captured.SkillName.Should().BeEmpty();
+            captured.TemplateName.Should().Be("Report reminder");
+            captured.SkillRef.Should().BeNull();
+            captured.SkillContent.Should().BeEmpty();
+            captured.OneShotMessage.Should().Be("Submit the report");
+            captured.OneShotRunAt.Should().NotBeNull();
+            captured.ScheduleCron.Should().BeEmpty();
+            captured.ScheduleTimezone.Should().Be(SkillRunnerDefaults.DefaultTimezone);
+            captured.ExecutionPrompt.Should().Be("Send the configured one-shot reminder message exactly as written.");
+
+            handler.Requests.Should().NotContain(request =>
+                request.Method == HttpMethod.Get &&
+                request.Path.Contains("/proxy/s/ornn-api/", StringComparison.Ordinal));
+            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
+                .Should().BeEquivalentTo("svc-lark", "svc-lark-failure");
         });
     }
 

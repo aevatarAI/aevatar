@@ -1088,6 +1088,58 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleStreamMessageAsync_ShouldWriteKeepAliveDuringIdleInteraction()
+    {
+        var previousInterval = NyxIdChatEndpoints.StreamKeepAliveInterval;
+        var bodyStream = new SignalingWriteStream("aevatar.nyxid_chat.keepalive");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            NyxIdChatEndpoints.StreamKeepAliveInterval = TimeSpan.FromMilliseconds(10);
+            var context = new DefaultHttpContext();
+            context.Request.Headers.Authorization = "Bearer valid-token";
+            context.Response.Body = bodyStream;
+
+            var runtime = new StubActorRuntime();
+            runtime.Actors["actor-1"] = new StubActor("actor-1");
+            var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>
+            {
+                BeforeEmitAsync = bodyStream.WaitForSignalAsync,
+                Frames =
+                {
+                    new AGUIEvent { RunFinished = new RunFinishedEvent() },
+                },
+            };
+
+            await InvokeTaskAsync(
+                "HandleStreamMessageAsync",
+                context,
+                "scope-a",
+                "actor-1",
+                new NyxIdChatEndpoints.NyxIdChatStreamRequest("long turn", SessionId: "session-keepalive"),
+                runtime,
+                new StubGAgentActorStore(),
+                interactionService,
+                NullLoggerFactory.Instance,
+                timeout.Token);
+
+            context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+            var body = bodyStream.GetText();
+            body.Should().Contain("RUN_STARTED");
+            body.Should().Contain("aevatar.nyxid_chat.keepalive");
+            body.Should().Contain("RUN_FINISHED");
+            body.IndexOf("RUN_STARTED", StringComparison.Ordinal)
+                .Should().BeLessThan(body.IndexOf("aevatar.nyxid_chat.keepalive", StringComparison.Ordinal));
+            body.IndexOf("aevatar.nyxid_chat.keepalive", StringComparison.Ordinal)
+                .Should().BeLessThan(body.IndexOf("RUN_FINISHED", StringComparison.Ordinal));
+        }
+        finally
+        {
+            NyxIdChatEndpoints.StreamKeepAliveInterval = previousInterval;
+        }
+    }
+
+    [Fact]
     public async Task HandleStreamMessageAsync_ShouldWriteNotFoundRunError_WhenResolverReportsMissingActor()
     {
         var context = new DefaultHttpContext();
@@ -3555,6 +3607,7 @@ public class NyxIdChatEndpointsCoverageTests
         public List<AGUIEvent> Frames { get; } = [];
         public Exception? Exception { get; init; }
         public NyxIdChatStartError? Failure { get; init; }
+        public Func<CancellationToken, Task>? BeforeEmitAsync { get; init; }
 
         public async Task<CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus>> ExecuteAsync(
             TCommand command,
@@ -3578,6 +3631,9 @@ public class NyxIdChatEndpointsCoverageTests
             var receipt = new NyxIdChatAcceptedReceipt(actorId, sessionId, sessionId, sessionId);
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
+
+            if (BeforeEmitAsync != null)
+                await BeforeEmitAsync(ct);
 
             foreach (var frame in Frames)
                 await emitAsync(frame, ct);
@@ -3607,6 +3663,41 @@ public class NyxIdChatEndpointsCoverageTests
                 NyxIdApprovalCommand approval => (approval.ActorId, approval.SessionId),
                 _ => ("actor", "session"),
             };
+    }
+
+    private sealed class SignalingWriteStream(string signalText) : MemoryStream
+    {
+        private readonly TaskCompletionSource _signal =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await base.WriteAsync(buffer, cancellationToken);
+            Observe(buffer.Span);
+        }
+
+        public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            await base.WriteAsync(buffer, offset, count, cancellationToken);
+            Observe(buffer.AsSpan(offset, count));
+        }
+
+        public Task WaitForSignalAsync(CancellationToken ct) => _signal.Task.WaitAsync(ct);
+
+        public string GetText()
+        {
+            Position = 0;
+            using var reader = new StreamReader(this, Encoding.UTF8, leaveOpen: true);
+            return reader.ReadToEnd();
+        }
+
+        private void Observe(ReadOnlySpan<byte> buffer)
+        {
+            if (Encoding.UTF8.GetString(buffer).Contains(signalText, StringComparison.Ordinal))
+                _signal.TrySetResult();
+        }
     }
 
     private sealed class StubNyxIdRelayScopeResolver : INyxIdRelayScopeResolver

@@ -78,6 +78,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly ChannelPlatformReplyService? _replyService;
     private readonly ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? _workflowResumeService;
     private readonly ChannelWorkflowDraftRunAdmission? _workflowDraftRunAdmission;
+    private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
 
     public ChannelConversationTurnRunner(
@@ -99,7 +100,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IUserConfigQueryPort? userConfigQueryPort = null,
         ChannelPlatformReplyService? replyService = null,
         ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
-        ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null)
+        ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null,
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -119,6 +121,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _replyService = replyService;
         _workflowResumeService = workflowResumeService;
         _workflowDraftRunAdmission = workflowDraftRunAdmission;
+        _remoteToolApprovalPort = remoteToolApprovalPort;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -148,6 +151,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // that looks like /init is still a card-action. (deepseek-v4-pro L65)
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
             return workflowResumeResult;
+
+        if (await TryHandleNyxIdApprovalCardActionAsync(activity, inbound, registration, runtimeContext, ct)
+                .ConfigureAwait(false) is { } nyxIdApprovalResult)
+        {
+            return nyxIdApprovalResult;
+        }
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound);
 
@@ -711,6 +720,134 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return new MessageContent { Text = ex.Message };
         }
     }
+
+    private async Task<ConversationTurnResult?> TryHandleNyxIdApprovalCardActionAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (activity.Type != ActivityType.CardAction)
+            return null;
+
+        var payload = activity.Content?.CardAction?.NyxIdApproval;
+        if (payload is null)
+            return null;
+
+        var reply = await ExecuteNyxIdApprovalCardActionAsync(activity, runtimeContext, payload, ct)
+            .ConfigureAwait(false);
+
+        return await SendReplyAsync(
+                reply,
+                string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id,
+                activity.Conversation,
+                inbound,
+                registration,
+                runtimeContext,
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<MessageContent> ExecuteNyxIdApprovalCardActionAsync(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        NyxIdApprovalActionPayload payload,
+        CancellationToken ct)
+    {
+        var requestId = NormalizeOptional(payload.RequestId);
+        if (requestId is null)
+            return new MessageContent { Text = "Approval action is missing the NyxID request id." };
+
+        var token = ResolveUserAccessToken(activity, runtimeContext);
+        if (token is null)
+        {
+            return new MessageContent
+            {
+                Text = "Approval action cannot be decided because the NyxID user credential is missing or expired. Open the current approval list and decide it there.",
+            };
+        }
+
+        var port = _remoteToolApprovalPort;
+        if (port is null)
+        {
+            return new MessageContent
+            {
+                Text = "Approval action cannot be decided because the remote approval decision service is unavailable.",
+            };
+        }
+
+        RemoteToolApprovalDecisionResult decision;
+        try
+        {
+            using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = token },
+            });
+            decision = await port.DecideAsync(
+                    new RemoteToolApprovalDecision(requestId, payload.Approved),
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "NyxID approval card decision failed before response: request={RequestId}, approved={Approved}",
+                requestId,
+                payload.Approved);
+            return new MessageContent { Text = $"Approval decision failed before reaching NyxID: {ex.Message}" };
+        }
+
+        if (!decision.Succeeded &&
+            TryResolveNyxIdApprovalDecisionError(decision, out var errorText))
+        {
+            return new MessageContent { Text = errorText };
+        }
+
+        return new MessageContent
+        {
+            Text = payload.Approved
+                ? $"Approval request `{requestId}` approved."
+                : $"Approval request `{requestId}` rejected.",
+        };
+    }
+
+    private static bool TryResolveNyxIdApprovalDecisionError(
+        RemoteToolApprovalDecisionResult result,
+        out string message)
+    {
+        if (result.Succeeded)
+        {
+            message = string.Empty;
+            return false;
+        }
+
+        var detail = NormalizeOptional(result.Detail) ?? "NyxID rejected the approval decision.";
+        var key = NormalizeOptional(result.ErrorKey) ?? string.Empty;
+        message = key switch
+        {
+            "already_decided" => "Approval request was already decided.",
+            "not_found" => "Approval request was not found or is no longer available.",
+            "forbidden" => BuildForbiddenApprovalMessage(detail),
+            "unauthorized" or "authentication_failed" => "Approval decision requires a valid NyxID user credential. Please sign in again and retry.",
+            _ when result.Status is 401 => "Approval decision requires a valid NyxID user credential. Please sign in again and retry.",
+            _ when result.Status is 403 => BuildForbiddenApprovalMessage(detail),
+            _ when result.Status is 404 => "Approval request was not found or is no longer available.",
+            _ when result.Status is 409 => "Approval request was already decided.",
+            _ => $"Approval decision was rejected by NyxID: {detail}",
+        };
+        return true;
+    }
+
+    private static string BuildForbiddenApprovalMessage(string detail) =>
+        detail.Contains("expired", StringComparison.OrdinalIgnoreCase)
+            ? "Approval request expired."
+            : $"Approval decision is not allowed for the current NyxID user: {detail}";
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
     // slash silently consumed.
@@ -1749,8 +1886,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // Typed payloads belong to their dedicated routers; reaching this point with one
         // attached means that router declined, and promoting it to a generic LLM turn
         // would bypass the typed contract.
-        if (cardAction.WorkflowResume is not null || cardAction.LlmSelection is not null)
+        if (cardAction.WorkflowResume is not null ||
+            cardAction.LlmSelection is not null ||
+            cardAction.NyxIdApproval is not null)
+        {
             return false;
+        }
 
         text = string.IsNullOrWhiteSpace(cardAction.SubmittedValue)
             ? $"[card_action] {cardAction.ActionId}"

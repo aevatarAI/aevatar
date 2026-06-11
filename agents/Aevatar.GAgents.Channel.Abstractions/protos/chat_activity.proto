@@ -220,6 +220,14 @@ message LlmSelectionActionPayload {
   string display_mode = 6;
 }
 
+// Carries repository-owned NyxID approval decision semantics for one card action.
+message NyxIdApprovalActionPayload {
+  // The NyxID approval request identifier.
+  string request_id = 1;
+  // The submitted approval decision.
+  bool approved = 2;
+}
+
 // Declares one interactive card element.
 message ActionElement {
   // The element kind.
@@ -248,6 +256,8 @@ message ActionElement {
   WorkflowResumeActionPayload workflow_resume = 11;
   // Repository-owned LLM selection payload for this action.
   LlmSelectionActionPayload llm_selection = 12;
+  // Repository-owned NyxID approval decision payload for this action.
+  NyxIdApprovalActionPayload nyx_id_approval = 13;
 }
 
 // Declares one title-text pair rendered inside a card.
@@ -296,6 +306,8 @@ message CardActionSubmission {
   LlmSelectionActionPayload llm_selection = 7;
   // The kind of action element that produced this callback.
   ActionElementKind action_kind = 8;
+  // Repository-owned NyxID approval decision payload submitted by this action.
+  NyxIdApprovalActionPayload nyx_id_approval = 9;
 }
 
 // Carries the channel-agnostic message content used for send, update, and reply operations.

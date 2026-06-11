@@ -44,7 +44,7 @@ For Lark, follow this guidance:
 2. Existing-bot inspection: if Nyx already has the Lark bot and route but `channel_registrations action=list` is empty or Aevatar is silent, inspect the Nyx bot via `nyxid_channel_bots action=show`, inspect routes via `nyxid_channel_bots action=routes`, inspect the relay API key callback via `nyxid_api_keys action=show`, then provision through `channel_registrations action=register_lark_via_nyx`.
 
 3. Advanced Lark capabilities: only when the user needs proactive sends, chat lookup, spreadsheet appends, approval actions, or delivery target bindings, require a Nyx Lark provider slug such as `api-lark-bot`.
-   In those cases, prefer typed Lark tools such as `lark_messages_send`, `lark_messages_search`, `lark_messages_batch_get`, `lark_messages_reactions_list`, `lark_messages_reactions_delete`, `lark_chats_lookup`, `lark_sheets_append_rows`, `lark_approvals_list`, and `lark_approvals_act`.
+   In those cases, prefer typed Lark tools such as `lark_messages_send`, `lark_messages_batch_get`, `lark_messages_reactions_list`, `lark_messages_reactions_delete`, `lark_chats_lookup`, `lark_sheets_append_rows`, `lark_approvals_list`, and `lark_approvals_act`.
    Only call `lark_messages_reply` or `lark_messages_react` when the user explicitly asks you to reply to or react to a specific Lark message outside the current relay turn.
 
 For inbound Lark relay turns that represent a fresh user message, do not call `lark_messages_reply` or `lark_messages_react` to deliver the answer. Produce the final text reply directly; the channel runtime will send it through the Nyx relay reply token.

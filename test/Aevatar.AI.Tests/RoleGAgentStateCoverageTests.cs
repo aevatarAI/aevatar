@@ -667,6 +667,61 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
+    public async Task HandleToolApprovalTimeout_ShouldKeepPendingAndScheduleStatus_WhenNotificationFails()
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: request => Task.FromResult(new RemoteToolApprovalSubmission(
+                "remote-1",
+                DateTimeOffset.FromUnixTimeSeconds(1_800))),
+            status: _ => throw new InvalidOperationException("status should not be called"));
+        var notificationPort = new StubRemoteApprovalNotificationPort(
+            _ => throw new InvalidOperationException("notification failed"));
+        var agent = CreateRoleAgent(
+            provider,
+            "role-timeout-notify-fails",
+            remotePort,
+            remoteToolApprovalNotificationPort: notificationPort);
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = """{"path":"/prod"}""",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                Channel = new AgentToolChannelContext(
+                    "lark",
+                    "sender-1",
+                    "scope-1",
+                    "msg-1",
+                    "om_1",
+                    "agent-delivery-1"),
+            }).ToPayload(),
+        };
+
+        await agent.HandleToolApprovalTimeout(new ToolApprovalTimeoutFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+        });
+
+        agent.State.PendingApproval.Should().NotBeNull();
+        agent.State.PendingApproval!.RequestId.Should().Be("req-1");
+        agent.State.PendingApproval.RemoteApprovalId.Should().Be("remote-1");
+        notificationPort.Notifications.Should().ContainSingle();
+        notificationPort.Notifications[0].Request.RequestId.Should().Be("req-1");
+        notificationPort.Notifications[0].Submission.RemoteApprovalId.Should().Be("remote-1");
+        notificationPort.Notifications[0].ToolContext.Channel.DeliveryTargetId.Should().Be("agent-delivery-1");
+        ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
+            .TimeoutRequests.Should().ContainSingle(x =>
+                x.CallbackId == "tool-approval-remote-status-req-1-remote-1-1" &&
+                x.ActorId == "role-timeout-notify-fails");
+    }
+
+    [Fact]
     public async Task HandleToolApprovalTimeout_ShouldPersistTerminalFailure_WhenRemoteSubmitThrows()
     {
         using var provider = BuildServiceProvider();
@@ -1380,12 +1435,14 @@ public sealed class RoleGAgentStateCoverageTests
         IServiceProvider provider,
         string actorId,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         ILLMProviderFactory? llmProviderFactory = null)
     {
         var agent = new TestRoleGAgent(
             llmProviderFactory,
             remoteToolApprovalPort,
+            remoteToolApprovalNotificationPort,
             toolSources ?? Enumerable.Empty<IAgentToolSource>())
         {
             Services = provider,
@@ -1438,11 +1495,13 @@ public sealed class RoleGAgentStateCoverageTests
     private sealed class TestRoleGAgent(
         ILLMProviderFactory? llmProviderFactory,
         IRemoteToolApprovalPort? remoteToolApprovalPort,
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort,
         IEnumerable<IAgentToolSource> toolSources)
         : RoleGAgent(
             llmProviderFactory: llmProviderFactory,
             toolSources: toolSources,
-            remoteToolApprovalPort: remoteToolApprovalPort)
+            remoteToolApprovalPort: remoteToolApprovalPort,
+            remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
     {
     }
 
@@ -1475,6 +1534,7 @@ public sealed class RoleGAgentStateCoverageTests
     {
         public List<RemoteToolApprovalRequest> Submitted { get; } = [];
         public List<RemoteToolApprovalStatusQuery> StatusQueries { get; } = [];
+        public List<RemoteToolApprovalDecision> Decisions { get; } = [];
 
         public Task<RemoteToolApprovalSubmission> SubmitAsync(RemoteToolApprovalRequest request, CancellationToken ct)
         {
@@ -1486,6 +1546,25 @@ public sealed class RoleGAgentStateCoverageTests
         {
             StatusQueries.Add(query);
             return status(query);
+        }
+
+        public Task<RemoteToolApprovalDecisionResult> DecideAsync(RemoteToolApprovalDecision decision, CancellationToken ct)
+        {
+            Decisions.Add(decision);
+            return Task.FromResult(new RemoteToolApprovalDecisionResult(true));
+        }
+    }
+
+    private sealed class StubRemoteApprovalNotificationPort(
+        Func<RemoteToolApprovalNotification, Task> notify)
+        : IRemoteToolApprovalNotificationPort
+    {
+        public List<RemoteToolApprovalNotification> Notifications { get; } = [];
+
+        public Task NotifyAsync(RemoteToolApprovalNotification notification, CancellationToken ct)
+        {
+            Notifications.Add(notification);
+            return notify(notification);
         }
     }
 

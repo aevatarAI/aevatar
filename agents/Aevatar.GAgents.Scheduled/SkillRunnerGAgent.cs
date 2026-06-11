@@ -204,7 +204,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private ChannelScheduleRunner Scheduler => _scheduler ??= new ChannelScheduleRunner(
         callbackId: SkillRunnerDefaults.TriggerCallbackId,
         schedulableSource: () => State,
-        triggerFactory: () => new TriggerSkillRunnerExecutionCommand { Reason = "schedule" },
+        triggerFactory: () => new TriggerSkillRunnerExecutionCommand { Reason = ResolveScheduleTriggerReason(State) },
         persistNextRunEventAsync: nextRunUtc => PersistDomainEventAsync(new SkillRunnerNextRunScheduledEvent
         {
             NextRunAt = Timestamp.FromDateTimeOffset(nextRunUtc),
@@ -252,6 +252,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             .On<SkillRunnerExecutionCompletedEvent>(ApplyCompleted)
             .On<SkillRunnerExecutionFailedEvent>(ApplyFailed)
             .On<SkillRunnerExecutionRejectedEvent>(ApplyRejected)
+            .On<SkillRunnerOneShotRetiredEvent>(ApplyOneShotRetired)
             .On<SkillRunnerExternalTriggerAdmittedEvent>(ApplyExternalTriggerAdmitted)
             .On<SkillRunnerExternalTriggerDispatchRequestedEvent>(ApplyExternalTriggerDispatchRequested)
             .On<SkillRunnerExternalTriggerRejectedEvent>(ApplyExternalTriggerRejected)
@@ -264,12 +265,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     public async Task HandleInitializeAsync(InitializeSkillRunnerCommand command)
     {
         var skillRef = NormalizeSkillReference(command.SkillRef ?? new SkillRunnerSkillReference());
+        var scheduleMode = NormalizeScheduleMode(command.ScheduleMode);
         var hasSkillRef = HasSkillReference(skillRef) && !string.IsNullOrWhiteSpace(skillRef.Name);
         var hasInlineSkillContent = !string.IsNullOrWhiteSpace(command.SkillContent);
-        if (!hasSkillRef && !hasInlineSkillContent)
+        var oneShotMessage = command.OneShotMessage?.Trim() ?? string.Empty;
+        var hasOneShotMessage = scheduleMode == SkillRunnerScheduleMode.OneShot &&
+                                !string.IsNullOrWhiteSpace(oneShotMessage);
+        if (!hasSkillRef && !hasInlineSkillContent && !hasOneShotMessage)
         {
             Logger.LogWarning(
-                "Skill runner {ActorId} initialization ignored because skill_ref.name and legacy skill_content are both empty",
+                "Skill runner {ActorId} initialization ignored because skill_ref.name, legacy skill_content, and one_shot_message are all empty",
                 Id);
             return;
         }
@@ -297,6 +302,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ExecutionPrompt = command.ExecutionPrompt?.Trim() ?? string.Empty,
             ScheduleCron = command.ScheduleCron?.Trim() ?? string.Empty,
             ScheduleTimezone = NormalizeTimezone(command.ScheduleTimezone),
+            ScheduleMode = scheduleMode,
+            OneShotRunAt = command.OneShotRunAt,
+            OneShotMessage = oneShotMessage,
             OutboundConfig = outboundConfig,
             Enabled = command.Enabled,
             ScopeId = command.ScopeId?.Trim() ?? string.Empty,
@@ -412,6 +420,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 Reason = SkillRunnerDefaults.RejectionReasonRunnerDisabled,
                 ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
             });
+            if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot && !hasExternalTrigger)
+                await RetireOneShotAsync(_clock.UtcNow, SkillRunnerDefaults.OneShotRetirementReasonRejected, CancellationToken.None);
             return;
         }
 
@@ -441,6 +451,12 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             });
 
             await CancelRetryLeaseAsync(CancellationToken.None);
+            if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot && !hasExternalTrigger)
+            {
+                await RetireOneShotAsync(now, SkillRunnerDefaults.OneShotRetirementReasonCompleted, CancellationToken.None);
+                return;
+            }
+
             await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
         }
         catch (Exception ex)
@@ -471,8 +487,25 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             });
 
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
+            if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot && !hasExternalTrigger)
+            {
+                await RetireOneShotAsync(now, SkillRunnerDefaults.OneShotRetirementReasonFailed, CancellationToken.None);
+                return;
+            }
+
             await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
         }
+    }
+
+    private async Task RetireOneShotAsync(DateTimeOffset retiredAt, string reason, CancellationToken ct)
+    {
+        await Scheduler.CancelAsync(ct);
+        await CancelRetryLeaseAsync(ct);
+        await PersistDomainEventAsync(new SkillRunnerOneShotRetiredEvent
+        {
+            RetiredAt = Timestamp.FromDateTimeOffset(retiredAt),
+            Reason = reason,
+        }, ct);
     }
 
     private async Task ScheduleRetryAsync(TriggerSkillRunnerExecutionCommand command, int retryAttempt, CancellationToken ct)
@@ -576,6 +609,22 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         // The counter is populated by NyxIdProxyToolFailureCountingMiddleware as the LLM
         // fans out nyxid_proxy calls inside the ChatStreamAsync loop.
         _toolFailureCounter.Reset();
+
+        if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot &&
+            !string.IsNullOrWhiteSpace(State.OneShotMessage) &&
+            !HasSkillReference(State.SkillRef) &&
+            string.IsNullOrWhiteSpace(State.SkillContent))
+        {
+            var output = State.OneShotMessage.Trim();
+            await SendTextOutputAsync(output, ct);
+            return new SkillRunnerExecutionResult(
+                output,
+            SkillRunnerExecutionKind.Prompt,
+            string.IsNullOrWhiteSpace(State.SkillName) ? SkillRunnerDefaults.OneShotSkillName : State.SkillName,
+            string.Empty,
+            string.Empty,
+            null);
+        }
 
         var plan = await BuildExecutionPlanAsync(ct);
         if (plan.Kind == SkillRunnerExecutionKind.Workflow)
@@ -1209,7 +1258,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 null,
                 State.ScopeId,
                 null,
-                null),
+                null,
+                Id),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
 
@@ -1703,6 +1753,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.ExecutionPrompt = evt.ExecutionPrompt ?? string.Empty;
         next.ScheduleCron = evt.ScheduleCron ?? string.Empty;
         next.ScheduleTimezone = NormalizeTimezone(evt.ScheduleTimezone);
+        next.ScheduleMode = NormalizeScheduleMode(evt.ScheduleMode);
+        next.OneShotRunAt = evt.OneShotRunAt;
+        next.OneShotMessage = evt.OneShotMessage ?? string.Empty;
+        next.RetiredAt = null;
+        next.RetirementReason = string.Empty;
         next.OutboundConfig = evt.OutboundConfig?.Clone() ?? new SkillRunnerOutboundConfig();
         next.Enabled = evt.Enabled;
         next.ScopeId = evt.ScopeId ?? string.Empty;
@@ -1762,6 +1817,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.CompletedAt));
         }
 
+        return next;
+    }
+
+    private static SkillRunnerState ApplyOneShotRetired(SkillRunnerState current, SkillRunnerOneShotRetiredEvent evt)
+    {
+        var next = current.Clone();
+        next.Enabled = false;
+        next.NextRunAt = null;
+        next.RetiredAt = evt.RetiredAt;
+        next.RetirementReason = evt.Reason ?? string.Empty;
         return next;
     }
 
@@ -1909,6 +1974,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private static string NormalizeTimezone(string? scheduleTimezone) =>
         string.IsNullOrWhiteSpace(scheduleTimezone) ? SkillRunnerDefaults.DefaultTimezone : scheduleTimezone.Trim();
+
+    private static SkillRunnerScheduleMode NormalizeScheduleMode(SkillRunnerScheduleMode scheduleMode) =>
+        scheduleMode == SkillRunnerScheduleMode.OneShot
+            ? SkillRunnerScheduleMode.OneShot
+            : SkillRunnerScheduleMode.Cron;
+
+    private static string ResolveScheduleTriggerReason(SkillRunnerState state) =>
+        state.ScheduleMode == SkillRunnerScheduleMode.OneShot
+            ? SkillRunnerDefaults.OneShotTriggerReason
+            : "schedule";
 
     private static string ResolvePlatform(string? platform) =>
         string.IsNullOrWhiteSpace(platform) ? SkillRunnerDefaults.DefaultPlatform : platform.Trim();

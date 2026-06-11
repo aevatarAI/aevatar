@@ -242,6 +242,106 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
+    public async Task Projector_ShouldEmitToolFramesFromCommittedCompletion()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "session-1",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "session-1",
+                    Content = "done",
+                    ToolCalls =
+                    {
+                        new ToolCallEvent
+                        {
+                            ToolName = "nyxid_proxy",
+                            ArgumentsJson = "{\"path\":\"/v1/test\"}",
+                            CallId = "call-1",
+                        },
+                    },
+                    ToolReceipts =
+                    {
+                        new AgentToolReceipt
+                        {
+                            ToolName = "nyxid_proxy",
+                            CallId = "call-1",
+                            Status = AgentToolReceiptStatus.Success,
+                            ResultJson = "{\"ok\":true}",
+                        },
+                    },
+                }),
+            CancellationToken.None);
+
+        hub.Published.Select(p => p.Event.EventCase).Should().Equal(
+            AGUIEvent.EventOneofCase.ToolCallStart,
+            AGUIEvent.EventOneofCase.ToolCallEnd,
+            AGUIEvent.EventOneofCase.TextMessageStart,
+            AGUIEvent.EventOneofCase.TextMessageContent,
+            AGUIEvent.EventOneofCase.TextMessageEnd,
+            AGUIEvent.EventOneofCase.RunFinished);
+        hub.Published[0].Event.ToolCallStart.ToolName.Should().Be("nyxid_proxy");
+        hub.Published[0].Event.ToolCallStart.ToolCallId.Should().Be("call-1");
+        hub.Published[1].Event.ToolCallEnd.ToolCallId.Should().Be("call-1");
+        hub.Published[1].Event.ToolCallEnd.Result.Should().Be("{\"ok\":true}");
+    }
+
+    [Fact]
+    public async Task Projector_ShouldEmitApprovalFrameFromCommittedPendingApproval()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "session-1",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new PendingToolApprovalPersistedEvent
+                {
+                    Pending = new PendingToolApprovalState
+                    {
+                        RequestId = "approval-1",
+                        SessionId = "session-1",
+                        ToolName = "shell",
+                        ToolCallId = "call-approval",
+                        ArgumentsJson = "{\"cmd\":\"pwd\"}",
+                        IsDestructive = true,
+                    },
+                }),
+            CancellationToken.None);
+
+        var published = hub.Published.Should().ContainSingle().Subject;
+        published.RootActorId.Should().Be("chat-actor-1");
+        published.SessionId.Should().Be("session-1");
+        published.Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.Custom);
+        published.Event.Custom.Name.Should().Be("TOOL_APPROVAL_REQUEST");
+        published.Event.Custom.Payload.Is(Struct.Descriptor).Should().BeTrue();
+        var fields = published.Event.Custom.Payload.Unpack<Struct>().Fields;
+        fields["requestId"].StringValue.Should().Be("approval-1");
+        fields["sessionId"].StringValue.Should().Be("session-1");
+        fields["toolName"].StringValue.Should().Be("shell");
+        fields["toolCallId"].StringValue.Should().Be("call-approval");
+        fields["argumentsJson"].StringValue.Should().Be("{\"cmd\":\"pwd\"}");
+        fields["isDestructive"].BoolValue.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Projector_ShouldSynthesizeContent_WhenActorAlreadyEmittedTransientFrames()
     {
         var hub = new RecordingSessionEventHub();

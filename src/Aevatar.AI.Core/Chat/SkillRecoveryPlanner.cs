@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -7,6 +8,9 @@ namespace Aevatar.AI.Core.Chat;
 
 internal static class SkillRecoveryPlanner
 {
+    internal const int MaxCallIdLength = 64;
+    private const int CallIdFingerprintLength = 16;
+    private const string CompactCallIdPrefix = "sr";
     private const string OrnnSearchSkillsToolName = "ornn_search_skills";
     private const string UseSkillToolName = "use_skill";
 
@@ -196,9 +200,94 @@ internal static class SkillRecoveryPlanner
     private static string BuildCallId(string? callIdPrefix, string toolName)
     {
         var suffix = toolName.Replace('_', '-');
-        return string.IsNullOrWhiteSpace(callIdPrefix)
+        var callId = string.IsNullOrWhiteSpace(callIdPrefix)
             ? $"skill-recovery:{suffix}"
             : $"{callIdPrefix}:skill-recovery:{suffix}";
+
+        return EnsureCallIdLimit(callId);
+    }
+
+    internal static string EnsureCallIdLimit(string callId)
+    {
+        if (callId.Length <= MaxCallIdLength)
+            return callId;
+
+        var readableSegment = ExtractReadableCallIdSegment(callId);
+        var fingerprint = BuildCallIdFingerprint(callId);
+        var readableBudget = MaxCallIdLength
+            - CompactCallIdPrefix.Length
+            - 2
+            - fingerprint.Length;
+        if (readableSegment.Length > readableBudget)
+            readableSegment = readableSegment[^readableBudget..];
+
+        return $"{CompactCallIdPrefix}:{readableSegment}:{fingerprint}";
+    }
+
+    internal static string BuildSequencedCallId(string? callId, int sequence)
+    {
+        if (string.IsNullOrWhiteSpace(callId))
+            return EnsureCallIdLimit($"skill-recovery:{sequence}");
+
+        var sequenceSegment = $"recovery:{sequence}";
+        return EnsureCallIdLimit(AppendCallIdSegment(callId, sequenceSegment));
+    }
+
+    private static string AppendCallIdSegment(string callId, string segment)
+    {
+        if (TrySplitCompactCallId(callId, out var readableSegment, out var fingerprint))
+            return $"{CompactCallIdPrefix}:{readableSegment}:{segment}:{fingerprint}";
+
+        return $"{callId}:{segment}";
+    }
+
+    private static string ExtractReadableCallIdSegment(string callId)
+    {
+        if (TrySplitCompactCallId(callId, out var compactReadableSegment, out _))
+            return compactReadableSegment;
+
+        var markerIndex = callId.IndexOf(":skill-recovery:", StringComparison.Ordinal);
+        if (markerIndex >= 0)
+            return callId[(markerIndex + ":skill-recovery:".Length)..];
+
+        var recoveryIndex = callId.IndexOf("skill-recovery:", StringComparison.Ordinal);
+        if (recoveryIndex >= 0)
+            return callId[(recoveryIndex + "skill-recovery:".Length)..];
+
+        var lastSeparator = callId.LastIndexOf(':');
+        return lastSeparator >= 0 && lastSeparator < callId.Length - 1
+            ? callId[(lastSeparator + 1)..]
+            : callId;
+    }
+
+    private static bool TrySplitCompactCallId(
+        string callId,
+        out string readableSegment,
+        out string fingerprint)
+    {
+        readableSegment = string.Empty;
+        fingerprint = string.Empty;
+
+        if (!callId.StartsWith($"{CompactCallIdPrefix}:", StringComparison.Ordinal))
+            return false;
+
+        var segments = callId[(CompactCallIdPrefix.Length + 1)..].Split(':');
+        if (segments.Length < 2 || !IsCallIdFingerprint(segments[^1]))
+            return false;
+
+        fingerprint = segments[^1];
+        readableSegment = string.Join(':', segments[..^1]);
+        return !string.IsNullOrWhiteSpace(readableSegment);
+    }
+
+    private static bool IsCallIdFingerprint(string value) =>
+        value.Length == CallIdFingerprintLength &&
+        value.All(static c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static string BuildCallIdFingerprint(string callId)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(callId));
+        return Convert.ToHexString(hash)[..CallIdFingerprintLength].ToLowerInvariant();
     }
 
     private static bool IsEnabled(AgentSkillRecoveryContext recovery) =>

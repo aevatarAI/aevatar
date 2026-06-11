@@ -1,10 +1,12 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
@@ -15,6 +17,62 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class FeishuCardNotificationPortTests
 {
+    [Fact]
+    public async Task RemoteApprovalNotifyAsync_ShouldRequireExplicitDeliveryTargetBeforeLookup()
+    {
+        var registry = Substitute.For<IUserAgentDeliveryTargetReader>();
+        var port = CreateRemoteApprovalPort(registry);
+
+        Func<Task> act = () => port.NotifyAsync(BuildRemoteApprovalNotification(null), CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*explicit delivery target id*");
+        await registry.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void RemoteApprovalBuildIntent_ShouldUseTypedNyxIdApprovalPayloadWithRemoteApprovalId()
+    {
+        var notification = BuildRemoteApprovalNotification("agent-1");
+
+        var intent = LarkRemoteToolApprovalNotificationPort.BuildIntent(notification);
+
+        intent.Cards.Should().ContainSingle();
+        var card = intent.Cards[0];
+        card.Actions.Should().HaveCount(2);
+        card.Actions[0].NyxIdApproval.RequestId.Should().Be("nyx-remote-1");
+        card.Actions[0].NyxIdApproval.Approved.Should().BeTrue();
+        card.Actions[1].NyxIdApproval.RequestId.Should().Be("nyx-remote-1");
+        card.Actions[1].NyxIdApproval.Approved.Should().BeFalse();
+        card.Text.Should().Contain("Local request: `local-req-1`");
+    }
+
+    [Fact]
+    public async Task RemoteApprovalNotifyAsync_ShouldSendInteractiveCardThroughDeliveryTarget()
+    {
+        var registry = BuildRegistry("agent-remote-1");
+        var handler = new RecordingHandler("""{"data":{"message_id":"om_remote_1"}}""");
+        var port = CreateRemoteApprovalPort(registry, handler);
+
+        await port.NotifyAsync(BuildRemoteApprovalNotification("agent-remote-1"), CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=chat_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("oc_chat_1");
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+        using var content = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
+        var elements = content.RootElement.GetProperty("body").GetProperty("elements");
+        var approveValue = elements[1].GetProperty("behaviors")[0].GetProperty("value");
+        approveValue.GetProperty("nyxid_approval_request_id").GetString().Should().Be("nyx-remote-1");
+        approveValue.GetProperty("nyxid_approval_approved").GetBoolean().Should().BeTrue();
+        var rejectValue = elements[2].GetProperty("behaviors")[0].GetProperty("value");
+        rejectValue.GetProperty("nyxid_approval_request_id").GetString().Should().Be("nyx-remote-1");
+        rejectValue.GetProperty("nyxid_approval_approved").GetBoolean().Should().BeFalse();
+    }
+
     [Fact]
     public async Task DeliverAsync_WhenInteractionSpecPresent_ShouldSendInteractiveCardThroughDispatcherPath()
     {
@@ -178,6 +236,40 @@ public sealed class FeishuCardNotificationPortTests
             new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }),
             new LarkMessageComposer(),
             NullLogger<FeishuCardNotificationPort>.Instance);
+
+    private static LarkRemoteToolApprovalNotificationPort CreateRemoteApprovalPort(
+        IUserAgentDeliveryTargetReader registry,
+        HttpMessageHandler? handler = null) =>
+        new(
+            registry,
+            handler is null
+                ? new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" })
+                : CreateNyxClient(handler),
+            new LarkMessageComposer(),
+            NullLogger<LarkRemoteToolApprovalNotificationPort>.Instance);
+
+    private static RemoteToolApprovalNotification BuildRemoteApprovalNotification(string? deliveryTargetId) =>
+        new(
+            new RemoteToolApprovalRequest(
+                "local-req-1",
+                "dangerous_tool",
+                "call-1",
+                """{"path":"/prod"}""",
+                ToolApprovalMode.Auto,
+                IsDestructive: true),
+            new RemoteToolApprovalSubmission(
+                "nyx-remote-1",
+                DateTimeOffset.Parse("2026-06-11T10:00:00Z")),
+            AgentToolExecutionContext.Empty with
+            {
+                Channel = new AgentToolChannelContext(
+                    "lark",
+                    "sender-1",
+                    "scope-1",
+                    "msg-1",
+                    "om_1",
+                    deliveryTargetId),
+            });
 
     private static IUserAgentDeliveryTargetReader BuildRegistry(string deliveryTargetId, bool fallback = false)
     {

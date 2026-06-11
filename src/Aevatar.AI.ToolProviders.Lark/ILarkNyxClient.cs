@@ -7,7 +7,6 @@ public interface ILarkNyxClient
     Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct);
     Task<string> ListMessageReactionsAsync(string token, LarkMessageReactionListRequest request, CancellationToken ct);
     Task<string> DeleteMessageReactionAsync(string token, LarkMessageReactionDeleteRequest request, CancellationToken ct);
-    Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct);
     Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct);
     Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
         string token,
@@ -53,20 +52,6 @@ public sealed record LarkMessageReactionListRequest(
 public sealed record LarkMessageReactionDeleteRequest(
     string MessageId,
     string ReactionId);
-
-public sealed record LarkMessageSearchRequest(
-    string Query,
-    IReadOnlyList<string>? ChatIds,
-    IReadOnlyList<string>? SenderIds,
-    string? IncludeAttachmentType,
-    string? ChatType,
-    string? SenderType,
-    string? ExcludeSenderType,
-    bool IsAtMe,
-    string? StartTime,
-    string? EndTime,
-    int PageSize,
-    string? PageToken);
 
 public sealed record LarkMessagesBatchGetRequest(
     IReadOnlyList<string> MessageIds);

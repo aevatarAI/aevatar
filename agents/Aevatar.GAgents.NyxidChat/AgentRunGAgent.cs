@@ -888,6 +888,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         !string.IsNullOrWhiteSpace(context.Channel.RegistrationScopeId) ||
         !string.IsNullOrWhiteSpace(context.Channel.MessageId) ||
         !string.IsNullOrWhiteSpace(context.Channel.PlatformMessageId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.DeliveryTargetId) ||
         !string.IsNullOrWhiteSpace(context.Routing.ModelOverride) ||
         !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
         context.Routing.MaxToolRoundsOverride.HasValue ||

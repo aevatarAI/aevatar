@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -68,6 +69,42 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
     }
 
     [Fact]
+    public void RuntimeCallbackSchedulerStateStorageSerializer_ShouldRoundtripAnyValueBytes()
+    {
+        var state = new RuntimeCallbackSchedulerState
+        {
+            ReminderCallbacks =
+            {
+                ["cb-byte-string"] = new RuntimeScheduledCallback
+                {
+                    ActorId = "actor-byte-string",
+                    CallbackId = "cb-byte-string",
+                    Generation = 9,
+                    SlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+                    DueTimeMillis = 1000,
+                    DeliveryMode = RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
+                    TriggerEnvelope = CreateEnvelopeWithAnyPayload("evt-byte-string", new Any
+                    {
+                        TypeUrl = "type.googleapis.com/aevatar.test.ByteStringPayload",
+                        Value = ByteString.CopyFrom(0x01, 0x02, 0x03, 0x7F),
+                    }),
+                    NextDueAtUnixTimeMs = 1_780_000_000_000,
+                    OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
+                },
+            },
+        };
+        var serializer = new RuntimeCallbackSchedulerStateGrainStorageSerializer();
+
+        var serialized = serializer.Serialize(state);
+        var roundTripped = serializer.Deserialize<RuntimeCallbackSchedulerState>(serialized);
+
+        var payload = roundTripped.ReminderCallbacks["cb-byte-string"].TriggerEnvelope.Payload;
+        payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.test.ByteStringPayload");
+        payload.Value.ToByteArray().Should().Equal(0x01, 0x02, 0x03, 0x7F);
+        payload.Value.Should().NotBeEmpty();
+    }
+
+    [Fact]
     public async Task RuntimeCallbackSchedulerState_ShouldReadAndWriteThroughOrleansPersistentState()
     {
         var persistentState =
@@ -126,6 +163,8 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         var attribute = parameter.GetCustomAttribute<PersistentStateAttribute>();
         attribute.Should().NotBeNull();
         attribute!.StateName.Should().Be("runtime-callback-scheduler-v2");
+        attribute.StorageName.Should().Be(OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName);
+        attribute.StorageName.Should().NotBe(OrleansRuntimeConstants.GrainStateStorageName);
     }
 
     [Fact]
@@ -360,6 +399,13 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
     {
         Id = id,
         Payload = Any.Pack(payload),
+        Route = EnvelopeRouteSemantics.CreateDirect("actor-1", "actor-1"),
+    };
+
+    private static EventEnvelope CreateEnvelopeWithAnyPayload(string id, Any payload) => new()
+    {
+        Id = id,
+        Payload = payload.Clone(),
         Route = EnvelopeRouteSemantics.CreateDirect("actor-1", "actor-1"),
     };
 

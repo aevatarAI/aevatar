@@ -66,7 +66,8 @@ public sealed class VoiceVolatileMediaStreamPort(
                 attachedHandle,
                 transport,
                 providerSession,
-                DispatchTransportControlAsync);
+                DispatchTransportControlAsync,
+                DispatchInputImageAsync);
 
             if (!_activeRelays.TryAdd(attachedHandle.ActiveTransportLeaseId, relay))
             {
@@ -184,6 +185,25 @@ public sealed class VoiceVolatileMediaStreamPort(
                 }),
             ct);
 
+    private Task DispatchInputImageAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        VoiceInputImage inputImage,
+        CancellationToken ct) =>
+        _dispatchPort.DispatchAsync(
+            handle.ActorId,
+            VoicePresenceSessionDispatch.BuildDirectEnvelope(
+                handle.ActorId,
+                handle.ModuleName,
+                new VoiceInputImageReceived
+                {
+                    SessionId = handle.SessionId,
+                    OwnerId = handle.OwnerId,
+                    TransportLeaseId = handle.ActiveTransportLeaseId ?? string.Empty,
+                    LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                    InputImage = inputImage.Clone(),
+                }),
+            ct);
+
     private static VoiceTransportLifetimeCompleted BuildLifetimeCompleted(
         VoicePresenceSessionLeaseHandle handle,
         string reason) =>
@@ -216,7 +236,8 @@ public sealed class VoiceVolatileMediaStreamPort(
         VoicePresenceSessionLeaseHandle handle,
         IVoiceTransport transport,
         RealtimeVoiceProviderSession providerSession,
-        Func<VoicePresenceSessionLeaseHandle, VoiceControlFrame, CancellationToken, Task> controlSink)
+        Func<VoicePresenceSessionLeaseHandle, VoiceControlFrame, CancellationToken, Task> controlSink,
+        Func<VoicePresenceSessionLeaseHandle, VoiceInputImage, CancellationToken, Task> inputImageSink)
         : IAsyncDisposable
     {
         private readonly CancellationTokenSource _relayCancellation = new();
@@ -260,6 +281,10 @@ public sealed class VoiceVolatileMediaStreamPort(
                     else if (frame.Control != null)
                     {
                         await controlSink(handle, frame.Control, ct);
+                    }
+                    else if (frame.InputImage != null)
+                    {
+                        await inputImageSink(handle, frame.InputImage, ct);
                     }
                 }
             }

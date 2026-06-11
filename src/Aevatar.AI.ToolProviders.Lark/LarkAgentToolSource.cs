@@ -50,8 +50,6 @@ public sealed class LarkAgentToolSource : IAgentToolSource
             tools.Add(new LarkMessagesReactionsListTool(_client));
         if (_options.EnableMessageReactionDelete)
             tools.Add(new LarkMessagesReactionsDeleteTool(_client));
-        if (_options.EnableMessageSearch)
-            tools.Add(new LarkMessagesSearchTool(_client));
         if (_options.EnableMessageBatchGet)
             tools.Add(new LarkMessagesBatchGetTool(_client));
         if (_options.EnableChatLookup)

@@ -21,7 +21,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
 
     public RuntimeCallbackSchedulerGrain(
-        [PersistentState(SchedulerStateName, OrleansRuntimeConstants.GrainStateStorageName)]
+        [PersistentState(SchedulerStateName, OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName)]
         IPersistentState<RuntimeCallbackSchedulerState> state)
     {
         _state = state;

@@ -239,9 +239,20 @@ message VoiceDrainAcknowledged {
   int64 playout_sequence = 2;
 }
 
+message VoiceTransportSessionAccepted {
+  string actor_id = 1;
+  string module_name = 2;
+  string session_id = 3;
+  int32 pcm_sample_rate_hz = 4;
+  int64 observed_state_version = 5;
+}
+
 message VoiceControlFrame {
   oneof frame {
     VoiceDrainAcknowledged drain_acknowledged = 1;
+    VoiceInputImage input_image = 2;
+    VoiceTransportSessionAccepted session_accepted = 3;
+    VoiceRealtimeFrame realtime_frame = 4;
   }
 }
 

@@ -28,6 +28,12 @@ message ConversationTurnCompletedEvent {
   repeated ConversationHistoryEntry appended_history = 9;
 }
 
+message RecentConversationAttachmentActivity {
+  string activity_id = 1;
+  int64 accepted_at_unix_ms = 2;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 3;
+}
+
 message NeedsLlmReplyEvent {
   string correlation_id = 1;
   string target_actor_id = 2;
@@ -64,6 +70,11 @@ message NeedsLlmReplyEvent {
   // ConversationGAgentState.retained_history into the transient run command so
   // per-message AgentRunGAgent instances still see the same conversation context.
   repeated ConversationHistoryEntry prior_history = 13;
+  // Conversation-owned recent accepted attachment activity snapshot. This is
+  // copied from ConversationGAgentState.recent_attachment_activities into the
+  // transient run command so the chat LLM path can include recent image context
+  // or inject an honest degradation warning.
+  repeated RecentConversationAttachmentActivity recent_attachment_activities = 14;
 }
 
 enum ChannelWorkflowDraftRunSourceKind {

@@ -1,16 +1,19 @@
 using System.Net;
 using System.Net.WebSockets;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Encodings.Web;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
@@ -119,6 +122,143 @@ public sealed class PolicyAwareVoiceEndpointsTests
         attachedTransports.Should().ContainSingle();
         detachedTransports.Should().ContainSingle()
             .Which.Should().BeSameAs(attachedTransports.Single());
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenAttachedClientSendsInputImage_ShouldExposeImageTransportFrame()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            ForwardToModel("fallback-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "lark-voice",
+                    Priority = 10,
+                    Match = new ChatRouteMatch
+                    {
+                        SourceKind = ChatSourceKind.Voice,
+                        Channel = "lark",
+                    },
+                    Action = VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+                },
+            ]));
+        var receivedFrames = new List<VoiceTransportFrame>();
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: async transport =>
+            {
+                await using (transport)
+                {
+                    await foreach (var frame in transport.ReceiveFramesAsync(CancellationToken.None))
+                        receivedFrames.Add(frame);
+                }
+            });
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Text,
+            Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(new VoiceControlFrame
+            {
+                InputImage = new VoiceInputImage
+                {
+                    MediaType = "image/png",
+                    Data = ByteString.CopyFrom([4, 5, 6]),
+                },
+            })));
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            new RecordingVoiceRealtimeSession(),
+            mediaPort);
+        var context = CreateVoiceContext(app, "/ws/voice?channel=lark");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        wsFeature.AcceptCalls.Should().Be(1);
+        var frame = receivedFrames.Should().ContainSingle().Which;
+        frame.InputImage.Should().NotBeNull();
+        frame.InputImage!.MediaType.Should().Be("image/png");
+        frame.InputImage.Data.ToByteArray().Should().Equal(4, 5, 6);
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenAttached_ShouldForwardRealtimeFramesToWebSocketControlChannel()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+            []));
+        var responseId = 51;
+        var hub = new RecordingProjectionSessionEventHub();
+        var receivedControls = new List<VoiceControlFrame>();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Text,
+            Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(new VoiceControlFrame
+            {
+                DrainAcknowledged = new VoiceDrainAcknowledged
+                {
+                    ResponseId = responseId,
+                    PlayoutSequence = 12,
+                },
+            })));
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: async transport =>
+            {
+                await hub.PublishAsync(
+                    "voice-agent-lark",
+                    "session-1",
+                    new VoiceRealtimeFrame
+                    {
+                        ModuleName = "voice_presence_openai",
+                        SessionId = "session-1",
+                        ResponseStarted = new VoiceResponseStarted
+                        {
+                            ResponseId = responseId,
+                            ProviderResponseId = "provider-response-51",
+                        },
+                    });
+
+                await using (transport)
+                {
+                    await foreach (var frame in transport.ReceiveFramesAsync(CancellationToken.None))
+                    {
+                        if (frame.Control != null)
+                            receivedControls.Add(frame.Control.Clone());
+                    }
+                }
+            });
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            new RecordingVoiceRealtimeSession(),
+            mediaPort,
+            realtimeHub: hub);
+        var context = CreateVoiceContext(app, "/ws/voice?channel=lark");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        wsFeature.AcceptCalls.Should().Be(1);
+        socket.SentTexts.Should().HaveCount(2);
+
+        var accepted = JsonParser.Default.Parse<VoiceControlFrame>(socket.SentTexts[0]);
+        accepted.FrameCase.Should().Be(VoiceControlFrame.FrameOneofCase.SessionAccepted);
+        accepted.SessionAccepted.SessionId.Should().Be("session-1");
+        accepted.SessionAccepted.PcmSampleRateHz.Should().Be(24000);
+
+        var realtime = JsonParser.Default.Parse<VoiceControlFrame>(socket.SentTexts[1]);
+        realtime.FrameCase.Should().Be(VoiceControlFrame.FrameOneofCase.RealtimeFrame);
+        realtime.RealtimeFrame.SessionId.Should().Be("session-1");
+        realtime.RealtimeFrame.ResponseStarted.ResponseId.Should().Be(responseId);
+        realtime.RealtimeFrame.ResponseStarted.ProviderResponseId.Should().Be("provider-response-51");
+
+        var ack = receivedControls.Should().ContainSingle().Which;
+        ack.FrameCase.Should().Be(VoiceControlFrame.FrameOneofCase.DrainAcknowledged);
+        ack.DrainAcknowledged.ResponseId.Should().Be(realtime.RealtimeFrame.ResponseStarted.ResponseId);
+        ack.DrainAcknowledged.PlayoutSequence.Should().Be(12);
     }
 
     [Theory]
@@ -332,7 +472,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
         RecordingCatalogQueryPort catalog,
         RecordingVoiceRealtimeSession session,
         RecordingVolatileMediaStreamPort? mediaPort = null,
-        Action<PolicyAwareVoiceEndpointOptions>? configureOptions = null)
+        Action<PolicyAwareVoiceEndpointOptions>? configureOptions = null,
+        IProjectionSessionEventHub<VoiceRealtimeFrame>? realtimeHub = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -345,6 +486,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
         builder.Services.AddSingleton<IUserAgentCatalogQueryPort>(catalog);
         builder.Services.AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(session);
         builder.Services.AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort ?? new RecordingVolatileMediaStreamPort());
+        if (realtimeHub != null)
+            builder.Services.AddSingleton(realtimeHub);
         var app = builder.Build();
         app.MapPolicyAwareVoiceEndpoint();
         return app;
@@ -589,13 +732,18 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
     private sealed class FakeWebSocket(WebSocketState state) : WebSocket
     {
+        private readonly Queue<ReceiveFrame> _frames = [];
         private WebSocketState _state = state;
 
         public List<(WebSocketCloseStatus Status, string? Description)> CloseCalls { get; } = [];
+        public List<string> SentTexts { get; } = [];
         public override WebSocketCloseStatus? CloseStatus => null;
         public override string? CloseStatusDescription => null;
         public override WebSocketState State => _state;
         public override string? SubProtocol => null;
+
+        public void EnqueueReceive(WebSocketMessageType messageType, byte[] data, bool endOfMessage = true) =>
+            _frames.Enqueue(new ReceiveFrame(messageType, data, endOfMessage));
 
         public override void Abort() => _state = WebSocketState.Aborted;
 
@@ -626,8 +774,18 @@ public sealed class PolicyAwareVoiceEndpointsTests
             ArraySegment<byte> buffer,
             CancellationToken cancellationToken)
         {
-            _ = buffer;
             cancellationToken.ThrowIfCancellationRequested();
+            if (_frames.Count > 0)
+            {
+                var frame = _frames.Dequeue();
+                _state = WebSocketState.Open;
+                if (frame.Data.Length > 0 && buffer.Array != null)
+                    Array.Copy(frame.Data, 0, buffer.Array, buffer.Offset, frame.Data.Length);
+
+                return Task.FromResult(
+                    new WebSocketReceiveResult(frame.Data.Length, frame.MessageType, frame.EndOfMessage));
+            }
+
             _state = WebSocketState.CloseReceived;
             return Task.FromResult(new WebSocketReceiveResult(0, WebSocketMessageType.Close, true));
         }
@@ -638,11 +796,83 @@ public sealed class PolicyAwareVoiceEndpointsTests
             bool endOfMessage,
             CancellationToken cancellationToken)
         {
-            _ = buffer;
-            _ = messageType;
             _ = endOfMessage;
             cancellationToken.ThrowIfCancellationRequested();
+            if (messageType == WebSocketMessageType.Text)
+                SentTexts.Add(Encoding.UTF8.GetString(buffer.Array!, buffer.Offset, buffer.Count));
+
             return Task.CompletedTask;
+        }
+
+        public override ValueTask SendAsync(
+            ReadOnlyMemory<byte> buffer,
+            WebSocketMessageType messageType,
+            WebSocketMessageFlags flags,
+            CancellationToken cancellationToken)
+        {
+            _ = flags;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (messageType == WebSocketMessageType.Text)
+                SentTexts.Add(Encoding.UTF8.GetString(buffer.Span));
+
+            return ValueTask.CompletedTask;
+        }
+
+        private readonly record struct ReceiveFrame(
+            WebSocketMessageType MessageType,
+            byte[] Data,
+            bool EndOfMessage);
+    }
+
+    private sealed class RecordingProjectionSessionEventHub : IProjectionSessionEventHub<VoiceRealtimeFrame>
+    {
+        private readonly List<Subscription> _subscriptions = [];
+
+        public async Task PublishAsync(
+            string rootActorId,
+            string sessionId,
+            VoiceRealtimeFrame evt,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            foreach (var subscription in _subscriptions.ToArray())
+            {
+                if (!string.Equals(subscription.RootActorId, rootActorId, StringComparison.Ordinal) ||
+                    !string.Equals(subscription.SessionId, sessionId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                await subscription.Handler(evt.Clone());
+            }
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync(
+            string rootActorId,
+            string sessionId,
+            Func<VoiceRealtimeFrame, ValueTask> handler,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var subscription = new Subscription(rootActorId, sessionId, handler);
+            _subscriptions.Add(subscription);
+            return Task.FromResult<IAsyncDisposable>(new SubscriptionHandle(_subscriptions, subscription));
+        }
+
+        private sealed record Subscription(
+            string RootActorId,
+            string SessionId,
+            Func<VoiceRealtimeFrame, ValueTask> Handler);
+
+        private sealed class SubscriptionHandle(
+            List<Subscription> subscriptions,
+            Subscription subscription) : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync()
+            {
+                subscriptions.Remove(subscription);
+                return ValueTask.CompletedTask;
+            }
         }
     }
 

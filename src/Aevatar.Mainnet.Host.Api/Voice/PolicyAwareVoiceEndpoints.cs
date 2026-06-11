@@ -115,8 +115,27 @@ public static class PolicyAwareVoiceEndpoints
         var ws = await http.WebSockets.AcceptWebSocketAsync();
         var transport = new WebSocketVoiceTransport(ws);
         var attached = false;
+        IAsyncDisposable? realtimeSubscription = null;
         try
         {
+            realtimeSubscription = await VoiceRealtimeTransportControlBridge.SubscribeAsync(
+                http.RequestServices,
+                accepted,
+                transport,
+                http.RequestAborted);
+            try
+            {
+                await VoiceRealtimeTransportControlBridge.SendSessionAcceptedAsync(
+                    transport,
+                    accepted,
+                    http.RequestAborted);
+            }
+            catch
+            {
+                await CleanupAcceptedTransportAsync(mediaStreamPort, accepted.LeaseHandle, transport);
+                throw;
+            }
+
             await mediaStreamPort.AttachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
             attached = true;
             await WaitUntilClosedAsync(transport, http.RequestAborted);
@@ -131,6 +150,9 @@ public static class PolicyAwareVoiceEndpoints
         }
         finally
         {
+            if (realtimeSubscription != null)
+                await realtimeSubscription.DisposeAsync();
+
             if (attached)
                 await mediaStreamPort.DetachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
         }
@@ -211,6 +233,23 @@ public static class PolicyAwareVoiceEndpoints
         catch (OperationCanceledException)
         {
         }
+    }
+
+    private static async Task CleanupAcceptedTransportAsync(
+        IVoiceVolatileMediaStreamPort mediaStreamPort,
+        VoicePresenceSessionLeaseHandle handle,
+        WebSocketVoiceTransport transport)
+    {
+        try
+        {
+            await mediaStreamPort.DetachAsync(handle, transport, CancellationToken.None);
+        }
+        catch
+        {
+            // best effort cleanup for an accepted lease whose control channel failed before attach
+        }
+
+        await transport.DisposeAsync();
     }
 
     private static ChatRouteInput BuildRouteInput(

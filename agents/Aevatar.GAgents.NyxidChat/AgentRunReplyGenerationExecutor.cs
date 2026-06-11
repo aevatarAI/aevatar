@@ -81,6 +81,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 generationContext.LlmControl,
                 generationContext.ToolContext,
                 replyRequest.PriorHistory.ToArray(),
+                BuildAttachmentInputContext(replyRequest, generationContext.LlmControl),
                 forceDisableTools: false,
                 metadataCts.Token)
                 .ConfigureAwait(false);
@@ -209,6 +210,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
                 planToolContext,
                 priorHistory: null,
+                attachmentContext: null,
                 forceDisableTools: workItem.StepState.FinalNoToolsStep,
                 ct: ct)
             .ConfigureAwait(false);
@@ -322,6 +324,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
                 AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
                 priorHistory: null,
+                attachmentContext: null,
                 forceDisableTools: false,
                 ct)
             .ConfigureAwait(false);
@@ -566,6 +569,18 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             toolContext,
             ownerFallbackControl,
             ownerFallbackToolContext);
+    }
+
+    private static ChatAttachmentInputContext BuildAttachmentInputContext(
+        NeedsLlmReplyEvent request,
+        LLMControlContext control)
+    {
+        var token = NormalizeOptional(control.NyxIdAccessToken)
+                    ?? NormalizeOptional(control.NyxIdOrgToken)
+                    ?? NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        return new ChatAttachmentInputContext(
+            request.RecentAttachmentActivities.Select(entry => entry.Clone()).ToArray(),
+            token);
     }
 
     private async Task<LLMControlContext> ApplyBotOwnerLlmConfigAsync(

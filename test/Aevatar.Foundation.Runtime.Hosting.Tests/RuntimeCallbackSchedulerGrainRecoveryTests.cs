@@ -92,10 +92,10 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                     services.RemoveAll<IStreamLifecycleManager>();
                     services.AddSingleton<IStreamProvider>(streamProvider);
                     services.AddSingleton<IStreamLifecycleManager, NoopStreamLifecycleManager>();
-                    services.RemoveAllKeyed<IGrainStorage>(OrleansRuntimeConstants.GrainStateStorageName);
+                    services.RemoveAllKeyed<IGrainStorage>(OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName);
                     services.AddSingleton(storage);
                     services.AddGrainStorage<TestRuntimeCallbackSchedulerStateStorage>(
-                        OrleansRuntimeConstants.GrainStateStorageName,
+                        OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName,
                         (sp, _) => sp.GetRequiredService<TestRuntimeCallbackSchedulerStateStorage>());
                 });
             })

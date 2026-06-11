@@ -211,21 +211,23 @@ public sealed class AgentToolExecutionContextMapperTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "legacy-access",
             [LLMRequestMetadataKeys.NyxIdOrgToken] = "legacy-org",
             [LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "legacy-sender-access",
-            [LLMRequestMetadataKeys.SenderBindingId] = "legacy-binding",
-            [LLMRequestMetadataKeys.ModelOverride] = "legacy-model",
-            [LLMRequestMetadataKeys.NyxIdRoutePreference] = "legacy-route",
-            [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "7",
-            [LLMRequestMetadataKeys.UserMemoryPrompt] = "legacy-memory",
-            [LLMRequestMetadataKeys.ConnectedServicesContext] = """{"services":[]}""",
-            ["channel.platform"] = "canonical-lark",
-            ["platform"] = "lark",
-            ["channel.sender_id"] = "ou-canonical",
-            ["sender_id"] = "ou-legacy",
-            ["registration_scope_id"] = "scope-legacy",
-            ["channel.message_id"] = "msg-canonical",
-            ["message_id"] = "msg-legacy",
-            ["channel.platform_message_id"] = "platform-msg-canonical",
-            ["platform_message_id"] = "platform-msg-legacy",
+                [LLMRequestMetadataKeys.SenderBindingId] = "legacy-binding",
+                [LLMRequestMetadataKeys.ModelOverride] = "legacy-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "legacy-route",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "7",
+                [LLMRequestMetadataKeys.UserMemoryPrompt] = "legacy-memory",
+                [LLMRequestMetadataKeys.ConnectedServicesContext] = """{"services":[]}""",
+                ["channel.platform"] = "canonical-lark",
+                ["platform"] = "lark",
+                ["channel.sender_id"] = "ou-canonical",
+                ["sender_id"] = "ou-legacy",
+                ["registration_scope_id"] = "scope-legacy",
+                ["delivery_target_id"] = "agent-forged",
+                ["channel.delivery_target_id"] = "agent-forged-canonical",
+                ["channel.message_id"] = "msg-canonical",
+                ["message_id"] = "msg-legacy",
+                ["channel.platform_message_id"] = "platform-msg-canonical",
+                ["platform_message_id"] = "platform-msg-legacy",
             ["lark.open_id"] = "ou-lark",
             ["lark.message_id"] = "msg-lark",
             ["telegram.chat_id"] = "10001",
@@ -250,6 +252,7 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Channel.Platform.Should().BeNull();
         context.Channel.SenderId.Should().BeNull();
         context.Channel.RegistrationScopeId.Should().BeNull();
+        context.Channel.DeliveryTargetId.Should().BeNull();
         context.Channel.MessageId.Should().BeNull();
         context.Channel.PlatformMessageId.Should().BeNull();
         context.SenderBinding.BindingId.Should().BeNull();
@@ -289,7 +292,7 @@ public sealed class AgentToolExecutionContextMapperTests
             new AgentToolRequestIdentity(" request-1 ", " call-1 "),
             new AgentToolCredentials(" access-1 ", " org-1 ", " sender-access-1 "),
             new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
-            new AgentToolChannelContext(" telegram ", " sender-1 ", " registration-1 ", " message-1 ", " platform-message-1 "),
+            new AgentToolChannelContext(" telegram ", " sender-1 ", " registration-1 ", " message-1 ", " platform-message-1 ", " delivery-target-1 "),
             new AgentToolSenderBindingContext(" binding-1 "),
             new LLMRequestRoutingContext(" model-1 ", " route-1 ", 7, " memory-1 "),
             new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
@@ -327,6 +330,7 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Channel.RegistrationScopeId.Should().Be("registration-1");
         copy.Channel.MessageId.Should().Be("message-1");
         copy.Channel.PlatformMessageId.Should().Be("platform-message-1");
+        copy.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
         copy.SenderBinding.BindingId.Should().Be("binding-1");
         copy.Routing.ModelOverride.Should().Be("model-1");
         copy.Routing.NyxIdRoutePreference.Should().Be("route-1");

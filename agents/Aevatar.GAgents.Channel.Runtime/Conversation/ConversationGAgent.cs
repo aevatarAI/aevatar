@@ -67,7 +67,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private const int RelayReplayClaimsCap = 10000;
     private const int PendingRelayAdmissionsCap = 1000;
     private const int RetainedHistoryMessagesCap = 100;
+    private const int RecentAttachmentActivityCap = 5;
     private const int MaxNyxRelayInterimUpdateRetryCount = 2;
+    private static readonly TimeSpan RecentAttachmentActivityWindow = TimeSpan.FromMinutes(10);
 
     /// <summary>
     /// Sliding window cap on retained processed ids. Keeps state size bounded while still
@@ -286,6 +288,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
             runCopy.PriorHistory.Clear();
             runCopy.PriorHistory.AddRange(State.RetainedHistory.Select(entry => entry.Clone()));
+            runCopy.RecentAttachmentActivities.Clear();
+            runCopy.RecentAttachmentActivities.AddRange(SelectRecentAttachmentActivities(State, nowMs));
             var persistedCopy = runCopy.Clone();
             persistedCopy.ReplyToken = string.Empty;
             persistedCopy.ReplyTokenExpiresAtUnixMs = 0;
@@ -293,6 +297,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             persistedCopy.TargetRef = null;
             persistedCopy.LlmControl = null;
             persistedCopy.PriorHistory.Clear();
+            persistedCopy.RecentAttachmentActivities.Clear();
             StripRuntimeCredentialsFromToolContext(persistedCopy);
             LlmReplyCredentialMetadataKeys.StripFrom(persistedCopy.Metadata);
             await PersistDomainEventAsync(persistedCopy);
@@ -404,6 +409,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         !string.IsNullOrWhiteSpace(context.Channel.RegistrationScopeId) ||
         !string.IsNullOrWhiteSpace(context.Channel.MessageId) ||
         !string.IsNullOrWhiteSpace(context.Channel.PlatformMessageId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.DeliveryTargetId) ||
         !string.IsNullOrWhiteSpace(context.SenderBinding.BindingId) ||
         !string.IsNullOrWhiteSpace(context.Routing.ModelOverride) ||
         !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
@@ -2515,6 +2521,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             next.Conversation = evt.Conversation.Clone();
         }
         AppendHistoryBounded(next.RetainedHistory, evt.AppendedHistory, RetainedHistoryMessagesCap);
+        NormalizeRecentAttachmentActivities(next.RecentAttachmentActivities, evt.CompletedAtUnixMs);
         next.LastUpdatedUnixMs = evt.CompletedAtUnixMs;
         return next;
     }
@@ -2605,6 +2612,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             next.Conversation = evt.Activity.Conversation.Clone();
         }
 
+        UpsertRecentAttachmentActivity(next.RecentAttachmentActivities, evt.Activity, evt.RequestedAtUnixMs);
         UpsertPendingLlmReplyRequest(next.PendingLlmReplyRequests, evt);
         next.LastUpdatedUnixMs = evt.RequestedAtUnixMs;
         return next;
@@ -2626,6 +2634,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (evt.Activity?.Conversation != null && next.Conversation == null)
             next.Conversation = evt.Activity.Conversation.Clone();
 
+        UpsertRecentAttachmentActivity(next.RecentAttachmentActivities, evt.Activity, evt.RequestedAtUnixMs);
         UpsertPendingWorkflowDraftRunRequest(next.PendingWorkflowDraftRunRequests, evt);
         next.LastUpdatedUnixMs = evt.RequestedAtUnixMs;
         return next;
@@ -3065,6 +3074,83 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         int cap)
     {
         while (field.Count > cap)
+            field.RemoveAt(0);
+    }
+
+    private static void UpsertRecentAttachmentActivity(
+        Google.Protobuf.Collections.RepeatedField<RecentConversationAttachmentActivity> field,
+        ChatActivity? activity,
+        long acceptedAtUnixMs)
+    {
+        if (activity?.Content?.Attachments is not { Count: > 0 })
+        {
+            NormalizeRecentAttachmentActivities(field, acceptedAtUnixMs);
+            return;
+        }
+
+        var activityId = NormalizeOptional(activity.Id);
+        if (activityId is null)
+        {
+            NormalizeRecentAttachmentActivities(field, acceptedAtUnixMs);
+            return;
+        }
+
+        RemoveRecentAttachmentActivity(field, activityId);
+        field.Add(new RecentConversationAttachmentActivity
+        {
+            ActivityId = activityId,
+            AcceptedAtUnixMs = acceptedAtUnixMs,
+            Activity = CloneForDurableState(activity),
+        });
+        NormalizeRecentAttachmentActivities(field, acceptedAtUnixMs);
+    }
+
+    private static void RemoveRecentAttachmentActivity(
+        Google.Protobuf.Collections.RepeatedField<RecentConversationAttachmentActivity> field,
+        string activityId)
+    {
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(field[i].ActivityId, activityId, StringComparison.Ordinal))
+                field.RemoveAt(i);
+        }
+    }
+
+    private static IEnumerable<RecentConversationAttachmentActivity> SelectRecentAttachmentActivities(
+        ConversationGAgentState state,
+        long nowMs)
+    {
+        var cutoff = nowMs > 0
+            ? nowMs - (long)RecentAttachmentActivityWindow.TotalMilliseconds
+            : 0;
+        return state.RecentAttachmentActivities
+            .Where(entry =>
+                entry.Activity?.Content?.Attachments is { Count: > 0 } &&
+                entry.AcceptedAtUnixMs > 0 &&
+                (cutoff <= 0 || entry.AcceptedAtUnixMs >= cutoff))
+            .TakeLast(RecentAttachmentActivityCap)
+            .Select(entry => entry.Clone());
+    }
+
+    private static void NormalizeRecentAttachmentActivities(
+        Google.Protobuf.Collections.RepeatedField<RecentConversationAttachmentActivity> field,
+        long nowMs)
+    {
+        var cutoff = nowMs > 0
+            ? nowMs - (long)RecentAttachmentActivityWindow.TotalMilliseconds
+            : 0;
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            var entry = field[i];
+            if (entry.Activity?.Content?.Attachments is not { Count: > 0 } ||
+                entry.AcceptedAtUnixMs <= 0 ||
+                (cutoff > 0 && entry.AcceptedAtUnixMs < cutoff))
+            {
+                field.RemoveAt(i);
+            }
+        }
+
+        while (field.Count > RecentAttachmentActivityCap)
             field.RemoveAt(0);
     }
 

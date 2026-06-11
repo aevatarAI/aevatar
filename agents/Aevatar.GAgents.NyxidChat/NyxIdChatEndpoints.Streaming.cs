@@ -13,6 +13,8 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public static partial class NyxIdChatEndpoints
 {
+    internal static TimeSpan StreamKeepAliveInterval { get; set; } = TimeSpan.FromSeconds(15);
+
     private static async Task HandleStreamMessageAsync(
         HttpContext http,
         string scopeId,
@@ -71,10 +73,19 @@ public static partial class NyxIdChatEndpoints
         }
 
         var writer = new NyxIdChatSseWriter(http.Response);
+        var writerLock = new SemaphoreSlim(1, 1);
+        await using var heartbeat = new NyxIdChatStreamKeepAlive(
+            writer,
+            writerLock,
+            actorId,
+            messageId,
+            StreamKeepAliveInterval,
+            ct);
         try
         {
             await writer.StartAsync(ct);
-            await writer.WriteRunStartedAsync(actorId, ct);
+            await WriteSerializedAsync(writerLock, token => writer.WriteRunStartedAsync(actorId, token), ct);
+            heartbeat.Start();
             var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
             var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
             await InjectConnectedServicesAsync(http, accessToken, metadata, ct);
@@ -93,14 +104,29 @@ public static partial class NyxIdChatEndpoints
                     request.InputParts,
                     metadata,
                     llmControl),
-                async (evt, _) =>
+                async (evt, token) =>
                 {
-                    await NyxIdChatAguiSseEventWriter.WriteAsync(evt, messageId, writer);
+                    if (IsTerminalFrame(evt))
+                        heartbeat.Stop();
+
+                    await WriteSerializedAsync(
+                        writerLock,
+                        async writeToken =>
+                        {
+                            await NyxIdChatAguiSseEventWriter.WriteAsync(evt, messageId, writer, writeToken);
+                        },
+                        token);
                 },
                 null,
                 ct);
 
-            await HandleInteractionFailureAsync(result, writer, "The chat request failed. Please try again.");
+            if (!result.Succeeded)
+                heartbeat.Stop();
+            await HandleInteractionFailureAsync(
+                result,
+                writer,
+                writerLock,
+                "The chat request failed. Please try again.");
         }
         catch (OperationCanceledException)
         {
@@ -108,7 +134,11 @@ public static partial class NyxIdChatEndpoints
         catch (Exception ex)
         {
             logger.LogError(ex, "NyxID streaming request failed for actor {ActorId}", actorId);
-            await writer.WriteRunErrorAsync("The chat request failed. Please try again.", CancellationToken.None);
+            heartbeat.Stop();
+            await WriteSerializedAsync(
+                writerLock,
+                token => writer.WriteRunErrorAsync("The chat request failed. Please try again.", token),
+                CancellationToken.None);
         }
     }
 
@@ -171,10 +201,19 @@ public static partial class NyxIdChatEndpoints
         }
 
         var writer = new NyxIdChatSseWriter(http.Response);
+        var writerLock = new SemaphoreSlim(1, 1);
+        await using var heartbeat = new NyxIdChatStreamKeepAlive(
+            writer,
+            writerLock,
+            actorId,
+            messageId,
+            StreamKeepAliveInterval,
+            ct);
         try
         {
             await writer.StartAsync(ct);
-            await writer.WriteRunStartedAsync(actorId, ct);
+            await WriteSerializedAsync(writerLock, token => writer.WriteRunStartedAsync(actorId, token), ct);
+            heartbeat.Start();
             // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
             // Approval continuation follows the same resolver-owned lookup path as chat streaming.
             // Missing actors are typed command start failures, not Host-side runtime probes.
@@ -186,14 +225,29 @@ public static partial class NyxIdChatEndpoints
                     request.Approved,
                     request.Reason ?? string.Empty,
                     messageId),
-                async (evt, _) =>
+                async (evt, token) =>
                 {
-                    await NyxIdChatAguiSseEventWriter.WriteAsync(evt, messageId, writer);
+                    if (IsTerminalFrame(evt))
+                        heartbeat.Stop();
+
+                    await WriteSerializedAsync(
+                        writerLock,
+                        async writeToken =>
+                        {
+                            await NyxIdChatAguiSseEventWriter.WriteAsync(evt, messageId, writer, writeToken);
+                        },
+                        token);
                 },
                 null,
                 ct);
 
-            await HandleInteractionFailureAsync(result, writer, "The approval continuation failed. Please try again.");
+            if (!result.Succeeded)
+                heartbeat.Stop();
+            await HandleInteractionFailureAsync(
+                result,
+                writer,
+                writerLock,
+                "The approval continuation failed. Please try again.");
         }
         catch (OperationCanceledException)
         {
@@ -201,26 +255,128 @@ public static partial class NyxIdChatEndpoints
         catch (Exception ex)
         {
             logger.LogError(ex, "NyxID approval streaming request failed for actor {ActorId}", actorId);
-            await writer.WriteRunErrorAsync("The approval continuation failed. Please try again.", CancellationToken.None);
+            heartbeat.Stop();
+            await WriteSerializedAsync(
+                writerLock,
+                token => writer.WriteRunErrorAsync("The approval continuation failed. Please try again.", token),
+                CancellationToken.None);
         }
     }
 
     private static async Task HandleInteractionFailureAsync(
         CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus> result,
         NyxIdChatSseWriter writer,
+        SemaphoreSlim writerLock,
         string message)
     {
         if (result.Succeeded)
             return;
 
-        await writer.WriteRunErrorAsync(
-            result.Error switch
-            {
-                NyxIdChatStartError.ProjectionUnavailable => "NyxID chat projection pipeline is unavailable.",
-                NyxIdChatStartError.ActorNotFound => "NyxID chat conversation was not found.",
-                _ => message,
-            },
+        await WriteSerializedAsync(
+            writerLock,
+            token => writer.WriteRunErrorAsync(
+                result.Error switch
+                {
+                    NyxIdChatStartError.ProjectionUnavailable => "NyxID chat projection pipeline is unavailable.",
+                    NyxIdChatStartError.ActorNotFound => "NyxID chat conversation was not found.",
+                    _ => message,
+                },
+                token),
             CancellationToken.None);
+    }
+
+    private static async ValueTask WriteSerializedAsync(
+        SemaphoreSlim writerLock,
+        Func<CancellationToken, ValueTask> writeAsync,
+        CancellationToken ct)
+    {
+        await writerLock.WaitAsync(ct);
+        try
+        {
+            await writeAsync(ct);
+        }
+        finally
+        {
+            writerLock.Release();
+        }
+    }
+
+    private static bool IsTerminalFrame(AGUIEvent evt) =>
+        evt.EventCase is AGUIEvent.EventOneofCase.RunFinished or AGUIEvent.EventOneofCase.RunError;
+
+    private sealed class NyxIdChatStreamKeepAlive : IAsyncDisposable
+    {
+        private readonly NyxIdChatSseWriter _writer;
+        private readonly SemaphoreSlim _writerLock;
+        private readonly string _actorId;
+        private readonly string _sessionId;
+        private readonly TimeSpan _interval;
+        private readonly CancellationTokenSource _cts;
+        private Task? _loop;
+
+        public NyxIdChatStreamKeepAlive(
+            NyxIdChatSseWriter writer,
+            SemaphoreSlim writerLock,
+            string actorId,
+            string sessionId,
+            TimeSpan interval,
+            CancellationToken requestCancellationToken)
+        {
+            _writer = writer ?? throw new ArgumentNullException(nameof(writer));
+            _writerLock = writerLock ?? throw new ArgumentNullException(nameof(writerLock));
+            _actorId = actorId;
+            _sessionId = sessionId;
+            _interval = interval <= TimeSpan.Zero ? TimeSpan.FromSeconds(15) : interval;
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(requestCancellationToken);
+        }
+
+        public void Start()
+        {
+            if (_loop != null)
+                return;
+
+            _loop = RunAsync();
+        }
+
+        public void Stop() => _cts.Cancel();
+
+        public async ValueTask DisposeAsync()
+        {
+            await _cts.CancelAsync();
+            if (_loop != null)
+            {
+                try
+                {
+                    await _loop;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+
+            _cts.Dispose();
+        }
+
+        private async Task RunAsync()
+        {
+            try
+            {
+                using var timer = new PeriodicTimer(_interval);
+                while (await timer.WaitForNextTickAsync(_cts.Token))
+                {
+                    await WriteSerializedAsync(
+                        _writerLock,
+                        token => _writer.WriteKeepAliveAsync(_actorId, _sessionId, token),
+                        _cts.Token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch
+            {
+            }
+        }
     }
 
     public sealed record NyxIdApprovalRequest(

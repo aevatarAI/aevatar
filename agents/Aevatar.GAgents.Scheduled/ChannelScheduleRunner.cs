@@ -56,7 +56,7 @@ internal sealed class ChannelScheduleRunner
     {
         var nowUtc = _clock.UtcNow;
         var schedule = _schedulableSource().Schedule;
-        if (!schedule.Enabled || string.IsNullOrWhiteSpace(schedule.Cron))
+        if (!schedule.Enabled || schedule.RetiredAt != null)
             return Task.CompletedTask;
 
         var nextRun = schedule.NextRunAt;
@@ -77,24 +77,10 @@ internal sealed class ChannelScheduleRunner
     public async Task ScheduleNextRunAsync(DateTimeOffset sampledUtc, CancellationToken ct)
     {
         var schedule = _schedulableSource().Schedule;
-        if (!schedule.Enabled || string.IsNullOrWhiteSpace(schedule.Cron))
+        if (!schedule.Enabled || schedule.RetiredAt != null)
             return;
 
-        // Refactor (iter89/cluster-089-scheduled-runner-wall-clock):
-        //   Old: cron helpers resolved OS timezones directly and due-time used a second DateTimeOffset.UtcNow read.
-        //   New: the runner receives clock/timezone dependencies and pure schedule math uses one sampled actor-turn time.
-        if (!_timeZoneResolver.TryResolve(schedule.Timezone, out var timeZone, out var error))
-        {
-            _logger.LogWarning("{Owner} could not compute next run: {Error}", _ownerDescription, error);
-            return;
-        }
-
-        if (!ChannelScheduleCalculator.TryGetNextOccurrence(
-                schedule.Cron,
-                timeZone,
-                sampledUtc,
-                out var nextRunAtUtc,
-                out error))
+        if (!TryComputeNextRun(schedule, sampledUtc, out var nextRunAtUtc, out var error))
         {
             _logger.LogWarning("{Owner} could not compute next run: {Error}", _ownerDescription, error);
             return;
@@ -107,6 +93,52 @@ internal sealed class ChannelScheduleRunner
 
         _lease = await _scheduleTimeoutAsync(_callbackId, dueTime, _triggerFactory(), ct);
         await _persistNextRunEventAsync(nextRunAtUtc);
+    }
+
+    private bool TryComputeNextRun(
+        ScheduleState schedule,
+        DateTimeOffset sampledUtc,
+        out DateTimeOffset nextRunAtUtc,
+        out string? error)
+    {
+        if (string.Equals(schedule.Mode, ScheduleState.ModeOneShot, StringComparison.Ordinal))
+        {
+            if (schedule.RunAt == null)
+            {
+                nextRunAtUtc = default;
+                error = "one-shot run_at_utc is required";
+                return false;
+            }
+
+            return ChannelScheduleCalculator.TryGetOneShotOccurrence(
+                schedule.RunAt.ToDateTimeOffset(),
+                sampledUtc,
+                out nextRunAtUtc,
+                out error);
+        }
+
+        // Refactor (iter89/cluster-089-scheduled-runner-wall-clock):
+        //   Old: cron helpers resolved OS timezones directly and due-time used a second DateTimeOffset.UtcNow read.
+        //   New: the runner receives clock/timezone dependencies and pure schedule math uses one sampled actor-turn time.
+        if (string.IsNullOrWhiteSpace(schedule.Cron))
+        {
+            nextRunAtUtc = default;
+            error = "schedule_cron is required";
+            return false;
+        }
+
+        if (!_timeZoneResolver.TryResolve(schedule.Timezone, out var timeZone, out error))
+        {
+            nextRunAtUtc = default;
+            return false;
+        }
+
+        return ChannelScheduleCalculator.TryGetNextOccurrence(
+            schedule.Cron,
+            timeZone,
+            sampledUtc,
+            out nextRunAtUtc,
+            out error);
     }
 
     /// <summary>Cancels any outstanding next-run lease.</summary>
