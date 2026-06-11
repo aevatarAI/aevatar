@@ -191,10 +191,8 @@ public sealed record CreateStudioMemberRequest(
 /// empty-string value reaching the actor.
 /// </summary>
 public sealed record UpdateStudioMemberRequest(
-    PatchValue<string> TeamId = default);
-
-public sealed record PatchStudioMemberRequest(
-    StudioMemberImplementationRefResponse? ImplementationRef = null);
+    PatchValue<string> TeamId = default,
+    PatchValue<StudioMemberImplementationRefResponse> ImplementationRef = default);
 
 /// <summary>
 /// Centralized input bounds applied at the create boundary so a single

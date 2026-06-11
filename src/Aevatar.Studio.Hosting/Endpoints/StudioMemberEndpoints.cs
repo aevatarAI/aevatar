@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.Hosting;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -42,8 +43,6 @@ internal static class StudioMemberEndpoints
         app.MapGet("/api/scopes/{scopeId}/members", HandleListAsync)
             .WithTags("StudioMembers");
         app.MapGet("/api/scopes/{scopeId}/members/{memberId}", HandleGetAsync)
-            .WithTags("StudioMembers");
-        app.MapPatch("/api/scopes/{scopeId}/members/{memberId}", HandlePatchAsync)
             .WithTags("StudioMembers");
         app.MapPut("/api/scopes/{scopeId}/members/{memberId}/binding", HandleBindAsync)
             .WithTags("StudioMembers");
@@ -138,31 +137,6 @@ internal static class StudioMemberEndpoints
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
-        }
-    }
-
-    internal static async Task<IResult> HandlePatchAsync(
-        HttpContext http,
-        string scopeId,
-        string memberId,
-        PatchStudioMemberRequest request,
-        [FromServices] IStudioMemberService memberService,
-        CancellationToken ct)
-    {
-        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
-            return denied;
-
-        try
-        {
-            return Results.Ok(await memberService.PatchAsync(scopeId, memberId, request, ct));
-        }
-        catch (StudioMemberNotFoundException ex)
-        {
-            return NotFound(ex);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest("INVALID_STUDIO_MEMBER_PATCH", ex.Message);
         }
     }
 
@@ -344,7 +318,8 @@ internal static class StudioMemberEndpoints
     /// </summary>
     public sealed class StudioMemberPatchBody
     {
-        public System.Text.Json.JsonElement? TeamId { get; set; }
+        public JsonElement? TeamId { get; set; }
+        public JsonElement? ImplementationRef { get; set; }
     }
 
     internal static async Task<IResult> HandlePatchAsync(
@@ -396,10 +371,40 @@ internal static class StudioMemberEndpoints
             }
         }
 
+        PatchValue<StudioMemberImplementationRefResponse> implementationRefPatch;
+        if (!body.ImplementationRef.HasValue)
+        {
+            implementationRefPatch = PatchValue<StudioMemberImplementationRefResponse>.Absent;
+        }
+        else
+        {
+            var jsonValue = body.ImplementationRef.Value;
+            if (jsonValue.ValueKind == JsonValueKind.Null)
+            {
+                return BadRequest(
+                    "INVALID_STUDIO_MEMBER_REQUEST",
+                    "implementationRef must be an object when present.");
+            }
+
+            if (jsonValue.ValueKind != JsonValueKind.Object)
+            {
+                return BadRequest(
+                    "INVALID_STUDIO_MEMBER_REQUEST",
+                    "implementationRef must be an object or absent.");
+            }
+
+            var implementationRef = jsonValue.Deserialize<StudioMemberImplementationRefResponse>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            implementationRefPatch = PatchValue<StudioMemberImplementationRefResponse>.Of(implementationRef);
+        }
+
         try
         {
             var detail = await memberService.UpdateAsync(
-                scopeId, memberId, new UpdateStudioMemberRequest(teamIdPatch), ct);
+                scopeId,
+                memberId,
+                new UpdateStudioMemberRequest(teamIdPatch, implementationRefPatch),
+                ct);
             return Results.Ok(detail);
         }
         catch (StudioMemberNotFoundException ex)
