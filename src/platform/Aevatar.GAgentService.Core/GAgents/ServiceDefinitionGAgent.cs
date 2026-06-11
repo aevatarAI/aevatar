@@ -51,6 +51,19 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
     }
 
     [EventHandler]
+    public async Task HandleUpdateExternalExposureAsync(UpdateServiceExternalExposureCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureExistingIdentity(command.Identity);
+        await PersistDomainEventAsync(new ServiceExternalExposureUpdatedEvent
+        {
+            Identity = command.Identity.Clone(),
+            ExternalExposure = command.ExternalExposure?.Clone() ?? new ExternalExposure(),
+        });
+        await DispatchInvocationCatalogObservationAsync(CancellationToken.None);
+    }
+
+    [EventHandler]
     public async Task HandleSetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -71,6 +84,7 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
             .Match(current, evt)
             .On<ServiceDefinitionCreatedEvent>(ApplyCreated)
             .On<ServiceDefinitionUpdatedEvent>(ApplyUpdated)
+            .On<ServiceExternalExposureUpdatedEvent>(ApplyExternalExposureUpdated)
             .On<DefaultServingRevisionChangedEvent>(ApplyDefaultServingRevisionChanged)
             .OrCurrent();
 
@@ -86,9 +100,23 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
     private static ServiceDefinitionState ApplyUpdated(ServiceDefinitionState state, ServiceDefinitionUpdatedEvent evt)
     {
         var next = state.Clone();
-        next.Spec = evt.Spec?.Clone() ?? new ServiceDefinitionSpec();
+        var spec = evt.Spec?.Clone() ?? new ServiceDefinitionSpec();
+        if (spec.ExternalExposure == null && state.Spec?.ExternalExposure != null)
+            spec.ExternalExposure = state.Spec.ExternalExposure.Clone();
+        next.Spec = spec;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Spec?.Identity, "updated");
+        return next;
+    }
+
+    private static ServiceDefinitionState ApplyExternalExposureUpdated(
+        ServiceDefinitionState state,
+        ServiceExternalExposureUpdatedEvent evt)
+    {
+        var next = state.Clone();
+        next.Spec.ExternalExposure = evt.ExternalExposure?.Clone() ?? new ExternalExposure();
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(evt.Identity, "external-exposure-updated");
         return next;
     }
 
@@ -111,8 +139,13 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         _ = ServiceKeys.Build(spec.Identity);
         if (spec.Endpoints.Count == 0)
             throw new InvalidOperationException("service endpoints are required.");
-        if (spec.ExternalExposure != null && string.IsNullOrWhiteSpace(spec.ExternalExposure.NyxIdSlug))
-            throw new InvalidOperationException("external_exposure.nyx_id_slug is required when external_exposure is specified.");
+        if (spec.ExternalExposure != null &&
+            string.IsNullOrWhiteSpace(spec.ExternalExposure.NyxidSlug) &&
+            spec.ExternalExposure.RegisteredAt == null)
+        {
+            throw new InvalidOperationException(
+                "external_exposure.nyxid_slug or external_exposure.registered_at is required when external_exposure is specified.");
+        }
     }
 
     private void EnsureExistingIdentity(ServiceIdentity identity)
@@ -135,7 +168,8 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
 
     private Task DispatchInvocationCatalogObservationAsync(CancellationToken ct)
     {
-        var identity = State.Spec?.Identity;
+        var spec = State.Spec;
+        var identity = spec?.Identity;
         if (identity == null || string.IsNullOrWhiteSpace(identity.ServiceId))
             return Task.CompletedTask;
 
@@ -147,7 +181,7 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
                 new ObserveServiceInvocationCatalogCommand
                 {
                     Identity = identity.Clone(),
-                    ServiceEndpoints = { State.Spec.Endpoints.Select(ToDescriptor) },
+                    ServiceEndpoints = { spec!.Endpoints.Select(ToDescriptor) },
                     SourceCatalogVersion = State.LastAppliedEventVersion,
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }),

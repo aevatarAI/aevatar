@@ -89,14 +89,19 @@ public sealed class ServiceCatalogProjector
             Description = endpoint.Description ?? string.Empty,
         };
 
-    private static ServiceExternalExposureReadModel? MapExternalExposure(ServiceExternalExposureSpec? exposure)
+    private static ServiceCatalogExternalExposureReadModel? MapExternalExposure(ExternalExposure? externalExposure)
     {
-        if (string.IsNullOrWhiteSpace(exposure?.NyxIdSlug))
-            return null;
-
-        return new ServiceExternalExposureReadModel
+        if (externalExposure == null ||
+            string.IsNullOrWhiteSpace(externalExposure.NyxidSlug) &&
+            externalExposure.RegisteredAt == null)
         {
-            NyxIdSlug = exposure.NyxIdSlug,
+            return null;
+        }
+
+        return new ServiceCatalogExternalExposureReadModel
+        {
+            NyxidSlug = externalExposure.NyxidSlug ?? string.Empty,
+            RegisteredAtUtcValue = externalExposure.RegisteredAt?.Clone(),
         };
     }
 }

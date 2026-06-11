@@ -2406,7 +2406,7 @@ public static class ScopeServiceEndpoints
             revisionSnapshots,
             revisions?.StateVersion ?? 0,
             revisions?.LastEventId ?? string.Empty,
-            service.ExternalExposure);
+            ExternalExposure: MapExternalExposure(service.ExternalExposure));
     }
 
     private static async Task<IReadOnlyList<ScopeServiceHttpResponse>> JoinScopeInvokeReadinessAsync(
@@ -2451,10 +2451,10 @@ public static class ScopeServiceEndpoints
                 service.Endpoints,
                 service.PolicyIds,
                 service.UpdatedAt,
-                service.ExternalExposure,
                 ready,
                 status.ToString(),
-                reason));
+                reason,
+                MapExternalExposure(service.ExternalExposure)));
         }
 
         return responses;
@@ -2490,7 +2490,8 @@ public static class ScopeServiceEndpoints
             revisions?.StateVersion ?? 0,
             revisions?.LastEventId ?? string.Empty,
             revisions?.UpdatedAt ?? service.UpdatedAt,
-            BuildScopeRevisionResponses(service, revisions, servingSet));
+            BuildScopeRevisionResponses(service, revisions, servingSet),
+            ExternalExposure: MapExternalExposure(service.ExternalExposure));
     }
 
     private static ScopeServiceEndpointContractHttpResponse? BuildScopeServiceEndpointContractResponse(
@@ -2948,6 +2949,23 @@ const response = await fetch("{{invokePath}}", {
         }
 
         return spec;
+    }
+
+    private static ExternalExposureHttpResponse? MapExternalExposure(
+        ServiceExternalExposureSnapshot? externalExposure)
+    {
+        if (externalExposure == null)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(externalExposure.NyxidSlug) &&
+            externalExposure.RegisteredAt == null)
+        {
+            return null;
+        }
+
+        return new ExternalExposureHttpResponse(
+            externalExposure.NyxidSlug ?? string.Empty,
+            externalExposure.RegisteredAt);
     }
 
     private static ServiceBindingKind ParseBindingKind(string? rawValue)
@@ -3534,7 +3552,7 @@ const response = await fetch("{{invokePath}}", {
         IReadOnlyList<ScopeBindingRevisionHttpResponse> Revisions,
         long CatalogStateVersion = 0,
         string CatalogLastEventId = "",
-        ServiceExternalExposureSnapshot? ExternalExposure = null);
+        ExternalExposureHttpResponse? ExternalExposure = null);
 
     public sealed record MemberPublishedServiceHttpResponse(
         string ScopeId,
@@ -3590,10 +3608,10 @@ const response = await fetch("{{invokePath}}", {
         IReadOnlyList<ServiceEndpointSnapshot> Endpoints,
         IReadOnlyList<string> PolicyIds,
         DateTimeOffset UpdatedAt,
-        ServiceExternalExposureSnapshot? ExternalExposure,
         bool InvokeReady,
         string InvokeReadinessStatus,
-        string? InvokeUnavailableReason);
+        string? InvokeUnavailableReason,
+        ExternalExposureHttpResponse? ExternalExposure = null);
 
     public sealed record ScopeServiceRevisionCatalogHttpResponse(
         string ScopeId,
@@ -3608,7 +3626,12 @@ const response = await fetch("{{invokePath}}", {
         long CatalogStateVersion,
         string CatalogLastEventId,
         DateTimeOffset UpdatedAt,
-        IReadOnlyList<ScopeBindingRevisionHttpResponse> Revisions);
+        IReadOnlyList<ScopeBindingRevisionHttpResponse> Revisions,
+        ExternalExposureHttpResponse? ExternalExposure = null);
+
+    public sealed record ExternalExposureHttpResponse(
+        string NyxidSlug,
+        DateTimeOffset? RegisteredAt);
 
     public sealed record ScopeServiceRevisionActionHttpResponse(
         string ScopeId,

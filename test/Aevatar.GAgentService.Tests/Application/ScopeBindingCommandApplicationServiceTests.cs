@@ -704,7 +704,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ],
             [],
             DateTimeOffset.UtcNow,
-            new ServiceExternalExposureSnapshot("orders-agent")));
+            new ServiceExternalExposureSnapshot(
+                "aevatar-orders",
+                DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))));
         var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
         var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
         var actorPort = new FakeWorkflowRunActorPort();
@@ -721,7 +723,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         commandPort.Calls[0].Method.Should().Be("UpdateServiceAsync");
         var updateCommand = commandPort.Calls[0].Command.Should().BeOfType<UpdateServiceDefinitionCommand>().Subject;
         updateCommand.Spec.ExternalExposure.Should().NotBeNull();
-        updateCommand.Spec.ExternalExposure!.NyxIdSlug.Should().Be("orders-agent");
+        updateCommand.Spec.ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
+        updateCommand.Spec.ExternalExposure.RegisteredAt.ToDateTimeOffset()
+            .Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
     }
 
     [Fact]

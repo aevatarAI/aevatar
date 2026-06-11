@@ -8,6 +8,18 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStore
 {
+    private const string CompleteScript = """
+        local current = redis.call('GET', KEYS[1])
+        if not current then
+            return 0
+        end
+        if current == ARGV[1] then
+            redis.call('SET', KEYS[1], ARGV[2], 'KEEPTTL')
+            return 1
+        end
+        return 0
+        """;
+
     private const string ReleaseScript = """
         local current = redis.call('GET', KEYS[1])
         if not current then
@@ -34,6 +46,17 @@ public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStor
         _database = connection.GetDatabase(database);
     }
 
+    internal RedisWorkflowWebhookReplayStore(
+        IDatabase database,
+        IOptions<WorkflowWebhookIngressOptions> options)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        ArgumentNullException.ThrowIfNull(options);
+
+        _database = database;
+        _options = options.Value;
+    }
+
     public async ValueTask<WorkflowWebhookReplayAdmission> AdmitAsync(
         WorkflowWebhookReplayAdmissionRequest request,
         CancellationToken cancellationToken = default)
@@ -42,7 +65,7 @@ public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStor
         cancellationToken.ThrowIfCancellationRequested();
 
         var key = BuildKey(request);
-        var record = ToRecord(request);
+        var record = ToRecord(request, completed: false);
         var payload = record.ToByteArray();
         var retention = ResolveRetention(_options.ReplayRetentionDays);
         var admitted = await _database.StringSetAsync(
@@ -69,12 +92,31 @@ public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStor
 
         var existing = WorkflowWebhookReplayRecord.Parser.ParseFrom((byte[])existingPayload!);
         var status = string.Equals(existing.PayloadFingerprint, request.PayloadFingerprint, StringComparison.Ordinal)
-            ? WorkflowWebhookReplayAdmissionStatus.DuplicateInProgress
+            ? existing.Completed
+                ? WorkflowWebhookReplayAdmissionStatus.DuplicateCompleted
+                : WorkflowWebhookReplayAdmissionStatus.DuplicateInProgress
             : WorkflowWebhookReplayAdmissionStatus.PayloadConflict;
         return new WorkflowWebhookReplayAdmission(
             status,
             existing.CommandId,
             existing.CorrelationId);
+    }
+
+    public async ValueTask CompleteAsync(
+        WorkflowWebhookReplayAdmissionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var key = BuildKey(request);
+        var admittedPayload = ToRecord(request, completed: false).ToByteArray();
+        var completedPayload = ToRecord(request, completed: true).ToByteArray();
+        await _database.ScriptEvaluateAsync(
+            CompleteScript,
+            [key],
+            [(RedisValue)admittedPayload, (RedisValue)completedPayload]);
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     public async ValueTask ReleaseAsync(
@@ -85,7 +127,7 @@ public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStor
         cancellationToken.ThrowIfCancellationRequested();
 
         var key = BuildKey(request);
-        var payload = ToRecord(request).ToByteArray();
+        var payload = ToRecord(request, completed: false).ToByteArray();
         await _database.ScriptEvaluateAsync(
             ReleaseScript,
             [key],
@@ -101,7 +143,9 @@ public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStor
         return $"{prefix}:{Escape(request.RouteKey)}:{Escape(request.SourceId)}:{Escape(request.DeliveryId)}";
     }
 
-    private static WorkflowWebhookReplayRecord ToRecord(WorkflowWebhookReplayAdmissionRequest request) =>
+    private static WorkflowWebhookReplayRecord ToRecord(
+        WorkflowWebhookReplayAdmissionRequest request,
+        bool completed) =>
         new()
         {
             RouteKey = request.RouteKey,
@@ -111,6 +155,7 @@ public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStor
             ReceivedAtUnixMs = request.ReceivedAt.ToUnixTimeMilliseconds(),
             CommandId = request.CommandId,
             CorrelationId = request.CorrelationId,
+            Completed = completed,
         };
 
     private static TimeSpan ResolveRetention(int retentionDays) =>

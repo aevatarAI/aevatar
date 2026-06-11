@@ -124,11 +124,17 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
             MapExternalExposure(readModel.ExternalExposure));
     }
 
-    private static ServiceExternalExposureSnapshot? MapExternalExposure(ServiceExternalExposureReadModel? exposure)
+    private static ServiceExternalExposureSnapshot? MapExternalExposure(
+        ServiceCatalogExternalExposureReadModel? externalExposure)
     {
-        if (string.IsNullOrWhiteSpace(exposure?.NyxIdSlug))
+        if (externalExposure == null)
             return null;
 
-        return new ServiceExternalExposureSnapshot(exposure.NyxIdSlug);
+        var nyxidSlug = externalExposure.NyxidSlug ?? string.Empty;
+        var registeredAt = externalExposure.RegisteredAt;
+        if (string.IsNullOrWhiteSpace(nyxidSlug) && registeredAt == null)
+            return null;
+
+        return new ServiceExternalExposureSnapshot(nyxidSlug, registeredAt);
     }
 }

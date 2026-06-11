@@ -79,6 +79,7 @@ message WorkflowWebhookReplayRecord {
   int64 received_at_unix_ms = 5;
   string command_id = 6;
   string correlation_id = 7;
+  bool completed = 8;
 }
 
 message WorkflowChatRequestEvent {

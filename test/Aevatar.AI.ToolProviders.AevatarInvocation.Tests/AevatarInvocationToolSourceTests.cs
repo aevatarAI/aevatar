@@ -1001,6 +1001,7 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCode(output).Should().Be("workflownotfound");
+        ErrorMessage(output).Should().Be(WorkflowChatRunStartErrorGuidance.WorkflowNotFound);
     }
 
     [Theory]
@@ -1499,6 +1500,15 @@ public sealed class AevatarInvocationToolSourceTests
 
     private static string ErrorCode(string json) =>
         ErrorCodeOrNull(json) ?? throw new InvalidOperationException($"Expected an error result: {json}");
+
+    private static string ErrorMessage(string json)
+    {
+        var root = Read(json);
+        return root.TryGetProperty("error", out var error) &&
+               error.TryGetProperty("message", out var message)
+            ? message.GetString() ?? string.Empty
+            : throw new InvalidOperationException($"Expected an error message: {json}");
+    }
 
     private static string? ErrorCodeOrNull(string json)
     {

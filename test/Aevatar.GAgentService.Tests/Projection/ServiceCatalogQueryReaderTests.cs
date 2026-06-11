@@ -22,10 +22,6 @@ public sealed class ServiceCatalogQueryReaderTests
             Namespace = "default",
             ServiceId = "svc",
             DisplayName = "Service",
-            ExternalExposure = new ServiceExternalExposureReadModel
-            {
-                NyxIdSlug = "orders-agent",
-            },
             Endpoints =
             {
                 new ServiceCatalogEndpointReadModel
@@ -35,6 +31,11 @@ public sealed class ServiceCatalogQueryReaderTests
                     Kind = "Command",
                     RequestTypeUrl = "type.googleapis.com/test.command",
                 },
+            },
+            ExternalExposure = new ServiceCatalogExternalExposureReadModel
+            {
+                NyxidSlug = "aevatar-orders",
+                RegisteredAt = DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"),
             },
             UpdatedAt = DateTimeOffset.UtcNow,
         });
@@ -46,7 +47,8 @@ public sealed class ServiceCatalogQueryReaderTests
         snapshot!.ServiceKey.Should().Be("tenant:app:default:svc");
         snapshot.Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
         snapshot.ExternalExposure.Should().NotBeNull();
-        snapshot.ExternalExposure!.NyxIdSlug.Should().Be("orders-agent");
+        snapshot.ExternalExposure.NyxidSlug.Should().Be("aevatar-orders");
+        snapshot.ExternalExposure.RegisteredAt.Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
     }
 
     [Fact]

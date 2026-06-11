@@ -9,6 +9,8 @@ namespace Aevatar.GAgents.Authoring.Lark;
 
 internal sealed class ScheduledAgentCreateRequestMapper
 {
+    private static readonly TimeZoneResolver ScheduleTimeZoneResolver = new();
+
     private static readonly HashSet<string> AllowedProperties = new(StringComparer.Ordinal)
     {
         "skill_ref",
@@ -53,6 +55,12 @@ internal sealed class ScheduledAgentCreateRequestMapper
         var timezone = Normalize(args.Str("schedule_timezone"));
         if (timezone is null)
             return ScheduledAgentCreatePlanResult.Failed("schedule_timezone is required");
+
+        if (!ScheduleTimeZoneResolver.TryResolve(timezone, out var scheduleTimeZone, out var timezoneError))
+            return ScheduledAgentCreatePlanResult.Failed($"invalid_schedule_timezone: {timezoneError}");
+
+        if (!ChannelScheduleCalculator.TryGetNextOccurrence(cron, scheduleTimeZone, DateTimeOffset.UtcNow, out _, out var cronError))
+            return ScheduledAgentCreatePlanResult.Failed($"invalid_schedule_cron: {cronError}");
 
         var scopeId = Normalize(AgentToolRequestContext.ScopeId ?? AgentToolRequestContext.ChannelRegistrationScopeId);
         if (scopeId is null)

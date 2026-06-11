@@ -80,7 +80,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             var updateSpec = CloneServiceDefinition(desiredBinding.ServiceDefinition);
             updateSpec.PolicyIds.Add(existingService.PolicyIds);
-            updateSpec.ExternalExposure ??= ToExternalExposureSpec(existingService.ExternalExposure);
+            ApplyExistingExternalExposure(updateSpec, existingService.ExternalExposure);
             await _serviceCommandPort.UpdateServiceAsync(new UpdateServiceDefinitionCommand
             {
                 Spec = updateSpec,
@@ -613,22 +613,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
 
     private static bool ServiceExternalExposureEquals(
         ServiceExternalExposureSnapshot? existingExposure,
-        ServiceExternalExposureSpec? desiredExposure)
+        ExternalExposure? desiredExposure)
     {
-        var existingSlug = existingExposure?.NyxIdSlug ?? string.Empty;
-        var desiredSlug = desiredExposure?.NyxIdSlug ?? string.Empty;
-        return string.Equals(existingSlug, desiredSlug, StringComparison.Ordinal);
-    }
-
-    private static ServiceExternalExposureSpec? ToExternalExposureSpec(ServiceExternalExposureSnapshot? source)
-    {
-        if (source == null)
-            return null;
-
-        return new ServiceExternalExposureSpec
-        {
-            NyxIdSlug = source.NyxIdSlug,
-        };
+        var existingSlug = existingExposure?.NyxidSlug ?? string.Empty;
+        var desiredSlug = desiredExposure?.NyxidSlug ?? string.Empty;
+        return string.Equals(existingSlug, desiredSlug, StringComparison.Ordinal) &&
+            existingExposure?.RegisteredAt == desiredExposure?.RegisteredAt?.ToDateTimeOffset();
     }
 
     private static ServiceDefinitionSpec CloneServiceDefinition(ServiceDefinitionSpec source)
@@ -637,11 +627,28 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             Identity = source.Identity.Clone(),
             DisplayName = source.DisplayName,
-            ExternalExposure = source.ExternalExposure?.Clone(),
         };
         clone.Endpoints.Add(source.Endpoints.Select(CloneEndpointSpec));
         clone.PolicyIds.Add(source.PolicyIds);
+        if (source.ExternalExposure != null)
+            clone.ExternalExposure = source.ExternalExposure.Clone();
         return clone;
+    }
+
+    private static void ApplyExistingExternalExposure(
+        ServiceDefinitionSpec spec,
+        ServiceExternalExposureSnapshot? existingExternalExposure)
+    {
+        if (spec.ExternalExposure != null || existingExternalExposure == null)
+            return;
+
+        spec.ExternalExposure = new ExternalExposure
+        {
+            NyxidSlug = existingExternalExposure.NyxidSlug ?? string.Empty,
+            RegisteredAt = existingExternalExposure.RegisteredAt.HasValue
+                ? Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(existingExternalExposure.RegisteredAt.Value)
+                : null,
+        };
     }
 
     private static ServiceEndpointSpec CloneEndpointSpec(ServiceEndpointSpec spec) =>

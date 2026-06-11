@@ -26,4 +26,5 @@ public sealed record ServiceEndpointSnapshot(
     string Description);
 
 public sealed record ServiceExternalExposureSnapshot(
-    string NyxIdSlug);
+    string NyxidSlug,
+    DateTimeOffset? RegisteredAt = null);
