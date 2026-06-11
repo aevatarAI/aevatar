@@ -10,7 +10,24 @@ internal static class ScriptReadModelVisibilityTestHelper
         CancellationToken ct,
         TimeSpan? timeoutOverride = null)
     {
+        return await WaitForSnapshotAsync(
+            queryAsync,
+            snapshot => snapshot.StateVersion >= minStateVersion,
+            $"Timed out waiting for script read model snapshot. min_state_version={minStateVersion}",
+            ct,
+            timeoutOverride);
+    }
+
+    public static async Task<ScriptReadModelSnapshot> WaitForSnapshotAsync(
+        Func<CancellationToken, Task<ScriptReadModelSnapshot?>> queryAsync,
+        Func<ScriptReadModelSnapshot, bool> isReady,
+        string timeoutMessage,
+        CancellationToken ct,
+        TimeSpan? timeoutOverride = null)
+    {
         ArgumentNullException.ThrowIfNull(queryAsync);
+        ArgumentNullException.ThrowIfNull(isReady);
+        ArgumentException.ThrowIfNullOrWhiteSpace(timeoutMessage);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(timeoutOverride ?? TimeSpan.FromSeconds(10));
@@ -32,7 +49,7 @@ internal static class ScriptReadModelVisibilityTestHelper
                     snapshot = null;
                 }
 
-                if (snapshot != null && snapshot.StateVersion >= minStateVersion)
+                if (snapshot != null && isReady(snapshot))
                     return snapshot;
 
                 await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
@@ -40,9 +57,7 @@ internal static class ScriptReadModelVisibilityTestHelper
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
         {
-            throw new InvalidOperationException(
-                $"Timed out waiting for script read model snapshot. min_state_version={minStateVersion}",
-                lastTransientReadException);
+            throw new InvalidOperationException(timeoutMessage, lastTransientReadException);
         }
     }
 
