@@ -106,14 +106,35 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var succeeded = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingSucceeded>();
         succeeded.Result.ImplementationKind.Should().Be(StudioMemberImplementationKind.Workflow);
-        succeeded.Result.ImplementationRef.Workflow.WorkflowId.Should().Be("workflow-main");
+        succeeded.Result.ImplementationRef.Workflow.WorkflowId.Should().Be("workflow-stable-id");
         succeeded.Result.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-platform-bind-1");
 
         var request = scopeBindingPort.Requests.Should().ContainSingle().Subject;
         request.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
+        request.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
         request.Workflow!.WorkflowYamls.Should().ContainSingle().Which.Should().Contain("name: workflow-main");
         request.AllowExistingRevisionReplay.Should().BeTrue();
         request.ReplayRevisionId.Should().Be("rev-platform-bind-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenWorkflowResultHasNoWorkflowId_ShouldDispatchFailedContinuation()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort
+        {
+            OmitWorkflowId = true,
+        };
+        var dispatchPort = new RecordingDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            NewWorkflowStartRequest());
+
+        var failed = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingFailed>();
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_FAILED");
+        failed.Failure.Message.Should().Be("scope binding workflow result workflow id is required for workflow member binding.");
     }
 
     [Fact]
@@ -568,6 +589,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         request.Request.Script = null;
         request.Request.Workflow = new StudioMemberWorkflowBindingRequest
         {
+            WorkflowId = "workflow-stable-id",
             WorkflowYamls = { "name: workflow-main\nsteps: []\n" },
         };
         return request;
@@ -641,6 +663,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         public List<ScopeBindingUpsertRequest> Requests { get; } = [];
         public Exception? Failure { get; init; }
         public bool OmitExpectedDeploymentId { get; init; }
+        public bool OmitWorkflowId { get; init; }
         public TaskCompletionSource<ScopeBindingUpsertRequest> UpsertStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<object?>? ReleaseUpsert { get; init; }
@@ -658,7 +681,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
 
             var result = request.ImplementationKind switch
             {
-                ScopeBindingImplementationKind.Workflow => BuildWorkflowResult(request),
+                ScopeBindingImplementationKind.Workflow => BuildWorkflowResult(request, OmitWorkflowId),
                 ScopeBindingImplementationKind.GAgent => BuildGAgentResult(request),
                 _ => BuildScriptResult(request),
             };
@@ -666,7 +689,9 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             return OmitExpectedDeploymentId ? result with { ExpectedDeploymentId = "" } : result;
         }
 
-        private static ScopeBindingUpsertResult BuildWorkflowResult(ScopeBindingUpsertRequest request)
+        private static ScopeBindingUpsertResult BuildWorkflowResult(
+            ScopeBindingUpsertRequest request,
+            bool omitWorkflowId)
         {
             var revisionId = request.RevisionId ?? "rev-1";
             return new ScopeBindingUpsertResult(
@@ -679,6 +704,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 WorkflowName: "workflow-main",
                 DefinitionActorIdPrefix: "scope-workflow:scope-1:workflow-main",
                 Workflow: new ScopeBindingWorkflowResult(
+                    omitWorkflowId ? string.Empty : request.Workflow?.WorkflowId ?? string.Empty,
                     "workflow-main",
                     "scope-workflow:scope-1:workflow-main"),
                 ExpectedDeploymentId: "deployment-1");

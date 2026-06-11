@@ -499,6 +499,12 @@ public sealed class StudioMemberService : IStudioMemberService
         {
             count++;
             implementationKind = MemberImplementationKindNames.Workflow;
+            if (string.IsNullOrWhiteSpace(request.Workflow.WorkflowId))
+            {
+                throw new InvalidOperationException(
+                    $"member '{memberId}' bind: workflowId is required for workflow members.");
+            }
+
             if (request.Workflow.WorkflowYamls.Count == 0)
             {
                 throw new InvalidOperationException(
