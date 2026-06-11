@@ -6,6 +6,10 @@ public interface IWorkflowWebhookReplayStore
         WorkflowWebhookReplayAdmissionRequest request,
         CancellationToken cancellationToken = default);
 
+    ValueTask CompleteAsync(
+        WorkflowWebhookReplayAdmissionRequest request,
+        CancellationToken cancellationToken = default);
+
     ValueTask ReleaseAsync(
         WorkflowWebhookReplayAdmissionRequest request,
         CancellationToken cancellationToken = default);

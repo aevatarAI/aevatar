@@ -157,6 +157,7 @@ public class WorkflowAbstractionsProtoCoverageTests
             ReceivedAtUnixMs = 1710000000000,
             CommandId = "cmd-1",
             CorrelationId = "corr-1",
+            Completed = true,
         };
 
         var parsed = WorkflowWebhookReplayRecord.Parser.ParseFrom(record.ToByteArray());
