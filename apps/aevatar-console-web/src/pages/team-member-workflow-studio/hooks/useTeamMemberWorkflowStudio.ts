@@ -919,7 +919,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const suppressedSourceSignatureRef =
     React.useRef<WorkflowSourceSignature | null>(null);
   const backHref = buildTeamDetailHref({
-    memberId: route.memberId || undefined,
     scopeId: route.scopeId,
     tab: "members",
     teamId: route.teamId,
@@ -1295,9 +1294,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         throw new Error("Workflow draft save did not return a stable workflow id.");
       }
 
-      const createdMember = await studioApi.createMemberWithId({
+      const createdMember = await studioApi.createMember({
         scopeId: route.scopeId,
-        memberId: savedWorkflowId,
         displayName: normalizedTitle,
         implementationKind: "workflow",
         teamId: route.teamId,
@@ -1317,6 +1315,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         scopeId: route.scopeId,
         memberId: createdMemberId,
         displayName: savedDraft.title,
+        workflowId: savedWorkflowId,
         workflowYamls: [serialized.yaml],
       });
 
@@ -1518,6 +1517,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       let savedDraft: SavedWorkflowDraft | null = null;
       let documentForPublish = document;
       let titleForPublish = trimOptional(title) || trimOptional(document.name);
+      let workflowIdForPublish = trimOptional(workflow.workflowId);
       if (dirty) {
         savedDraft = await saveWorkflowDraft({
           document,
@@ -1528,6 +1528,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         });
         documentForPublish = savedDraft.document;
         titleForPublish = savedDraft.title;
+        workflowIdForPublish =
+          trimOptional(savedDraft.workflow.workflowId) || workflowIdForPublish;
+      }
+
+      if (!workflowIdForPublish) {
+        throw new Error("Resolve a stable workflow draft id before publishing.");
       }
 
       const serialized = await studioApi.serializeYaml({
@@ -1541,6 +1547,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         scopeId: route.scopeId,
         memberId: route.memberId,
         displayName: titleForPublish,
+        workflowId: workflowIdForPublish,
         workflowYamls: [serialized.yaml],
       });
 

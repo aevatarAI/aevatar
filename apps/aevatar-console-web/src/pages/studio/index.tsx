@@ -4953,10 +4953,18 @@ const StudioPage: React.FC = () => {
     let memberBindingRunOutcome: StudioBindingRunOutcome | null = null;
     if (buildPendingBindCandidate.kind === 'workflow') {
       if (resolvedBuildMemberId) {
+        const workflowIdForBinding = trimOptional(
+          selectedWorkflowId || activeWorkflowFile?.workflowId,
+        );
+        if (!workflowIdForBinding) {
+          throw new Error('Resolve a stable workflow draft id before binding this member.');
+        }
+
         const receipt = await studioApi.bindMemberWorkflow({
           scopeId: resolvedStudioScopeId,
           memberId: resolvedBuildMemberId,
           displayName: buildPendingBindCandidate.displayName,
+          workflowId: workflowIdForBinding,
           workflowYamls: await buildWorkflowYamlBundle(),
         });
         await queryClient.invalidateQueries({
