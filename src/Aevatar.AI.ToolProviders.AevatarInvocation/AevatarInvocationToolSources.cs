@@ -54,19 +54,6 @@ public sealed class ObserveRunToolSource : IAgentToolSource
         Task.FromResult<IReadOnlyList<IAgentTool>>([new ObserveRunTool(_dispatcher)]);
 }
 
-public sealed class QueryReadModelToolSource : IAgentToolSource
-{
-    private readonly AevatarInvocationDispatcher _dispatcher;
-
-    public QueryReadModelToolSource(AevatarInvocationDispatcher dispatcher)
-    {
-        _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
-    }
-
-    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<IAgentTool>>([new QueryReadModelTool(_dispatcher)]);
-}
-
 internal sealed class InvokeGAgentTool : IAevatarInvocationTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
@@ -148,26 +135,4 @@ internal sealed class ObserveRunTool : IAevatarInvocationTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.ObserveRunAsync(argumentsJson, ct);
-}
-
-internal sealed class QueryReadModelTool : IAevatarInvocationTool
-{
-    private readonly AevatarInvocationDispatcher _dispatcher;
-
-    public QueryReadModelTool(AevatarInvocationDispatcher dispatcher)
-    {
-        _dispatcher = dispatcher;
-    }
-
-    public string Name => "aevatar_query_readmodel";
-
-    public string Description =>
-        "Read one of the closed-set Aevatar current-state read models by name and typed query.";
-
-    public string ParametersSchema => AevatarInvocationToolSchemas.QueryReadModel;
-
-    public bool IsReadOnly => true;
-
-    public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-        _dispatcher.QueryReadModelAsync(argumentsJson, ct);
 }

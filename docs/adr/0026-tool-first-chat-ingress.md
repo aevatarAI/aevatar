@@ -18,7 +18,9 @@ Tool prefilled arguments must not be interpreted as actor addressing.
 D5/D6 describe later session-owned execution robustness. `ChatRunActor` is not
 implemented in the current v1 slice; `/v1/responses` `wait=complete` therefore
 returns the accepted/streaming invocation receipt and clients observe terminal
-completion through `aevatar_observe_run` or `aevatar_query_readmodel`. Voice
+completion through `aevatar_observe_run`; workflow current-state and
+timeline/export queries use the existing Workflow provider/API/SDK typed
+surfaces. Voice
 control/transcript already shares the user-visible `IRealtimeSession` lifecycle;
 future generation/resume/seq-ack/gap/drop/provider lifecycle work belongs to
 that shared realtime-session robustness baseline. Raw PCM/WebRTC remains at the
@@ -115,7 +117,6 @@ repository (no external repo changes — CLAUDE.md §"外部仓库无改动权")
 | `aevatar_invoke_team` | `team_id`, `endpoint_id`, typed `payload` | same | `stream` |
 | `aevatar_start_workflow` | `workflow_id`, typed `inputs` | same | `stream` |
 | `aevatar_observe_run` | `run_id` | `{status, recent_events, partial_output}` | — |
-| `aevatar_query_readmodel` | `readmodel_name`, typed `query` | typed result | — |
 
 Payloads are typed proto, not free-form JSON. The dispatcher validates the
 proto schema before executing; a malformed call returns a structured error

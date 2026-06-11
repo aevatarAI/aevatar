@@ -65,20 +65,6 @@ message ObserveRunToolRequest {
   int32 take = 4;
 }
 
-message ReadModelQuery {
-  string id = 1;
-  string actor_id = 2;
-  string run_id = 3;
-  string service_id = 4;
-  string command_id = 5;
-  int32 take = 6;
-}
-
-message QueryReadModelToolRequest {
-  string readmodel_name = 1;
-  ReadModelQuery query = 2;
-}
-
 message InvocationToolError {
   string code = 1;
   string message = 2;
@@ -115,11 +101,4 @@ message ObserveRunResult {
   string actor_id = 6;
   string command_id = 7;
   int64 state_version = 8;
-}
-
-message QueryReadModelResult {
-  string readmodel_name = 1;
-  string result_json = 2;
-  InvocationToolError error = 3;
-  int32 count = 4;
 }
