@@ -30,6 +30,7 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
     private readonly WebSocket _ws;
     private readonly TaskCompletionSource _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
     private bool _disposed;
 
     public WebSocketVoiceTransport(WebSocket ws)
@@ -45,15 +46,7 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (pcm16.IsEmpty) return;
-        try
-        {
-            await _ws.SendAsync(pcm16, WebSocketMessageType.Binary, endOfMessage: true, ct);
-        }
-        catch
-        {
-            _completion.TrySetResult();
-            throw;
-        }
+        await SendAsync(pcm16, WebSocketMessageType.Binary, ct);
     }
 
     public async Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
@@ -62,9 +55,26 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
         ArgumentNullException.ThrowIfNull(frame);
         var json = ControlJsonWriter.Format(frame);
         var bytes = Encoding.UTF8.GetBytes(json);
+        await SendAsync(bytes, WebSocketMessageType.Text, ct);
+    }
+
+    private async Task SendAsync(
+        ReadOnlyMemory<byte> payload,
+        WebSocketMessageType messageType,
+        CancellationToken ct)
+    {
         try
         {
-            await _ws.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, endOfMessage: true, ct);
+            await _sendGate.WaitAsync(ct);
+            try
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                await _ws.SendAsync(payload, messageType, endOfMessage: true, ct);
+            }
+            finally
+            {
+                _sendGate.Release();
+            }
         }
         catch
         {
