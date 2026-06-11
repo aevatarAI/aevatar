@@ -46,6 +46,17 @@ public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStor
         _database = connection.GetDatabase(database);
     }
 
+    internal RedisWorkflowWebhookReplayStore(
+        IDatabase database,
+        IOptions<WorkflowWebhookIngressOptions> options)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        ArgumentNullException.ThrowIfNull(options);
+
+        _database = database;
+        _options = options.Value;
+    }
+
     public async ValueTask<WorkflowWebhookReplayAdmission> AdmitAsync(
         WorkflowWebhookReplayAdmissionRequest request,
         CancellationToken cancellationToken = default)

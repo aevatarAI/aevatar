@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -9,6 +10,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using StackExchange.Redis;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -326,6 +328,37 @@ public sealed class WorkflowWebhookIngressEndpointsTests
         conflict.Status.Should().Be(WorkflowWebhookReplayAdmissionStatus.PayloadConflict);
     }
 
+    [Fact]
+    public async Task RedisWorkflowWebhookReplayStore_ShouldReturnCompletedDuplicateAfterCompletion()
+    {
+        var database = RecordingRedisReplayDatabase.Create();
+        var store = new RedisWorkflowWebhookReplayStore(
+            database.Database,
+            Options.Create(new WorkflowWebhookIngressOptions { RedisKeyPrefix = "test:webhook-replay" }));
+        var request = new WorkflowWebhookReplayAdmissionRequest(
+            "invoice",
+            "lark",
+            "delivery-1",
+            "fingerprint-1",
+            DateTimeOffset.UnixEpoch,
+            "cmd-1",
+            "corr-1");
+
+        var first = await store.AdmitAsync(request);
+        await store.CompleteAsync(request);
+        var duplicate = await store.AdmitAsync(request with { CommandId = "cmd-2", CorrelationId = "corr-2" });
+        var conflict = await store.AdmitAsync(request with { PayloadFingerprint = "fingerprint-2" });
+        var completedRecord = database.GetRecord("test:webhook-replay:696e766f696365:6c61726b:64656c69766572792d31");
+
+        first.Status.Should().Be(WorkflowWebhookReplayAdmissionStatus.Admitted);
+        duplicate.Status.Should().Be(WorkflowWebhookReplayAdmissionStatus.DuplicateCompleted);
+        duplicate.ExistingCommandId.Should().Be("cmd-1");
+        duplicate.ExistingCorrelationId.Should().Be("corr-1");
+        conflict.Status.Should().Be(WorkflowWebhookReplayAdmissionStatus.PayloadConflict);
+        completedRecord.Completed.Should().BeTrue();
+        database.CompleteCompareAndSetCount.Should().Be(1);
+    }
+
     private static WorkflowWebhookIngressOptions CreateOptions()
     {
         var options = new WorkflowWebhookIngressOptions
@@ -426,6 +459,80 @@ public sealed class WorkflowWebhookIngressEndpointsTests
         {
             Released.Add(request);
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private class RecordingRedisReplayDatabase : DispatchProxy
+    {
+        private readonly Dictionary<string, RedisValue> _records = new(StringComparer.Ordinal);
+
+        public int CompleteCompareAndSetCount { get; private set; }
+
+        public IDatabase Database { get; private set; } = null!;
+
+        public static RecordingRedisReplayDatabase Create()
+        {
+            var database = Create<IDatabase, RecordingRedisReplayDatabase>();
+            var recorder = (RecordingRedisReplayDatabase)(object)database;
+            recorder.Database = database;
+            return recorder;
+        }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            return targetMethod?.Name switch
+            {
+                nameof(IDatabase.StringSetAsync) => StringSetAsync(args),
+                nameof(IDatabase.StringGetAsync) => StringGetAsync(args),
+                nameof(IDatabase.ScriptEvaluateAsync) => ScriptEvaluateAsync(args),
+                _ => throw new NotSupportedException(targetMethod?.Name),
+            };
+        }
+
+        private Task<bool> StringSetAsync(object?[]? args)
+        {
+            var key = (RedisKey)args![0]!;
+            var value = (RedisValue)args[1]!;
+            var when = (When)args[3]!;
+            if (when != When.NotExists)
+                throw new InvalidOperationException("Replay admission must use first-writer-wins SET NX semantics.");
+
+            var keyText = key.ToString();
+            if (_records.ContainsKey(keyText))
+                return Task.FromResult(false);
+
+            _records.Add(keyText, value);
+            return Task.FromResult(true);
+        }
+
+        private Task<RedisValue> StringGetAsync(object?[]? args)
+        {
+            var key = (RedisKey)args![0]!;
+            var keyText = key.ToString();
+            return Task.FromResult(_records.TryGetValue(keyText, out var value) ? value : RedisValue.Null);
+        }
+
+        private Task<RedisResult> ScriptEvaluateAsync(object?[]? args)
+        {
+            var keys = (RedisKey[])args![1]!;
+            var values = (RedisValue[])args[2]!;
+            keys.Should().ContainSingle();
+            values.Should().HaveCount(2);
+
+            var keyText = keys[0].ToString();
+            if (_records.TryGetValue(keyText, out var current) && current == values[0])
+            {
+                _records[keyText] = values[1];
+                CompleteCompareAndSetCount++;
+            }
+
+            return Task.FromResult(RedisResult.Create(CompleteCompareAndSetCount));
+        }
+
+        public Aevatar.Workflow.Abstractions.WorkflowWebhookReplayRecord GetRecord(string key)
+        {
+            _records.TryGetValue(key, out var value).Should().BeTrue();
+            return Aevatar.Workflow.Abstractions.WorkflowWebhookReplayRecord.Parser.ParseFrom((byte[])value!);
         }
     }
 }
