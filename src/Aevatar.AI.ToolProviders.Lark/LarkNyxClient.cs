@@ -276,15 +276,15 @@ public sealed class LarkNyxClient : ILarkNyxClient
 
     public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct)
     {
+        // GET /approval/v4/tasks/query is the only documented user-task-list endpoint; user_id
+        // and topic are both required. The shorter /approval/v4/tasks path does not exist and
+        // Lark answers it with a misleading 99991663 "Invalid access token".
         var queryParts = new List<string>
         {
+            $"user_id={Uri.EscapeDataString(request.UserId)}",
             $"topic={Uri.EscapeDataString(request.Topic)}",
             $"page_size={request.PageSize}",
         };
-        if (!string.IsNullOrWhiteSpace(request.DefinitionCode))
-            queryParts.Add($"definition_code={Uri.EscapeDataString(request.DefinitionCode.Trim())}");
-        if (!string.IsNullOrWhiteSpace(request.Locale))
-            queryParts.Add($"locale={Uri.EscapeDataString(request.Locale.Trim())}");
         if (!string.IsNullOrWhiteSpace(request.PageToken))
             queryParts.Add($"page_token={Uri.EscapeDataString(request.PageToken.Trim())}");
         if (!string.IsNullOrWhiteSpace(request.UserIdType))
@@ -293,7 +293,7 @@ public sealed class LarkNyxClient : ILarkNyxClient
         return _nyxClient.ProxyRequestAsync(
             token,
             _options.ProviderSlug,
-            $"open-apis/approval/v4/tasks?{string.Join("&", queryParts)}",
+            $"open-apis/approval/v4/tasks/query?{string.Join("&", queryParts)}",
             "GET",
             body: null,
             extraHeaders: null,
@@ -321,16 +321,23 @@ public sealed class LarkNyxClient : ILarkNyxClient
 
     public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct)
     {
-        var path = request.Action switch
+        // The documented action endpoints are tasks/approve, tasks/reject and tasks/transfer
+        // (tasks/pass, tasks/refuse and tasks/forward do not exist on the Lark side). All three
+        // take user_id_type as a query parameter and require approval_code in the body.
+        var endpoint = request.Action switch
         {
-            "approve" => "open-apis/approval/v4/tasks/pass",
-            "reject" => "open-apis/approval/v4/tasks/refuse",
-            "transfer" => BuildTransferPath(request.UserIdType),
+            "approve" => "open-apis/approval/v4/tasks/approve",
+            "reject" => "open-apis/approval/v4/tasks/reject",
+            "transfer" => "open-apis/approval/v4/tasks/transfer",
             _ => throw new InvalidOperationException($"Unsupported approval action: {request.Action}"),
         };
+        var path = string.IsNullOrWhiteSpace(request.UserIdType)
+            ? endpoint
+            : $"{endpoint}?user_id_type={Uri.EscapeDataString(request.UserIdType.Trim())}";
 
         var body = new Dictionary<string, object?>
         {
+            ["approval_code"] = request.ApprovalCode,
             ["instance_code"] = request.InstanceCode,
             ["task_id"] = request.TaskId,
             ["user_id"] = request.UserId,
@@ -464,10 +471,13 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ["type"] = request.FileType,
         };
 
+        // Approval attachments only upload through the legacy surface
+        // /approval/openapi/v2/file/upload (no open-apis/ prefix; same host serves it);
+        // open-apis/approval/v4/files/upload is not a real endpoint.
         return _nyxClient.ProxyRequestMultipartAsync(
             token,
             _options.ProviderSlug,
-            "open-apis/approval/v4/files/upload",
+            "approval/openapi/v2/file/upload",
             "POST",
             formFields,
             fileFieldName: "content",
@@ -476,13 +486,6 @@ public sealed class LarkNyxClient : ILarkNyxClient
             fileContent: request.Content,
             extraHeaders: null,
             ct);
-    }
-
-    private static string BuildTransferPath(string? userIdType)
-    {
-        if (string.IsNullOrWhiteSpace(userIdType))
-            return "open-apis/approval/v4/tasks/forward";
-        return $"open-apis/approval/v4/tasks/forward?user_id_type={Uri.EscapeDataString(userIdType.Trim())}";
     }
 
     private static void ValidateMessageResourceRequest(LarkMessageResourceDownloadRequest request)

@@ -64,7 +64,7 @@ public sealed class LarkCoverageTests
 
         var approvalsListTool = new LarkApprovalsListTool(client);
         approvalsListTool.Name.Should().Be("lark_approvals_list");
-        approvalsListTool.Description.Should().Contain("List approval tasks");
+        approvalsListTool.Description.Should().Contain("List the Lark approval tasks of the current operator");
         approvalsListTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
         approvalsListTool.IsReadOnly.Should().BeTrue();
 
@@ -78,6 +78,10 @@ public sealed class LarkCoverageTests
         approvalsActTool.Name.Should().Be("lark_approvals_act");
         approvalsActTool.Description.Should().Contain("Act on a Lark approval task");
         approvalsActTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        // approve/reject/transfer mutate someone's approval flow irreversibly through an
+        // org-shared tenant credential — the middleware must always pause for human approval.
+        approvalsActTool.IsDestructive.Should().BeTrue();
+        approvalsActTool.RequiresApproval("{}").Should().BeTrue();
 
         var sheetsTool = new LarkSheetsAppendRowsTool(client);
         sheetsTool.Name.Should().Be("lark_sheets_append_rows");
@@ -263,6 +267,7 @@ public sealed class LarkCoverageTests
             "token-123",
             new LarkApprovalTaskActionRequest(
                 "approve",
+                "approval-def-1",
                 "inst-1",
                 "task-1",
                 "lark-user-1",
@@ -274,31 +279,32 @@ public sealed class LarkCoverageTests
 
         handler.LastRequest!.RequestUri!.ToString()
             .Should()
-            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/pass");
+            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/approve");
+        handler.LastBody.Should().Contain("\"approval_code\":\"approval-def-1\"");
         handler.LastBody.Should().Contain("\"comment\":\"looks good\"");
         handler.LastBody.Should().Contain("\"form\":\"{\\u0022field\\u0022:\\u0022value\\u0022}\"");
 
         await client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("reject", "inst-1", "task-1", "lark-user-1", null, null, null, null),
+            new LarkApprovalTaskActionRequest("reject", "approval-def-1", "inst-1", "task-1", "lark-user-1", null, null, null, null),
             CancellationToken.None);
 
         handler.LastRequest!.RequestUri!.ToString()
             .Should()
-            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/refuse");
+            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/reject");
 
         await client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("transfer", "inst-1", "task-1", "lark-user-1", null, null, "ou_target", null),
+            new LarkApprovalTaskActionRequest("transfer", "approval-def-1", "inst-1", "task-1", "lark-user-1", null, null, "ou_target", null),
             CancellationToken.None);
 
         handler.LastRequest!.RequestUri!.ToString()
             .Should()
-            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/forward");
+            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/transfer");
 
         var unsupported = () => client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("escalate", "inst-1", "task-1", "lark-user-1", null, null, null, null),
+            new LarkApprovalTaskActionRequest("escalate", "approval-def-1", "inst-1", "task-1", "lark-user-1", null, null, null, null),
             CancellationToken.None);
 
         await unsupported.Should().ThrowAsync<InvalidOperationException>()

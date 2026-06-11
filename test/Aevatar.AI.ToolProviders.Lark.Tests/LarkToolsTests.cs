@@ -1031,25 +1031,24 @@ public class LarkToolsTests
                 {
                   "code": 0,
                   "data": {
-                    "count": 1,
+                    "count": { "total": 1, "has_more": false },
                     "has_more": false,
+                    "page_token": "pt-1",
                     "tasks": [
                       {
                         "task_id": "task_1",
-                        "instance_code": "inst_1",
+                        "process_id": "1214564545474",
+                        "process_code": "inst_1",
                         "title": "Expense Approval",
                         "status": "1",
+                        "process_status": "1",
                         "topic": "1",
-                        "support_api_operate": true,
                         "definition_code": "def_1",
                         "definition_name": "Expense",
-                        "initiator": "ou_init",
-                        "initiator_name": "Alice",
+                        "initiators": ["ou_init"],
+                        "initiator_names": ["Alice"],
                         "user_id": "ou_owner",
-                        "instance_status": "1",
-                        "summaries": [
-                          { "key": "amount", "value": "100" }
-                        ]
+                        "urls": { "pc": "https://applink.example/pc", "mobile": "https://applink.example/mobile" }
                       }
                     ]
                   }
@@ -1060,6 +1059,7 @@ public class LarkToolsTests
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
+            ["channel.lark.operator_user_id"] = "lark-user-1",
         });
 
         try
@@ -1068,12 +1068,22 @@ public class LarkToolsTests
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+            document.RootElement.GetProperty("count").GetInt32().Should().Be(1);
+            document.RootElement.GetProperty("page_token").GetString().Should().Be("pt-1");
             var tasks = document.RootElement.GetProperty("tasks");
             tasks.GetArrayLength().Should().Be(1);
             tasks[0].GetProperty("topic").GetString().Should().Be("todo");
             tasks[0].GetProperty("status").GetString().Should().Be("todo");
+            tasks[0].GetProperty("process_status").GetString().Should().Be("running");
+            tasks[0].GetProperty("instance_code").GetString().Should().Be("inst_1");
+            tasks[0].GetProperty("definition_code").GetString().Should().Be("def_1");
+            tasks[0].GetProperty("initiators")[0].GetString().Should().Be("ou_init");
+            tasks[0].GetProperty("initiator_names")[0].GetString().Should().Be("Alice");
+            tasks[0].GetProperty("link").GetString().Should().Be("https://applink.example/pc");
             client.LastApprovalQueryRequest.Should().NotBeNull();
             client.LastApprovalQueryRequest!.Topic.Should().Be("1");
+            client.LastApprovalQueryRequest.UserId.Should().Be("lark-user-1");
+            client.LastApprovalQueryRequest.UserIdType.Should().Be("user_id");
         }
         finally
         {
@@ -1082,9 +1092,56 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkApprovalsListTool_PinsUserIdFromChannelContext_IgnoringToolArguments()
+    {
+        var client = new StubLarkNyxClient();
+        var tool = new LarkApprovalsListTool(client);
+
+        // Without any channel sender identity the tool must fail closed: api-lark-bot is an
+        // org-shared tenant credential, so a caller-supplied user_id would let any org member
+        // list anyone's approval tasks.
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await tool.ExecuteAsync("""{"topic":"todo","user_id":"ou_someone_else"}""");
+            result.Should().Contain("\"success\":false");
+            result.Should().Contain("operator identity");
+            client.LastApprovalQueryRequest.Should().BeNull();
+        }
+
+        // Lark sender open_id from the typed channel context is an acceptable identity source.
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.platform"] = "lark",
+            ["channel.sender_id"] = "ou_sender_1",
+        }))
+        {
+            var result = await tool.ExecuteAsync("""{"topic":"todo","user_id":"ou_someone_else"}""");
+            result.Should().Contain("\"success\":true");
+            client.LastApprovalQueryRequest!.UserId.Should().Be("ou_sender_1");
+            client.LastApprovalQueryRequest.UserIdType.Should().Be("open_id");
+        }
+
+        // A non-Lark platform sender id must NOT be treated as a Lark user id.
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.platform"] = "telegram",
+            ["channel.sender_id"] = "tg-sender-1",
+        }))
+        {
+            var result = await tool.ExecuteAsync("""{"topic":"todo"}""");
+            result.Should().Contain("\"success\":false");
+            result.Should().Contain("operator identity");
+        }
+    }
+
+    [Fact]
     public async Task LarkApprovalsListTool_ShouldValidateInputs_AndNormalizeAdditionalStatuses()
     {
         var tool = new LarkApprovalsListTool(new StubLarkNyxClient());
+        var operatorMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.lark.operator_user_id"] = "lark-user-1",
+        };
 
         using (new AgentToolRequestMetadataScope())
         {
@@ -1092,14 +1149,10 @@ public class LarkToolsTests
                 .Should().Contain("No NyxID access token available");
         }
 
-        using (new AgentToolRequestMetadataScope("token-123"))
+        using (new AgentToolRequestMetadataScope("token-123", operatorMetadata))
         {
             (await tool.ExecuteAsync("""{"topic":"unknown"}"""))
                 .Should().Contain("topic must be one of");
-            (await tool.ExecuteAsync("""{"topic":"todo","locale":"fr-FR"}"""))
-                .Should().Contain("locale must be one of");
-            (await tool.ExecuteAsync("""{"topic":"todo","user_id_type":"email"}"""))
-                .Should().Contain("user_id_type must be one of");
             (await tool.ExecuteAsync("""{"topic":"todo","page_size":101}"""))
                 .Should().Contain("page_size must be between 1 and 100");
         }
@@ -1108,7 +1161,7 @@ public class LarkToolsTests
         {
             ApprovalListResponse = """{"error":true,"status":504,"message":"timeout"}""",
         });
-        using (new AgentToolRequestMetadataScope("token-123"))
+        using (new AgentToolRequestMetadataScope("token-123", operatorMetadata))
         {
             (await errorTool.ExecuteAsync("""{"topic":"todo"}"""))
                 .Should().Contain("nyx_proxy_error status=504");
@@ -1121,20 +1174,20 @@ public class LarkToolsTests
                 {
                   "code": 0,
                   "data": {
-                    "count": 5,
+                    "count": { "total": 5, "has_more": false },
                     "has_more": false,
                     "tasks": [
-                      { "task_id": "task_2", "instance_code": "inst_2", "status": "2", "topic": "2", "instance_status": "2", "summaries": [] },
-                      { "task_id": "task_3", "instance_code": "inst_3", "status": "17", "topic": "3", "instance_status": "3", "summaries": [] },
-                      { "task_id": "task_4", "instance_code": "inst_4", "status": "18", "topic": "17", "instance_status": "4", "summaries": [] },
-                      { "task_id": "task_5", "instance_code": "inst_5", "status": "33", "topic": "18", "instance_status": "5", "summaries": [] },
-                      { "task_id": "task_6", "instance_code": "inst_6", "status": "34", "topic": "99", "instance_status": "0", "summaries": [] }
+                      { "task_id": "task_2", "process_code": "inst_2", "status": "2", "topic": "2", "process_status": "2" },
+                      { "task_id": "task_3", "process_code": "inst_3", "status": "17", "topic": "3", "process_status": "3" },
+                      { "task_id": "task_4", "process_code": "inst_4", "status": "18", "topic": "17", "process_status": "4" },
+                      { "task_id": "task_5", "process_code": "inst_5", "status": "33", "topic": "18", "process_status": "5" },
+                      { "task_id": "task_6", "process_code": "inst_6", "status": "34", "topic": "99", "process_status": "0" }
                     ]
                   }
                 }
                 """,
         });
-        using (new AgentToolRequestMetadataScope("token-123"))
+        using (new AgentToolRequestMetadataScope("token-123", operatorMetadata))
         {
             var result = await successTool.ExecuteAsync("""{"topic":"done"}""");
 
@@ -1142,19 +1195,19 @@ public class LarkToolsTests
             var tasks = document.RootElement.GetProperty("tasks");
             tasks[0].GetProperty("topic").GetString().Should().Be("done");
             tasks[0].GetProperty("status").GetString().Should().Be("done");
-            tasks[0].GetProperty("instance_status").GetString().Should().Be("approved");
+            tasks[0].GetProperty("process_status").GetString().Should().Be("approved");
             tasks[1].GetProperty("topic").GetString().Should().Be("initiated");
             tasks[1].GetProperty("status").GetString().Should().Be("unread");
-            tasks[1].GetProperty("instance_status").GetString().Should().Be("rejected");
+            tasks[1].GetProperty("process_status").GetString().Should().Be("rejected");
             tasks[2].GetProperty("topic").GetString().Should().Be("cc_unread");
             tasks[2].GetProperty("status").GetString().Should().Be("read");
-            tasks[2].GetProperty("instance_status").GetString().Should().Be("withdrawn");
+            tasks[2].GetProperty("process_status").GetString().Should().Be("withdrawn");
             tasks[3].GetProperty("topic").GetString().Should().Be("cc_read");
             tasks[3].GetProperty("status").GetString().Should().Be("processing");
-            tasks[3].GetProperty("instance_status").GetString().Should().Be("terminated");
+            tasks[3].GetProperty("process_status").GetString().Should().Be("terminated");
             tasks[4].GetProperty("topic").GetString().Should().Be("99");
             tasks[4].GetProperty("status").GetString().Should().Be("withdrawn");
-            tasks[4].GetProperty("instance_status").GetString().Should().Be("none");
+            tasks[4].GetProperty("process_status").GetString().Should().Be("none");
         }
     }
 
@@ -1308,7 +1361,7 @@ public class LarkToolsTests
             ["channel.lark.operator_user_id"] = "lark-user-1",
         }))
         {
-            var result = await tool.ExecuteAsync("""{"action":"transfer","instance_code":"inst_1","task_id":"task_1"}""");
+            var result = await tool.ExecuteAsync("""{"action":"transfer","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1"}""");
             result.Should().Contain("transfer_user_id is required");
         }
     }
@@ -1327,19 +1380,21 @@ public class LarkToolsTests
         }))
         {
             var result = await tool.ExecuteAsync(
-                """{"action":"approve","instance_code":"inst_1","task_id":"task_1","comment":"LGTM","form_json":"[{\"id\":\"field_1\",\"type\":\"input\",\"value\":\"ok\"}]"}""");
+                """{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","comment":"LGTM","form_json":"[{\"id\":\"field_1\",\"type\":\"input\",\"value\":\"ok\"}]"}""");
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
             client.LastApprovalActionRequest.Should().NotBeNull();
             client.LastApprovalActionRequest!.Action.Should().Be("approve");
+            client.LastApprovalActionRequest.ApprovalCode.Should().Be("def_1");
             client.LastApprovalActionRequest.UserId.Should().Be("lark-user-1");
+            client.LastApprovalActionRequest.UserIdType.Should().Be("user_id");
             client.LastApprovalActionRequest.FormJson.Should().Contain("\"field_1\"");
         }
     }
 
     [Fact]
-    public async Task LarkApprovalsActTool_UsesLarkOperatorUserIdFromTurnMetadataOverToolArgument()
+    public async Task LarkApprovalsActTool_IgnoresCallerSuppliedUserId_AndPinsOperatorIdentity()
     {
         var client = new StubLarkNyxClient
         {
@@ -1353,14 +1408,66 @@ public class LarkToolsTests
             ["channel.lark.operator_open_id"] = "ou_4159cd4d1af9b836b0fb2dc05ef52efe",
         }))
         {
+            // user_id/user_id_type are no longer tool parameters; a model-supplied value must
+            // never reach the Lark request (org-shared credential + self-reported user_id would
+            // let any caller approve on behalf of anyone).
             var result = await tool.ExecuteAsync(
-                """{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id":"ou_4159cd4d1af9b836b0fb2dc05ef52efe","comment":"LGTM"}""");
+                """{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","user_id":"ou_someone_else","user_id_type":"open_id","comment":"LGTM"}""");
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
             client.LastApprovalActionRequest.Should().NotBeNull();
             client.LastApprovalActionRequest!.UserId.Should().Be("lark-user-1");
-            client.LastApprovalActionRequest.UserId.Should().NotBe("ou_4159cd4d1af9b836b0fb2dc05ef52efe");
+            client.LastApprovalActionRequest.UserIdType.Should().Be("user_id");
+        }
+    }
+
+    [Fact]
+    public async Task LarkApprovalsActTool_ResolvesOperatorIdentityByPriority()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ApprovalActionResponse = """{"code":0,"data":{}}""",
+        };
+        var tool = new LarkApprovalsActTool(client);
+        const string args =
+            """{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1"}""";
+
+        // union_id is tenant-stable and cross-app safe, so it wins over user_id/open_id.
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.lark.operator_union_id"] = "on_union_1",
+            ["channel.lark.operator_user_id"] = "lark-user-1",
+            ["channel.lark.operator_open_id"] = "ou_operator_1",
+        }))
+        {
+            (await tool.ExecuteAsync(args)).Should().Contain("\"success\":true");
+            client.LastApprovalActionRequest!.UserId.Should().Be("on_union_1");
+            client.LastApprovalActionRequest.UserIdType.Should().Be("union_id");
+        }
+
+        // Card-operator open_id is used when no union_id/user_id is available.
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.lark.operator_open_id"] = "ou_operator_1",
+        }))
+        {
+            (await tool.ExecuteAsync(args)).Should().Contain("\"success\":true");
+            client.LastApprovalActionRequest!.UserId.Should().Be("ou_operator_1");
+            client.LastApprovalActionRequest.UserIdType.Should().Be("open_id");
+        }
+
+        // Plain chat turns fall back to the inbound Lark sender (union_id over open_id).
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.platform"] = "lark",
+            ["channel.sender_id"] = "ou_sender_1",
+            ["channel.lark.union_id"] = "on_sender_union_1",
+        }))
+        {
+            (await tool.ExecuteAsync(args)).Should().Contain("\"success\":true");
+            client.LastApprovalActionRequest!.UserId.Should().Be("on_sender_union_1");
+            client.LastApprovalActionRequest.UserIdType.Should().Be("union_id");
         }
     }
 
@@ -1383,7 +1490,7 @@ public class LarkToolsTests
                     {
                         Id = "tc-lark-approval",
                         Name = "lark_approvals_act",
-                        ArgumentsJson = """{"action":"approve","instance_code":"inst_1","task_id":"task_1","comment":"LGTM"}""",
+                        ArgumentsJson = """{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","comment":"LGTM"}""",
                     },
                 ],
             },
@@ -1420,41 +1527,52 @@ public class LarkToolsTests
     public async Task LarkApprovalsActTool_ShouldValidateInputs_AndSurfaceProxyErrors()
     {
         var tool = new LarkApprovalsActTool(new StubLarkNyxClient());
+        var operatorMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.lark.operator_user_id"] = "lark-user-1",
+        };
 
         using (new AgentToolRequestMetadataScope())
         {
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1"}"""))
+            (await tool.ExecuteAsync("""{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1"}"""))
                 .Should().Contain("No NyxID access token available");
         }
 
+        using (new AgentToolRequestMetadataScope("token-123", operatorMetadata))
+        {
+            (await tool.ExecuteAsync("""{"action":"pause","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1"}"""))
+                .Should().Contain("action must be one of");
+            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1"}"""))
+                .Should().Contain("approval_code is required");
+            (await tool.ExecuteAsync("""{"action":"approve","approval_code":"def_1","task_id":"task_1"}"""))
+                .Should().Contain("instance_code is required");
+            (await tool.ExecuteAsync("""{"action":"approve","approval_code":"def_1","instance_code":"inst_1"}"""))
+                .Should().Contain("task_id is required");
+            (await tool.ExecuteAsync("""{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","transfer_user_id":"ou_1"}"""))
+                .Should().Contain("transfer_user_id is only allowed when action=transfer");
+            (await tool.ExecuteAsync("""{"action":"reject","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","form_json":"{}"}"""))
+                .Should().Contain("form_json is only supported when action=approve");
+            (await tool.ExecuteAsync("""{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","form_json":"{bad json}"}"""))
+                .Should().Contain("form_json is not valid JSON");
+        }
+
+        // No channel operator identity → fail closed instead of trusting any caller-supplied id.
         using (new AgentToolRequestMetadataScope("token-123"))
         {
-            (await tool.ExecuteAsync("""{"action":"pause","instance_code":"inst_1","task_id":"task_1"}"""))
-                .Should().Contain("action must be one of");
-            (await tool.ExecuteAsync("""{"action":"approve","task_id":"task_1"}"""))
-                .Should().Contain("instance_code is required");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1"}"""))
-                .Should().Contain("task_id is required");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1"}"""))
-                .Should().Contain("user_id is required");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id_type":"email"}"""))
-                .Should().Contain("user_id_type must be one of");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","transfer_user_id":"ou_1"}"""))
-                .Should().Contain("transfer_user_id is only allowed when action=transfer");
-            (await tool.ExecuteAsync("""{"action":"reject","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","form_json":"{}"}"""))
-                .Should().Contain("form_json is only supported when action=approve");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","form_json":"{bad json}"}"""))
-                .Should().Contain("form_json is not valid JSON");
+            var result = await tool.ExecuteAsync(
+                """{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","user_id":"ou_spoofed"}""");
+            result.Should().Contain("\"success\":false");
+            result.Should().Contain("operator identity");
         }
 
         var errorTool = new LarkApprovalsActTool(new StubLarkNyxClient
         {
             ApprovalActionResponse = """{"error":true,"status":409,"message":"already processed"}""",
         });
-        using (new AgentToolRequestMetadataScope("token-123"))
+        using (new AgentToolRequestMetadataScope("token-123", operatorMetadata))
         {
             var result = await errorTool.ExecuteAsync(
-                """{"action":"reject","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","comment":"nope"}""");
+                """{"action":"reject","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","comment":"nope"}""");
 
             result.Should().Contain("nyx_proxy_error status=409");
             result.Should().Contain("\"action\":\"reject\"");
@@ -1823,7 +1941,7 @@ public class LarkToolsTests
         var handler = new RecordingHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""{"code":0,"data":{"tasks":[],"count":0}}""", Encoding.UTF8, "application/json"),
+                Content = new StringContent("""{"code":0,"data":{"tasks":[],"count":{"total":0,"has_more":false}}}""", Encoding.UTF8, "application/json"),
             });
         var client = new LarkNyxClient(
             new LarkToolOptions { ProviderSlug = "api-lark-bot" },
@@ -1833,12 +1951,38 @@ public class LarkToolsTests
 
         await client.ListApprovalTasksAsync(
             "token-123",
-            new LarkApprovalTaskQueryRequest("1", "def_1", "zh-CN", 10, "page-1", "open_id"),
+            new LarkApprovalTaskQueryRequest("1", "ou_operator_1", 10, "page-1", "open_id"),
             CancellationToken.None);
 
         handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        // Official endpoint is GET /approval/v4/tasks/query with user_id REQUIRED; the bare
+        // /approval/v4/tasks path does not exist (Lark answers it with a misleading 99991663).
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/query?user_id=ou_operator_1&topic=1&page_size=10&page_token=page-1&user_id_type=open_id");
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_ListApprovalTasks_OmitsOptionalQueryParameters()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"tasks":[],"count":{"total":0,"has_more":false}}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.ListApprovalTasksAsync(
+            "token-123",
+            new LarkApprovalTaskQueryRequest("1", "ou_operator_1", 20, null, null),
+            CancellationToken.None);
+
         handler.LastRequest!.RequestUri!.ToString()
-            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks?topic=1&page_size=10&definition_code=def_1&locale=zh-CN&page_token=page-1&user_id_type=open_id");
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/query?user_id=ou_operator_1&topic=1&page_size=20");
     }
 
     [Fact]
@@ -1883,12 +2027,14 @@ public class LarkToolsTests
 
         await client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("transfer", "inst_1", "task_1", "lark-user-1", "reassign", null, "ou_target", "open_id"),
+            new LarkApprovalTaskActionRequest("transfer", "approval_def_1", "inst_1", "task_1", "lark-user-1", "reassign", null, "ou_target", "open_id"),
             CancellationToken.None);
 
         handler.LastRequest.Should().NotBeNull();
+        // Official endpoint is /tasks/transfer; /tasks/forward does not exist on the Lark side.
         handler.LastRequest!.RequestUri!.ToString()
-            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/forward?user_id_type=open_id");
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/transfer?user_id_type=open_id");
+        handler.LastBody.Should().Contain("\"approval_code\":\"approval_def_1\"");
         handler.LastBody.Should().Contain("\"user_id\":\"lark-user-1\"");
         handler.LastBody.Should().Contain("\"transfer_user_id\":\"ou_target\"");
     }
@@ -2031,8 +2177,10 @@ public class LarkToolsTests
 
         handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        // Approval file upload only exists on the legacy surface /approval/openapi/v2/file/upload
+        // (no open-apis/ prefix); open-apis/approval/v4/files/upload is not a real endpoint.
         handler.LastRequest.RequestUri!.ToString()
-            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/files/upload");
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/approval/openapi/v2/file/upload");
         handler.LastRequest.Headers.Authorization!.Parameter.Should().Be("token-123");
         handler.LastRequest.Content!.Headers.ContentType!.MediaType.Should().Be("multipart/form-data");
         handler.LastBody.Should().Contain("""name=name""");
@@ -2475,7 +2623,7 @@ public class LarkToolsTests
             "application/octet-stream");
         public string SearchResponse { get; set; } = """{"code":0,"data":{"items":[],"total":0}}""";
         public string AppendSheetResponse { get; set; } = """{"code":0,"data":{"updates":{}}}""";
-        public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
+        public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":{"total":0,"has_more":false}}}""";
         public string ApprovalGetResponse { get; set; } = """{"code":0,"data":{"instance_code":"inst_default","status":"1"}}""";
         public string ApprovalActionResponse { get; set; } = """{"code":0,"data":{}}""";
         public string DocxCreateResponse { get; set; } = """{"code":0,"data":{"document":{"document_id":"doccn_default","url":"https://example.feishu.cn/docx/doccn_default"}}}""";

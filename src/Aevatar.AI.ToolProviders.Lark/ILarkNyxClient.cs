@@ -104,10 +104,14 @@ public sealed record LarkSheetAppendRowsRequest(
     string Range,
     IReadOnlyList<IReadOnlyList<string?>> Rows);
 
+/// <summary>
+/// Query for Lark <c>GET /open-apis/approval/v4/tasks/query</c>. The official contract
+/// requires both <paramref name="UserId"/> and <paramref name="Topic"/>; <paramref name="UserIdType"/>
+/// must describe the id type of <paramref name="UserId"/> (defaults to <c>open_id</c> on the Lark side).
+/// </summary>
 public sealed record LarkApprovalTaskQueryRequest(
     string Topic,
-    string? DefinitionCode,
-    string? Locale,
+    string UserId,
     int PageSize,
     string? PageToken,
     string? UserIdType);
@@ -117,8 +121,16 @@ public sealed record LarkApprovalInstanceGetRequest(
     string? Locale,
     string? UserIdType);
 
+/// <summary>
+/// Action against Lark <c>POST /open-apis/approval/v4/tasks/approve|reject|transfer</c>.
+/// All three endpoints require <paramref name="ApprovalCode"/> (the approval definition code)
+/// in addition to <paramref name="InstanceCode"/> + <paramref name="TaskId"/> + <paramref name="UserId"/>;
+/// <paramref name="UserIdType"/> rides as a query parameter and must match the id type of
+/// <paramref name="UserId"/> (and <paramref name="TransferUserId"/> for transfer).
+/// </summary>
 public sealed record LarkApprovalTaskActionRequest(
     string Action,
+    string ApprovalCode,
     string InstanceCode,
     string TaskId,
     string UserId,
