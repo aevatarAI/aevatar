@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
 
 namespace Aevatar.Integration.Tests;
@@ -48,6 +49,11 @@ internal static class ScriptReadModelVisibilityTestHelper
                     lastTransientReadException = ex;
                     snapshot = null;
                 }
+                catch (ProjectionIndexSchemaDriftException ex) when (IsTransientBareAliasVisibilityDrift(ex))
+                {
+                    lastTransientReadException = ex;
+                    snapshot = null;
+                }
 
                 if (snapshot != null && isReady(snapshot))
                     return snapshot;
@@ -64,8 +70,29 @@ internal static class ScriptReadModelVisibilityTestHelper
     private static bool IsTransientMissingReadIndex(InvalidOperationException ex)
     {
         var message = ex.Message;
+        return IsTransientMissingReadIndexMessage(message) ||
+               IsTransientRecoveringShardMessage(message);
+    }
+
+    private static bool IsTransientMissingReadIndexMessage(string message)
+    {
         return message.Contains("Elasticsearch index", StringComparison.Ordinal)
                && message.Contains("was not found during 'get'", StringComparison.Ordinal)
                && message.Contains("read-model", StringComparison.Ordinal);
+    }
+
+    private static bool IsTransientRecoveringShardMessage(string message)
+    {
+        return message.Contains("Elasticsearch get failed: 503 Service Unavailable", StringComparison.Ordinal)
+               && (message.Contains("No shard available", StringComparison.Ordinal)
+                   || message.Contains("CurrentState[RECOVERING]", StringComparison.Ordinal));
+    }
+
+    private static bool IsTransientBareAliasVisibilityDrift(ProjectionIndexSchemaDriftException ex)
+    {
+        return string.Equals(ex.CurrentPhysicalIndex, ex.IndexAlias, StringComparison.Ordinal)
+               && ex.ExpectedPhysicalIndex.StartsWith(
+                   string.Concat(ex.IndexAlias, "-v"),
+                   StringComparison.Ordinal);
     }
 }
