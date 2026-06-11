@@ -919,7 +919,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const suppressedSourceSignatureRef =
     React.useRef<WorkflowSourceSignature | null>(null);
   const backHref = buildTeamDetailHref({
-    memberId: route.memberId || undefined,
     scopeId: route.scopeId,
     tab: "members",
     teamId: route.teamId,

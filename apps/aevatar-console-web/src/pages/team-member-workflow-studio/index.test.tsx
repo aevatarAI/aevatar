@@ -805,7 +805,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(`${window.location.pathname}${window.location.search}`).toBe(
-      "/scopes/scope-1/teams/t-alpha?memberId=member-alpha&tab=members",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
     );
   });
 
@@ -914,7 +914,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
     const params = new URLSearchParams(window.location.search);
-    expect(params.get("memberId")).toBe("member-alpha");
+    expect(params.get("memberId")).toBeNull();
     expect(params.get("tab")).toBe("members");
     expect(params.get("workflowId")).toBeNull();
   });
