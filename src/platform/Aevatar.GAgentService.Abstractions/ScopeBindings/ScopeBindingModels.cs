@@ -1,5 +1,7 @@
 namespace Aevatar.GAgentService.Abstractions;
 
+using System.Text.Json.Serialization;
+
 public enum ScopeBindingImplementationKind
 {
     Unspecified = 0,
@@ -8,8 +10,26 @@ public enum ScopeBindingImplementationKind
     GAgent = 3,
 }
 
-public sealed record ScopeBindingWorkflowSpec(
-    IReadOnlyList<string> WorkflowYamls);
+public sealed record ScopeBindingWorkflowSpec
+{
+    [JsonConstructor]
+    public ScopeBindingWorkflowSpec(
+        string WorkflowId,
+        IReadOnlyList<string> WorkflowYamls)
+    {
+        this.WorkflowId = WorkflowId;
+        this.WorkflowYamls = WorkflowYamls;
+    }
+
+    public ScopeBindingWorkflowSpec(IReadOnlyList<string> WorkflowYamls)
+        : this(string.Empty, WorkflowYamls)
+    {
+    }
+
+    public string WorkflowId { get; init; }
+
+    public IReadOnlyList<string> WorkflowYamls { get; init; }
+}
 
 public sealed record ScopeBindingScriptSpec(
     string ScriptId,
@@ -40,9 +60,32 @@ public sealed record ScopeBindingUpsertRequest(
     bool AllowExistingRevisionReplay = false,
     string? ReplayRevisionId = null);
 
-public sealed record ScopeBindingWorkflowResult(
-    string WorkflowName,
-    string DefinitionActorIdPrefix);
+public sealed record ScopeBindingWorkflowResult
+{
+    [JsonConstructor]
+    public ScopeBindingWorkflowResult(
+        string WorkflowId,
+        string WorkflowName,
+        string DefinitionActorIdPrefix)
+    {
+        this.WorkflowId = WorkflowId;
+        this.WorkflowName = WorkflowName;
+        this.DefinitionActorIdPrefix = DefinitionActorIdPrefix;
+    }
+
+    public ScopeBindingWorkflowResult(
+        string WorkflowName,
+        string DefinitionActorIdPrefix)
+        : this(string.Empty, WorkflowName, DefinitionActorIdPrefix)
+    {
+    }
+
+    public string WorkflowId { get; init; }
+
+    public string WorkflowName { get; init; }
+
+    public string DefinitionActorIdPrefix { get; init; }
+}
 
 public sealed record ScopeBindingScriptResult(
     string ScriptId,

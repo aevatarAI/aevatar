@@ -176,7 +176,7 @@ public sealed class StudioMemberEndpointsTests
             ScopeId,
             "m-1",
             new UpdateStudioMemberBindingRequest(
-                Workflow: new StudioMemberWorkflowBindingSpec(["w:"])),
+                Workflow: new StudioMemberWorkflowBindingSpec("workflow-stable-id", ["w:"])),
             service,
             CancellationToken.None);
 
