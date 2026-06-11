@@ -23,7 +23,6 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddAevatarPlatform();
-builder.AddGAgentServiceCapabilityBundle();
 builder.AddAevatarWorkflowObservability();
 
 var app = builder.Build();

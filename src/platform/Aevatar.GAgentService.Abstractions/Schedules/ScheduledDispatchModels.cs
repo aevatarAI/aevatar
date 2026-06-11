@@ -93,7 +93,8 @@ public sealed record ScheduledDispatchSummary(
     int FailureCount,
     IReadOnlyDictionary<string, string> Headers,
     string ScheduleActorId,
-    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic);
+    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic,
+    bool Deleted = false);
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,

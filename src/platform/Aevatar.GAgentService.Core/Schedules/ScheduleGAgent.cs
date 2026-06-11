@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
@@ -11,6 +12,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Core.Schedules;
 
+[GAgent("gagent.service.scheduled-dispatch")]
 public sealed class ScheduleGAgent : GAgentBase<ScheduledDispatchState>
 {
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
@@ -197,6 +199,12 @@ public sealed class ScheduleGAgent : GAgentBase<ScheduledDispatchState>
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(command);
+        if (!command.Manual && State.Deleted)
+        {
+            Logger.LogInformation("Scheduled dispatch {ActorId} ignored fire because it is deleted.", Id);
+            return;
+        }
+
         EnsureConfiguredForWrite(command.Manual ? "manual fire" : "fire");
         if (!command.Manual && !State.Enabled)
         {

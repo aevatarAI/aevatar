@@ -125,13 +125,14 @@ public static class ScheduledDispatchEndpoints
 
     internal static async Task<IResult> Delete(
         string scheduleId,
+        [FromQuery] string? reason,
         [FromBody] ScheduledDispatchStateChangeHttpRequest? input,
         [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
         try
         {
-            var receipt = await schedules.DeleteAsync(scheduleId, input?.Reason ?? string.Empty, ct);
+            var receipt = await schedules.DeleteAsync(scheduleId, reason ?? input?.Reason ?? string.Empty, ct);
             return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
@@ -259,7 +260,6 @@ public sealed record ScheduledWorkflowChatTargetHttpRequest
     public string? SessionId { get; init; }
     public string? RevisionId { get; init; }
     public ServiceInvocationCaller? Caller { get; init; }
-    public LLMControlContextPayload? LlmControl { get; init; }
     public ScheduledServiceInvocationAuthHttpRequest? Auth { get; init; }
 
     public ScheduledDispatchTargetDescriptor ToTarget() =>
@@ -272,7 +272,6 @@ public sealed record ScheduledWorkflowChatTargetHttpRequest
                 {
                     Prompt = NormalizeRequired(Prompt, nameof(Prompt)),
                     SessionId = NormalizeOptional(SessionId),
-                    LlmControl = LlmControl?.Clone(),
                 }),
                 RevisionId,
                 Caller,

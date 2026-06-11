@@ -95,9 +95,11 @@ public sealed class ScheduledDispatchApplicationServiceTests
     public async Task UpdateAsync_ShouldNormalizeServiceInvocationAndDispatchUpdate()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
         var service = new ScheduledDispatchApplicationService(
             actorPort,
-            new RecordingScheduledDispatchQueryPort(),
+            queryPort,
             new ScheduledDispatchTargetPreparationService());
         var payload = Any.Pack(new StringValue { Value = "invoke" });
 
@@ -160,6 +162,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     [InlineData("tenant/report")]
     [InlineData("tenant?report")]
     [InlineData("tenant report")]
+    [InlineData("tenant:report")]
     public async Task CreateAsync_ShouldRejectRouteUnsafeScheduleId(string scheduleId)
     {
         var service = CreateService();
@@ -167,13 +170,13 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var act = () => service.CreateAsync(CreateEnvelopeConfiguration(scheduleId));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*letters, digits, '.', '_', ':', and '-'*");
+            .WithMessage("*letters, digits, '.', '_', and '-'*");
     }
 
     [Theory]
     [InlineData("abc")]
     [InlineData("ABC")]
-    [InlineData("abc-123_DEF:ghi.jkl")]
+    [InlineData("abc-123_DEF.ghi-jkl")]
     public void ScheduledDispatchActorIdFormat_ShouldAcceptAsciiScheduleIds(string scheduleId)
     {
         ScheduledDispatchActorId.Format($" {scheduleId} ")
@@ -184,12 +187,13 @@ public sealed class ScheduledDispatchApplicationServiceTests
     [InlineData("计划")]
     [InlineData("éclair")]
     [InlineData("emoji-🙂")]
+    [InlineData("tenant:report")]
     public void ScheduledDispatchActorIdFormat_ShouldRejectNonAsciiScheduleIds(string scheduleId)
     {
         var act = () => ScheduledDispatchActorId.Format(scheduleId);
 
         act.Should().Throw<ArgumentException>()
-            .WithMessage("*letters, digits, '.', '_', ':', and '-'*");
+            .WithMessage("*letters, digits, '.', '_', and '-'*");
     }
 
     [Theory]
@@ -376,9 +380,11 @@ public sealed class ScheduledDispatchApplicationServiceTests
     public async Task EnableDisableRunNow_ShouldResolveExistingActorAndReturnNotFoundWhenMissing()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
         var service = new ScheduledDispatchApplicationService(
             actorPort,
-            new RecordingScheduledDispatchQueryPort(),
+            queryPort,
             new ScheduledDispatchTargetPreparationService());
 
         var enabled = await service.EnableAsync(" schedule-1 ", " resume ");
@@ -431,6 +437,49 @@ public sealed class ScheduledDispatchApplicationServiceTests
         actorPort.Deleted.Should().ContainSingle().Which.Should().Be(("actor:schedule-1", "remove"));
         actorPort.RunNow.Should().ContainSingle().Which.ActorId.Should().Be("actor:schedule-1");
         await missing.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+    }
+
+    [Fact]
+    public async Task Mutations_ShouldPreflightReadModelLifecycle()
+    {
+        var existingQueryPort = new RecordingScheduledDispatchQueryPort();
+        existingQueryPort.Details["schedule-1"] = CreateDetail("schedule-1");
+        var existingActorPort = new RecordingScheduledDispatchActorPort();
+        var existingService = new ScheduledDispatchApplicationService(
+            existingActorPort,
+            existingQueryPort,
+            new ScheduledDispatchTargetPreparationService());
+
+        var duplicateCreate = () => existingService.CreateAsync(CreateEnvelopeConfiguration("schedule-1"));
+        await duplicateCreate.Should().ThrowAsync<ScheduledDispatchConflictException>();
+        existingActorPort.Created.Should().BeEmpty();
+
+        var deletedQueryPort = new RecordingScheduledDispatchQueryPort();
+        deletedQueryPort.Details["schedule-1"] = CreateDetail("schedule-1", deleted: true);
+        var deletedActorPort = new RecordingScheduledDispatchActorPort();
+        var deletedService = new ScheduledDispatchApplicationService(
+            deletedActorPort,
+            deletedQueryPort,
+            new ScheduledDispatchTargetPreparationService());
+
+        var createAfterDelete = () => deletedService.CreateAsync(CreateEnvelopeConfiguration("schedule-1"));
+        var updateAfterDelete = () => deletedService.UpdateAsync("schedule-1", CreateEnvelopeConfiguration("ignored"));
+        var enableAfterDelete = () => deletedService.EnableAsync("schedule-1", string.Empty);
+        var disableAfterDelete = () => deletedService.DisableAsync("schedule-1", string.Empty);
+        var deleteAfterDelete = () => deletedService.DeleteAsync("schedule-1", string.Empty);
+        var runNowAfterDelete = () => deletedService.RunNowAsync("schedule-1");
+
+        await createAfterDelete.Should().ThrowAsync<ScheduledDispatchConflictException>();
+        await updateAfterDelete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await enableAfterDelete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await disableAfterDelete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await deleteAfterDelete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await runNowAfterDelete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        deletedActorPort.Updated.Should().BeEmpty();
+        deletedActorPort.Enabled.Should().BeEmpty();
+        deletedActorPort.Disabled.Should().BeEmpty();
+        deletedActorPort.Deleted.Should().BeEmpty();
+        deletedActorPort.RunNow.Should().BeEmpty();
     }
 
     [Fact]
@@ -518,12 +567,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
         reader.LastQuery.Filters.Should().BeEquivalentTo(
             new[]
             {
-                new ProjectionDocumentFilter
-                {
-                    FieldPath = nameof(ScheduledDispatchDocument.Deleted),
-                    Operator = ProjectionDocumentFilterOperator.Eq,
-                    Value = ProjectionDocumentValue.FromBool(false),
-                },
                 new ProjectionDocumentFilter
                 {
                     FieldPath = nameof(ScheduledDispatchDocument.TargetKind),
@@ -645,6 +688,36 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new RecordingScheduledDispatchActorPort(),
             new RecordingScheduledDispatchQueryPort(),
             new ScheduledDispatchTargetPreparationService());
+
+    private static ScheduledDispatchDetail CreateDetail(string scheduleId, bool deleted = false) =>
+        new(
+            new ScheduledDispatchSummary(
+                scheduleId,
+                string.Empty,
+                ScheduledDispatchTargetKind.Envelope,
+                "actor-1",
+                Any.Pack(new Empty()).TypeUrl,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                "0 9 * * *",
+                "UTC",
+                true,
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow,
+                null,
+                null,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                0,
+                0,
+                new Dictionary<string, string>(),
+                $"actor:{scheduleId}",
+                ScheduledDispatchScheduleKind.Generic,
+                deleted),
+            []);
 
     private static ScheduledDispatchConfiguration CreateEnvelopeConfiguration(string scheduleId) =>
         new(
@@ -841,6 +914,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
     private sealed class RecordingScheduledDispatchQueryPort : IScheduledDispatchQueryPort
     {
+        public Dictionary<string, ScheduledDispatchDetail> Details { get; } = new(StringComparer.Ordinal);
         public List<string> GetScheduleIds { get; } = [];
         public List<(int Take, string? Cursor, bool IncludeTotalCount)> ListRequests { get; } = [];
         public List<ScheduledDispatchListQuery> FilteredListRequests { get; } = [];
@@ -849,7 +923,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         {
             ct.ThrowIfCancellationRequested();
             GetScheduleIds.Add(scheduleId);
-            return Task.FromResult<ScheduledDispatchDetail?>(null);
+            return Task.FromResult(Details.GetValueOrDefault(scheduleId));
         }
 
         public Task<ScheduledDispatchListResult> ListAsync(

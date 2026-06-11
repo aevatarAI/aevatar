@@ -249,7 +249,7 @@ public sealed class ScheduledDispatchProjectionTests
     }
 
     [Fact]
-    public async Task QueryPort_ShouldClampPagingAndMapListResult()
+    public async Task QueryPort_ShouldClampPagingMapListResultAndHideTombstonesAfterRead()
     {
         var reader = new StubScheduleDocumentReader
         {
@@ -273,6 +273,13 @@ public sealed class ScheduledDispatchProjectionTests
                         ScheduleActorId = "schedule-actor",
                         TargetActorId = "target-actor",
                     },
+                    new ScheduledDispatchDocument
+                    {
+                        ScheduleId = "deleted-schedule",
+                        Deleted = true,
+                        CreatedAt = DateTimeOffset.Parse("2026-05-29T08:00:00+00:00"),
+                        UpdatedAt = DateTimeOffset.Parse("2026-05-29T08:30:00+00:00"),
+                    },
                 ],
                 NextCursor = "next",
                 TotalCount = 12,
@@ -287,7 +294,9 @@ public sealed class ScheduledDispatchProjectionTests
         reader.Queries[0].Take.Should().Be(1);
         reader.Queries[0].Cursor.Should().Be("cursor");
         reader.Queries[0].IncludeTotalCount.Should().BeTrue();
+        reader.Queries[0].Filters.Should().NotContain(static x => x.FieldPath == nameof(ScheduledDispatchDocument.Deleted));
         reader.Queries[1].Take.Should().Be(200);
+        reader.Queries[1].Filters.Should().NotContain(static x => x.FieldPath == nameof(ScheduledDispatchDocument.Deleted));
         result.NextCursor.Should().Be("next");
         result.TotalCount.Should().Be(12);
         result.Items.Should().ContainSingle();

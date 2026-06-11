@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
@@ -21,6 +22,13 @@ public sealed class ScheduleGAgentTests
 {
     private const string ScheduleActorId = "scheduled-dispatch:schedule-1";
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
+
+    [Fact]
+    public void ScheduleGAgent_ShouldDeclareStableAgentKind()
+    {
+        typeof(ScheduleGAgent).GetCustomAttribute<GAgentAttribute>()?.Kind
+            .Should().Be("gagent.service.scheduled-dispatch");
+    }
 
     [Fact]
     public async Task HandleFireAsync_ShouldSuppressDuplicateDispatchAfterTerminalRecordIsDurable()
@@ -541,6 +549,37 @@ public sealed class ScheduleGAgentTests
         scheduler.Canceled.Should().BeEmpty();
         scheduler.TimeoutRequests.Should().ContainSingle();
         agent.State.NextFireLease!.Generation.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_WhenDeleted_ShouldIgnoreNonManualFireAndRejectManualFire()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+        await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand { Reason = "remove" });
+
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)),
+            Manual = false,
+        });
+        var manualFire = () => agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)),
+            Manual = true,
+        });
+
+        dispatch.Dispatches.Should().BeEmpty();
+        agent.State.FireRecords.Should().BeEmpty();
+        agent.State.FireCount.Should().Be(0);
+        agent.State.FailureCount.Should().Be(0);
+        await manualFire.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not configured*");
     }
 
     [Fact]

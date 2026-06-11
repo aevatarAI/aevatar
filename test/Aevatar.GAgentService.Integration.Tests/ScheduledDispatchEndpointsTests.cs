@@ -31,7 +31,9 @@ public sealed class ScheduledDispatchEndpointsTests
         configuration.Target.ServiceInvocation.Should().NotBeNull();
         configuration.Target.ServiceInvocation!.EndpointId.Should().Be("chat");
         configuration.Target.ServiceInvocation.Identity.ServiceId.Should().Be("daily-workflow");
-        configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("run daily");
+        var chatRequest = configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.Prompt.Should().Be("run daily");
+        chatRequest.LlmControl.Should().BeNull();
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         configuration.CronExpression.Should().Be("0 9 * * *");
         configuration.Timezone.Should().Be("UTC");
@@ -139,9 +141,19 @@ public sealed class ScheduledDispatchEndpointsTests
         var chatRequest = configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>();
         chatRequest.Prompt.Should().Be("run workflow");
         chatRequest.SessionId.Should().Be("session-1");
+        chatRequest.LlmControl.Should().BeNull();
         configuration.Target.ServiceInvocation.RevisionId.Should().Be("rev-1");
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         configuration.Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void WorkflowChatTargetRequest_ShouldNotExposeLLMControl()
+    {
+        typeof(ScheduledWorkflowChatTargetHttpRequest)
+            .GetProperty(nameof(ChatRequestEvent.LlmControl))
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -322,9 +334,10 @@ public sealed class ScheduledDispatchEndpointsTests
 
         var accepted = await ScheduledDispatchEndpoints.Delete(
             "schedule-1",
+            null,
             new ScheduledDispatchStateChangeHttpRequest { Reason = "remove" },
             acceptedService);
-        var notFound = await ScheduledDispatchEndpoints.Delete("missing", null, notFoundService);
+        var notFound = await ScheduledDispatchEndpoints.Delete("missing", null, null, notFoundService);
 
         var acceptedHttp = CreateHttpContext();
         await accepted.ExecuteAsync(acceptedHttp);
@@ -335,6 +348,24 @@ public sealed class ScheduledDispatchEndpointsTests
         acceptedService.Deleted.Should().ContainSingle().Which.Should().Be(("schedule-1", "remove"));
         notFoundHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         notFoundService.Deleted.Should().ContainSingle().Which.Should().Be(("missing", string.Empty));
+    }
+
+    [Fact]
+    public async Task Delete_ShouldPreferQueryReasonOverBodyReason()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            "schedule-1",
+            "query-remove",
+            new ScheduledDispatchStateChangeHttpRequest { Reason = "body-remove" },
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.Deleted.Should().ContainSingle().Which.Should().Be(("schedule-1", "query-remove"));
     }
 
     [Fact]
