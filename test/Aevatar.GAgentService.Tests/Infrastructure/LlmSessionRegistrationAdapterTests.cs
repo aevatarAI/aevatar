@@ -275,11 +275,15 @@ public sealed class LlmSessionRegistrationAdapterTests
             },
         };
 
-        await adapter.RecordCompletionAsync("actor-1", "resp_1", completion);
+        var admission = await adapter.RecordCompletionAsync("actor-1", "resp_1", completion);
 
         dispatch.Calls.Should().ContainSingle();
         dispatch.Calls[0].actorId.Should().Be("actor-1");
         dispatch.Calls[0].envelope.Payload.TypeUrl.Should().Contain("RecordResponseSessionCompletionRequested");
+        admission.Accepted.Should().BeTrue();
+        admission.ActorId.Should().Be("actor-1");
+        admission.CommandId.Should().Be("resp_1:completion");
+        admission.CorrelationId.Should().Be("resp_1:completion");
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<RecordResponseSessionCompletionRequested>();
         packed.ResponseId.Should().Be("resp_1");
         packed.Completion.OutputText.Should().Be("forwarded done");

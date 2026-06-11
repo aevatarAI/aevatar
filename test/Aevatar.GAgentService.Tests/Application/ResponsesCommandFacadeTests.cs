@@ -793,7 +793,7 @@ public sealed class ResponsesCommandFacadeTests
             return Task.CompletedTask;
         }
 
-        public Task RecordCompletionAsync(
+        public Task<DispatchAdmission> RecordCompletionAsync(
             string sessionActorId,
             string responseId,
             LlmSessionCompletion completion,
@@ -803,7 +803,9 @@ public sealed class ResponsesCommandFacadeTests
             QueryPort.Snapshot = QueryPort.Snapshot is null
                 ? BuildSnapshot(responseId, "scope-1", LlmSessionStatus.Completed) with { Completion = ToSnapshot(completion) }
                 : QueryPort.Snapshot with { Completion = ToSnapshot(completion) };
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(
+                sessionActorId,
+                new EventEnvelope { Id = $"{responseId}:completion" }));
         }
 
         public Task ReceiveForwardedToolResultAsync(

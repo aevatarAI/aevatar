@@ -660,11 +660,14 @@ public sealed class MainnetChatCompletionsEndpointsTests
             LlmSessionForwardedToolCall call,
             CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task RecordCompletionAsync(
+        public Task<DispatchAdmission> RecordCompletionAsync(
             string sessionActorId,
             string responseId,
             LlmSessionCompletion completion,
-            CancellationToken ct = default) => Task.CompletedTask;
+            CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(
+                sessionActorId,
+                new EventEnvelope { Id = $"{responseId}:completion" }));
 
         public Task ReceiveForwardedToolResultAsync(
             string sessionActorId,

@@ -79,7 +79,7 @@ public sealed class ResponsesCommandFacade(
                 sessionResult.Error.Message);
         if (continuation.AlreadyResolvedCompletion is not null)
         {
-            var completionResult = await RecordCompletionAndReadAsync(
+            var completionResult = await RecordCompletionAsync(
                 sessionResult.Session!,
                 continuation.AlreadyResolvedCompletion,
                 ct);
@@ -88,10 +88,11 @@ public sealed class ResponsesCommandFacade(
                     completionResult.Error.StatusCode,
                     completionResult.Error.Code,
                     completionResult.Error.Message)
-                : ResponsesCreateCommandResult.FromCompleted(new ResponsesCreateCompletedCommandResult(
+                : ResponsesCreateCommandResult.FromAccepted(new ResponsesCreateAcceptedCommandResult(
                     normalized,
                     createdAt.ToUnixTimeSeconds(),
-                    completionResult.Completion!));
+                    sessionResult.Session!,
+                    completionResult.Admission!));
         }
 
         var prepared = await BuildExecutionPlanAsync(
@@ -760,18 +761,19 @@ public sealed class ResponsesCommandFacade(
         return true;
     }
 
-    private async Task<CompletionRecordResult> RecordCompletionAndReadAsync(
+    private async Task<CompletionRecordResult> RecordCompletionAsync(
         LlmSessionRegistrationResult session,
         LlmSessionCompletion completion,
         CancellationToken ct)
     {
         try
         {
-            await responseSessionRegistrationPort.RecordCompletionAsync(
+            var admission = await responseSessionRegistrationPort.RecordCompletionAsync(
                 session.ActorId,
                 session.ResponseId,
                 completion,
                 ct);
+            return CompletionRecordResult.FromAdmission(admission);
         }
         catch (OperationCanceledException)
         {
@@ -785,20 +787,6 @@ public sealed class ResponsesCommandFacade(
                 "response_completion_record_failed",
                 $"Failed to record response completion. Correlation: {correlation}"));
         }
-
-        var observedCompletion = await LlmSessionCompletionObserver.WaitForCompletionAsync(
-            responseSessionQueryPort,
-            session.ResponseId,
-            ct);
-        if (observedCompletion is null)
-        {
-            return CompletionRecordResult.FromError(new ResponsesCommandError(
-                503,
-                "response_completion_not_observed",
-                "Response completion was committed but is not yet visible in the read model."));
-        }
-
-        return CompletionRecordResult.FromCompletion(observedCompletion);
     }
 
     // Refactor (iter103/cluster-1 r2):
@@ -1113,10 +1101,10 @@ public sealed class ResponsesCommandFacade(
 
     private sealed record CompletionRecordResult(
         ResponsesCommandError? Error,
-        LlmSessionCompletionSnapshot? Completion)
+        DispatchAdmission? Admission)
     {
         public static CompletionRecordResult FromError(ResponsesCommandError error) => new(error, null);
 
-        public static CompletionRecordResult FromCompletion(LlmSessionCompletionSnapshot completion) => new(null, completion);
+        public static CompletionRecordResult FromAdmission(DispatchAdmission admission) => new(null, admission);
     }
 }

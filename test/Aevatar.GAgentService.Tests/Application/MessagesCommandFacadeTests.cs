@@ -353,14 +353,16 @@ public sealed class MessagesCommandFacadeTests
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public Task RecordCompletionAsync(
+        public Task<DispatchAdmission> RecordCompletionAsync(
             string sessionActorId,
             string responseId,
             LlmSessionCompletion completion,
             CancellationToken ct = default)
         {
             RecordedCompletions.Add(completion.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(
+                sessionActorId,
+                new EventEnvelope { Id = $"{responseId}:completion" }));
         }
 
         public Task ReceiveForwardedToolResultAsync(

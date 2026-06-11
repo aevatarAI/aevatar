@@ -121,7 +121,7 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
-    public async Task PostMessages_WhenCompletionReadModelLags_ShouldWaitAndReturnAnthropicMessageEnvelope()
+    public async Task PostMessages_WhenCompletionReadModelLags_ShouldReturnAcceptedEnvelopeWithoutPolling()
     {
         var provider = new MessagesRecordingLLMProvider
         {
@@ -134,11 +134,8 @@ public sealed class MainnetMessagesEndpointsTests
                 },
             ],
         };
-        var sessions = new MessagesRecordingSessionStore
-        {
-            CompletionObservationLagReads = 1,
-        };
-        await using var app = await CreateAppAsync(provider, sessions);
+        var sessions = new MessagesRecordingSessionStore();
+        await using var app = await CreateAppAsync(provider, sessions, completeNonStreaming: false);
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
@@ -160,11 +157,10 @@ public sealed class MainnetMessagesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("content")[0]
-            .GetProperty("text")
-            .GetString()
-            .Should()
-            .Be("Eventually visible");
+        doc.RootElement.GetProperty("content").GetArrayLength().Should().Be(0);
+        doc.RootElement.GetProperty("stop_reason").ValueKind.Should().Be(JsonValueKind.Null);
+        provider.LastRequest.Should().BeNull();
+        sessions.RecordedCompletions.Should().BeEmpty();
     }
 
     [Fact]
@@ -765,7 +761,8 @@ public sealed class MainnetMessagesEndpointsTests
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IResponsesToolProvider? responsesToolProvider = null,
         IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
-        IResponsesRouteResolver? routeResolver = null)
+        IResponsesRouteResolver? routeResolver = null,
+        bool completeNonStreaming = true)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -780,7 +777,10 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<MessagesCommandFacade>();
-        builder.Services.AddSingleton<IMessagesCommandFacade, CompletingMessagesCommandFacade>();
+        if (completeNonStreaming)
+            builder.Services.AddSingleton<IMessagesCommandFacade, CompletingMessagesCommandFacade>();
+        else
+            builder.Services.AddSingleton<IMessagesCommandFacade>(static sp => sp.GetRequiredService<MessagesCommandFacade>());
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
@@ -1059,13 +1059,10 @@ public sealed class MainnetMessagesEndpointsTests
         ILlmSessionQueryPort
     {
         private readonly Dictionary<string, LlmSessionSnapshot> _snapshots = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, int> _completionObservationLagReads = new(StringComparer.Ordinal);
 
         public List<LlmSessionRecord> Registered { get; } = [];
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
         public List<(string ActorId, string ResponseId, LlmSessionCompletion Completion)> RecordedCompletions { get; } = [];
-
-        public int CompletionObservationLagReads { get; init; }
 
         public Task<LlmSessionRegistrationResult> RegisterAsync(
             LlmSessionRecord record,
@@ -1106,7 +1103,7 @@ public sealed class MainnetMessagesEndpointsTests
             LlmSessionForwardedToolCall call,
             CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task RecordCompletionAsync(
+        public Task<DispatchAdmission> RecordCompletionAsync(
             string sessionActorId,
             string responseId,
             LlmSessionCompletion completion,
@@ -1142,12 +1139,9 @@ public sealed class MainnetMessagesEndpointsTests
                                 clone.Usage.TotalTokens)),
                 };
             }
-            if (CompletionObservationLagReads > 0)
-            {
-                _completionObservationLagReads[responseId] = CompletionObservationLagReads;
-            }
-
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(
+                sessionActorId,
+                new EventEnvelope { Id = $"{responseId}:completion" }));
         }
 
         public Task ReceiveForwardedToolResultAsync(
@@ -1169,14 +1163,6 @@ public sealed class MainnetMessagesEndpointsTests
             CancellationToken ct = default)
         {
             var snapshot = _snapshots.GetValueOrDefault(responseId);
-            if (snapshot?.Completion is not null &&
-                _completionObservationLagReads.TryGetValue(responseId, out var remaining) &&
-                remaining > 0)
-            {
-                _completionObservationLagReads[responseId] = remaining - 1;
-                return Task.FromResult<LlmSessionSnapshot?>(snapshot with { Completion = null });
-            }
-
             return Task.FromResult(snapshot);
         }
     }
