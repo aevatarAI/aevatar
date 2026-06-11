@@ -34,7 +34,9 @@ public sealed class StudioMemberServiceBindingTests
             ScopeId,
             MemberId,
             new UpdateStudioMemberBindingRequest(
-                Workflow: new StudioMemberWorkflowBindingSpec(["workflow:\n  name: x"])),
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "workflow-stable-id",
+                    ["workflow:\n  name: x"])),
             CancellationToken.None);
 
         response.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
@@ -47,6 +49,7 @@ public sealed class StudioMemberServiceBindingTests
         started.ScopeId.Should().Be(ScopeId);
         started.MemberId.Should().Be(MemberId);
         started.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
+        started.Binding.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
         started.Binding.Workflow!.WorkflowYamls.Should().ContainSingle();
     }
 
@@ -112,11 +115,33 @@ public sealed class StudioMemberServiceBindingTests
             ScopeId,
             MemberId,
             new UpdateStudioMemberBindingRequest(
-                Workflow: new StudioMemberWorkflowBindingSpec(["workflow:"])),
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "workflow-stable-id",
+                    ["workflow:"])),
             CancellationToken.None);
 
         response.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
         commandPort.StartedRuns.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task BindAsync_Workflow_ShouldRequireWorkflowId()
+    {
+        var service = NewService(
+            new RecordingCommandPort(),
+            new ThrowingBindQueryPort());
+
+        var act = () => service.BindAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberBindingRequest(
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    string.Empty,
+                    ["workflow:\n  name: x"])),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflowId is required for workflow members*");
     }
 
     [Fact]
