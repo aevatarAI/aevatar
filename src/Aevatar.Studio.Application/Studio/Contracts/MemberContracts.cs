@@ -106,6 +106,13 @@ public sealed record StudioMemberSummaryResponse(
     /// the create/patch flows pass it through unchanged.
     /// </summary>
     public string? TeamId { get; init; }
+
+    /// <summary>
+    /// Typed implementation identity shared by scope and team roster
+    /// summaries. Null means the member read model has not yet observed an
+    /// implementation reference.
+    /// </summary>
+    public StudioMemberImplementationRefResponse? ImplementationRef { get; init; }
 }
 
 public sealed record StudioMemberDetailResponse(
