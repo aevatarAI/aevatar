@@ -19,6 +19,7 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("agent_delivery_targets");
         prompt.Should().Contain("loaded skill metadata and instructions");
         prompt.Should().Contain("fetch live data through `nyxid_proxy`");
+        prompt.Should().Contain("required_service_slugs");
         prompt.Should().Contain("derive the digest from current facts");
         prompt.Should().Contain("post the digest to the negotiated chat target");
         prompt.Should().Contain("api-github");
