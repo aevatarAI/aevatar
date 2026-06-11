@@ -76,6 +76,12 @@ public sealed class LarkCoverageTests
         sheetsTool.Name.Should().Be("lark_sheets_append_rows");
         sheetsTool.Description.Should().Contain("Append rows to a known Lark spreadsheet");
         sheetsTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+
+        var bitableTool = new LarkBitableRecordsCreateTool(client);
+        bitableTool.Name.Should().Be("lark_bitable_records_create");
+        bitableTool.Description.Should().Contain("Create one Lark Bitable record");
+        bitableTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        bitableTool.ParametersSchema.Should().Contain("fields_json");
     }
 
     [Fact]
@@ -333,6 +339,14 @@ public sealed class LarkCoverageTests
             _ = request;
             _ = ct;
             return Task.FromResult("""{"code":0,"data":{"updates":{}}}""");
+        }
+
+        public Task<string> CreateBitableRecordAsync(string token, LarkBitableRecordCreateRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"record":{}}}""");
         }
 
         public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct)

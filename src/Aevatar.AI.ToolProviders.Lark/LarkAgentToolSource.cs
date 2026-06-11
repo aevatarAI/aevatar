@@ -58,6 +58,8 @@ public sealed class LarkAgentToolSource : IAgentToolSource
             tools.Add(new LarkChatsLookupTool(_client));
         if (_options.EnableSheetsAppendRows)
             tools.Add(new LarkSheetsAppendRowsTool(_client));
+        if (_options.EnableBitableRecordsCreate)
+            tools.Add(new LarkBitableRecordsCreateTool(_client));
         if (_options.EnableApprovalsList)
             tools.Add(new LarkApprovalsListTool(_client));
         if (_options.EnableApprovalsAct)
