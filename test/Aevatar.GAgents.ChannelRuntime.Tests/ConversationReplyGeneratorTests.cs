@@ -1699,9 +1699,6 @@ public sealed class ConversationReplyGeneratorTests
         public Task<string> DeleteMessageReactionAsync(string token, LarkMessageReactionDeleteRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
-        public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct) =>
-            throw new NotSupportedException();
-
         public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
