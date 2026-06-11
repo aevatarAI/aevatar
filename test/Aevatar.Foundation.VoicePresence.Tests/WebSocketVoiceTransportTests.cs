@@ -86,6 +86,43 @@ public class WebSocketVoiceTransportTests
     }
 
     [Fact]
+    public async Task Send_methods_should_serialize_concurrent_audio_and_control_sends()
+    {
+        var firstSendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sendCount = 0;
+        var socket = new FakeWebSocket(WebSocketState.Open)
+        {
+            BeforeSendAsync = async (_, ct) =>
+            {
+                if (Interlocked.Increment(ref sendCount) == 1)
+                {
+                    firstSendStarted.TrySetResult();
+                    await releaseFirstSend.Task.WaitAsync(ct);
+                }
+            },
+        };
+        await using var transport = new WebSocketVoiceTransport(socket);
+
+        var audioTask = transport.SendAudioAsync(new byte[] { 1, 2, 3 }, CancellationToken.None);
+        await firstSendStarted.Task;
+        var controlTask = transport.SendControlAsync(new VoiceControlFrame
+        {
+            DrainAcknowledged = new VoiceDrainAcknowledged
+            {
+                ResponseId = 7,
+            },
+        }, CancellationToken.None);
+
+        releaseFirstSend.SetResult();
+        await Task.WhenAll(audioTask, controlTask);
+
+        socket.MaxConcurrentSends.ShouldBe(1);
+        socket.SentBinaries.Count.ShouldBe(1);
+        socket.SentTexts.Count.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task ReceiveFramesAsync_should_stop_when_websocket_throws()
     {
         var socket = new FakeWebSocket(WebSocketState.Open)
