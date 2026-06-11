@@ -1165,6 +1165,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 await FlushPendingEventInjectionsAsync(state, ct);
                 await PersistRuntimeStateAsync(ctx, state, ct);
                 break;
+            case VoiceControlFrame.FrameOneofCase.InputImage:
+                break;
             case VoiceControlFrame.FrameOneofCase.None:
             default:
                 break;

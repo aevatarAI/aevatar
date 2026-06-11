@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
 
@@ -16,8 +17,15 @@ namespace Aevatar.Foundation.VoicePresence.Transport;
 public sealed class WebSocketVoiceTransport : IVoiceTransport
 {
     private const int ReceiveBufferSize = 8 * 1024;
+    private const int MaxInputImageBytes = 500 * 1024;
+    private const int MaxTextMessageBytes = ((MaxInputImageBytes + 2) / 3 * 4) + 1024;
     private static readonly JsonFormatter ControlJsonWriter = new(JsonFormatter.Settings.Default);
     private static readonly JsonParser ControlJsonReader = new(JsonParser.Settings.Default);
+    private static readonly string[] SupportedInputImageMediaTypes =
+    [
+        "image/jpeg",
+        "image/png",
+    ];
 
     private readonly WebSocket _ws;
     private readonly TaskCompletionSource _completion =
@@ -86,6 +94,11 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
                 {
                     yield break;
                 }
+                catch (VoiceTransportFrameRejectedException ex)
+                {
+                    await TryClosePolicyViolationAsync(ex.Message, ct);
+                    yield break;
+                }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     yield break;
@@ -102,9 +115,15 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
                 }
                 else if (messageType == WebSocketMessageType.Text)
                 {
-                    var frame = TryParseControlFrame(buffer, totalBytes);
-                    if (frame != null)
-                        yield return VoiceTransportFrame.ControlFrame(frame);
+                    var textFrame = TryParseTextFrame(buffer, totalBytes);
+                    if (textFrame.RejectionReason != null)
+                    {
+                        await TryClosePolicyViolationAsync(textFrame.RejectionReason, ct);
+                        yield break;
+                    }
+
+                    if (textFrame.Frame.HasValue)
+                        yield return textFrame.Frame.Value;
                 }
             }
         }
@@ -153,21 +172,100 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
             result = await _ws.ReceiveAsync(
                 buffer.AsMemory(totalBytes, buffer.Length - totalBytes), ct);
             totalBytes += result.Count;
+
+            if (result.MessageType == WebSocketMessageType.Text && totalBytes > MaxTextMessageBytes)
+                throw new VoiceTransportFrameRejectedException("Voice text frame exceeds the input image size limit.");
         } while (!result.EndOfMessage);
 
         return (totalBytes, result.MessageType, buffer);
     }
 
-    private static VoiceControlFrame? TryParseControlFrame(byte[] buffer, int length)
+    private static TextFrameParseResult TryParseTextFrame(byte[] buffer, int length)
     {
+        var containsInputImage = ContainsInputImageProperty(buffer, length);
         try
         {
             var json = Encoding.UTF8.GetString(buffer, 0, length);
-            return ControlJsonReader.Parse<VoiceControlFrame>(json);
+            var frame = ControlJsonReader.Parse<VoiceControlFrame>(json);
+            if (frame.FrameCase == VoiceControlFrame.FrameOneofCase.InputImage)
+            {
+                var rejection = ValidateInputImage(frame.InputImage);
+                return rejection == null
+                    ? TextFrameParseResult.Accepted(VoiceTransportFrame.InputImageFrame(frame.InputImage.Clone()))
+                    : TextFrameParseResult.Rejected(rejection);
+            }
+
+            return TextFrameParseResult.Accepted(VoiceTransportFrame.ControlFrame(frame));
         }
         catch
         {
-            return null;
+            return containsInputImage
+                ? TextFrameParseResult.Rejected("Invalid voice input image frame.")
+                : TextFrameParseResult.Ignored();
         }
     }
+
+    private static bool ContainsInputImageProperty(byte[] buffer, int length)
+    {
+        try
+        {
+            var reader = new Utf8JsonReader(buffer.AsSpan(0, length));
+            if (!JsonDocument.TryParseValue(ref reader, out var document))
+                return false;
+
+            using (document)
+            {
+                return document.RootElement.ValueKind == JsonValueKind.Object &&
+                       (document.RootElement.TryGetProperty("inputImage", out _) ||
+                        document.RootElement.TryGetProperty("input_image", out _));
+            }
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? ValidateInputImage(VoiceInputImage? inputImage)
+    {
+        if (inputImage == null ||
+            inputImage.Data.IsEmpty)
+        {
+            return "Voice input image data is required.";
+        }
+
+        var mediaType = inputImage.MediaType.Trim();
+        if (!SupportedInputImageMediaTypes.Contains(mediaType, StringComparer.OrdinalIgnoreCase))
+            return "Voice input image media type must be image/jpeg or image/png.";
+
+        return inputImage.Data.Length <= MaxInputImageBytes
+            ? null
+            : "Voice input image exceeds the 500 KB size limit.";
+    }
+
+    private async Task TryClosePolicyViolationAsync(string reason, CancellationToken ct)
+    {
+        if (_ws.State is not WebSocketState.Open and not WebSocketState.CloseReceived)
+            return;
+
+        try
+        {
+            await _ws.CloseAsync(WebSocketCloseStatus.PolicyViolation, reason, ct);
+        }
+        catch
+        {
+            // best-effort close for invalid client input
+        }
+    }
+
+    private readonly record struct TextFrameParseResult(VoiceTransportFrame? Frame, string? RejectionReason)
+    {
+        public static TextFrameParseResult Accepted(VoiceTransportFrame frame) => new(frame, null);
+
+        public static TextFrameParseResult Ignored() => new(null, null);
+
+        public static TextFrameParseResult Rejected(string reason) => new(null, reason);
+    }
+
+    private sealed class VoiceTransportFrameRejectedException(string message) : Exception(message);
 }

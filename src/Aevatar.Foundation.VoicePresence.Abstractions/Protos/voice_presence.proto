@@ -242,6 +242,7 @@ message VoiceDrainAcknowledged {
 message VoiceControlFrame {
   oneof frame {
     VoiceDrainAcknowledged drain_acknowledged = 1;
+    VoiceInputImage input_image = 2;
   }
 }
 

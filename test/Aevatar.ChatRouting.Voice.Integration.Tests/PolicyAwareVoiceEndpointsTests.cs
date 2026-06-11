@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.WebSockets;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Encodings.Web;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -11,6 +12,7 @@ using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
@@ -119,6 +121,64 @@ public sealed class PolicyAwareVoiceEndpointsTests
         attachedTransports.Should().ContainSingle();
         detachedTransports.Should().ContainSingle()
             .Which.Should().BeSameAs(attachedTransports.Single());
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenAttachedClientSendsInputImage_ShouldExposeImageTransportFrame()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            ForwardToModel("fallback-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "lark-voice",
+                    Priority = 10,
+                    Match = new ChatRouteMatch
+                    {
+                        SourceKind = ChatSourceKind.Voice,
+                        Channel = "lark",
+                    },
+                    Action = VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+                },
+            ]));
+        var receivedFrames = new List<VoiceTransportFrame>();
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: async transport =>
+            {
+                await using (transport)
+                {
+                    await foreach (var frame in transport.ReceiveFramesAsync(CancellationToken.None))
+                        receivedFrames.Add(frame);
+                }
+            });
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Text,
+            Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(new VoiceControlFrame
+            {
+                InputImage = new VoiceInputImage
+                {
+                    MediaType = "image/png",
+                    Data = ByteString.CopyFrom([4, 5, 6]),
+                },
+            })));
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            new RecordingVoiceRealtimeSession(),
+            mediaPort);
+        var context = CreateVoiceContext(app, "/ws/voice?channel=lark");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        wsFeature.AcceptCalls.Should().Be(1);
+        var frame = receivedFrames.Should().ContainSingle().Which;
+        frame.InputImage.Should().NotBeNull();
+        frame.InputImage!.MediaType.Should().Be("image/png");
+        frame.InputImage.Data.ToByteArray().Should().Equal(4, 5, 6);
     }
 
     [Theory]
@@ -589,6 +649,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
     private sealed class FakeWebSocket(WebSocketState state) : WebSocket
     {
+        private readonly Queue<ReceiveFrame> _frames = [];
         private WebSocketState _state = state;
 
         public List<(WebSocketCloseStatus Status, string? Description)> CloseCalls { get; } = [];
@@ -598,6 +659,9 @@ public sealed class PolicyAwareVoiceEndpointsTests
         public override string? SubProtocol => null;
 
         public override void Abort() => _state = WebSocketState.Aborted;
+
+        public void EnqueueReceive(WebSocketMessageType messageType, byte[] data, bool endOfMessage = true) =>
+            _frames.Enqueue(new ReceiveFrame(messageType, data, endOfMessage));
 
         public override Task CloseAsync(
             WebSocketCloseStatus closeStatus,
@@ -626,8 +690,18 @@ public sealed class PolicyAwareVoiceEndpointsTests
             ArraySegment<byte> buffer,
             CancellationToken cancellationToken)
         {
-            _ = buffer;
             cancellationToken.ThrowIfCancellationRequested();
+            if (_frames.Count > 0)
+            {
+                var frame = _frames.Dequeue();
+                _state = WebSocketState.Open;
+                if (frame.Data.Length > 0 && buffer.Array != null)
+                    Array.Copy(frame.Data, 0, buffer.Array, buffer.Offset, frame.Data.Length);
+
+                return Task.FromResult(
+                    new WebSocketReceiveResult(frame.Data.Length, frame.MessageType, frame.EndOfMessage));
+            }
+
             _state = WebSocketState.CloseReceived;
             return Task.FromResult(new WebSocketReceiveResult(0, WebSocketMessageType.Close, true));
         }
@@ -644,6 +718,11 @@ public sealed class PolicyAwareVoiceEndpointsTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+
+        private readonly record struct ReceiveFrame(
+            WebSocketMessageType MessageType,
+            byte[] Data,
+            bool EndOfMessage);
     }
 
     private sealed class TestAuthHandler(
