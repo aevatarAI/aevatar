@@ -52,6 +52,51 @@ public sealed class SkillRecoveryPlannerTests
     }
 
     [Fact]
+    public async Task Orchestrator_ApplyInitialDirectivesAsync_WhenCallIdPrefixIsLong_ShouldKeepSyntheticCallIdsWithinOpenAiLimit()
+    {
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("ornn_search_skills", _ => SearchResult(
+            status: "success",
+            text: "display text changed",
+            matches:
+            [
+                new { skill_name = "project-summary", description = "summary plan", is_private = false, category = "ops", tags = Array.Empty<string>() },
+            ])));
+        tools.Register(new DelegateTool("use_skill", _ => LoadResult(
+            status: "success",
+            skillName: "project-summary",
+            loaded: true,
+            error: null,
+            text: "# project-summary\n\nInstructions")));
+        var orchestrator = new SkillRecoveryOrchestrator(
+            Recovery(primarySkillName: null),
+            _ => new StreamingToolExecutor(tools));
+        var messages = new List<ChatMessage> { ChatMessage.User("/goal ship") };
+        var pending = new List<ChatMessage> { messages[0] };
+        var longPrefix = "req-" + new string('a', 50);
+
+        var applied = await orchestrator.ApplyInitialDirectivesAsync(
+            toolContext: null,
+            messages,
+            pending,
+            longPrefix,
+            CancellationToken.None);
+
+        applied.Should().BeTrue();
+        var toolCallIds = messages
+            .Where(message => message.Role == "tool")
+            .Select(message => message.ToolCallId)
+            .ToArray();
+        toolCallIds.Should().HaveCount(2);
+        toolCallIds.Should().OnlyContain(callId =>
+            callId != null && callId.Length <= SkillRecoveryPlanner.MaxCallIdLength);
+        toolCallIds.Should().OnlyHaveUniqueItems();
+        toolCallIds[0].Should().Contain("ornn-search-skills:recovery:1");
+        toolCallIds[1].Should().Contain("use-skill:recovery:2");
+        $"{longPrefix}:skill-recovery:ornn-search-skills:recovery:1".Length.Should().BeGreaterThan(71);
+    }
+
+    [Fact]
     public async Task Orchestrator_TryRecoverFinalAnswerAsync_WhenTypedSearchHasMatchesButNoLoad_ShouldExecuteUseSkill()
     {
         var tools = new ToolManager();
@@ -120,6 +165,32 @@ public sealed class SkillRecoveryPlannerTests
 
         forced.Should().BeTrue();
         directive.ToolCall!.Name.Should().Be("use_skill");
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenLongPrefixesDiffer_ShouldKeepUseSkillCallIdsBoundedAndDistinct()
+    {
+        var first = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(primarySkillName: "project-summary"),
+            [ChatMessage.User("/goal ship")],
+            finalContent: null,
+            recoveryAttempts: 0,
+            callIdPrefix: "req-" + new string('a', 50),
+            out var firstDirective);
+        var second = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(primarySkillName: "project-summary"),
+            [ChatMessage.User("/goal ship")],
+            finalContent: null,
+            recoveryAttempts: 0,
+            callIdPrefix: "req-" + new string('b', 50),
+            out var secondDirective);
+
+        first.Should().BeTrue();
+        second.Should().BeTrue();
+        firstDirective.ToolCall!.Id.Length.Should().BeLessThanOrEqualTo(SkillRecoveryPlanner.MaxCallIdLength);
+        secondDirective.ToolCall!.Id.Length.Should().BeLessThanOrEqualTo(SkillRecoveryPlanner.MaxCallIdLength);
+        firstDirective.ToolCall.Id.Should().NotBe(secondDirective.ToolCall.Id);
+        firstDirective.ToolCall.Id.Should().Contain("use-skill");
     }
 
     [Fact]
