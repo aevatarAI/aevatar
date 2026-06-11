@@ -276,8 +276,15 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_RunAgent_FromChannelInbound_AdmitsExternalTrigger()
+    public async Task ExecuteAsync_RunAgent_FromChannelInbound_DispatchesManualTriggerNotAdmission()
     {
+        // Regression (prod 2026-06-11): run_agent used to route channel-context calls through
+        // the external-trigger admission protocol. Admission requires a pre-registered
+        // ExternalTriggerSource on the runner, and scheduled_agent_creator registers none,
+        // so every owner-issued /run-agent ended as a committed-but-silent
+        // SkillRunnerExternalTriggerRejectedEvent(unknown_source) while the tool replied
+        // "accepted". The owner's management-plane trigger is authorized by the caller-scope
+        // check and must dispatch TriggerAsync directly even when channel metadata is present.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
@@ -288,19 +295,7 @@ public sealed class AgentBuilderToolTests
                 ScopeId = "scope-1",
             }));
 
-        var captured = new List<AdmitSkillRunnerExternalTriggerCommand>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        skillRunnerPort.AdmitExternalTriggerAsync(
-                "skill-runner-1",
-                Arg.Do<AdmitSkillRunnerExternalTriggerCommand>(command => captured.Add(command.Clone())),
-                Arg.Any<CancellationToken>())
-            .Returns(call => Task.FromResult(new SkillRunnerExternalTriggerAdmissionReceipt(
-                "skill-runner-1",
-                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.AdmissionId,
-                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.AdmissionId,
-                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.AdmissionId,
-                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.SourceId,
-                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.DeliveryId)));
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
@@ -333,17 +328,14 @@ public sealed class AgentBuilderToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            captured.Should().ContainSingle();
-            var identity = captured[0].Identity;
-            identity.Kind.Should().Be(ExternalTriggerSourceKind.ChannelInbound);
-            identity.SourceId.Should().Be("channel:lark:scope-1");
-            identity.DeliveryId.Should().Be("activity-1");
-            identity.PayloadSummary.Should().Be("channel run_agent");
-            identity.PayloadRef.Should().Be("om_1");
 
-            await skillRunnerPort.DidNotReceive().TriggerAsync(
+            await skillRunnerPort.Received(1).TriggerAsync(
+                "skill-runner-1",
+                "run_agent",
+                Arg.Any<CancellationToken>());
+            await skillRunnerPort.DidNotReceive().AdmitExternalTriggerAsync(
                 Arg.Any<string>(),
-                Arg.Any<string>(),
+                Arg.Any<AdmitSkillRunnerExternalTriggerCommand>(),
                 Arg.Any<CancellationToken>());
         }
         finally
