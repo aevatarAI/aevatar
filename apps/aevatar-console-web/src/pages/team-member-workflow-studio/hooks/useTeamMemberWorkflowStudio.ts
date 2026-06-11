@@ -258,6 +258,10 @@ function resolveExplicitWorkflowId(
   return trimOptional(implementationRef?.workflowId);
 }
 
+function isWorkflowDraftRouteId(value: string): boolean {
+  return Boolean(value && !/\s/.test(value));
+}
+
 function resolveWorkflowDraftReloadIds(
   memberDetail: StudioMemberDetail | null | undefined,
 ): readonly string[] {
@@ -267,7 +271,10 @@ function resolveWorkflowDraftReloadIds(
     "workflow"
       ? trimOptional(memberDetail?.summary.memberId)
       : "";
-  const ids = [explicitWorkflowId, memberWorkflowId].filter(Boolean);
+  const ids = [
+    isWorkflowDraftRouteId(explicitWorkflowId) ? explicitWorkflowId : "",
+    isWorkflowDraftRouteId(memberWorkflowId) ? memberWorkflowId : "",
+  ].filter(Boolean);
 
   return Array.from(new Set(ids));
 }

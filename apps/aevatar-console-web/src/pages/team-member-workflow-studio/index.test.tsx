@@ -784,7 +784,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     ).toBeNull();
   });
 
-  it("falls back to the scoped member draft when the workflow ref points at the runtime name", async () => {
+  it("skips runtime workflow names when reloading the scoped member draft", async () => {
     window.history.replaceState(
       {},
       "",
@@ -809,41 +809,33 @@ describe("TeamMemberWorkflowStudioPage", () => {
         updatedAt: "2026-06-08T00:00:01Z",
       },
     });
-    (studioApi.getWorkflow as jest.Mock).mockImplementation(
-      async (workflowId: string) => {
-        if (workflowId === "Untitled member") {
-          throw Object.assign(new Error("Not found"), { status: 404 });
-        }
-
-        return {
-          directoryId: "scope:scope-1",
-          directoryLabel: "scope-1",
-          draftExists: true,
-          fileName: "untitled-member.yaml",
-          filePath: "scope://scope-1/untitled-member.yaml",
-          findings: [],
-          layout: null,
-          name: "Untitled member",
-          workflowId: "untitled-member",
-          yaml: "name: Untitled member\nsteps: []\n",
-          document: {
-            name: "Untitled member",
-            roles: [],
-            steps: [
-              {
-                id: "llm_call",
-                type: "llm_call",
-                targetRole: null,
-                parameters: {},
-                next: null,
-                branches: {},
-              },
-            ],
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "untitled-member.yaml",
+      filePath: "scope://scope-1/untitled-member.yaml",
+      findings: [],
+      layout: null,
+      name: "Untitled member",
+      workflowId: "untitled-member",
+      yaml: "name: Untitled member\nsteps: []\n",
+      document: {
+        name: "Untitled member",
+        roles: [],
+        steps: [
+          {
+            id: "llm_call",
+            type: "llm_call",
+            targetRole: null,
+            parameters: {},
+            next: null,
+            branches: {},
           },
-          updatedAtUtc: "2026-06-08T00:00:01Z",
-        };
+        ],
       },
-    );
+      updatedAtUtc: "2026-06-08T00:00:01Z",
+    });
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
@@ -851,7 +843,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     await waitFor(() => {
       expect(screen.getByText("nodes:1")).toBeTruthy();
     });
-    expect(studioApi.getWorkflow).toHaveBeenCalledWith(
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith(
       "Untitled member",
       "scope-1",
     );
@@ -859,6 +851,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "untitled-member",
       "scope-1",
     );
+    expect(studioApi.getWorkflow).toHaveBeenCalledTimes(1);
     expect(
       screen.queryByText("No workflow draft is linked to this member yet."),
     ).toBeNull();
