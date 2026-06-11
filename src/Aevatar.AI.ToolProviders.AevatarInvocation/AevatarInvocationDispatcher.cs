@@ -301,9 +301,12 @@ public sealed class AevatarInvocationDispatcher
         var result = await _workflowDispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded || result.Receipt == null)
         {
+            var message = result.Error == WorkflowChatRunStartError.WorkflowNotFound
+                ? WorkflowChatRunStartErrorGuidance.WorkflowNotFound
+                : $"Workflow start failed: {result.Error}";
             var startError = Error(
                 result.Error.ToString(),
-                $"Workflow start failed: {result.Error}");
+                message);
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(startError), startError);
         }
 

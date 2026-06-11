@@ -15,20 +15,29 @@ namespace Aevatar.GAgentService.Tests.Projection;
 
 public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
 {
-    [Fact]
-    public void GetPlans_ShouldMapServiceDefinitionEventsToCatalogScope()
+    [Theory]
+    [MemberData(nameof(ServiceDefinitionCatalogEvents))]
+    public void GetPlans_ShouldMapServiceDefinitionEventsToCatalogScope(IMessage serviceDefinitionEvent)
     {
         var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
 
         var plans = provider.GetPlans(BuildContext(
             typeof(ServiceDefinitionGAgent),
-            new ServiceDefinitionCreatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } })).ToArray();
+            serviceDefinitionEvent)).ToArray();
 
         plans.Should().ContainSingle();
         plans[0].LeaseType.Should().Be(typeof(ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>));
         plans[0].StartRequest.RootActorId.Should().Be("service-actor");
         plans[0].StartRequest.ProjectionKind.Should().Be("service-catalog");
         plans[0].StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+    }
+
+    public static IEnumerable<object[]> ServiceDefinitionCatalogEvents()
+    {
+        yield return [new ServiceDefinitionCreatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } }];
+        yield return [new ServiceDefinitionUpdatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } }];
+        yield return [new ServiceExternalExposureUpdatedEvent { Identity = Identity(), ExternalExposure = new ExternalExposure { NyxidSlug = "aevatar-orders" } }];
+        yield return [new DefaultServingRevisionChangedEvent { Identity = Identity(), RevisionId = "r1" }];
     }
 
     [Fact]

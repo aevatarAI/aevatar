@@ -47,7 +47,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             },
             "schedule_cron": {
               "type": "string",
-              "description": "Cron expression for scheduled execution."
+              "description": "Standard 5-field cron expression (minute hour day-of-month month day-of-week). Seconds fields are not supported."
             },
             "schedule_timezone": {
               "type": "string",

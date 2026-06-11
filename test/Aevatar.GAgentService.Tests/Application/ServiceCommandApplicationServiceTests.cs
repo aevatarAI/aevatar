@@ -62,6 +62,11 @@ public sealed class ServiceCommandApplicationServiceTests
         {
             Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
         });
+        var externalExposureReceipt = await service.UpdateServiceExternalExposureAsync(new UpdateServiceExternalExposureCommand
+        {
+            Identity = identity.Clone(),
+            ExternalExposure = new ExternalExposure { NyxidSlug = "aevatar-orders" },
+        });
         var defaultReceipt = await service.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
         {
             Identity = identity.Clone(),
@@ -70,15 +75,17 @@ public sealed class ServiceCommandApplicationServiceTests
 
         createReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         updateReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        externalExposureReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         defaultReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         defaultReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rev-1");
-        provisioner.DefinitionRequests.Should().HaveCount(3);
-        provisioner.InvocationCatalogRequests.Should().HaveCount(3);
+        provisioner.DefinitionRequests.Should().HaveCount(4);
+        provisioner.InvocationCatalogRequests.Should().HaveCount(4);
         provisioner.InvocationCatalogRequests.Should().OnlyContain(x =>
             ServiceKeys.Build(x) == ServiceKeys.Build(identity));
         dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
             AnyTypeUrl<CreateServiceDefinitionCommand>(),
             AnyTypeUrl<UpdateServiceDefinitionCommand>(),
+            AnyTypeUrl<UpdateServiceExternalExposureCommand>(),
             AnyTypeUrl<SetDefaultServingRevisionCommand>(),
         ]);
     }
