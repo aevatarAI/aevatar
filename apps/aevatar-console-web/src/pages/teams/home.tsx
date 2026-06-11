@@ -1151,56 +1151,78 @@ const TeamsHomePage: React.FC = () => {
     () => groupMembersByTeamId(studioMembers),
     [studioMembers],
   );
-  const runtimeTrackableEntryMembers = React.useMemo(() => {
+  const runtimeTrackableEntryMemberServices = React.useMemo(() => {
     const membersById = new Map(
       studioMembers
         .map((member) => [trimOptional(member.memberId), member] as const)
         .filter(([memberId]) => memberId.length > 0),
     );
-    const seenMemberIds = new Set<string>();
-    const result: StudioMemberSummary[] = [];
+    const result: Array<{
+      readonly memberId: string;
+      readonly serviceId: string;
+    }> = [];
 
     studioTeams.forEach((team) => {
       const entryMemberId = trimOptional(team.entryMemberId);
-      if (!entryMemberId || seenMemberIds.has(entryMemberId)) {
+      if (!entryMemberId) {
         return;
       }
 
       const member = membersById.get(entryMemberId);
-      if (
-        !member ||
-        (!trimOptional(member.publishedServiceId) &&
-          !trimOptional(member.lastBoundRevisionId))
-      ) {
+      const serviceId = trimOptional(member?.publishedServiceId);
+      if (!member || !serviceId) {
         return;
       }
 
-      seenMemberIds.add(entryMemberId);
-      result.push(member);
+      result.push({
+        memberId: entryMemberId,
+        serviceId,
+      });
     });
 
     return result;
   }, [studioMembers, studioTeams]);
+  const runtimeTrackableServiceIds = React.useMemo(
+    () =>
+      Array.from(
+        new Set(
+          runtimeTrackableEntryMemberServices.map((entry) => entry.serviceId),
+        ),
+      ),
+    [runtimeTrackableEntryMemberServices],
+  );
   const memberRunQueries = useQueries({
-    queries: runtimeTrackableEntryMembers.map((member) => ({
+    queries: runtimeTrackableServiceIds.map((serviceId) => ({
       enabled: canLoadRoster && membersQuery.isSuccess,
-      queryKey: ["teams", "member-runs", queryScopeId, member.memberId],
+      queryKey: ["teams", "service-runs", queryScopeId, serviceId],
       queryFn: () =>
-        scopeRuntimeApi.listMemberRuns(queryScopeId, member.memberId, {
+        scopeRuntimeApi.listServiceRuns(queryScopeId, serviceId, {
           take: 1,
         }),
       retry: false,
     })),
   });
   const runsByMemberId = React.useMemo(
-    () =>
-      Object.fromEntries(
-        runtimeTrackableEntryMembers.map((member, index) => [
-          trimOptional(member.memberId),
+    () => {
+      const runsByServiceId = Object.fromEntries(
+        runtimeTrackableServiceIds.map((serviceId, index) => [
+          serviceId,
           memberRunQueries[index]?.data?.runs ?? [],
         ]),
-      ) as Record<string, readonly ScopeServiceRunSummary[]>,
-    [memberRunQueries, runtimeTrackableEntryMembers],
+      ) as Record<string, readonly ScopeServiceRunSummary[]>;
+
+      return Object.fromEntries(
+        runtimeTrackableEntryMemberServices.map((entry) => [
+          entry.memberId,
+          runsByServiceId[entry.serviceId] ?? [],
+        ]),
+      ) as Record<string, readonly ScopeServiceRunSummary[]>;
+    },
+    [
+      memberRunQueries,
+      runtimeTrackableEntryMemberServices,
+      runtimeTrackableServiceIds,
+    ],
   );
   const teamPreviews = React.useMemo(
     () =>
