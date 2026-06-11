@@ -773,7 +773,7 @@ public sealed class ResponsesCommandFacade(
                 session.ResponseId,
                 completion,
                 ct);
-            return CompletionRecordResult.FromAccepted(admission);
+            return CompletionRecordResult.FromAdmission(admission);
         }
         catch (OperationCanceledException)
         {
@@ -1105,6 +1105,6 @@ public sealed class ResponsesCommandFacade(
     {
         public static CompletionRecordResult FromError(ResponsesCommandError error) => new(error, null);
 
-        public static CompletionRecordResult FromAccepted(DispatchAdmission admission) => new(null, admission);
+        public static CompletionRecordResult FromAdmission(DispatchAdmission admission) => new(null, admission);
     }
 }

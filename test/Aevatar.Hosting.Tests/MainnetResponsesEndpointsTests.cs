@@ -140,7 +140,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WithNonStreamingProviderCompletion_ShouldReturnCompletedResponse()
+    public async Task PostResponses_WhenCompletionReadModelLags_ShouldReturnAcceptedResponseWithoutPolling()
     {
         var provider = new RecordingLLMProvider
         {
@@ -154,7 +154,7 @@ public sealed class MainnetResponsesEndpointsTests
             ],
         };
         var sessions = new RecordingResponseSessionStore();
-        await using var app = await CreateAppAsync(provider, sessions);
+        await using var app = await CreateAppAsync(provider, sessions, completeNonStreaming: false);
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
@@ -168,14 +168,13 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("status").GetString().Should().Be("completed");
-        doc.RootElement.GetProperty("output")[0]
-            .GetProperty("content")[0]
-            .GetProperty("text")
-            .GetString()
-            .Should()
-            .Be("eventually visible");
-        sessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "eventually visible");
+        doc.RootElement.GetProperty("status").GetString().Should().Be("in_progress");
+        var output = doc.RootElement.GetProperty("output");
+        output.GetArrayLength().Should().Be(1);
+        output[0].GetProperty("status").GetString().Should().Be("in_progress");
+        output[0].GetProperty("content").GetArrayLength().Should().Be(0);
+        provider.LastRequest.Should().BeNull();
+        sessions.RecordedCompletions.Should().BeEmpty();
     }
 
     [Fact]
@@ -809,12 +808,11 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("status").GetString()
-            .Should()
-            .Be("in_progress");
-        doc.RootElement.GetProperty("output")[0].GetProperty("status").GetString()
-            .Should()
-            .Be("in_progress");
+        doc.RootElement.GetProperty("status").GetString().Should().Be("in_progress");
+        var output = doc.RootElement.GetProperty("output");
+        output.GetArrayLength().Should().Be(1);
+        output[0].GetProperty("status").GetString().Should().Be("in_progress");
+        output[0].GetProperty("content").GetArrayLength().Should().Be(0);
         provider.LastRequest.Should().BeNull();
         sessions.Registered.Should().ContainSingle()
             .Which.PreviousResponseId.Should().Be("resp_previous");
@@ -2508,7 +2506,8 @@ public sealed class MainnetResponsesEndpointsTests
         IResponsesToolProvider? responsesToolProvider = null,
         IResponsesModelsAggregator? modelsAggregator = null,
         IResponsesRouteResolver? routeResolver = null,
-        IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null)
+        IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
+        bool completeNonStreaming = true)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -2523,7 +2522,10 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<ResponsesCommandFacade>();
-        builder.Services.AddSingleton<IResponsesCommandFacade, CompletingResponsesCommandFacade>();
+        if (completeNonStreaming)
+            builder.Services.AddSingleton<IResponsesCommandFacade, CompletingResponsesCommandFacade>();
+        else
+            builder.Services.AddSingleton<IResponsesCommandFacade>(static sp => sp.GetRequiredService<ResponsesCommandFacade>());
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new StubResponsesCallerScopeResolver());
@@ -3318,12 +3320,9 @@ public sealed class MainnetResponsesEndpointsTests
                                 clone.Usage.TotalTokens)),
                 };
             }
-            return Task.FromResult(new DispatchAdmission(
-                true,
-                $"{responseId}:completion",
-                DateTimeOffset.UtcNow,
+            return Task.FromResult(DispatchAdmissionFactory.Create(
                 sessionActorId,
-                $"{responseId}:completion"));
+                new EventEnvelope { Id = $"{responseId}:completion" }));
         }
 
         public Task ReceiveForwardedToolResultAsync(
