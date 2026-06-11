@@ -1097,7 +1097,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     );
   });
 
-  it("does not fall back to the member id when the workflow ref points at an invalid runtime name", async () => {
+  it("does not reload runtime display names or fall back to the member id", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1131,17 +1131,20 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     expect(await screen.findByDisplayValue("Untitled member")).toBeTruthy();
-    await waitFor(() => {
-      expect(studioApi.getWorkflow).toHaveBeenCalledWith(
-        "Untitled member",
-        "scope-1",
-      );
-    });
     expect(
       await screen.findAllByText(
         "No workflow draft is linked to this member yet.",
       ),
     ).not.toHaveLength(0);
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith(
+      "Untitled member",
+      "scope-1",
+    );
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith(
+      "untitled-member",
+      "scope-1",
+    );
+    expect(studioApi.getWorkflow).not.toHaveBeenCalled();
   });
 
   it("shows a recoverable state when no stable workflow ref exists", async () => {

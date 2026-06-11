@@ -306,6 +306,10 @@ function resolveExplicitWorkflowId(
   return trimOptional(implementationRef?.workflowId);
 }
 
+function isWorkflowDraftRouteId(value: string): boolean {
+  return Boolean(value && !/\s/.test(value));
+}
+
 function resolveBoundWorkflowRevisionId(
   memberDetail: StudioMemberDetail | null | undefined,
 ): string {
@@ -362,6 +366,12 @@ function resolveWorkflowDraftReloadIds(
   const memberId = resolveMemberWorkflowOwnerId(memberDetail, routeMemberId);
   const publishedServiceId = trimOptional(memberDetail?.summary.publishedServiceId);
   const routeDraftWorkflowId = trimOptional(routeWorkflowId);
+  const recoveredDraftWorkflowId = trimOptional(recoveredWorkflowId);
+  const recoveredIsReloadableWorkflowId = isReloadWorkflowIdAllowed({
+    memberId,
+    publishedServiceId,
+    workflowId: recoveredDraftWorkflowId,
+  });
   const routeIsReloadableWorkflowId = isReloadWorkflowIdAllowed({
     memberId,
     publishedServiceId,
@@ -373,7 +383,7 @@ function resolveWorkflowDraftReloadIds(
     workflowId: explicitWorkflowId,
   });
   const ids = [
-    trimOptional(recoveredWorkflowId),
+    recoveredIsReloadableWorkflowId ? recoveredDraftWorkflowId : "",
     explicitIsReloadableWorkflowId ? explicitWorkflowId : "",
     routeIsReloadableWorkflowId ? routeDraftWorkflowId : "",
   ];
@@ -452,11 +462,14 @@ function isReloadWorkflowIdAllowed(input: {
     return false;
   }
 
-  return !isPublishedServiceWorkflowIdentity({
-    memberId: input.memberId,
-    publishedServiceId: input.publishedServiceId,
-    workflowId,
-  });
+  return (
+    isWorkflowDraftRouteId(workflowId) &&
+    !isPublishedServiceWorkflowIdentity({
+      memberId: input.memberId,
+      publishedServiceId: input.publishedServiceId,
+      workflowId,
+    })
+  );
 }
 
 function selectWorkflowByRevision<TWorkflow extends WorkflowBindingCandidate>(
