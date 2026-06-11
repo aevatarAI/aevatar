@@ -872,11 +872,13 @@ describe('studioApi host-session requests', () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
+    const runtimeWorkflowYaml = 'name: joker-runtime\nsteps: []\n';
     const result = await studioApi.bindMemberWorkflow({
       scopeId: 'scope-1',
       memberId: 'joker',
       displayName: 'joker',
-      workflowYamls: ['name: joker\nsteps: []\n'],
+      workflowId: 'workflow-stable-1',
+      workflowYamls: [runtimeWorkflowYaml],
       revisionId: 'rev-1',
     });
 
@@ -897,10 +899,23 @@ describe('studioApi host-session requests', () => {
       implementationKind: 'workflow',
       displayName: 'joker',
       workflow: {
-        workflowYamls: ['name: joker\nsteps: []\n'],
+        workflowId: 'workflow-stable-1',
+        workflowYamls: [runtimeWorkflowYaml],
       },
       revisionId: 'rev-1',
     });
+  });
+
+  it('rejects member workflow binding without a stable workflow id', async () => {
+    expect(() =>
+      studioApi.bindMemberWorkflow({
+        scopeId: 'scope-1',
+        memberId: 'joker',
+        displayName: 'joker',
+        workflowId: ' ',
+        workflowYamls: ['name: joker\nsteps: []\n'],
+      }),
+    ).toThrow('Workflow member binding requires a stable workflow id.');
   });
 
   it('binds a GAgent to the default service using the scope binding endpoint', async () => {

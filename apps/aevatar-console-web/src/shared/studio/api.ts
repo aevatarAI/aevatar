@@ -25,6 +25,7 @@ import type {
   StudioMemberLifecycleStage,
   StudioMemberRoster,
   StudioMemberSummary,
+  StudioMemberWorkflowBindingInput,
   StudioParseYamlResult,
   StudioRoleCatalogImportResult,
   StudioRoleCatalog,
@@ -1997,13 +1998,14 @@ export const studioApi = {
     );
   },
 
-  bindMemberWorkflow(input: {
-    scopeId: string;
-    memberId: string;
-    displayName?: string | null;
-    workflowYamls: readonly string[];
-    revisionId?: string | null;
-  }): Promise<StudioMemberBindingAcceptedResponse> {
+  bindMemberWorkflow(
+    input: StudioMemberWorkflowBindingInput
+  ): Promise<StudioMemberBindingAcceptedResponse> {
+    const workflowId = trimOptional(input.workflowId);
+    if (!workflowId) {
+      throw new Error("Workflow member binding requires a stable workflow id.");
+    }
+
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
       decodeStudioMemberBindingAcceptedResponse,
@@ -2015,6 +2017,7 @@ export const studioApi = {
             implementationKind: "workflow",
             displayName: trimOptional(input.displayName),
             workflow: {
+              workflowId,
               workflowYamls: input.workflowYamls,
             },
             revisionId: trimOptional(input.revisionId),

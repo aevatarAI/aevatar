@@ -214,6 +214,15 @@ export interface StudioStartExecutionInput {
   readonly eventFormat?: string | null;
 }
 
+export interface StudioMemberWorkflowBindingInput {
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly displayName?: string | null;
+  readonly workflowId: string;
+  readonly workflowYamls: readonly string[];
+  readonly revisionId?: string | null;
+}
+
 export type StudioScopeBindingImplementationKind =
   | 'workflow'
   | 'script'

@@ -1273,6 +1273,7 @@ jest.mock("@/shared/studio/api", () => ({
       scopeId: string;
       memberId: string;
       displayName?: string;
+      workflowId: string;
       workflowYamls: string[];
     }) => {
       mockStudioMembers = mockStudioMembers.map((member) =>
@@ -5537,6 +5538,7 @@ describe("StudioPage", () => {
           scopeId: "scope-1",
           memberId: "workspace-demo",
           displayName: "workspace-demo",
+          workflowId: "workflow-1",
           workflowYamls: expect.arrayContaining([expect.stringContaining("name: workspace-demo")]),
         }),
       );
@@ -5961,6 +5963,7 @@ describe("StudioPage", () => {
           scopeId: "scope-1",
           memberId: "draft1",
           displayName: "draft1",
+          workflowId: "workflow-1",
         })
       );
     });

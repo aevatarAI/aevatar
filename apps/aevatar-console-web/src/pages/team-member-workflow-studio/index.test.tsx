@@ -565,6 +565,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         displayName: "Untitled member",
         memberId: "untitled-member",
         scopeId: "scope-1",
+        workflowId: "untitled-member",
         workflowYamls: [expect.stringContaining("name: Untitled member")],
       });
     });
@@ -3638,6 +3639,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         displayName: "Workflow Alpha Published",
         memberId: "member-alpha",
         scopeId: "scope-1",
+        workflowId: "workflow-alpha",
         workflowYamls: [expect.stringContaining("name: Workflow Alpha Published")],
       });
       expect(studioApi.getMemberBindingRun).toHaveBeenCalledWith(
@@ -3978,6 +3980,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         displayName: "Workflow Alpha v2",
         memberId: "member-alpha",
         scopeId: "scope-1",
+        workflowId: "workflow-alpha",
         workflowYamls: [expect.stringContaining("name: Workflow Alpha v2")],
       });
     });
