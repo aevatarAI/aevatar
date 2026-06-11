@@ -38,6 +38,8 @@ public sealed class ScheduledAgentCreatorToolTests
         properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
         properties.TryGetProperty("skill_content", out _).Should().BeFalse();
         properties.TryGetProperty("provider_base_url", out _).Should().BeFalse();
+        properties.TryGetProperty("required_service_slugs", out var requiredServiceSlugs).Should().BeTrue();
+        requiredServiceSlugs.GetProperty("items").GetProperty("type").GetString().Should().Be("string");
         properties.TryGetProperty("output_format", out var outputFormat).Should().BeTrue();
         outputFormat.GetProperty("enum").EnumerateArray().Select(static x => x.GetString())
             .Should().BeEquivalentTo("auto", "text", "feishu_doc");
@@ -89,6 +91,8 @@ public sealed class ScheduledAgentCreatorToolTests
     [InlineData("""{"skill_ref":"daily","schedule_cron":"","schedule_timezone":"UTC"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":""}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","nyx_api_key":"bad"}""")]
+    [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","required_service_slugs":"tavily-search"}""")]
+    [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","required_service_slugs":["tavily-search",123]}""")]
     public async Task ExecuteAsync_InvalidRequests_ShouldFailBeforeKeyCreation(string argumentsJson)
     {
         var harness = CreateHarness();
@@ -343,6 +347,74 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("required_service_ambiguous:ornn-api");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RequiredServiceSlugs_ShouldBeResolvedIntoScopedKeyAllowlist()
+    {
+        var handler = CreateSuccessHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/keys", """
+            {
+              "keys": [
+                {"id":"svc-ornn","slug":"ornn-api"},
+                {"id":"svc-lark","slug":"api-lark-bot"},
+                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"},
+                {"id":"svc-tavily","slug":"tavily-search"},
+                {"id":"svc-github","slug":"api-github"}
+              ]
+            }
+            """);
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "skill_ref": "daily-report",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "required_service_slugs": [" tavily-search ", "api-github", "api-github", "api-lark-bot"]
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+
+            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+            createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
+                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure", "svc-tavily", "svc-github");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDeclaredRuntimeServiceMissing_ShouldFailBeforeKeyCreation()
+    {
+        var handler = CreateSuccessHandler();
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "skill_ref": "daily-report",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "required_service_slugs": ["tavily-search"]
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("required_service_not_found:tavily-search");
+            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
         });
     }
 

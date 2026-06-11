@@ -110,6 +110,12 @@ internal sealed class ScheduledAgentApiKeyIssuer
         {
             yield return serviceSlugs.FailureNotificationSlug;
         }
+
+        foreach (var slug in serviceSlugs.RequiredServiceSlugs)
+        {
+            if (!string.IsNullOrWhiteSpace(slug))
+                yield return slug;
+        }
     }
 
     private async Task<ScheduledAgentSkillPreflightResult> PreflightSkillFetchAsync(
@@ -361,7 +367,8 @@ internal sealed record ScheduledAgentSkillPreflightResult(
 
 internal sealed record ScheduledAgentServiceSlugs(
     string PrimaryOutboundSlug,
-    string? FailureNotificationSlug);
+    string? FailureNotificationSlug,
+    IReadOnlyList<string> RequiredServiceSlugs);
 
 internal sealed record ScheduledAgentApiKeyIssueResult(
     bool Success,

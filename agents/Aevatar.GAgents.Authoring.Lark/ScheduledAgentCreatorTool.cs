@@ -89,6 +89,13 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
               "type": "boolean",
               "description": "When true, the run must observe a successful NyxID proxy call."
             },
+            "required_service_slugs": {
+              "type": "array",
+              "description": "Optional NyxID service slugs the scheduled skill body will call through nyxid_proxy, such as tavily-search or api-github. The creator resolves these to service IDs for the scoped key; callers must not provide service IDs.",
+              "items": {
+                "type": "string"
+              }
+            },
             "output_format": {
               "type": "string",
               "enum": ["auto", "text", "feishu_doc"],

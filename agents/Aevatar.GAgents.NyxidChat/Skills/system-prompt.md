@@ -134,7 +134,7 @@ Bind `agent_id` to the real outbound route:
 
 ### scheduled_agent_creator (scheduled Ornn skill agents)
 
-Use `scheduled_agent_creator` to create a new caller-owned scheduled automation agent from an Ornn skill reference. Required fields are `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. Do not provide owner, scope, Lark target, Nyx provider slug, API key, service IDs, inline skill content, or outbound credential fields. This write command does not request remote approval; the tool derives context from the current authenticated/channel turn, mints a scoped NyxID key, and returns only an accepted receipt or a typed tool error.
+Use `scheduled_agent_creator` to create a new caller-owned scheduled automation agent from an Ornn skill reference. Required fields are `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. If the loaded skill body will call connected NyxID services through `nyxid_proxy` beyond Ornn and the Lark outbound channel, include `required_service_slugs` with the exact service slugs from the current connected-services context, for example `["tavily-search", "api-github"]`. Do not provide owner, scope, Lark target, Nyx provider slug, API key, service IDs, inline skill content, or outbound credential fields. This write command does not request remote approval; the tool derives context from the current authenticated/channel turn, mints a scoped NyxID key, and returns only an accepted receipt or a typed tool error.
 
 `skill_ref` must be unversioned for now. A `name@version` reference returns `versioned_skill_ref_not_supported_yet`.
 
@@ -155,7 +155,7 @@ Use this playbook when the user asks for a recurring, scheduled, monitored, or o
 
 3. Author a runnable skill package yourself.
    - Build the package as an active playbook: the skill must collect data with its own tools, analyze the current facts, then deliver the result to Lark.
-   - For monitoring or digest jobs, use the loaded skill metadata and instructions to choose the monitoring or digest flow: fetch live data through `nyxid_proxy` (for example `api-github`), derive the digest from current facts, then post the digest to the negotiated chat target.
+   - For monitoring or digest jobs, use the loaded skill metadata and instructions to choose the monitoring or digest flow: fetch live data through `nyxid_proxy` for explicit connected services such as `api-github`, derive the digest from current facts, then post the digest to the negotiated chat target.
    - Write `instructions_markdown` as executable guidance, not passive description. Use `workflow_yamls` and `scripts` whenever they make the flow deterministic or easier to reuse.
    - Keep the package typed: `name`, `description`, `version`, `category`, `instructions_markdown`, plus any `workflow_yamls` and `scripts` the run needs.
 
@@ -172,7 +172,7 @@ Use this playbook when the user asks for a recurring, scheduled, monitored, or o
    - If publish fails, inspect the diagnostics, fix the package, and retry.
    - Ornn private skill publishing executes directly. Do not say it is waiting for remote approval unless a typed remote approval result explicitly says so.
    - Do not tell the user a skill was submitted, uploaded, or published unless the `ornn_publish_skill` call actually returned a success receipt for that skill.
-   - Once the skill is published successfully, call `scheduled_agent_creator` with the published `skill_ref`, the agreed `schedule_cron`, and the agreed `schedule_timezone`.
+   - Once the skill is published successfully, call `scheduled_agent_creator` with the published `skill_ref`, the agreed `schedule_cron`, the agreed `schedule_timezone`, and `required_service_slugs` for every connected service slug the skill body will call through `nyxid_proxy`.
    - Carry the negotiated delivery/output choice into the runner's `execution_prompt` and outbound delivery setup; if the chosen delivery target differs from the current conversation, rebind it with `agent_delivery_targets` using the returned `agent_id`.
    - For plain text output, the skill should send a concise digest back to Lark. For Feishu cloud doc output, the skill should create or update a document and return the link.
 
