@@ -253,38 +253,35 @@ internal static class LarkProxyResponseParser
         {
             foreach (var task in tasksProp.EnumerateArray())
             {
-                var summaries = new List<LarkApprovalTaskField>();
-                if (task.TryGetProperty("summaries", out var summariesProp) && summariesProp.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var summary in summariesProp.EnumerateArray())
-                    {
-                        summaries.Add(new LarkApprovalTaskField(
-                            Key: TryReadString(summary, "key"),
-                            Value: TryReadString(summary, "value")));
-                    }
-                }
+                var urls = task.TryGetProperty("urls", out var urlsProp) && urlsProp.ValueKind == JsonValueKind.Object
+                    ? urlsProp
+                    : default;
 
                 tasks.Add(new LarkApprovalTaskSummary(
                     TaskId: TryReadString(task, "task_id"),
-                    InstanceCode: TryReadString(task, "instance_code"),
                     Title: TryReadString(task, "title"),
                     Status: TryReadString(task, "status"),
+                    ProcessStatus: TryReadString(task, "process_status"),
                     Topic: TryReadString(task, "topic"),
-                    SupportApiOperate: TryReadBool(task, "support_api_operate"),
+                    UserId: TryReadString(task, "user_id"),
                     DefinitionCode: TryReadString(task, "definition_code"),
                     DefinitionName: TryReadString(task, "definition_name"),
-                    Initiator: TryReadString(task, "initiator"),
-                    InitiatorName: TryReadString(task, "initiator_name"),
-                    UserId: TryReadString(task, "user_id"),
-                    InstanceStatus: TryReadString(task, "instance_status"),
-                    Link: TryReadString(task, "link"),
-                    Summaries: summaries));
+                    ProcessCode: TryReadString(task, "process_code"),
+                    ProcessId: TryReadString(task, "process_id"),
+                    Initiators: TryReadStringArray(task, "initiators"),
+                    InitiatorNames: TryReadStringArray(task, "initiator_names"),
+                    Link: TryReadString(urls, "pc") ?? TryReadString(urls, "mobile")));
             }
         }
 
+        // count is an object ({total, has_more}) in the tasks/query response.
+        var count = data.TryGetProperty("count", out var countProp) && countProp.ValueKind == JsonValueKind.Object
+            ? TryReadInt(countProp, "total")
+            : null;
+
         return new LarkApprovalTaskQueryResult(
             Tasks: tasks,
-            Count: TryReadInt(data, "count") ?? tasks.Count,
+            Count: count ?? tasks.Count,
             HasMore: TryReadBool(data, "has_more") ?? false,
             PageToken: TryReadString(data, "page_token"));
     }
@@ -493,6 +490,25 @@ internal static class LarkProxyResponseParser
         element.TryGetProperty(propertyName, out var property) && property.ValueKind is JsonValueKind.True or JsonValueKind.False
             ? property.GetBoolean()
             : null;
+
+    private static IReadOnlyList<string> TryReadStringArray(JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != JsonValueKind.Object ||
+            !element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var values = new List<string>();
+        foreach (var item in property.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } value)
+                values.Add(value);
+        }
+
+        return values;
+    }
 }
 
 internal sealed record LarkSendResult(
@@ -565,25 +581,26 @@ internal sealed record LarkSheetAppendResult(
     int? UpdatedColumns,
     int? UpdatedCells);
 
-internal sealed record LarkApprovalTaskField(
-    string? Key,
-    string? Value);
-
+/// <summary>
+/// One task from <c>GET /approval/v4/tasks/query</c>. <paramref name="ProcessCode"/> is the
+/// approval instance code of the task's flow (the tasks/query response names the instance level
+/// "process"; its statuses are the instance statuses and its code is accepted by
+/// <c>GET /approval/v4/instances/{instance_code}</c>).
+/// </summary>
 internal sealed record LarkApprovalTaskSummary(
     string? TaskId,
-    string? InstanceCode,
     string? Title,
     string? Status,
+    string? ProcessStatus,
     string? Topic,
-    bool? SupportApiOperate,
+    string? UserId,
     string? DefinitionCode,
     string? DefinitionName,
-    string? Initiator,
-    string? InitiatorName,
-    string? UserId,
-    string? InstanceStatus,
-    string? Link,
-    IReadOnlyList<LarkApprovalTaskField> Summaries);
+    string? ProcessCode,
+    string? ProcessId,
+    IReadOnlyList<string> Initiators,
+    IReadOnlyList<string> InitiatorNames,
+    string? Link);
 
 internal sealed record LarkApprovalTaskQueryResult(
     IReadOnlyList<LarkApprovalTaskSummary> Tasks,
