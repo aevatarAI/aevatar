@@ -158,6 +158,33 @@ public sealed class ScheduledDispatchApplicationServiceTests
         actorPort.Updated.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task Mutations_WhenReadModelLagsButActorExists_ShouldDispatchToActor()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+
+        var updated = await service.UpdateAsync("schedule-1", CreateEnvelopeConfiguration("ignored"));
+        var enabled = await service.EnableAsync("schedule-1", "resume");
+        var disabled = await service.DisableAsync("schedule-1", "pause");
+        var deleted = await service.DeleteAsync("schedule-1", "remove");
+        var runNow = await service.RunNowAsync("schedule-1");
+
+        updated.ScheduleId.Should().Be("schedule-1");
+        enabled.ScheduleId.Should().Be("schedule-1");
+        disabled.ScheduleId.Should().Be("schedule-1");
+        deleted.ScheduleId.Should().Be("schedule-1");
+        runNow.ScheduleId.Should().Be("schedule-1");
+        actorPort.Updated.Should().ContainSingle().Which.ActorId.Should().Be("actor:schedule-1");
+        actorPort.Enabled.Should().ContainSingle().Which.Should().Be(("actor:schedule-1", "resume"));
+        actorPort.Disabled.Should().ContainSingle().Which.Should().Be(("actor:schedule-1", "pause"));
+        actorPort.Deleted.Should().ContainSingle().Which.Should().Be(("actor:schedule-1", "remove"));
+        actorPort.RunNow.Should().ContainSingle().Which.ActorId.Should().Be("actor:schedule-1");
+    }
+
     [Theory]
     [InlineData("tenant/report")]
     [InlineData("tenant?report")]

@@ -101,6 +101,42 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
+    public async Task PrepareAsync_ShouldStripLlmControlBeforePersistingEnvelopeTarget()
+    {
+        var service = new ScheduledDispatchTargetPreparationService();
+        var configuration = new ScheduledDispatchConfiguration(
+            "schedule-1",
+            "Daily",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.Envelope,
+                Envelope: new EventEnvelope
+                {
+                    Payload = Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "run",
+                        LlmControl = new LLMControlContextPayload
+                        {
+                            NyxIdAccessToken = "raw-user-token",
+                            NyxIdOrgToken = "raw-org-token",
+                            SenderNyxIdAccessToken = "raw-sender-token",
+                            ModelOverride = "sonnet",
+                        },
+                    }),
+                    Route = EnvelopeRouteSemantics.CreateDirect("publisher-1", "target-1"),
+                }),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
+
+        var prepared = await service.PrepareAsync(configuration, "cmd-1", "corr-1");
+
+        prepared.TriggerEnvelope.Payload.Unpack<ChatRequestEvent>().LlmControl.Should().BeNull();
+        prepared.Descriptor.Envelope!.Payload.Unpack<ChatRequestEvent>().LlmControl.Should().BeNull();
+        configuration.Target.Envelope!.Payload.Unpack<ChatRequestEvent>().LlmControl.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task ScheduledServiceInvocationDispatchPort_ShouldInvokeExplicitServiceInvocationPort()
     {
         var invocationPort = new RecordingServiceInvocationPort();

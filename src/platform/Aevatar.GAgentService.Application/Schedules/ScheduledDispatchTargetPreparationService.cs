@@ -38,6 +38,7 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
         if (envelope.Payload == null)
             throw new ArgumentException("Envelope scheduled dispatch target requires a payload.", nameof(configuration));
 
+        envelope.Payload = StripCredentialBearingLlmControl(envelope.Payload);
         envelope.Id = string.IsNullOrWhiteSpace(envelope.Id) ? commandId : envelope.Id.Trim();
         envelope.Timestamp ??= Timestamp.FromDateTime(DateTime.UtcNow);
         var targetActorId = ResolveTargetActorId(target.ActorId, envelope);
@@ -48,11 +49,16 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
         if (string.IsNullOrWhiteSpace(propagation.CorrelationId))
             propagation.CorrelationId = correlationId;
 
+        var safeDescriptor = configuration.Target with
+        {
+            Envelope = envelope.Clone(),
+        };
+
         return new PreparedScheduledDispatchTarget(
             targetActorId,
             envelope,
             envelope.Payload.TypeUrl,
-            configuration.Target);
+            safeDescriptor);
     }
 
     private static PreparedScheduledDispatchTarget PrepareServiceInvocationTarget(

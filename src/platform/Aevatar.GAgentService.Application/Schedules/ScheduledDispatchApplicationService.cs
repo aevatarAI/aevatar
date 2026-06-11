@@ -185,7 +185,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     private async Task EnsureMutableAsync(string scheduleId, CancellationToken ct)
     {
         var existing = await _queryPort.GetAsync(scheduleId, ct);
-        if (existing?.Schedule.Deleted != false)
+        if (existing?.Schedule.Deleted == true)
             throw new ScheduledDispatchNotFoundException(scheduleId);
     }
 
