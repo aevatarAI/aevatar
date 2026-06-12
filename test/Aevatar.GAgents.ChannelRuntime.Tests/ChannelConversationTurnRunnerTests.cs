@@ -2051,6 +2051,55 @@ public sealed class ChannelConversationTurnRunnerTests
         adapter.Replies[0].ReplyText.Should().Contain("/oauth/authorize");
     }
 
+    // /clear is a conversation-state command handled by the runner without identity
+    // requirements: the typed outcome flag tells the conversation actor (sole owner of
+    // retained history) to commit the cleared event. Works for unbound senders too —
+    // a poisoned DM transcript must be recoverable before /init.
+    [Fact]
+    public async Task RunInboundAsync_ShouldFlagRetainedHistoryClear_WhenClearCommandInPrivateChat()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("/clear", "msg-clear-dm", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        result.RetainedHistoryClearRequested.Should().BeTrue();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("已清空");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRefuseRetainedHistoryClear_WhenClearCommandInGroupChat()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("/clear", "msg-clear-group", ConversationScope.Group, "oc_group_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.RetainedHistoryClearRequested.Should().BeFalse();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("仅支持单聊");
+    }
+
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
     // slash silently consumed.
     // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;

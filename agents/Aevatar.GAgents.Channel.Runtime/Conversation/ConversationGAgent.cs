@@ -101,6 +101,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             .On<LlmReplyDeliveryFailedEvent>(ApplyLastReplyDeliveryFailed)
             .On<ConversationReplyLifecycleChangedEvent>(ApplyReplyLifecycleChanged)
             .On<ConversationReplyLifecycleClearedEvent>(ApplyReplyLifecycleCleared)
+            .On<ConversationRetainedHistoryClearedEvent>(ApplyRetainedHistoryCleared)
             .OrCurrent();
 
     /// <summary>
@@ -267,6 +268,21 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var result = await runner.RunInboundAsync(activity, runtimeContext, CancellationToken.None);
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (result.RetainedHistoryClearRequested)
+        {
+            var cleared = new ConversationRetainedHistoryClearedEvent
+            {
+                ProcessedActivityId = activity.Id ?? string.Empty,
+                ClearedEntryCount = State.RetainedHistory.Count,
+                ClearedAtUnixMs = nowMs,
+            };
+            await PersistDomainEventAsync(cleared);
+            Logger.LogInformation(
+                "Cleared conversation retained history on user request: conversation={Key} entries={Count}",
+                activity.Conversation?.CanonicalKey,
+                cleared.ClearedEntryCount);
+        }
+
         if (result.LlmReplyRequest is not null)
         {
             if (string.IsNullOrWhiteSpace(result.LlmReplyRequest.RunId))
@@ -2523,6 +2539,20 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         AppendHistoryBounded(next.RetainedHistory, evt.AppendedHistory, RetainedHistoryMessagesCap);
         NormalizeRecentAttachmentActivities(next.RecentAttachmentActivities, evt.CompletedAtUnixMs);
         next.LastUpdatedUnixMs = evt.CompletedAtUnixMs;
+        return next;
+    }
+
+    // /clear semantics: the retained transcript window and the recent attachment
+    // snapshot together form the conversation memory replayed into LLM turns, so
+    // both reset; dedup/lifecycle bookkeeping is unrelated and stays untouched.
+    private static ConversationGAgentState ApplyRetainedHistoryCleared(
+        ConversationGAgentState current,
+        ConversationRetainedHistoryClearedEvent evt)
+    {
+        var next = current.Clone();
+        next.RetainedHistory.Clear();
+        next.RecentAttachmentActivities.Clear();
+        next.LastUpdatedUnixMs = evt.ClearedAtUnixMs;
         return next;
     }
 

@@ -28,6 +28,15 @@ message ConversationTurnCompletedEvent {
   repeated ConversationHistoryEntry appended_history = 9;
 }
 
+// Committed domain event: the conversation cleared its retained transcript window
+// on an explicit user request (/clear). Replay applies an empty retained history;
+// the cleared entry count is recorded for observability.
+message ConversationRetainedHistoryClearedEvent {
+  string processed_activity_id = 1;
+  int32 cleared_entry_count = 2;
+  int64 cleared_at_unix_ms = 3;
+}
+
 message RecentConversationAttachmentActivity {
   string activity_id = 1;
   int64 accepted_at_unix_ms = 2;
