@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
@@ -110,6 +111,7 @@ public static class ServiceCollectionExtensions
         // fail closed instead of stranding a dead-letter approval (#2004).
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
+        services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
             new LocalWorkflowDefinitionCommandAdapter(
