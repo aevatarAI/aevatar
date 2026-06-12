@@ -425,12 +425,17 @@ internal sealed class ScheduledAgentCreateRequestMapper
             };
         }
 
-        // A JSON null is "not provided": tool-calling models routinely emit every schema
-        // field and null the unused ones (e.g. delay_seconds=180 alongside run_at_utc=null).
-        // Treating a present-but-null key as provided made the one-shot "exactly one of
-        // delay_seconds or run_at_utc" guard reject every valid reminder (2026-06-12).
+        // A JSON null or blank string is "not provided": tool-calling models routinely emit
+        // every schema field and clear the unused ones (e.g. delay_seconds=180 alongside
+        // run_at_utc=null or ""). Treating an empty unused key as provided made the one-shot
+        // "exactly one of delay_seconds or run_at_utc" guard reject valid reminders.
         public bool HasProperty(string name) =>
-            Properties.TryGetValue(name, out var value) && value.ValueKind != JsonValueKind.Null;
+            Properties.TryGetValue(name, out var value) && value.ValueKind switch
+            {
+                JsonValueKind.Null => false,
+                JsonValueKind.String => !string.IsNullOrWhiteSpace(value.GetString()),
+                _ => true,
+            };
 
         public bool? Bool(string name)
         {

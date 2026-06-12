@@ -638,6 +638,38 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_OneShotWithBlankRunAt_ShouldTreatBlankAsUnsetAndSucceed()
+    {
+        var harness = CreateHarness();
+        InitializeSkillRunnerCommand? capturedBlankRunAt = null;
+        harness.SkillRunnerPort.InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Do<InitializeSkillRunnerCommand>(value => capturedBlankRunAt = value),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "schedule_mode": "one_shot",
+                  "delay_seconds": 180,
+                  "run_at_utc": "",
+                  "one_shot_message": "Remind me to join the meeting"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            capturedBlankRunAt.Should().NotBeNull();
+            capturedBlankRunAt!.ScheduleMode.Should().Be(SkillRunnerScheduleMode.OneShot);
+            capturedBlankRunAt.OneShotRunAt.Should().NotBeNull();
+            capturedBlankRunAt.OneShotMessage.Should().Be("Remind me to join the meeting");
+        });
+    }
+
+    [Fact]
     public async Task ExecuteAsync_OneShotReminder_ShouldMintLarkScopedKeyWithoutOrnnPreflight()
     {
         var handler = CreateSuccessHandler();
