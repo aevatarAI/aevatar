@@ -11,7 +11,7 @@ namespace Aevatar.CQRS.Core.Tests;
 public sealed class DefaultCommandInteractionServiceTests
 {
     [Fact]
-    public async Task ExecuteAsync_ShouldBindObservationBeforeDispatch_ThenEmitAcceptedAndPump()
+    public async Task ExecuteAsync_ShouldBindObservationBeforeDispatch_ThenEmitAcceptedAfterDispatch()
     {
         var order = new List<string>();
         var sink = new EventChannel<string>();
@@ -55,7 +55,9 @@ public sealed class DefaultCommandInteractionServiceTests
         frames.Should().ContainSingle().Which.Should().Be("done:completed");
         observation.Calls.Should().ContainSingle();
         observation.Calls[0].Execution.Should().Be(execution);
-        order.Should().StartWith("prepare", "observe", "dispatch", "receipt", "accepted", "emit");
+        order.Should().StartWith("prepare", "observe", "receipt");
+        order.Should().ContainInOrder("dispatch", "accepted");
+        order.Should().Contain("emit");
     }
 
     [Fact]
@@ -90,6 +92,114 @@ public sealed class DefaultCommandInteractionServiceTests
         accepted.Should().BeEmpty();
         target.ReleaseCalls.Should().BeEmpty();
         order.Should().Equal("prepare", "observe");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldEmitLiveFramesWhileDispatchAdmissionIsPending()
+    {
+        var order = new List<string>();
+        var sink = new EventChannel<string>();
+        var dispatchStarted = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowDispatch = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var frameEmitted = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var acceptedObserved = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var target = new TestTarget("target-1", sink);
+        var receipt = new TestReceipt("target-1", "receipt-early");
+        var execution = CreateExecution(target, receipt, commandId: "cmd-early");
+        var pipeline = new BlockingDispatchPipeline(
+            CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(execution),
+            order,
+            dispatchStarted,
+            allowDispatch);
+        var accepted = new List<TestReceipt>();
+        var frames = new List<string>();
+        var service = CreateService(
+            pipeline,
+            observationLifecycle: new RecordingObservationLifecycle(order),
+            receiptFactory: new RecordingTestReceiptFactory(order, receipt));
+
+        var executionTask = service.ExecuteAsync(
+            "command-early",
+            (frame, _) =>
+            {
+                order.Add("emit");
+                frames.Add(frame);
+                frameEmitted.TrySetResult(null);
+                return ValueTask.CompletedTask;
+            },
+            (acceptedReceipt, _) =>
+            {
+                order.Add("accepted");
+                accepted.Add(acceptedReceipt);
+                acceptedObserved.TrySetResult(null);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        await dispatchStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        sink.Push("progress-before-accepted");
+        await frameEmitted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        accepted.Should().BeEmpty();
+        frames.Should().Equal("progress-before-accepted");
+        order.Should().Equal("prepare", "observe", "receipt", "dispatch-start", "emit");
+
+        allowDispatch.SetResult(null);
+        await acceptedObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        sink.Push("done:completed");
+        sink.Complete();
+
+        var result = await executionTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.Succeeded.Should().BeTrue();
+        accepted.Should().ContainSingle().Which.Should().Be(receipt);
+        frames.Should().Equal("progress-before-accepted", "done:completed");
+        order.Should().Equal(
+            "prepare",
+            "observe",
+            "receipt",
+            "dispatch-start",
+            "emit",
+            "dispatch-finish",
+            "accepted",
+            "emit");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDispatchFailsAfterEarlyLiveFrame_ShouldReleaseAsIncomplete()
+    {
+        var sink = new EventChannel<string>();
+        sink.Push("done:completed");
+        var target = new TestTarget("target-1", sink);
+        var receipt = new TestReceipt("target-1", "receipt-dispatch-fail");
+        var pipeline = new ThrowingDispatchPipeline(
+            CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                CreateExecution(target, receipt)));
+        var frames = new List<string>();
+        var service = CreateService(
+            pipeline,
+            observationLifecycle: new RecordingObservationLifecycle([]));
+
+        var act = () => service.ExecuteAsync(
+            "command-dispatch-fail",
+            (frame, _) =>
+            {
+                frames.Add(frame);
+                return ValueTask.CompletedTask;
+            },
+            ct: CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("dispatch failed");
+        frames.Should().ContainSingle().Which.Should().Be("done:completed");
+        target.ReleaseCalls.Should().ContainSingle();
+        target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
+        target.ReleaseCalls[0].Cleanup.ObservedCompletion.Should().BeEmpty();
+        target.ReleaseCalls[0].Cleanup.DurableCompletion.HasTerminalCompletion.Should().BeFalse();
     }
 
     [Fact]
@@ -386,6 +496,86 @@ public sealed class DefaultCommandInteractionServiceTests
             DispatchCalls++;
             order.Add("dispatch");
             return Task.FromResult(DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope));
+        }
+
+        public async Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
+            string command,
+            CancellationToken ct = default)
+        {
+            var prepared = await PrepareAsync(command, ct);
+            if (!prepared.Succeeded || prepared.Target == null)
+                return prepared;
+
+            var admission = await DispatchPreparedAsync(prepared.Target, ct);
+            return CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                prepared.Target with { Admission = admission });
+        }
+    }
+
+    private sealed class BlockingDispatchPipeline(
+        CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string> result,
+        List<string> order,
+        TaskCompletionSource<object?> dispatchStarted,
+        TaskCompletionSource<object?> allowDispatch)
+        : ICommandDispatchPipeline<string, TestTarget, TestReceipt, string>
+    {
+        public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> PrepareAsync(
+            string command,
+            CancellationToken ct = default)
+        {
+            _ = command;
+            ct.ThrowIfCancellationRequested();
+            order.Add("prepare");
+            return Task.FromResult(result);
+        }
+
+        public async Task<DispatchAdmission> DispatchPreparedAsync(
+            CommandDispatchExecution<TestTarget, TestReceipt> execution,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(execution);
+            ct.ThrowIfCancellationRequested();
+            order.Add("dispatch-start");
+            dispatchStarted.SetResult(null);
+            await allowDispatch.Task.WaitAsync(ct);
+            order.Add("dispatch-finish");
+            return DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope);
+        }
+
+        public async Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
+            string command,
+            CancellationToken ct = default)
+        {
+            var prepared = await PrepareAsync(command, ct);
+            if (!prepared.Succeeded || prepared.Target == null)
+                return prepared;
+
+            var admission = await DispatchPreparedAsync(prepared.Target, ct);
+            return CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                prepared.Target with { Admission = admission });
+        }
+    }
+
+    private sealed class ThrowingDispatchPipeline(
+        CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string> result)
+        : ICommandDispatchPipeline<string, TestTarget, TestReceipt, string>
+    {
+        public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> PrepareAsync(
+            string command,
+            CancellationToken ct = default)
+        {
+            _ = command;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(result);
+        }
+
+        public Task<DispatchAdmission> DispatchPreparedAsync(
+            CommandDispatchExecution<TestTarget, TestReceipt> execution,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(execution);
+            ct.ThrowIfCancellationRequested();
+            return Task.FromException<DispatchAdmission>(new InvalidOperationException("dispatch failed"));
         }
 
         public async Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(

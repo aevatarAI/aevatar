@@ -483,6 +483,68 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRunWorkflowByIdStreamAsync_ShouldNotMutateCorrelationHeader_WhenAguiFrameStartsResponseBeforeAccepted()
+    {
+        var snapshot = new ServiceCatalogSnapshot(
+            "tenant-a:workflow-app:user:token:approval",
+            "tenant-a",
+            "workflow-app",
+            "user:user-1-token",
+            "approval",
+            "Approval",
+            "rev-1",
+            "rev-1",
+            "dep-1",
+            "definition-actor-1",
+            "active",
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult = [snapshot],
+        };
+        queryPort.GetServiceResults.Enqueue(snapshot);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("definition-actor-1", "approval", "cmd-1", "corr-late");
+                await emitAsync(new WorkflowRunEventEnvelope
+                {
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        MessageId = "msg-1",
+                        Delta = "early",
+                    },
+                }, ct);
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        var http = CreateHttpContext();
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
+            http,
+            "user-1",
+            "approval",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowByIdStreamHttpRequest(
+                "hello",
+                EventFormat: "agui"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.Headers.Should().NotContainKey("X-Correlation-Id");
+        body.Should().Contain("\"textMessageContent\": { \"messageId\": \"msg-1\", \"delta\": \"early\" }");
+        body.Should().Contain("aevatar.run.context");
+    }
+
+    [Fact]
     public async Task HandleRunWorkflowByIdStreamAsync_ShouldReturnServiceUnavailable_WhenProjectionUnavailableBeforeAguiStarts()
     {
         var snapshot = new ServiceCatalogSnapshot(
