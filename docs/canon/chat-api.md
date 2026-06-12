@@ -132,7 +132,17 @@ POST /api/workflows/signal
 
 实践建议：显式传递 `actorId + runId (+ stepId)`，不要依赖服务端内存映射。
 
-## 5. 输出事件（SSE/WS）
+## 5. 文件输入与 document_extract
+
+Chat 输入中的文件会被规范化为 typed `WorkflowFileRef`，并作为当前 step 的 `input_file_refs` 进入 workflow 执行链路。`tool_call` 构造 `WorkflowToolExecutionRequest` 时会保留这批引用，审批挂起后的持久化状态也必须保留同一批引用，避免恢复执行时丢失当前 step 文件上下文。
+
+`document_extract` 的文件选择规则：
+
+1. 工具 arguments 中显式 `fileRef` / `file_ref` 优先。
+2. 未显式传入时，只有当前 step 恰好有 1 个 `input_file_refs` 才 fallback 到该文件。
+3. 当前 step 没有文件或有多个文件时 fail closed，调用方必须显式传入 `fileRef`。
+
+## 6. 输出事件（SSE/WS）
 
 统一输出 `WorkflowRunEventEnvelope` proto；JSON 仅作为 SSE/WS external wire adapter 表达。核心事件类型包括：
 
@@ -152,7 +162,7 @@ POST /api/workflows/signal
 - `aevatar.media.chunk`：媒体分片，payload 为 `MediaContentEvent`
 - `aevatar.workflow.waiting_signal`
 
-## 6. WebSocket 请求/回包协议
+## 7. WebSocket 请求/回包协议
 
 连接 `GET /api/ws/chat` 后，发送：
 
@@ -182,7 +192,7 @@ POST /api/workflows/signal
 2. `command.ack` 是 CQRS dispatch pipeline 生成的 accepted receipt，只表示当前命令已经通过 runtime 成功 dispatch 到目标 actor 语义边界。
 3. 最终结果仍以 `agui.event` 流与 `/api/actors/*` 查询为准。
 
-## 7. 常见使用模式
+## 8. 常见使用模式
 
 ### 模式 A：直接对话
 

@@ -50,6 +50,37 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
+    public async Task StepRequest_ShouldCarryStartInputFileRefs()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(SingleStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "run-1",
+            Input = "hello",
+        };
+        start.InputFileRefs.Add(new WorkflowFileRef
+        {
+            FileId = "file-step",
+            ArtifactId = "workflow-file://file-step",
+            SourceKind = WorkflowFileSourceKind.ChatInput,
+            FileName = "step.txt",
+            MediaType = "text/plain",
+        });
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var request = ctx.Published
+            .Select(p => p.Event)
+            .Where(e => e.Is(StepRequestEvent.Descriptor))
+            .Select(e => e.Unpack<StepRequestEvent>())
+            .Single(r => r.StepId == "step-1");
+
+        request.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-step");
+    }
+
+    [Fact]
     public async Task DuplicateWorkflowCallStart_WithSameRunAndInvocation_ShouldNotPublishAlreadyActiveFailure()
     {
         var ctx = new RecordingEventHandlerContext();

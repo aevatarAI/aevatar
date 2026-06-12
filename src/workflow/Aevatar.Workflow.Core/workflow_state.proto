@@ -4,6 +4,7 @@ option csharp_namespace = "Aevatar.Workflow.Core";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
+import "workflow_execution_messages.proto";
 
 message WorkflowState
 {
@@ -217,6 +218,7 @@ message WorkflowExecutionKernelState
   bool current_step_dispatch_pending = 9;
   string current_step_timeout_callback_id = 10;
   map<string, string> execution_ids_by_step_id = 11;
+  repeated WorkflowFileRef input_file_refs = 12;
 }
 
 message PendingDelayState
@@ -301,6 +303,7 @@ message PendingToolCallApprovalState
   string approval_request_id = 6;
   string arguments_json = 7;
   string input = 8;
+  repeated WorkflowFileRef input_file_refs = 9;
 }
 
 message ToolCallModuleState

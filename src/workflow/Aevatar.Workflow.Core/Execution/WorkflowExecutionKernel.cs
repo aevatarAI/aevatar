@@ -119,6 +119,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.RetryBackoffsByStepId.Clear();
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
+        state.InputFileRefs.Clear();
+        state.InputFileRefs.Add(evt.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         state.Variables["input"] = evt.Input ?? string.Empty;
         MergeStartParametersIntoVariables(state.Variables, evt.Parameters);
         await SaveStateAsync(state, ctx, ct);
@@ -877,6 +879,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.RetryAttemptsByStepId.Clear();
         state.TimeoutsByStepId.Clear();
         state.RetryBackoffsByStepId.Clear();
+        state.InputFileRefs.Clear();
         await SaveStateAsync(state, ctx, ct);
 
         foreach (var lease in timeoutLeases)
@@ -902,7 +905,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.Variables.Count == 0 &&
             state.RetryAttemptsByStepId.Count == 0 &&
             state.TimeoutsByStepId.Count == 0 &&
-            state.RetryBackoffsByStepId.Count == 0)
+            state.RetryBackoffsByStepId.Count == 0 &&
+            state.InputFileRefs.Count == 0)
         {
             return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
         }
@@ -993,6 +997,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             Input = input,
             TargetRole = effectiveTargetRole,
         };
+        request.InputFileRefs.Add(state.InputFileRefs.Select(static fileRef => fileRef.Clone()));
 
         state.Variables["input"] = input;
         foreach (var (key, value) in step.Parameters)
