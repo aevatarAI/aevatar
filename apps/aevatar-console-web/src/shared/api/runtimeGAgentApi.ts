@@ -325,7 +325,7 @@ function decodeBindingRetirementResult(
 export const runtimeGAgentApi = {
   listKinds(): Promise<RuntimeGAgentKindDescriptor[]> {
     return requestJson(
-      "/api/scopes/gagent-kinds",
+      "/api/scopes/gagent-types",
       (value) =>
         expectArray(value, "RuntimeGAgentKindDescriptor[]", decodeGAgentKindDescriptor)
     );
