@@ -534,8 +534,9 @@ public static class ServiceCollectionExtensions
             {
                 var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
                 var logger = sp.GetService<ILogger<ReloadableLLMProviderFactory>>();
+                var loggerFactory = sp.GetService<ILoggerFactory>();
                 return new ReloadableLLMProviderFactory(
-                    () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor),
+                    () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, loggerFactory),
                     versionProvider,
                     logger);
             });
@@ -545,14 +546,15 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILLMProviderFactory>(sp =>
         {
             var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
-            return BuildLlmProviderFactory(configuration, options, secretsStoreAccessor);
+            return BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, sp.GetService<ILoggerFactory>());
         });
     }
 
     private static ILLMProviderFactory BuildLlmProviderFactory(
         IConfiguration configuration,
         AevatarAIFeatureOptions options,
-        Func<IAevatarSecretsStore> secretsStoreAccessor)
+        Func<IAevatarSecretsStore> secretsStoreAccessor,
+        ILoggerFactory? loggerFactory = null)
     {
         var secrets = secretsStoreAccessor();
         var configuredProviders = ReadConfiguredProviders(secrets, configuration, options);
@@ -597,7 +599,7 @@ public static class ServiceCollectionExtensions
         var standardProviders = configuredProviders
             .Where(provider => !IsNyxIdProviderType(provider.ProviderType))
             .ToList();
-        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName);
+        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName, loggerFactory);
         if (standardProviders.Count == 0)
             return nyxIdFactory;
 
@@ -703,9 +705,13 @@ public static class ServiceCollectionExtensions
 
     private static NyxIdLLMProviderFactory BuildNyxIdFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
-        string defaultName)
+        string defaultName,
+        ILoggerFactory? loggerFactory = null)
     {
         var factory = new NyxIdLLMProviderFactory();
+        // Providers default to NullLogger when no logger is supplied, which silenced every
+        // upstream LLM warning (and the 2026-06-12 incident probes) in production.
+        var providerLogger = loggerFactory?.CreateLogger<NyxIdLLMProvider>();
         foreach (var provider in configuredProviders)
         {
             if (string.IsNullOrWhiteSpace(provider.Endpoint))
@@ -721,7 +727,8 @@ public static class ServiceCollectionExtensions
                 provider.Endpoint,
                 // NyxID gateway token comes exclusively from per-request metadata
                 // (the caller's Bearer token). No local secrets fallback.
-                static () => null);
+                static () => null,
+                providerLogger);
         }
 
         factory.SetDefault(ResolveDefaultProviderName(configuredProviders.ToList(), defaultName));
