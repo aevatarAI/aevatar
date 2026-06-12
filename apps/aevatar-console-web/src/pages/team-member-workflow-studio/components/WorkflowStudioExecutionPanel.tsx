@@ -19,6 +19,8 @@ type DetailMode = "logs" | "evidence";
 type NodeRunCard = {
   readonly statusLog: ExecutionLogItem;
   readonly inputText: string;
+  readonly interactionText: string;
+  readonly pendingText: string;
   readonly outputText: string;
   readonly stepId: string;
 };
@@ -26,6 +28,8 @@ type NodeRunCard = {
 type MutableNodeRunCard = {
   statusLog: ExecutionLogItem;
   inputText: string;
+  interactionText: string;
+  pendingText: string;
   outputText: string;
   stepId: string;
 };
@@ -105,6 +109,8 @@ function buildNodeRunCards(logs: readonly ExecutionLogItem[]): NodeRunCard[] {
       cards.push({
         statusLog: log,
         inputText: log.clipboardText.trim(),
+        interactionText: "",
+        pendingText: "",
         outputText: "",
         stepId: log.stepId,
       });
@@ -115,10 +121,17 @@ function buildNodeRunCards(logs: readonly ExecutionLogItem[]): NodeRunCard[] {
     if (log.tone === "pending" || log.tone === "run") {
       if (activeCard && !isTerminalStepLog(activeCard.statusLog)) {
         activeCard.statusLog = log;
+        if (log.tone === "pending") {
+          activeCard.pendingText = log.clipboardText.trim();
+        } else {
+          activeCard.interactionText = log.clipboardText.trim();
+        }
       } else {
         cards.push({
           statusLog: log,
           inputText: "",
+          interactionText: log.tone === "run" ? log.clipboardText.trim() : "",
+          pendingText: log.tone === "pending" ? log.clipboardText.trim() : "",
           outputText: "",
           stepId: log.stepId,
         });
@@ -138,6 +151,8 @@ function buildNodeRunCards(logs: readonly ExecutionLogItem[]): NodeRunCard[] {
       cards.push({
         statusLog: log,
         inputText: "",
+        interactionText: "",
+        pendingText: "",
         outputText: log.clipboardText.trim(),
         stepId: log.stepId,
       });
@@ -313,6 +328,26 @@ function renderNodeRunCard(card: NodeRunCard, index: number): React.ReactNode {
           "No user input provided.",
         ),
       )}
+      {card.pendingText
+        ? renderNodeTextBlock(
+            t(
+              "teamMemberWorkflowStudio.executionPanel.nodePrompt",
+              "Prompt",
+            ),
+            card.pendingText,
+            "",
+          )
+        : null}
+      {card.interactionText
+        ? renderNodeTextBlock(
+            t(
+              "teamMemberWorkflowStudio.executionPanel.nodeInteraction",
+              "Interaction",
+            ),
+            card.interactionText,
+            "",
+          )
+        : null}
       {renderNodeTextBlock(
         t("teamMemberWorkflowStudio.executionPanel.nodeOutput", "Output"),
         card.outputText,

@@ -288,6 +288,17 @@ async function* createWorkflowInvokeEvents(input: string = "Run the workflow") {
     type: "CUSTOM",
   };
   yield {
+    name: "aevatar.human_input.request",
+    payload: {
+      prompt: "Need approval before deployment",
+      runId: "run-1",
+      stepId: "approve",
+      suspensionType: "human_approval",
+    },
+    timestamp: Date.parse("2026-06-08T00:00:03Z"),
+    type: "CUSTOM",
+  };
+  yield {
     name: "aevatar.usage",
     payload: {
       completionTokens: 24,
@@ -835,6 +846,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.createMember).toHaveBeenCalledTimes(1);
     expect(studioApi.updateMemberImplementationRef).not.toHaveBeenCalled();
 
+    fireEvent.change(screen.getByLabelText("Workflow title"), {
+      target: { value: "Retried member" },
+    });
     fireEvent.click(saveButton);
 
     await waitFor(() => {
@@ -850,7 +864,14 @@ describe("TeamMemberWorkflowStudioPage", () => {
         "/scopes/scope-1/teams/t-alpha/members/m-untitled-member/workflow",
       );
     });
-    expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+    expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(2);
+    expect(studioApi.saveWorkflow).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        workflowId: "wf-untitled-member",
+        workflowName: "Retried member",
+        yaml: expect.stringContaining("name: Retried member"),
+      }),
+    );
     expect(studioApi.createMember).toHaveBeenCalledTimes(1);
   });
 
@@ -3424,6 +3445,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(triageRunCard).toHaveTextContent("Workflow complete");
     expect(triageRunCard).toHaveTextContent("triage");
     expect(triageRunCard).toHaveTextContent("completed");
+    const approvalRunCard = within(consolePanel).getByLabelText("approve node run");
+    expect(within(approvalRunCard).getByText("Prompt")).toBeTruthy();
+    expect(approvalRunCard).toHaveTextContent("Need approval before deployment");
+    expect(approvalRunCard).toHaveTextContent("human approval");
+    expect(approvalRunCard).toHaveTextContent("pending");
     expect(consolePanel).not.toHaveTextContent("Run started");
     expect(consolePanel).not.toHaveTextContent("triage started");
     expect(consolePanel).not.toHaveTextContent("Run finished");

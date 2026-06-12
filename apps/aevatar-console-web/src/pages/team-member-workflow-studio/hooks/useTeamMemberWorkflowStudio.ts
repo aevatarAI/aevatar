@@ -1082,12 +1082,30 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
 
       if (pendingCreatedWorkflowMemberLink) {
+        const savedDraft = await saveWorkflowDraft({
+          document,
+          layout,
+          routeScopeId: route.scopeId,
+          title,
+          workflow: pendingCreatedWorkflowMemberLink.savedDraft.workflow,
+        });
+        const savedWorkflowId = trimOptional(savedDraft.workflow.workflowId);
+        if (!savedWorkflowId) {
+          throw new Error("Workflow draft save did not return a stable workflow id.");
+        }
+
+        const currentLink: PendingCreatedWorkflowMemberLink = {
+          memberId: pendingCreatedWorkflowMemberLink.memberId,
+          savedDraft,
+          workflowId: savedWorkflowId,
+        };
+        setPendingCreatedWorkflowMemberLink(currentLink);
         await linkCreatedWorkflowMemberDraft({
           scopeId: route.scopeId,
-          memberId: pendingCreatedWorkflowMemberLink.memberId,
-          workflowId: pendingCreatedWorkflowMemberLink.workflowId,
+          memberId: currentLink.memberId,
+          workflowId: currentLink.workflowId,
         });
-        return pendingCreatedWorkflowMemberLink;
+        return currentLink;
       }
 
       const normalizedTitle =
