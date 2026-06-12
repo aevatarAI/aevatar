@@ -13,7 +13,6 @@ import {
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
-import { rememberTeamMemberDraftWorkflowHint } from "@/shared/navigation/teamRoutes";
 
 async function openTeamTestDialog() {
   fireEvent.click(await screen.findByRole("button", { name: "测试团队" }));
@@ -240,6 +239,11 @@ function mockCreateTeamMembersCatalog() {
         displayName: "Team Alpha Operator",
         description: "负责处理升级工单",
         implementationKind: "workflow",
+        implementationRef: {
+          implementationKind: "workflow",
+          workflowId: "wf-team-alpha",
+          workflowRevision: "rev-alpha",
+        },
         lifecycleStage: "bind_ready",
         publishedServiceId: "alpha-service",
         lastBoundRevisionId: "rev-alpha",
@@ -1743,13 +1747,16 @@ describe("TeamDetailPage", () => {
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-team-alpha",
+    );
   });
 
-  it("preserves the route draft workflow hint when reopening Workflow Studio from Team members", async () => {
+  it("uses the roster implementation workflow id instead of the route workflow hint", async () => {
     window.history.replaceState(
       {},
       "",
-      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&workflowId=wf-team-alpha&tab=members",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&workflowId=wf-route-stale&tab=members",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1764,18 +1771,39 @@ describe("TeamDetailPage", () => {
     );
   });
 
-  it("recovers the last member draft workflow hint when the Team members URL has no query", async () => {
+  it("does not recover workflow ids from session storage when the roster has no implementation workflow id", async () => {
     window.history.replaceState(
       {},
       "",
       "/scopes/scope-1/teams/t-alpha?tab=members",
     );
-    rememberTeamMemberDraftWorkflowHint({
-      memberId: "member-team-alpha",
-      publishedServiceId: "alpha-service",
+    window.sessionStorage.setItem(
+      [
+        "aevatar.teamMemberDraftWorkflowHint.v1",
+        "scope-1",
+        "t-alpha",
+        "member-team-alpha",
+      ].join(":"),
+      "wf-team-alpha",
+    );
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-1",
-      teamId: "t-alpha",
-      workflowId: "wf-team-alpha",
+      members: [
+        {
+          memberId: "member-team-alpha",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Team Alpha Operator",
+          description: "负责处理升级工单",
+          implementationKind: "workflow",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "alpha-service",
+          lastBoundRevisionId: "rev-alpha",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
     });
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1785,12 +1813,10 @@ describe("TeamDetailPage", () => {
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
-    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
-      "wf-team-alpha",
-    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBeNull();
   });
 
-  it("does not reuse a route draft workflow hint for another Team member row", async () => {
+  it("does not reuse a route workflow hint for another Team member row", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1804,7 +1830,9 @@ describe("TeamDetailPage", () => {
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
-    expect(new URLSearchParams(window.location.search).get("workflowId")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-team-alpha",
+    );
   });
 
   it("routes workflow member invoke actions into the member invoke page", async () => {

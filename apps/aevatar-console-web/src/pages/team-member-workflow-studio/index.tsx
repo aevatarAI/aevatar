@@ -6,7 +6,7 @@ import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
 import WorkflowStudioNodeDetailPanel from "./components/WorkflowStudioNodeDetailPanel";
 import WorkflowStudioNodeLibrary from "./components/WorkflowStudioNodeLibrary";
 import WorkflowStudioPasteYamlPanel from "./components/WorkflowStudioPasteYamlPanel";
-import WorkflowStudioRunOptionsPanel from "./components/WorkflowStudioRunOptionsPanel";
+import WorkflowStudioDraftRunPanel from "./components/WorkflowStudioDraftRunPanel";
 import WorkflowStudioYamlPanel from "./components/WorkflowStudioYamlPanel";
 import { useTeamMemberWorkflowStudio } from "./hooks/useTeamMemberWorkflowStudio";
 import { t } from "@/shared/i18n/messages";
@@ -58,7 +58,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
     EXECUTION_PANEL_DEFAULT_HEIGHT,
   );
   const sidePanelOpen =
-    studio.runOptionsOpen || studio.yamlImportPanelOpen || studio.yamlPanelOpen;
+    studio.draftRunPanelOpen || studio.yamlImportPanelOpen || studio.yamlPanelOpen;
   const executionPanelOpen = Boolean(studio.executionDetail || studio.executionError);
 
   React.useEffect(
@@ -234,20 +234,18 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         publishPending={studio.publishPending}
         publishPlaceholderReason={studio.publishPlaceholderReason}
         publishTone={studio.publishTone}
-        canRunActiveMember={studio.canRunActiveMember}
+        canOpenDraftRunPanel={studio.canOpenDraftRunPanel}
         canSave={studio.canSave}
         canViewYaml={studio.canViewYaml}
         dirty={studio.dirty}
-        activeMemberRunPending={studio.activeMemberRunPending}
         activeMemberRunPlaceholderReason={studio.activeMemberRunPlaceholderReason}
         onPublishMember={studio.publishMember}
         onAddNode={studio.openNodeLibrary}
         onDeleteConnection={studio.deleteSelectedConnection}
         onDeleteNode={studio.deleteSelectedNode}
-        onOpenRunOptions={studio.openRunOptions}
+        onOpenDraftRunPanel={studio.openDraftRunPanel}
         onOpenPasteYaml={studio.openYamlImportPanel}
         onViewYaml={studio.openYamlPanel}
-        onRunActiveMember={studio.runActiveMember}
         onNavigateBack={studio.navigateBack}
         onNavigateToTeam={studio.navigateToTeam}
         onNavigateToTeams={studio.navigateToTeams}
@@ -361,10 +359,14 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             tabIndex={0}
           />
         ) : null}
-        <WorkflowStudioRunOptionsPanel
+        <WorkflowStudioDraftRunPanel
+          canRun={studio.canRunActiveMember}
+          disabledReason={studio.activeMemberRunPlaceholderReason}
           onClose={studio.selectCanvas}
+          onRun={studio.runActiveMember}
           onRunMessageChange={studio.setExecutionRunMessage}
-          open={studio.runOptionsOpen}
+          open={studio.draftRunPanelOpen}
+          pending={studio.activeMemberRunPending}
           runMessage={studio.executionRunMessage}
           width={sidePanelWidth}
         />
@@ -385,7 +387,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           width={sidePanelWidth}
           yaml={studio.currentYaml}
         />
-        {studio.runOptionsOpen ||
+        {studio.draftRunPanelOpen ||
         studio.yamlImportPanelOpen ||
         studio.yamlPanelOpen ? null : (
           <WorkflowStudioNodeDetailPanel

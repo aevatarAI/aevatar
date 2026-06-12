@@ -693,8 +693,8 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
+  'teamMemberWorkflowStudio.header.prepareDraftRun': 'Prepare draft run',
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
-  'teamMemberWorkflowStudio.header.runOptionsAria': 'Run options',
   'teamMemberWorkflowStudio.header.runActiveMember': 'Run draft',
   'teamMemberWorkflowStudio.header.runDraft': 'Run draft',
   'teamMemberWorkflowStudio.header.save': 'Save',
@@ -757,12 +757,14 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
   'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
-  'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
+  'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
-  'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
+  'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     'Optional input sent to this workflow draft run',
-  'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': 'Run options panel',
-  'teamMemberWorkflowStudio.runOptionsPanel.title': 'Run options',
+  'teamMemberWorkflowStudio.draftRunPanel.sectionAria': 'Draft run panel',
+  'teamMemberWorkflowStudio.draftRunPanel.startDraftRun':
+    'Start draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.title': 'Draft run',
   'teamMemberWorkflowStudio.runsPanel.description':
     'This tab only shows runs with an explicit link to the current workflow member.',
   'teamMemberWorkflowStudio.runsPanel.empty':

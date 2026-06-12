@@ -5,17 +5,10 @@ import {
   buildTeamMemberWorkflowStudioHref,
   buildTeamStudioHref,
   buildTeamsHref,
-  readTeamMemberDraftWorkflowHint,
   readTeamDetailRouteState,
-  rememberTeamMemberDraftWorkflowHint,
-  resolveTeamMemberDraftWorkflowHint,
 } from "./teamRoutes";
 
 describe("teamRoutes", () => {
-  beforeEach(() => {
-    window.sessionStorage.clear();
-  });
-
   it("builds a canonical team detail href and trims empty values", () => {
     expect(
       buildTeamDetailHref({
@@ -104,10 +97,10 @@ describe("teamRoutes", () => {
         mode: "edit-member",
         scopeId: "scope-alpha",
         teamId: "t-alpha",
-        workflowId: " member-member-alpha ",
+        workflowId: " wf-alpha-next ",
       }),
     ).toBe(
-      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=member-member-alpha",
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=wf-alpha-next",
     );
   });
 
@@ -188,99 +181,6 @@ describe("teamRoutes", () => {
       teamId: "t-alpha",
       workflowId: "wf-alpha",
     });
-  });
-
-  it("resolves route draft workflow hints only for the same Team member", () => {
-    expect(
-      resolveTeamMemberDraftWorkflowHint({
-        memberId: "m-alpha",
-        publishedServiceId: "svc-alpha",
-        routeMemberId: "m-alpha",
-        routeWorkflowId: "wf-alpha",
-      }),
-    ).toBe("wf-alpha");
-
-    expect(
-      resolveTeamMemberDraftWorkflowHint({
-        memberId: "m-beta",
-        publishedServiceId: "svc-beta",
-        routeMemberId: "m-alpha",
-        routeWorkflowId: "wf-alpha",
-      }),
-    ).toBe("");
-  });
-
-  it("does not resolve published service identities as draft workflow hints", () => {
-    expect(
-      resolveTeamMemberDraftWorkflowHint({
-        memberId: "m-alpha",
-        publishedServiceId: "svc-alpha",
-        routeMemberId: "m-alpha",
-        routeWorkflowId: "svc-alpha",
-      }),
-    ).toBe("");
-
-    expect(
-      resolveTeamMemberDraftWorkflowHint({
-        memberId: "m-alpha",
-        publishedServiceId: "",
-        routeMemberId: "m-alpha",
-        routeWorkflowId: "member-m-alpha",
-      }),
-    ).toBe("");
-  });
-
-  it("stores draft workflow hints in session storage without crossing member identities", () => {
-    rememberTeamMemberDraftWorkflowHint({
-      memberId: "m-alpha",
-      publishedServiceId: "svc-alpha",
-      scopeId: "scope-alpha",
-      teamId: "t-alpha",
-      workflowId: "wf-alpha",
-    });
-
-    expect(
-      readTeamMemberDraftWorkflowHint({
-        memberId: "m-alpha",
-        publishedServiceId: "svc-alpha",
-        routeMemberId: "",
-        routeWorkflowId: "",
-        scopeId: "scope-alpha",
-        teamId: "t-alpha",
-      }),
-    ).toBe("wf-alpha");
-
-    expect(
-      readTeamMemberDraftWorkflowHint({
-        memberId: "m-beta",
-        publishedServiceId: "svc-beta",
-        routeMemberId: "",
-        routeWorkflowId: "",
-        scopeId: "scope-alpha",
-        teamId: "t-alpha",
-      }),
-    ).toBe("");
-  });
-
-  it("does not store published service identities as draft workflow hints", () => {
-    rememberTeamMemberDraftWorkflowHint({
-      memberId: "m-alpha",
-      publishedServiceId: "svc-alpha",
-      scopeId: "scope-alpha",
-      teamId: "t-alpha",
-      workflowId: "svc-alpha",
-    });
-
-    expect(
-      readTeamMemberDraftWorkflowHint({
-        memberId: "m-alpha",
-        publishedServiceId: "svc-alpha",
-        routeMemberId: "",
-        routeWorkflowId: "",
-        scopeId: "scope-alpha",
-        teamId: "t-alpha",
-      }),
-    ).toBe("");
   });
 
   it("does not read removed legacy Team member workflow routes", () => {

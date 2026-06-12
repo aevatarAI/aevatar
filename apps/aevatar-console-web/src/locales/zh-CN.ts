@@ -652,8 +652,8 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.pasteYaml': '粘贴 YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow 主操作',
+  'teamMemberWorkflowStudio.header.prepareDraftRun': '准备草稿运行',
   'teamMemberWorkflowStudio.header.runMessage': '运行消息',
-  'teamMemberWorkflowStudio.header.runOptionsAria': '运行选项',
   'teamMemberWorkflowStudio.header.runActiveMember': '运行草稿',
   'teamMemberWorkflowStudio.header.runDraft': '运行草稿',
   'teamMemberWorkflowStudio.header.save': '保存',
@@ -715,12 +715,13 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.title': '节点库',
   'teamMemberWorkflowStudio.resize.executionPanel': '调整运行控制台大小',
   'teamMemberWorkflowStudio.resize.sidePanel': '调整侧边面板大小',
-  'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
+  'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     '草稿运行输入',
-  'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
+  'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     '本次 Workflow 草稿运行的可选输入',
-  'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': '运行选项面板',
-  'teamMemberWorkflowStudio.runOptionsPanel.title': '运行选项',
+  'teamMemberWorkflowStudio.draftRunPanel.sectionAria': '草稿运行面板',
+  'teamMemberWorkflowStudio.draftRunPanel.startDraftRun': '开始草稿运行',
+  'teamMemberWorkflowStudio.draftRunPanel.title': '草稿运行',
   'teamMemberWorkflowStudio.runsPanel.description':
     '这个 tab 只展示明确关联到当前 Workflow 成员的运行记录。',
   'teamMemberWorkflowStudio.runsPanel.empty':

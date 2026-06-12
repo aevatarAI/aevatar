@@ -8,7 +8,6 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   SaveOutlined,
-  SettingOutlined,
 } from "@ant-design/icons";
 import {
   Breadcrumb,
@@ -29,20 +28,18 @@ type WorkflowStudioHeaderProps = {
   readonly publishPending: boolean;
   readonly publishPlaceholderReason?: string;
   readonly publishTone: "default" | "processing" | "success" | "warning" | "error";
-  readonly canRunActiveMember: boolean;
+  readonly canOpenDraftRunPanel: boolean;
   readonly canSave: boolean;
   readonly canViewYaml: boolean;
   readonly dirty: boolean;
-  readonly activeMemberRunPending: boolean;
   readonly activeMemberRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
   readonly onAddNode: () => void;
   readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
-  readonly onOpenRunOptions: () => void;
+  readonly onOpenDraftRunPanel: () => void;
   readonly onOpenPasteYaml: () => void;
   readonly onViewYaml: () => void;
-  readonly onRunActiveMember: () => void;
   readonly onNavigateBack: () => void;
   readonly onNavigateToTeam: () => void;
   readonly onNavigateToTeams: () => void;
@@ -282,15 +279,13 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
 };
 
 type HeaderPrimaryActionsProps = {
-  readonly activeMemberRunPending: boolean;
   readonly activeMemberRunPlaceholderReason?: string;
-  readonly canRunActiveMember: boolean;
+  readonly canOpenDraftRunPanel: boolean;
   readonly canViewYaml: boolean;
   readonly onAddNode: () => void;
-  readonly onOpenRunOptions: () => void;
+  readonly onOpenDraftRunPanel: () => void;
   readonly onPasteYamlClick: () => void;
   readonly onPublishMember: () => void;
-  readonly onRunActiveMember: () => void;
   readonly onViewYaml: () => void;
   readonly pasteYamlPending: boolean;
   readonly publishDisabled: boolean;
@@ -300,15 +295,13 @@ type HeaderPrimaryActionsProps = {
 };
 
 const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
-  activeMemberRunPending,
   activeMemberRunPlaceholderReason,
-  canRunActiveMember,
+  canOpenDraftRunPanel,
   canViewYaml,
   onAddNode,
-  onOpenRunOptions,
+  onOpenDraftRunPanel,
   onPasteYamlClick,
   onPublishMember,
-  onRunActiveMember,
   onViewYaml,
   pasteYamlPending,
   publishDisabled,
@@ -350,40 +343,25 @@ const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
         {t("teamMemberWorkflowStudio.header.publishMemberShort", "Publish member")}
       </Button>
     ) : null}
-    <Space.Compact>
-      <Button
-        disabled={!canRunActiveMember}
-        icon={<PlayCircleOutlined />}
-        loading={activeMemberRunPending}
-        onClick={onRunActiveMember}
-        size="small"
-        title={
-          canRunActiveMember
-            ? t(
-                "teamMemberWorkflowStudio.header.runDraft",
-                "Run draft",
-              )
-            : activeMemberRunPlaceholderReason
-        }
-      >
-        {t(
-          "teamMemberWorkflowStudio.header.runDraft",
-          "Run draft",
-        )}
-      </Button>
-      <Tooltip title={t("teamMemberWorkflowStudio.header.runOptionsAria", "Run options")}>
-        <Button
-          aria-label={t(
-            "teamMemberWorkflowStudio.header.runOptionsAria",
-            "Run options",
-          )}
-          data-testid="workflow-run-options-button"
-          icon={<SettingOutlined />}
-          onClick={onOpenRunOptions}
-          size="small"
-        />
-      </Tooltip>
-    </Space.Compact>
+    <Button
+      disabled={!canOpenDraftRunPanel}
+      icon={<PlayCircleOutlined />}
+      onClick={onOpenDraftRunPanel}
+      size="small"
+      title={
+        canOpenDraftRunPanel
+          ? t(
+              "teamMemberWorkflowStudio.header.prepareDraftRun",
+              "Prepare draft run",
+            )
+          : activeMemberRunPlaceholderReason
+      }
+    >
+      {t(
+        "teamMemberWorkflowStudio.header.runDraft",
+        "Run draft",
+      )}
+    </Button>
     <Button
       icon={<FileTextOutlined />}
       loading={pasteYamlPending}
@@ -491,20 +469,18 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   publishPending,
   publishPlaceholderReason,
   publishTone,
-  canRunActiveMember,
+  canOpenDraftRunPanel,
   canSave,
   canViewYaml,
   dirty,
-  activeMemberRunPending,
   activeMemberRunPlaceholderReason,
   onPublishMember,
   onAddNode,
   onDeleteConnection,
   onDeleteNode,
-  onOpenRunOptions,
+  onOpenDraftRunPanel,
   onOpenPasteYaml,
   onViewYaml,
-  onRunActiveMember,
   onNavigateBack,
   onNavigateToTeam,
   onNavigateToTeams,
@@ -572,15 +548,13 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           workflowTitle={workflowTitle}
         />
         <HeaderPrimaryActions
-          activeMemberRunPending={activeMemberRunPending}
           activeMemberRunPlaceholderReason={activeMemberRunPlaceholderReason}
-          canRunActiveMember={canRunActiveMember}
+          canOpenDraftRunPanel={canOpenDraftRunPanel}
           canViewYaml={canViewYaml}
           onAddNode={onAddNode}
-          onOpenRunOptions={onOpenRunOptions}
+          onOpenDraftRunPanel={onOpenDraftRunPanel}
           onPasteYamlClick={onOpenPasteYaml}
           onPublishMember={onPublishMember}
-          onRunActiveMember={onRunActiveMember}
           onViewYaml={onViewYaml}
           pasteYamlPending={pasteYamlPending}
           publishDisabled={publishDisabled}

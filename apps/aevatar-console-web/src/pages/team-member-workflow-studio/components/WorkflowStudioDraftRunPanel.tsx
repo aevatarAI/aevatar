@@ -2,18 +2,26 @@ import { Button, Input, Space, Typography } from "antd";
 import React from "react";
 import { t } from "@/shared/i18n/messages";
 
-type WorkflowStudioRunOptionsPanelProps = {
+type WorkflowStudioDraftRunPanelProps = {
+  readonly canRun: boolean;
+  readonly disabledReason?: string;
   readonly onClose: () => void;
+  readonly onRun: () => void;
   readonly onRunMessageChange: (message: string) => void;
   readonly open: boolean;
+  readonly pending: boolean;
   readonly runMessage: string;
   readonly width?: number;
 };
 
-const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps> = ({
+const WorkflowStudioDraftRunPanel: React.FC<WorkflowStudioDraftRunPanelProps> = ({
+  canRun,
+  disabledReason,
   onClose,
+  onRun,
   onRunMessageChange,
   open,
+  pending,
   runMessage,
   width = 420,
 }) => {
@@ -24,8 +32,8 @@ const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps
   return (
     <aside
       aria-label={t(
-        "teamMemberWorkflowStudio.runOptionsPanel.sectionAria",
-        "Run options panel",
+        "teamMemberWorkflowStudio.draftRunPanel.sectionAria",
+        "Draft run panel",
       )}
       style={{
         background: "#ffffff",
@@ -46,7 +54,7 @@ const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps
         <Space align="start" style={{ justifyContent: "space-between", width: "100%" }}>
           <div style={{ minWidth: 0 }}>
             <Typography.Text strong style={{ color: "#111827", fontSize: 16 }}>
-              {t("teamMemberWorkflowStudio.runOptionsPanel.title", "Run options")}
+              {t("teamMemberWorkflowStudio.draftRunPanel.title", "Draft run")}
             </Typography.Text>
           </div>
           <Button onClick={onClose} size="small">
@@ -65,19 +73,19 @@ const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps
         <section>
           <Typography.Text strong>
             {t(
-              "teamMemberWorkflowStudio.runOptionsPanel.messageLabel",
+              "teamMemberWorkflowStudio.draftRunPanel.messageLabel",
               "Draft run input",
             )}
           </Typography.Text>
           <Input.TextArea
             aria-label={t(
-              "teamMemberWorkflowStudio.runOptionsPanel.messageLabel",
+              "teamMemberWorkflowStudio.draftRunPanel.messageLabel",
               "Draft run input",
             )}
             autoSize={{ minRows: 8, maxRows: 16 }}
             onChange={(event) => onRunMessageChange(event.target.value)}
             placeholder={t(
-              "teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder",
+              "teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder",
               "Optional input sent to this workflow draft run",
             )}
             style={{
@@ -86,9 +94,40 @@ const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps
             value={runMessage}
           />
         </section>
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            justifyItems: "start",
+          }}
+        >
+          <Button
+            disabled={!canRun}
+            icon={null}
+            loading={pending}
+            onClick={onRun}
+            title={canRun ? undefined : disabledReason}
+            type="primary"
+          >
+            {t(
+              "teamMemberWorkflowStudio.draftRunPanel.startDraftRun",
+              "Start draft run",
+            )}
+          </Button>
+          {!canRun && disabledReason ? (
+            <Typography.Text
+              style={{
+                color: "#6b7280",
+                fontSize: 12,
+              }}
+            >
+              {disabledReason}
+            </Typography.Text>
+          ) : null}
+        </div>
       </div>
     </aside>
   );
 };
 
-export default WorkflowStudioRunOptionsPanel;
+export default WorkflowStudioDraftRunPanel;

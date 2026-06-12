@@ -19,7 +19,6 @@ import {
   buildTeamDetailHref,
   buildTeamMemberInvokeHref,
   buildTeamMemberWorkflowStudioHref,
-  readTeamMemberDraftWorkflowHint,
   readTeamDetailRouteState,
   type TeamDetailTab,
 } from "@/shared/navigation/teamRoutes";
@@ -739,20 +738,17 @@ const TeamDetailPage: React.FC = () => {
         const isBoundMember =
           normalizeStatus(member.lifecycleStage) === "bind_ready" &&
           publishedServiceId.length > 0;
-        const routeDraftWorkflowId = readTeamMemberDraftWorkflowHint({
-          memberId: member.memberId,
-          publishedServiceId,
-          routeMemberId: routeState.memberId,
-          routeWorkflowId: routeState.workflowId,
-          scopeId,
-          teamId: selectedTeamId,
-        });
+        const memberDraftWorkflowId =
+          trimText(member.implementationRef?.implementationKind).toLowerCase() ===
+          "workflow"
+            ? trimText(member.implementationRef?.workflowId)
+            : "";
         const workflowStudioHref = buildTeamMemberWorkflowStudioHref({
           memberId: member.memberId,
           mode: "edit-member",
           scopeId,
           teamId: selectedTeamId,
-          workflowId: routeDraftWorkflowId || undefined,
+          workflowId: memberDraftWorkflowId || undefined,
         });
         const memberInvokeHref = buildTeamMemberInvokeHref({
           memberId: member.memberId,
