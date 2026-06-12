@@ -68,7 +68,7 @@ public sealed class StudioMemberServicePatchTests
     }
 
     [Fact]
-    public async Task PatchAsync_GAgentImplementationRef_ShouldUpdateActorTypeName()
+    public async Task PatchAsync_GAgentImplementationRef_ShouldUpdateDiagnosticActorTypeName()
     {
         var commandPort = new RecordingMemberCommandPort();
         var service = NewService(
@@ -80,13 +80,13 @@ public sealed class StudioMemberServicePatchTests
             MemberId,
             ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.GAgent,
-                    ActorTypeName: "Aevatar.SomeAgent")),
+                    DiagnosticActorTypeName: "Aevatar.SomeAgent")),
             CancellationToken.None);
 
         commandPort.ImplementationUpdates.Should().ContainSingle()
             .Which.Implementation.Should().Be(new StudioMemberImplementationRefResponse(
                 ImplementationKind: MemberImplementationKindNames.GAgent,
-                ActorTypeName: "Aevatar.SomeAgent"));
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"));
         commandPort.RecordedBindings.Should().BeEmpty();
     }
 
@@ -135,7 +135,7 @@ public sealed class StudioMemberServicePatchTests
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task PatchAsync_GAgentImplementationRef_ShouldRejectEmptyActorTypeName(string actorTypeName)
+    public async Task PatchAsync_GAgentImplementationRef_ShouldRejectEmptyDiagnosticActorTypeName(string diagnosticActorTypeName)
     {
         var service = NewService(
             new RecordingMemberCommandPort(),
@@ -146,17 +146,17 @@ public sealed class StudioMemberServicePatchTests
             MemberId,
             ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.GAgent,
-                    ActorTypeName: actorTypeName)),
+                    DiagnosticActorTypeName: diagnosticActorTypeName)),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*implementationRef.actorTypeName is required*");
+            .WithMessage("*implementationRef.diagnosticActorTypeName is required*");
     }
 
     [Theory]
     [InlineData("scriptId")]
     [InlineData("scriptRevision")]
-    [InlineData("actorTypeName")]
+    [InlineData("diagnosticActorTypeName")]
     public async Task PatchAsync_WorkflowImplementationRef_ShouldRejectNonWorkflowFields(string disallowedField)
     {
         var service = NewService(
@@ -173,10 +173,10 @@ public sealed class StudioMemberServicePatchTests
                 MemberImplementationKindNames.Workflow,
                 WorkflowId: "wf-alpha",
                 ScriptRevision: "rev-script-1"),
-            "actorTypeName" => new StudioMemberImplementationRefResponse(
+            "diagnosticActorTypeName" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.Workflow,
                 WorkflowId: "wf-alpha",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             _ => throw new ArgumentOutOfRangeException(nameof(disallowedField)),
         };
 
@@ -193,7 +193,7 @@ public sealed class StudioMemberServicePatchTests
     [Theory]
     [InlineData("workflowId")]
     [InlineData("workflowRevision")]
-    [InlineData("actorTypeName")]
+    [InlineData("diagnosticActorTypeName")]
     public async Task PatchAsync_ScriptImplementationRef_ShouldRejectNonScriptFields(string disallowedField)
     {
         var service = NewService(
@@ -210,10 +210,10 @@ public sealed class StudioMemberServicePatchTests
                 MemberImplementationKindNames.Script,
                 WorkflowRevision: "wf-rev-1",
                 ScriptId: "script-alpha"),
-            "actorTypeName" => new StudioMemberImplementationRefResponse(
+            "diagnosticActorTypeName" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.Script,
                 ScriptId: "script-alpha",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             _ => throw new ArgumentOutOfRangeException(nameof(disallowedField)),
         };
 
@@ -243,19 +243,19 @@ public sealed class StudioMemberServicePatchTests
             "workflowId" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.GAgent,
                 WorkflowId: "wf-alpha",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             "workflowRevision" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.GAgent,
                 WorkflowRevision: "wf-rev-1",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             "scriptId" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.GAgent,
                 ScriptId: "script-alpha",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             "scriptRevision" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.GAgent,
                 ScriptRevision: "rev-script-1",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             _ => throw new ArgumentOutOfRangeException(nameof(disallowedField)),
         };
 

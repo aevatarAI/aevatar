@@ -526,7 +526,10 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         RejectPresent(implementation.ScriptId, "implementationRef.scriptId", implementation.ImplementationKind);
         RejectPresent(implementation.ScriptRevision, "implementationRef.scriptRevision", implementation.ImplementationKind);
-        RejectPresent(implementation.ActorTypeName, "implementationRef.actorTypeName", implementation.ImplementationKind);
+        RejectPresent(
+            implementation.DiagnosticActorTypeName,
+            "implementationRef.diagnosticActorTypeName",
+            implementation.ImplementationKind);
 
         return new StudioMemberImplementationRefResponse(
             ImplementationKind: MemberImplementationKindNames.Workflow,
@@ -539,7 +542,10 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         RejectPresent(implementation.WorkflowId, "implementationRef.workflowId", implementation.ImplementationKind);
         RejectPresent(implementation.WorkflowRevision, "implementationRef.workflowRevision", implementation.ImplementationKind);
-        RejectPresent(implementation.ActorTypeName, "implementationRef.actorTypeName", implementation.ImplementationKind);
+        RejectPresent(
+            implementation.DiagnosticActorTypeName,
+            "implementationRef.diagnosticActorTypeName",
+            implementation.ImplementationKind);
 
         return new StudioMemberImplementationRefResponse(
             ImplementationKind: MemberImplementationKindNames.Script,
@@ -557,7 +563,9 @@ public sealed class StudioMemberService : IStudioMemberService
 
         return new StudioMemberImplementationRefResponse(
             ImplementationKind: MemberImplementationKindNames.GAgent,
-            ActorTypeName: NormalizeRequired(implementation.ActorTypeName, "implementationRef.actorTypeName"));
+            DiagnosticActorTypeName: NormalizeRequired(
+                implementation.DiagnosticActorTypeName,
+                "implementationRef.diagnosticActorTypeName"));
     }
 
     private static string? NormalizeOptional(string? value)
