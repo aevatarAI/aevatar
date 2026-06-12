@@ -1828,7 +1828,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             Credentials = new AgentToolCredentials(token, token, null),
             Caller = new AgentToolCallerContext(
                 inboundEvent.RegistrationScopeId,
-                null,
+                inboundEvent.RegistrationScopeId,
                 inboundEvent.MessageId),
             Channel = new AgentToolChannelContext(
                 inboundEvent.Platform,
@@ -2040,7 +2040,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             Caller = new AgentToolCallerContext(
                 inboundEvent.RegistrationScopeId,
-                null,
+                inboundEvent.RegistrationScopeId,
                 inboundEvent.MessageId),
             Channel = new AgentToolChannelContext(
                 inboundEvent.Platform,
