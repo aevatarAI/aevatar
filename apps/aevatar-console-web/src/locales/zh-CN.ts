@@ -618,7 +618,9 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.executionPanel.logs': '日志',
   'teamMemberWorkflowStudio.executionPanel.node': '节点',
   'teamMemberWorkflowStudio.executionPanel.nodeInput': '输入',
+  'teamMemberWorkflowStudio.executionPanel.nodeInteraction': '交互',
   'teamMemberWorkflowStudio.executionPanel.nodeOutput': '输出',
+  'teamMemberWorkflowStudio.executionPanel.nodePrompt': '提示',
   'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
     '{stepId} 节点运行',
   'teamMemberWorkflowStudio.executionPanel.output': '输出',

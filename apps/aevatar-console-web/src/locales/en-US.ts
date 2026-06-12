@@ -659,7 +659,9 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionPanel.logs': 'Logs',
   'teamMemberWorkflowStudio.executionPanel.node': 'Node',
   'teamMemberWorkflowStudio.executionPanel.nodeInput': 'Input',
+  'teamMemberWorkflowStudio.executionPanel.nodeInteraction': 'Interaction',
   'teamMemberWorkflowStudio.executionPanel.nodeOutput': 'Output',
+  'teamMemberWorkflowStudio.executionPanel.nodePrompt': 'Prompt',
   'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
     '{stepId} node run',
   'teamMemberWorkflowStudio.executionPanel.output': 'Output',
