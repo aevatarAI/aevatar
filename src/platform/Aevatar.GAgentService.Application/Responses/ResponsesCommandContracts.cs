@@ -186,20 +186,16 @@ public sealed record ResponsesCreateCommandPlan(
 public sealed record ResponsesCreateCommandResult(
     ResponsesCommandError? Error,
     ResponsesCreateCommandPlan? StreamPlan,
-    ResponsesCreateCompletedCommandResult? Completed,
-    ResponsesCreateAcceptedCommandResult? Accepted)
+    ResponsesCreateCompletedCommandResult? Completed)
 {
     public static ResponsesCreateCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null, null, null);
+        new(new ResponsesCommandError(statusCode, code, message), null, null);
 
     public static ResponsesCreateCommandResult FromStreamPlan(ResponsesCreateCommandPlan plan) =>
-        new(null, plan, null, null);
+        new(null, plan, null);
 
     public static ResponsesCreateCommandResult FromCompleted(ResponsesCreateCompletedCommandResult completed) =>
-        new(null, null, completed, null);
-
-    public static ResponsesCreateCommandResult FromAccepted(ResponsesCreateAcceptedCommandResult accepted) =>
-        new(null, null, null, accepted);
+        new(null, null, completed);
 }
 
 public sealed record ResponsesCreateCompletedCommandResult(
@@ -213,12 +209,6 @@ public enum ResponsesCompletionStage
     Committed = 0,
     ReadModelObserved = 1,
 }
-
-public sealed record ResponsesCreateAcceptedCommandResult(
-    NormalizedResponsesRequest Normalized,
-    long CreatedAt,
-    LlmSessionRegistrationResult Session,
-    DispatchAdmission Admission);
 
 public sealed record ResponsesStreamCommandResult(
     ResponsesCommandError? Error,
