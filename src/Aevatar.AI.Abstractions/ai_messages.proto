@@ -253,6 +253,13 @@ message RoleChatSessionCompletedEvent {
   repeated AgentToolReceipt tool_receipts = 11;
 }
 
+message VoicePresenceEnableRequested {
+  string module_name = 1;
+  int32 pcm_sample_rate_hz = 2;
+  aevatar.voice.VoiceRemoteAudioSupport remote_audio_support = 3;
+  aevatar.voice.VoiceSessionDefaults session_defaults = 4;
+}
+
 message InitializeRoleAgentEvent {
   // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
   //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
@@ -272,6 +279,7 @@ message InitializeRoleAgentEvent {
   bool enable_summarization = 14;
   string role_id = 15;
   map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 16;
+  repeated VoicePresenceEnableRequested voice_presence_enables = 17;
   reserved 9;
   reserved "stream_buffer_capacity";
 }

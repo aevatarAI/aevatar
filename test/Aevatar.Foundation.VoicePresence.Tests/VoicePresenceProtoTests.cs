@@ -136,6 +136,21 @@ public class VoicePresenceProtoTests
     }
 
     [Fact]
+    public void Voice_presence_proto_should_not_own_ai_capability_enable_command()
+    {
+        var messageNames = VoicePresenceReflection.Descriptor.MessageTypes
+            .Select(static x => x.Name)
+            .ToArray();
+        var signalFields = VoiceModuleSignal.Descriptor.Fields.InDeclarationOrder()
+            .Select(static x => x.Name)
+            .ToArray();
+
+        messageNames.ShouldNotContain("VoicePresenceEnableRequested");
+        signalFields.ShouldNotContain("voice_presence_enable_requested");
+        signalFields.ShouldNotContain("enable_requested");
+    }
+
+    [Fact]
     public void VoiceModuleSignal_should_roundtrip_transport_lifetime_completed()
     {
         var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));

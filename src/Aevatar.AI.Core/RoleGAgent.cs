@@ -13,6 +13,7 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
@@ -130,6 +131,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
     {
         await PersistDomainEventAsync(evt);
+        foreach (var enable in evt.VoicePresenceEnables)
+            await PersistVoicePresenceEnableAsync(enable, CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public Task HandleVoicePresenceEnableRequested(VoicePresenceEnableRequested evt)
+    {
+        return PersistVoicePresenceEnableAsync(evt, CancellationToken.None);
     }
 
     /// <summary>Handles tool approval decisions from the frontend or NyxID remote.</summary>
@@ -662,6 +671,37 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var next = current.Clone();
         next.VoicePresence[evt.ModuleName] = evt.State?.Clone() ?? new VoicePresenceRuntimeState();
         return next;
+    }
+
+    private Task PersistVoicePresenceEnableAsync(VoicePresenceEnableRequested request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var normalized = VoicePresenceEnableRequests.Normalize(request);
+        return PersistDomainEventAsync(new VoicePresenceRuntimeStateChangedEvent
+        {
+            ModuleName = normalized.ModuleName,
+            State = BuildVoicePresenceEnabledState(normalized),
+        }, ct);
+    }
+
+    private static VoicePresenceRuntimeState BuildVoicePresenceEnabledState(
+        VoicePresenceEnableRequested request)
+    {
+        var sessionConfig = VoicePresenceEnableRequests.ToSessionConfig(request);
+        return new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.Idle,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+            NextResponseId = 1,
+            Initialized = true,
+            PcmSampleRateHz = sessionConfig.SampleRateHz > 0
+                ? sessionConfig.SampleRateHz
+                : VoicePresenceEnableRequests.DefaultPcmSampleRateHz,
+            RemoteAudioSupport = request.RemoteAudioSupport,
+            ActiveSessionConfig = sessionConfig,
+        };
     }
 
     /// <summary>Returns agent description.</summary>
@@ -1261,6 +1301,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 continue;
 
             next.VoiceSessionDefaults[moduleName] = entry.Value?.Clone() ?? new VoiceSessionDefaults();
+        }
+        foreach (var enable in evt.VoicePresenceEnables)
+        {
+            if (enable is null || !VoicePresenceEnableRequests.HasSessionDefaults(enable))
+                continue;
+
+            var normalized = VoicePresenceEnableRequests.Normalize(enable);
+            next.VoiceSessionDefaults[normalized.ModuleName] = normalized.SessionDefaults.Clone();
         }
         overrides.ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName.Trim();
         overrides.Model = string.IsNullOrWhiteSpace(evt.Model) ? string.Empty : evt.Model.Trim();
