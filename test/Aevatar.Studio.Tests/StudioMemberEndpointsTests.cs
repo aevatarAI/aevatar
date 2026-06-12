@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
@@ -155,6 +156,96 @@ public sealed class StudioMemberEndpointsTests
 
         result.Should().BeOfType<Ok<StudioMemberDetailResponse>>()
             .Which.Value.Should().BeSameAs(detail);
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldReturnOk_OnImplementationRefPatch()
+    {
+        var patched = new StudioMemberDetailResponse(
+            NewSummary() with { MemberId = "m-alpha", LifecycleStage = MemberLifecycleStageNames.BuildReady },
+            new StudioMemberImplementationRefResponse(
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                WorkflowId: "wf-alpha"),
+            LastBinding: null);
+        var implementationRef = new StudioMemberImplementationRefResponse(
+            ImplementationKind: MemberImplementationKindNames.Workflow,
+            WorkflowId: "wf-alpha");
+        var request = new StudioMemberEndpoints.StudioMemberPatchBody
+        {
+            ImplementationRef = JsonSerializer.SerializeToElement(implementationRef),
+        };
+        var service = new RecordingMemberService
+        {
+            UpdateResponse = patched,
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            request,
+            service,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<StudioMemberDetailResponse>>()
+            .Which.Value.Should().BeSameAs(patched);
+        service.UpdateInvoked.Should().BeTrue();
+        service.UpdateRequest!.ImplementationRef.HasValue.Should().BeTrue();
+        service.UpdateRequest.ImplementationRef.Value.Should().Be(implementationRef);
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldReturnBadRequest_OnValidationError()
+    {
+        var service = new RecordingMemberService
+        {
+            UpdateException = new InvalidOperationException("implementationRef.workflowId is required."),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            new StudioMemberEndpoints.StudioMemberPatchBody
+            {
+                ImplementationRef = JsonSerializer.SerializeToElement(
+                    new StudioMemberImplementationRefResponse(
+                        ImplementationKind: MemberImplementationKindNames.Workflow,
+                        WorkflowId: string.Empty)),
+            },
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_REQUEST");
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldReturnTyped404_WhenMemberMissing()
+    {
+        var service = new RecordingMemberService
+        {
+            UpdateException = new StudioMemberNotFoundException(ScopeId, "m-missing"),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-missing",
+            new StudioMemberEndpoints.StudioMemberPatchBody
+            {
+                ImplementationRef = JsonSerializer.SerializeToElement(
+                    new StudioMemberImplementationRefResponse(
+                        ImplementationKind: MemberImplementationKindNames.Workflow,
+                        WorkflowId: "wf-alpha")),
+            },
+            service,
+            CancellationToken.None);
+
+        var statusCode = result.GetType().GetProperty("StatusCode")?.GetValue(result) as int?;
+        statusCode.Should().Be(StatusCodes.Status404NotFound);
     }
 
     [Fact]
