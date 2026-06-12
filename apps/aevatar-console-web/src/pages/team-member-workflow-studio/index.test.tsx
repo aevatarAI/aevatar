@@ -10,7 +10,7 @@ import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { history } from "@/shared/navigation/history";
 import TeamMemberWorkflowStudioPage from "./index";
-import { studioApi } from "@/shared/studio/api";
+import { StudioApiError, studioApi } from "@/shared/studio/api";
 
 jest.mock("@/shared/graphs/GraphCanvas", () => ({
   __esModule: true,
@@ -104,28 +104,45 @@ jest.mock("@/shared/graphs/GraphCanvas", () => ({
   },
 }));
 
-jest.mock("@/shared/studio/api", () => ({
-  studioApi: {
-    bindMemberWorkflow: jest.fn(),
-    getMember: jest.fn(),
-    getTeam: jest.fn(),
-    getExecution: jest.fn(),
-    getMemberBindingRun: jest.fn(),
-    getWorkspaceSettings: jest.fn(),
-    getWorkflow: jest.fn(),
-    listWorkflows: jest.fn(),
-    listExecutions: jest.fn(),
-    parseYaml: jest.fn(),
-    saveWorkflow: jest.fn(),
-    serializeYaml: jest.fn(),
-    setTeamEntryMember: jest.fn(),
-    startExecution: jest.fn(),
-    createMember: jest.fn(),
-    createMemberWithId: jest.fn(),
-    updateMemberImplementationRef: jest.fn(),
-    updateMemberTeamAssignment: jest.fn(),
-  },
-}));
+jest.mock("@/shared/studio/api", () => {
+  class MockStudioApiError extends Error {
+    readonly code?: string;
+    readonly status: number;
+
+    constructor(message: string, status: number, code?: string) {
+      super(message);
+      this.name = "StudioApiError";
+      this.code = code;
+      this.status = status;
+    }
+  }
+
+  return {
+    StudioApiError: MockStudioApiError,
+    isStudioApiStatus: (error: unknown, status: number) =>
+      error instanceof MockStudioApiError && error.status === status,
+    studioApi: {
+      bindMemberWorkflow: jest.fn(),
+      getMember: jest.fn(),
+      getTeam: jest.fn(),
+      getExecution: jest.fn(),
+      getMemberBindingRun: jest.fn(),
+      getWorkspaceSettings: jest.fn(),
+      getWorkflow: jest.fn(),
+      listWorkflows: jest.fn(),
+      listExecutions: jest.fn(),
+      parseYaml: jest.fn(),
+      saveWorkflow: jest.fn(),
+      serializeYaml: jest.fn(),
+      setTeamEntryMember: jest.fn(),
+      startExecution: jest.fn(),
+      createMember: jest.fn(),
+      createMemberWithId: jest.fn(),
+      updateMemberImplementationRef: jest.fn(),
+      updateMemberTeamAssignment: jest.fn(),
+    },
+  };
+});
 
 jest.mock("@/shared/api/runtimeRunsApi", () => ({
   runtimeRunsApi: {
@@ -194,7 +211,43 @@ function createSseResponse(): Response {
   return {} as Response;
 }
 
-async function* createWorkflowInvokeEvents() {
+type TestRuntimeEvent = Record<string, unknown>;
+
+function createControlledWorkflowInvokeStream() {
+  const queuedEvents: TestRuntimeEvent[] = [];
+  const waiters: Array<() => void> = [];
+  let completed = false;
+
+  const notify = () => {
+    waiters.shift()?.();
+  };
+
+  return {
+    emit(event: TestRuntimeEvent) {
+      queuedEvents.push(event);
+      notify();
+    },
+    finish() {
+      completed = true;
+      notify();
+    },
+    async *stream() {
+      while (!completed || queuedEvents.length > 0) {
+        const nextEvent = queuedEvents.shift();
+        if (nextEvent) {
+          yield nextEvent;
+          continue;
+        }
+
+        await new Promise<void>((resolve) => {
+          waiters.push(resolve);
+        });
+      }
+    },
+  };
+}
+
+async function* createWorkflowInvokeEvents(input: string = "Run the workflow") {
   yield {
     actorId: "actor-1",
     commandId: "command-1",
@@ -216,7 +269,7 @@ async function* createWorkflowInvokeEvents() {
   yield {
     name: "aevatar.step.request",
     payload: {
-      input: "Run the workflow",
+      input,
       stepId: "triage",
       stepType: "llm_call",
       targetRole: "assistant",
@@ -232,6 +285,17 @@ async function* createWorkflowInvokeEvents() {
       success: true,
     },
     timestamp: Date.parse("2026-06-08T00:00:02Z"),
+    type: "CUSTOM",
+  };
+  yield {
+    name: "aevatar.human_input.request",
+    payload: {
+      prompt: "Need approval before deployment",
+      runId: "run-1",
+      stepId: "approve",
+      suspensionType: "human_approval",
+    },
+    timestamp: Date.parse("2026-06-08T00:00:03Z"),
     type: "CUSTOM",
   };
   yield {
@@ -347,6 +411,66 @@ function createPointerDragEvent(
   });
   Object.defineProperty(event, "pointerId", { value: 7 });
   return event;
+}
+
+function mockNewWorkflowMemberCreateFixtures() {
+  const createdWorkflow = {
+    directoryId: "scope:scope-1",
+    directoryLabel: "scope-1",
+    draftExists: true,
+    fileName: "wf-untitled-member.yaml",
+    filePath: "scope://scope-1/wf-untitled-member.yaml",
+    findings: [],
+    layout: null,
+    name: "Untitled member",
+    workflowId: "wf-untitled-member",
+    yaml: "name: Untitled member\nsteps: []\n",
+    document: {
+      name: "Untitled member",
+      roles: [],
+      steps: [
+        {
+          id: "llm_call",
+          type: "llm_call",
+          targetRole: null,
+          parameters: {},
+          next: null,
+          branches: {},
+        },
+      ],
+    },
+    updatedAtUtc: "2026-06-08T00:00:01Z",
+  };
+  const createdMemberSummary = {
+    createdAt: "2026-06-08T00:00:00Z",
+    description: "",
+    displayName: "Untitled member",
+    implementationKind: "workflow",
+    lastBoundRevisionId: null,
+    lifecycleStage: "created",
+    memberId: "m-untitled-member",
+    publishedServiceId: "member-m-untitled-member",
+    scopeId: "scope-1",
+    teamId: "t-alpha",
+    updatedAt: "2026-06-08T00:00:01Z",
+  };
+  const createdMemberDetail = {
+    implementationRef: {
+      implementationKind: "workflow",
+      workflowId: "wf-untitled-member",
+    },
+    summary: createdMemberSummary,
+  };
+
+  (studioApi.saveWorkflow as jest.Mock).mockResolvedValue(createdWorkflow);
+  (studioApi.createMember as jest.Mock).mockResolvedValue(createdMemberSummary);
+  (studioApi.getWorkflow as jest.Mock).mockResolvedValue(createdWorkflow);
+
+  return {
+    createdMemberDetail,
+    createdMemberSummary,
+    createdWorkflow,
+  };
 }
 
 describe("TeamMemberWorkflowStudioPage", () => {
@@ -593,6 +717,162 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({
       queryKey: ["teams", "roster", "scope-1"],
     });
+  });
+
+  it("waits for a newly created workflow member to materialize before linking the draft", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    const { createdMemberDetail } = mockNewWorkflowMemberCreateFixtures();
+    (studioApi.getMember as jest.Mock)
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockResolvedValue(createdMemberDetail);
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(studioApi.getMember).toHaveBeenCalledWith(
+        "scope-1",
+        "m-untitled-member",
+      );
+      expect(studioApi.updateMemberImplementationRef).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "m-untitled-member",
+        implementationRef: {
+          implementationKind: "workflow",
+          workflowId: "wf-untitled-member",
+        },
+      });
+      expect(window.location.pathname).toBe(
+        "/scopes/scope-1/teams/t-alpha/members/m-untitled-member/workflow",
+      );
+    });
+    const getMemberMock = studioApi.getMember as jest.Mock;
+    const updateMemberImplementationRefMock =
+      studioApi.updateMemberImplementationRef as jest.Mock;
+    expect(getMemberMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(getMemberMock.mock.invocationCallOrder[0]).toBeLessThan(
+      updateMemberImplementationRefMock.mock.invocationCallOrder[0],
+    );
+    expect(getMemberMock.mock.invocationCallOrder[1]).toBeLessThan(
+      updateMemberImplementationRefMock.mock.invocationCallOrder[0],
+    );
+    expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+    expect(studioApi.createMember).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks a newly created workflow member when the first implementation link hits a materialization 404", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    const { createdMemberDetail } = mockNewWorkflowMemberCreateFixtures();
+    (studioApi.getMember as jest.Mock).mockResolvedValue(createdMemberDetail);
+    (studioApi.updateMemberImplementationRef as jest.Mock)
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockResolvedValue(createdMemberDetail);
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(studioApi.getMember).toHaveBeenCalledWith(
+        "scope-1",
+        "m-untitled-member",
+      );
+      expect(studioApi.updateMemberImplementationRef).toHaveBeenCalledTimes(2);
+      expect(window.location.pathname).toBe(
+        "/scopes/scope-1/teams/t-alpha/members/m-untitled-member/workflow",
+      );
+    });
+    const getMemberMock = studioApi.getMember as jest.Mock;
+    const updateMemberImplementationRefMock =
+      studioApi.updateMemberImplementationRef as jest.Mock;
+    expect(getMemberMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(getMemberMock.mock.invocationCallOrder[1]).toBeLessThan(
+      updateMemberImplementationRefMock.mock.invocationCallOrder[1],
+    );
+    expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+    expect(studioApi.createMember).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries linking a pending created workflow member without creating another member", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    const { createdMemberDetail } = mockNewWorkflowMemberCreateFixtures();
+    (studioApi.getMember as jest.Mock)
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockResolvedValue(createdMemberDetail);
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    fireEvent.click(saveButton);
+
+    expect(
+      await screen.findByText(
+        "Workflow member m-untitled-member was created but is not visible yet. Retry saving in a moment.",
+      ),
+    ).toBeTruthy();
+    expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+    expect(studioApi.createMember).toHaveBeenCalledTimes(1);
+    expect(studioApi.updateMemberImplementationRef).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Workflow title"), {
+      target: { value: "Retried member" },
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.updateMemberImplementationRef).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "m-untitled-member",
+        implementationRef: {
+          implementationKind: "workflow",
+          workflowId: "wf-untitled-member",
+        },
+      });
+      expect(window.location.pathname).toBe(
+        "/scopes/scope-1/teams/t-alpha/members/m-untitled-member/workflow",
+      );
+    });
+    expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(2);
+    expect(studioApi.saveWorkflow).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        workflowId: "wf-untitled-member",
+        workflowName: "Retried member",
+        yaml: expect.stringContaining("name: Retried member"),
+      }),
+    );
+    expect(studioApi.createMember).toHaveBeenCalledTimes(1);
   });
 
   it("reloads route state after creating a workflow member", async () => {
@@ -1677,6 +1957,95 @@ describe("TeamMemberWorkflowStudioPage", () => {
     await waitFor(() => {
       expect(saveButton).toBeDisabled();
     });
+  });
+
+  it("loads and saves the workflow draft title even when the member name differs", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Member Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    const loadedWorkflow = {
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    };
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue(loadedWorkflow);
+    (studioApi.saveWorkflow as jest.Mock).mockResolvedValue({
+      ...loadedWorkflow,
+      document: null,
+      name: "Workflow Renamed",
+      updatedAtUtc: "2026-06-08T00:00:01Z",
+      yaml: "name: Workflow Renamed\nsteps:\n  - id: triage\n    type: llm_call\n",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const saveButton = await screen.findByRole("button", { name: "Save" });
+    const titleInput = await screen.findByLabelText("Workflow title");
+    await waitFor(() => {
+      expect(titleInput).toHaveValue("Workflow Alpha");
+    });
+    await waitFor(() => {
+      expect(saveButton).toBeDisabled();
+    });
+
+    fireEvent.change(titleInput, {
+      target: { value: "Workflow Renamed" },
+    });
+
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "workflow-alpha",
+          workflowName: "Workflow Renamed",
+        }),
+      );
+      expect(studioApi.serializeYaml).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            name: "Workflow Renamed",
+          }),
+        }),
+      );
+    });
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.startExecution).not.toHaveBeenCalled();
+    expect(studioApi.updateMemberImplementationRef).not.toHaveBeenCalled();
+    expect(titleInput).toHaveValue("Workflow Renamed");
   });
 
   it("renders unsaved graph edits in the YAML view", async () => {
@@ -3013,6 +3382,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(draftRunPanel).toHaveStyle({
       borderLeft: "1px solid #e5e7eb",
     });
+    expect(
+      within(draftRunPanel).getByText(
+        "Leave blank to run this draft without user input.",
+      ),
+    ).toBeTruthy();
     expect(runtimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
     const draftRunInput = within(draftRunPanel).getByRole("textbox");
     fireEvent.change(draftRunInput, {
@@ -3025,6 +3399,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     );
     const resultPanel = await screen.findByTestId("member-run-result-panel");
     const consolePanel = screen.getByLabelText("Draft run console");
+    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
     const consoleResizeHandle = screen.getByRole("separator", {
       name: "Resize run console",
     });
@@ -3063,16 +3438,30 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "Workflow complete",
     );
     expect(within(consolePanel).getByText("Run log")).toBeTruthy();
-    expect(consolePanel).toHaveTextContent("Run started");
-    expect(consolePanel).toHaveTextContent("triage started");
-    expect(consolePanel).toHaveTextContent("triage completed");
-    expect(consolePanel).toHaveTextContent("Run finished");
+    const triageRunCard = within(consolePanel).getByLabelText("triage node run");
+    expect(within(triageRunCard).getByText("Input")).toBeTruthy();
+    expect(within(triageRunCard).getByText("Output")).toBeTruthy();
+    expect(triageRunCard).toHaveTextContent("Run the workflow");
+    expect(triageRunCard).toHaveTextContent("Workflow complete");
+    expect(triageRunCard).toHaveTextContent("triage");
+    expect(triageRunCard).toHaveTextContent("completed");
+    const approvalRunCard = within(consolePanel).getByLabelText("approve node run");
+    expect(within(approvalRunCard).getByText("Prompt")).toBeTruthy();
+    expect(approvalRunCard).toHaveTextContent("Need approval before deployment");
+    expect(approvalRunCard).toHaveTextContent("human approval");
+    expect(approvalRunCard).toHaveTextContent("pending");
+    expect(consolePanel).not.toHaveTextContent("Run started");
+    expect(consolePanel).not.toHaveTextContent("triage started");
+    expect(consolePanel).not.toHaveTextContent("Run finished");
+    expect(consolePanel).not.toHaveTextContent("aevatar.usage");
+    expect(consolePanel).not.toHaveTextContent("STATE_SNAPSHOT");
+    expect(consolePanel).not.toHaveTextContent("stateVersion");
+    expect(consolePanel).not.toHaveTextContent("raw-observation-1");
+    fireEvent.click(
+      within(consolePanel).getByRole("radio", { name: "Evidence frames" }),
+    );
     const consoleEvidenceMarkers = [
-      "Run started",
-      "triage started",
-      "triage completed",
       "aevatar.usage",
-      "Run finished",
       "STATE_SNAPSHOT",
       "stateVersion",
       "42",
@@ -3090,6 +3479,142 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.startExecution).not.toHaveBeenCalled();
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("renders draft run log cards as SSE frames arrive", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "bind_ready",
+        memberId: "member-alpha",
+        publishedServiceId: "service-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+    (runtimeRunsApi.streamDraftRun as jest.Mock).mockResolvedValue(
+      createSseResponse(),
+    );
+    const stream = createControlledWorkflowInvokeStream();
+    (parseBackendSSEStream as jest.Mock).mockReturnValue(stream.stream());
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const runDraftButton = await screen.findByRole("button", {
+      name: "Run draft",
+    });
+    await waitFor(() => {
+      expect(runDraftButton).toBeEnabled();
+    });
+    fireEvent.click(runDraftButton);
+    const draftRunPanel = await screen.findByLabelText("Draft run panel");
+    const draftRunInput = within(draftRunPanel).getByRole("textbox");
+    fireEvent.change(draftRunInput, {
+      target: { value: "Run the workflow" },
+    });
+    fireEvent.click(
+      within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+    );
+
+    const consolePanel = await screen.findByLabelText("Draft run console");
+    expect(consolePanel).toHaveTextContent("running");
+
+    await act(async () => {
+      stream.emit({
+        actorId: "actor-1",
+        commandId: "command-1",
+        correlationId: "correlation-1",
+        runId: "run-1",
+        threadId: "actor-1",
+        timestamp: Date.parse("2026-06-08T00:00:00Z"),
+        type: "RUN_STARTED",
+      });
+      await flushAsyncWork();
+    });
+    expect(consolePanel).toHaveTextContent("1 run event(s) received");
+    expect(within(consolePanel).queryByLabelText("triage node run")).toBeNull();
+
+    await act(async () => {
+      stream.emit({
+        name: "aevatar.step.request",
+        payload: {
+          input: "Run the workflow",
+          stepId: "triage",
+          stepType: "llm_call",
+          targetRole: "assistant",
+        },
+        timestamp: Date.parse("2026-06-08T00:00:01Z"),
+        type: "CUSTOM",
+      });
+      await flushAsyncWork();
+    });
+    const runningTriageCard = within(consolePanel).getByLabelText("triage node run");
+    expect(runningTriageCard).toHaveTextContent("started");
+    expect(runningTriageCard).toHaveTextContent("Run the workflow");
+    expect(runningTriageCard).toHaveTextContent("No output captured.");
+    expect(consolePanel).toHaveTextContent(/Events\s*2/);
+    expect(consolePanel).toHaveTextContent(/Logs\s*1/);
+
+    await act(async () => {
+      stream.emit({
+        name: "aevatar.step.completed",
+        payload: {
+          output: "Workflow complete",
+          stepId: "triage",
+          success: true,
+        },
+        timestamp: Date.parse("2026-06-08T00:00:02Z"),
+        type: "CUSTOM",
+      });
+      await flushAsyncWork();
+    });
+    const completedTriageCard = within(consolePanel).getByLabelText("triage node run");
+    expect(completedTriageCard).toHaveTextContent("completed");
+    expect(completedTriageCard).toHaveTextContent("Workflow complete");
+
+    await act(async () => {
+      stream.emit({
+        result: {
+          output: "Workflow complete",
+        },
+        runId: "run-1",
+        timestamp: Date.parse("2026-06-08T00:00:03Z"),
+        type: "RUN_FINISHED",
+      });
+      stream.finish();
+      await flushAsyncWork();
+    });
+    await waitFor(() => {
+      expect(consolePanel).toHaveTextContent("succeeded");
+    });
   });
 
   it("starts a failed draft run from the draft run panel and keeps the error visible", async () => {
@@ -3164,9 +3689,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     expect(resultPanel).not.toHaveTextContent("Member run");
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
-    expect(
-      screen.getByLabelText("Draft run panel"),
-    ).toBeTruthy();
+    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
   });
 
   it("runs draft workflow members before they are published", async () => {
@@ -3211,7 +3734,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
     (runtimeRunsApi.streamDraftRun as jest.Mock).mockResolvedValue(
       createSseResponse(),
     );
-    (parseBackendSSEStream as jest.Mock).mockReturnValue(createWorkflowInvokeEvents());
+    (parseBackendSSEStream as jest.Mock).mockReturnValue(
+      createWorkflowInvokeEvents(""),
+    );
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
@@ -3229,17 +3754,22 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.click(
       within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
     );
+    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
 
     await waitFor(() => {
       expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
         "scope-1",
         expect.objectContaining({
-          prompt: "Run Workflow Alpha",
+          prompt: "",
           workflowYamls: [expect.stringContaining("name: Workflow Alpha")],
         }),
         expect.any(AbortSignal),
       );
     });
+    const consolePanel = screen.getByLabelText("Draft run console");
+    const triageRunCard = within(consolePanel).getByLabelText("triage node run");
+    expect(triageRunCard).toHaveTextContent("No user input provided.");
+    expect(triageRunCard).not.toHaveTextContent("Run Workflow Alpha");
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
 
@@ -3605,7 +4135,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
         "scope-1",
         expect.objectContaining({
-          prompt: "Run Workflow Alpha",
+          prompt: "",
           workflowYamls: [expect.stringContaining("name: Workflow Alpha")],
         }),
         expect.any(AbortSignal),

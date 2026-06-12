@@ -245,6 +245,37 @@ function buildEvidencePreview(payload: unknown): string {
   return summary || buildExecutionLogPreview(payload);
 }
 
+function readBusinessOutputText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  const record = asExecutionRecord(value);
+  if (!record) {
+    return '';
+  }
+
+  const directOutput = readRecordString(
+    record,
+    'output',
+    'Output',
+    'message',
+    'Message',
+    'text',
+    'Text',
+  );
+  if (directOutput) {
+    return directOutput;
+  }
+
+  const nestedResult = record.result ?? record.Result;
+  if (nestedResult && nestedResult !== value) {
+    return readBusinessOutputText(nestedResult);
+  }
+
+  return '';
+}
+
 function isRawObservedEventName(value: string): boolean {
   return value === 'aevatar.raw.observed' || value === 'aevatar.observed.raw';
 }
@@ -658,17 +689,19 @@ export function buildExecutionTrace(
     if (parsed.runFinished) {
       const runFinished = asExecutionRecord(parsed.runFinished);
       const runResult = runFinished?.result ?? runFinished;
+      const businessOutput = readBusinessOutputText(runResult);
+      const outputText = businessOutput || buildExecutionLogText(runResult);
       logs.push({
         category: 'output',
         tone: 'run',
         title: t("shared.studio.execution.run.finished", "Run finished"),
         meta: '',
-        previewText: buildExecutionLogPreview(runResult),
-        clipboardText: buildExecutionLogText(runResult),
+        previewText: buildExecutionLogPreview(outputText),
+        clipboardText: outputText,
         timestamp,
         stepId: latestStepId,
         interaction: null,
-        payloadText: buildExecutionLogText(runResult),
+        payloadText: businessOutput ? buildExecutionLogText(runResult) : '',
         rawText,
         eventType: 'RUN_FINISHED',
       });

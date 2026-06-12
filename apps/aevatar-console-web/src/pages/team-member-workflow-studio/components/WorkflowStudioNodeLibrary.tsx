@@ -1,4 +1,4 @@
-import { SearchOutlined } from "@ant-design/icons";
+import { CloseOutlined, SearchOutlined } from "@ant-design/icons";
 import { Button, Empty, Input, Space, Tag, Typography } from "antd";
 import React from "react";
 import { t } from "@/shared/i18n/messages";
@@ -87,27 +87,54 @@ const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
           borderRight: "1px solid #e5e7eb",
           bottom: 0,
           boxShadow: "10px 0 30px rgba(15, 23, 42, 0.08)",
+          display: "flex",
+          flexDirection: "column",
           left: 0,
           maxWidth: "calc(100% - 48px)",
-          overflow: "auto",
-          padding: 20,
+          overflow: "hidden",
           position: "absolute",
           top: 0,
           width: 380,
         }}
       >
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
-          <Space
-            align="center"
-            style={{ justifyContent: "space-between", width: "100%" }}
-          >
-            <Typography.Title level={4} style={{ margin: 0 }}>
+        <header
+          style={{
+            alignItems: "flex-start",
+            borderBottom: "1px solid #eef2f7",
+            display: "flex",
+            gap: 12,
+            justifyContent: "space-between",
+            padding: "16px 20px 14px",
+          }}
+        >
+          <div style={{ display: "grid", gap: 4, minWidth: 0 }}>
+            <Typography.Text strong style={{ color: "#111827", fontSize: 16 }}>
               {t("teamMemberWorkflowStudio.nodeLibrary.title", "Node library")}
-            </Typography.Title>
-            <Button onClick={onClose} size="small">
-              {t("teamMemberWorkflowStudio.common.close", "Close")}
-            </Button>
-          </Space>
+            </Typography.Text>
+          </div>
+          <Button
+            aria-label={t(
+              "teamMemberWorkflowStudio.nodeLibrary.closeAria",
+              "Close node library",
+            )}
+            icon={<CloseOutlined />}
+            onClick={onClose}
+            size="small"
+            style={{ height: 28, width: 28 }}
+            type="text"
+          />
+        </header>
+        <Space
+          direction="vertical"
+          size={16}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: "auto",
+            padding: "18px 20px 20px",
+            width: "100%",
+          }}
+        >
           <Input
             allowClear
             aria-label={t(
