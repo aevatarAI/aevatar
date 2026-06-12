@@ -96,7 +96,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     }
 
     [Fact]
-    public async Task WorkflowTool_WhenApprovalPending_ShouldFailClosedWithoutReturningPendingPayload()
+    public async Task WorkflowTool_WhenApprovalPending_ShouldReturnTypedPendingOutcomeWithoutExecutingAgentTool()
     {
         var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
         var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Yielded("approval-1"));
@@ -105,22 +105,26 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             approvalHandler: approvalHandler);
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
-        await FluentActions.Awaiting(() => tool.ExecuteAsync(
-                new WorkflowToolExecutionRequest(
-                    ArgumentsJson: "{}",
-                    RunId: "run-1",
-                    StepId: "step-1",
-                    ExecutionId: "exec-1",
-                    CallId: "call-1",
-                    ScopeId: "scope-1",
-                    CallerCredential: new WorkflowCallerCredential()),
-                CancellationToken.None))
-            .Should()
-            .ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ApprovalPending*approval-1*");
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: """{"danger":true}""",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
 
         agentTool.ExecuteCount.Should().Be(0);
         approvalHandler.Requests.Should().ContainSingle();
+        result.PendingApproval.Should().NotBeNull();
+        result.PendingApproval!.ApprovalRequestId.Should().Be(approvalHandler.Requests.Single().RequestId);
+        result.PendingApproval.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        result.PendingApproval.ToolName.Should().Be("capture_context");
+        result.PendingApproval.ToolCallId.Should().Be("call-1");
+        result.PendingApproval.ArgumentsJson.Should().Be("""{"danger":true}""");
+        result.ResultJson.Should().BeEmpty();
         AgentToolRequestContext.Current.Should().BeNull();
     }
 

@@ -198,6 +198,18 @@ message WorkflowResumeActionPayload {
   string edited_content = 6;
   // The feedback submitted with an approval or rejection action.
   string feedback = 7;
+  // The typed tool approval continuation keys for direct workflow tool calls.
+  WorkflowToolApprovalResumeActionPayload tool_approval = 8;
+}
+
+// Carries direct workflow tool approval resume keys.
+message WorkflowToolApprovalResumeActionPayload {
+  // The workflow tool execution identifier.
+  string execution_id = 1;
+  // The original workflow tool call identifier.
+  string tool_call_id = 2;
+  // The approval request identifier emitted by the workflow actor.
+  string approval_request_id = 3;
 }
 
 // Refactor (iter93/cluster-093):
