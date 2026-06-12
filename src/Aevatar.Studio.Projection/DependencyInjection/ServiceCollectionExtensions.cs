@@ -12,7 +12,6 @@ using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
-using Aevatar.Studio.Projection.Repair;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Workspace;
 using Microsoft.Extensions.Configuration;
@@ -42,7 +41,6 @@ public static class ServiceCollectionExtensions
 
         services.AddCqrsCore();
         services.AddStudioProjectionActorCommandDispatch();
-        services.TryAddSingleton<StudioWorkflowDraftMemberEnsureCommandFactory>();
 
         // Projection read-model runtime (write dispatcher + sink bindings)
         services.AddProjectionReadModelRuntime();
@@ -107,10 +105,6 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
             StudioTeamCurrentStateProjector>();
-
-        services.AddCurrentStateProjectionMaterializer<
-            StudioMaterializationContext,
-            StudioWorkflowDraftMemberEnsureMaterializer>();
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
@@ -186,11 +180,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
         services.TryAddSingleton<IStudioMemberPlatformBindingCommandPort, ScopeBindingStudioMemberPlatformBindingCommandService>();
         services.TryAddSingleton<IStudioTeamCommandPort, ActorDispatchStudioTeamCommandService>();
-        services.TryAddSingleton(sp => new StudioWorkflowDraftMemberRepairService(
-            sp.GetRequiredService<IStudioWorkspaceQueryPort>(),
-            sp.GetRequiredService<IStudioActorBootstrap>(),
-            sp.GetRequiredService<StudioProjectionActorCommandDispatch>(),
-            sp.GetRequiredService<StudioWorkflowDraftMemberEnsureCommandFactory>()));
 
         return services;
     }
