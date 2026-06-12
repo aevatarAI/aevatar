@@ -10,7 +10,7 @@ import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { history } from "@/shared/navigation/history";
 import TeamMemberWorkflowStudioPage from "./index";
-import { studioApi } from "@/shared/studio/api";
+import { StudioApiError, studioApi } from "@/shared/studio/api";
 
 jest.mock("@/shared/graphs/GraphCanvas", () => ({
   __esModule: true,
@@ -104,28 +104,45 @@ jest.mock("@/shared/graphs/GraphCanvas", () => ({
   },
 }));
 
-jest.mock("@/shared/studio/api", () => ({
-  studioApi: {
-    bindMemberWorkflow: jest.fn(),
-    getMember: jest.fn(),
-    getTeam: jest.fn(),
-    getExecution: jest.fn(),
-    getMemberBindingRun: jest.fn(),
-    getWorkspaceSettings: jest.fn(),
-    getWorkflow: jest.fn(),
-    listWorkflows: jest.fn(),
-    listExecutions: jest.fn(),
-    parseYaml: jest.fn(),
-    saveWorkflow: jest.fn(),
-    serializeYaml: jest.fn(),
-    setTeamEntryMember: jest.fn(),
-    startExecution: jest.fn(),
-    createMember: jest.fn(),
-    createMemberWithId: jest.fn(),
-    updateMemberImplementationRef: jest.fn(),
-    updateMemberTeamAssignment: jest.fn(),
-  },
-}));
+jest.mock("@/shared/studio/api", () => {
+  class MockStudioApiError extends Error {
+    readonly code?: string;
+    readonly status: number;
+
+    constructor(message: string, status: number, code?: string) {
+      super(message);
+      this.name = "StudioApiError";
+      this.code = code;
+      this.status = status;
+    }
+  }
+
+  return {
+    StudioApiError: MockStudioApiError,
+    isStudioApiStatus: (error: unknown, status: number) =>
+      error instanceof MockStudioApiError && error.status === status,
+    studioApi: {
+      bindMemberWorkflow: jest.fn(),
+      getMember: jest.fn(),
+      getTeam: jest.fn(),
+      getExecution: jest.fn(),
+      getMemberBindingRun: jest.fn(),
+      getWorkspaceSettings: jest.fn(),
+      getWorkflow: jest.fn(),
+      listWorkflows: jest.fn(),
+      listExecutions: jest.fn(),
+      parseYaml: jest.fn(),
+      saveWorkflow: jest.fn(),
+      serializeYaml: jest.fn(),
+      setTeamEntryMember: jest.fn(),
+      startExecution: jest.fn(),
+      createMember: jest.fn(),
+      createMemberWithId: jest.fn(),
+      updateMemberImplementationRef: jest.fn(),
+      updateMemberTeamAssignment: jest.fn(),
+    },
+  };
+});
 
 jest.mock("@/shared/api/runtimeRunsApi", () => ({
   runtimeRunsApi: {
@@ -347,6 +364,66 @@ function createPointerDragEvent(
   });
   Object.defineProperty(event, "pointerId", { value: 7 });
   return event;
+}
+
+function mockNewWorkflowMemberCreateFixtures() {
+  const createdWorkflow = {
+    directoryId: "scope:scope-1",
+    directoryLabel: "scope-1",
+    draftExists: true,
+    fileName: "wf-untitled-member.yaml",
+    filePath: "scope://scope-1/wf-untitled-member.yaml",
+    findings: [],
+    layout: null,
+    name: "Untitled member",
+    workflowId: "wf-untitled-member",
+    yaml: "name: Untitled member\nsteps: []\n",
+    document: {
+      name: "Untitled member",
+      roles: [],
+      steps: [
+        {
+          id: "llm_call",
+          type: "llm_call",
+          targetRole: null,
+          parameters: {},
+          next: null,
+          branches: {},
+        },
+      ],
+    },
+    updatedAtUtc: "2026-06-08T00:00:01Z",
+  };
+  const createdMemberSummary = {
+    createdAt: "2026-06-08T00:00:00Z",
+    description: "",
+    displayName: "Untitled member",
+    implementationKind: "workflow",
+    lastBoundRevisionId: null,
+    lifecycleStage: "created",
+    memberId: "m-untitled-member",
+    publishedServiceId: "member-m-untitled-member",
+    scopeId: "scope-1",
+    teamId: "t-alpha",
+    updatedAt: "2026-06-08T00:00:01Z",
+  };
+  const createdMemberDetail = {
+    implementationRef: {
+      implementationKind: "workflow",
+      workflowId: "wf-untitled-member",
+    },
+    summary: createdMemberSummary,
+  };
+
+  (studioApi.saveWorkflow as jest.Mock).mockResolvedValue(createdWorkflow);
+  (studioApi.createMember as jest.Mock).mockResolvedValue(createdMemberSummary);
+  (studioApi.getWorkflow as jest.Mock).mockResolvedValue(createdWorkflow);
+
+  return {
+    createdMemberDetail,
+    createdMemberSummary,
+    createdWorkflow,
+  };
 }
 
 describe("TeamMemberWorkflowStudioPage", () => {
@@ -593,6 +670,152 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({
       queryKey: ["teams", "roster", "scope-1"],
     });
+  });
+
+  it("waits for a newly created workflow member to materialize before linking the draft", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    const { createdMemberDetail } = mockNewWorkflowMemberCreateFixtures();
+    (studioApi.getMember as jest.Mock)
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockResolvedValue(createdMemberDetail);
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(studioApi.getMember).toHaveBeenCalledWith(
+        "scope-1",
+        "m-untitled-member",
+      );
+      expect(studioApi.updateMemberImplementationRef).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "m-untitled-member",
+        implementationRef: {
+          implementationKind: "workflow",
+          workflowId: "wf-untitled-member",
+        },
+      });
+      expect(window.location.pathname).toBe(
+        "/scopes/scope-1/teams/t-alpha/members/m-untitled-member/workflow",
+      );
+    });
+    const getMemberMock = studioApi.getMember as jest.Mock;
+    const updateMemberImplementationRefMock =
+      studioApi.updateMemberImplementationRef as jest.Mock;
+    expect(getMemberMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(getMemberMock.mock.invocationCallOrder[0]).toBeLessThan(
+      updateMemberImplementationRefMock.mock.invocationCallOrder[0],
+    );
+    expect(getMemberMock.mock.invocationCallOrder[1]).toBeLessThan(
+      updateMemberImplementationRefMock.mock.invocationCallOrder[0],
+    );
+    expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+    expect(studioApi.createMember).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks a newly created workflow member when the first implementation link hits a materialization 404", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    const { createdMemberDetail } = mockNewWorkflowMemberCreateFixtures();
+    (studioApi.getMember as jest.Mock).mockResolvedValue(createdMemberDetail);
+    (studioApi.updateMemberImplementationRef as jest.Mock)
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockResolvedValue(createdMemberDetail);
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(studioApi.getMember).toHaveBeenCalledWith(
+        "scope-1",
+        "m-untitled-member",
+      );
+      expect(studioApi.updateMemberImplementationRef).toHaveBeenCalledTimes(2);
+      expect(window.location.pathname).toBe(
+        "/scopes/scope-1/teams/t-alpha/members/m-untitled-member/workflow",
+      );
+    });
+    const getMemberMock = studioApi.getMember as jest.Mock;
+    const updateMemberImplementationRefMock =
+      studioApi.updateMemberImplementationRef as jest.Mock;
+    expect(getMemberMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(getMemberMock.mock.invocationCallOrder[1]).toBeLessThan(
+      updateMemberImplementationRefMock.mock.invocationCallOrder[1],
+    );
+    expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+    expect(studioApi.createMember).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries linking a pending created workflow member without creating another member", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    const { createdMemberDetail } = mockNewWorkflowMemberCreateFixtures();
+    (studioApi.getMember as jest.Mock)
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockRejectedValueOnce(new StudioApiError("Not Found", 404))
+      .mockResolvedValue(createdMemberDetail);
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    fireEvent.click(saveButton);
+
+    expect(
+      await screen.findByText(
+        "Workflow member m-untitled-member was created but is not visible yet. Retry saving in a moment.",
+      ),
+    ).toBeTruthy();
+    expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+    expect(studioApi.createMember).toHaveBeenCalledTimes(1);
+    expect(studioApi.updateMemberImplementationRef).not.toHaveBeenCalled();
+
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.updateMemberImplementationRef).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "m-untitled-member",
+        implementationRef: {
+          implementationKind: "workflow",
+          workflowId: "wf-untitled-member",
+        },
+      });
+      expect(window.location.pathname).toBe(
+        "/scopes/scope-1/teams/t-alpha/members/m-untitled-member/workflow",
+      );
+    });
+    expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+    expect(studioApi.createMember).toHaveBeenCalledTimes(1);
   });
 
   it("reloads route state after creating a workflow member", async () => {

@@ -757,6 +757,8 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
   'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
+  'teamMemberWorkflowStudio.draftRunPanel.closeAria':
+    'Close draft run panel',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':

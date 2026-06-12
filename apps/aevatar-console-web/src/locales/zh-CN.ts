@@ -715,6 +715,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.title': '节点库',
   'teamMemberWorkflowStudio.resize.executionPanel': '调整运行控制台大小',
   'teamMemberWorkflowStudio.resize.sidePanel': '调整侧边面板大小',
+  'teamMemberWorkflowStudio.draftRunPanel.closeAria': '关闭草稿运行面板',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     '草稿运行输入',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
