@@ -317,6 +317,23 @@ public sealed class StudioMemberService : IStudioMemberService
                 ct);
         }
 
+        if (request.ImplementationRef.HasValue)
+        {
+            var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
+                ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+            var implementation = NormalizePatchImplementationRef(
+                memberId,
+                detail.Summary.ImplementationKind,
+                request.ImplementationRef.Value
+                    ?? throw new InvalidOperationException("implementationRef must not be null when present."));
+
+            await _memberCommandPort.UpdateImplementationAsync(
+                scopeId,
+                memberId,
+                implementation,
+                ct);
+        }
+
         // Re-read the member detail so callers see the post-update state.
         return await GetAsync(scopeId, memberId, ct);
     }
@@ -479,10 +496,83 @@ public sealed class StudioMemberService : IStudioMemberService
         return normalized;
     }
 
+    private static StudioMemberImplementationRefResponse NormalizePatchImplementationRef(
+        string memberId,
+        string memberImplementationKind,
+        StudioMemberImplementationRefResponse implementation)
+    {
+        var kind = NormalizeRequired(implementation.ImplementationKind, "implementationRef.implementationKind")
+            .ToLowerInvariant();
+
+        if (!string.Equals(kind, memberImplementationKind, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"member '{memberId}' implementationKind is locked at create. " +
+                $"Was {memberImplementationKind}, attempted {kind}.");
+        }
+
+        return kind switch
+        {
+            MemberImplementationKindNames.Workflow => NormalizeWorkflowImplementationRef(implementation),
+            MemberImplementationKindNames.Script => NormalizeScriptImplementationRef(implementation),
+            MemberImplementationKindNames.GAgent => NormalizeGAgentImplementationRef(implementation),
+            _ => throw new InvalidOperationException(
+                $"implementationRef.implementationKind '{implementation.ImplementationKind}' is not supported."),
+        };
+    }
+
+    private static StudioMemberImplementationRefResponse NormalizeWorkflowImplementationRef(
+        StudioMemberImplementationRefResponse implementation)
+    {
+        RejectPresent(implementation.ScriptId, "implementationRef.scriptId", implementation.ImplementationKind);
+        RejectPresent(implementation.ScriptRevision, "implementationRef.scriptRevision", implementation.ImplementationKind);
+        RejectPresent(implementation.ActorTypeName, "implementationRef.actorTypeName", implementation.ImplementationKind);
+
+        return new StudioMemberImplementationRefResponse(
+            ImplementationKind: MemberImplementationKindNames.Workflow,
+            WorkflowId: NormalizeRequired(implementation.WorkflowId, "implementationRef.workflowId"),
+            WorkflowRevision: NormalizeOptional(implementation.WorkflowRevision));
+    }
+
+    private static StudioMemberImplementationRefResponse NormalizeScriptImplementationRef(
+        StudioMemberImplementationRefResponse implementation)
+    {
+        RejectPresent(implementation.WorkflowId, "implementationRef.workflowId", implementation.ImplementationKind);
+        RejectPresent(implementation.WorkflowRevision, "implementationRef.workflowRevision", implementation.ImplementationKind);
+        RejectPresent(implementation.ActorTypeName, "implementationRef.actorTypeName", implementation.ImplementationKind);
+
+        return new StudioMemberImplementationRefResponse(
+            ImplementationKind: MemberImplementationKindNames.Script,
+            ScriptId: NormalizeRequired(implementation.ScriptId, "implementationRef.scriptId"),
+            ScriptRevision: NormalizeOptional(implementation.ScriptRevision));
+    }
+
+    private static StudioMemberImplementationRefResponse NormalizeGAgentImplementationRef(
+        StudioMemberImplementationRefResponse implementation)
+    {
+        RejectPresent(implementation.WorkflowId, "implementationRef.workflowId", implementation.ImplementationKind);
+        RejectPresent(implementation.WorkflowRevision, "implementationRef.workflowRevision", implementation.ImplementationKind);
+        RejectPresent(implementation.ScriptId, "implementationRef.scriptId", implementation.ImplementationKind);
+        RejectPresent(implementation.ScriptRevision, "implementationRef.scriptRevision", implementation.ImplementationKind);
+
+        return new StudioMemberImplementationRefResponse(
+            ImplementationKind: MemberImplementationKindNames.GAgent,
+            ActorTypeName: NormalizeRequired(implementation.ActorTypeName, "implementationRef.actorTypeName"));
+    }
+
     private static string? NormalizeOptional(string? value)
     {
         var normalized = value?.Trim() ?? string.Empty;
         return normalized.Length == 0 ? null : normalized;
+    }
+
+    private static void RejectPresent(string? value, string fieldName, string implementationKind)
+    {
+        if (value != null)
+        {
+            throw new InvalidOperationException(
+                $"{fieldName} is not allowed when implementationRef.implementationKind is '{implementationKind}'.");
+        }
     }
 
     private static string GenerateBindingRunId() =>
