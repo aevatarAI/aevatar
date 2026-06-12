@@ -2086,6 +2086,14 @@ public static class ScopeServiceEndpoints
                 Approved = request.Approved,
                 UserInput = request.UserInput,
                 Metadata = request.Metadata,
+                ToolApproval = request.ToolApproval == null
+                    ? null
+                    : new WorkflowToolApprovalResumeInput
+                    {
+                        ExecutionId = request.ToolApproval.ExecutionId ?? string.Empty,
+                        ToolCallId = request.ToolApproval.ToolCallId ?? string.Empty,
+                        ApprovalRequestId = request.ToolApproval.ApprovalRequestId ?? string.Empty,
+                    },
             },
             resumeService,
             ct);
@@ -3490,7 +3498,13 @@ const response = await fetch("{{invokePath}}", {
         bool Approved,
         string? UserInput = null,
         Dictionary<string, string>? Metadata = null,
-        string? ActorId = null);
+        string? ActorId = null,
+        WorkflowToolApprovalResumeHttpRequest? ToolApproval = null);
+
+    public sealed record WorkflowToolApprovalResumeHttpRequest(
+        string? ExecutionId,
+        string? ToolCallId,
+        string? ApprovalRequestId);
 
     public sealed record SignalScopeServiceRunHttpRequest(
         string? SignalName,

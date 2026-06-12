@@ -62,6 +62,14 @@ public sealed record WorkflowResumeRequest
     public string? EditedContent { get; init; }
     public string? Feedback { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
+    public WorkflowToolApprovalResumeRequest? ToolApproval { get; init; }
+}
+
+public sealed record WorkflowToolApprovalResumeRequest
+{
+    public required string ExecutionId { get; init; }
+    public required string ToolCallId { get; init; }
+    public required string ApprovalRequestId { get; init; }
 }
 
 public sealed record WorkflowSignalRequest

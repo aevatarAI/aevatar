@@ -492,7 +492,14 @@ message WorkflowToolApprovalSuspension
   string tool_name = 2;
   string tool_call_id = 3;
   string approval_request_id = 4;
-  string arguments_json = 5;
+  reserved 5;
+  reserved "arguments_json";
+}
+message WorkflowToolApprovalResume
+{
+  string execution_id = 1;
+  string tool_call_id = 2;
+  string approval_request_id = 3;
 }
 message WorkflowResumedEvent
 {
@@ -503,6 +510,7 @@ message WorkflowResumedEvent
   map<string, string> metadata = 5;
   string edited_content = 6;
   string feedback = 7;
+  WorkflowToolApprovalResume tool_approval = 8;
 }
 message WorkflowHumanApprovalResolvedEvent
 {

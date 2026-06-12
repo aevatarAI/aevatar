@@ -425,7 +425,12 @@ internal sealed class ScheduledAgentCreateRequestMapper
             };
         }
 
-        public bool HasProperty(string name) => Properties.ContainsKey(name);
+        // A JSON null is "not provided": tool-calling models routinely emit every schema
+        // field and null the unused ones (e.g. delay_seconds=180 alongside run_at_utc=null).
+        // Treating a present-but-null key as provided made the one-shot "exactly one of
+        // delay_seconds or run_at_utc" guard reject every valid reminder (2026-06-12).
+        public bool HasProperty(string name) =>
+            Properties.TryGetValue(name, out var value) && value.ValueKind != JsonValueKind.Null;
 
         public bool? Bool(string name)
         {

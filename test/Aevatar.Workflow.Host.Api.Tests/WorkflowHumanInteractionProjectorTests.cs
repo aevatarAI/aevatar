@@ -212,7 +212,6 @@ public sealed class WorkflowHumanInteractionProjectorTests
                         ToolName = "dangerous_tool",
                         ToolCallId = "call-tool",
                         ApprovalRequestId = "approval-tool",
-                        ArgumentsJson = "{}",
                     },
                 }),
             },
