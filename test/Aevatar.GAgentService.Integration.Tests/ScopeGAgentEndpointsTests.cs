@@ -54,8 +54,8 @@ public sealed class ScopeGAgentEndpointsTests
             .Where(r => r != null)
             .ToHashSet(StringComparer.Ordinal);
 
-        routes.Should().Contain(route => route.Contains("gagent-kinds"));
-        routes.Should().NotContain(route => route.Contains("gagent-types"));
+        routes.Should().Contain(route => route.Contains("gagent-types"));
+        routes.Should().NotContain(route => route.Contains("gagent-kinds"));
         routes.Should().Contain(route => route.Contains("gagent/draft-run"));
         routes.Should().Contain(route => route.Contains("gagent-actors"));
         routes.Should().Contain("/api/scopes/{scopeId}/execution-events");
@@ -120,12 +120,32 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public async Task OldGAgentTypesRoute_ShouldReturnNotFoundOverHttp()
+    public async Task GAgentTypesRoute_ShouldReturnAgentKindCatalogOverHttp()
     {
-        await using var host = await ScopeGAgentEndpointHostedTestHost.StartAsync(new FakeGAgentDraftRunInteractionPort());
+        var catalogReader = new FakeServiceCatalogQueryReader
+        {
+            Services = [CreateServiceCatalogSnapshot("orders")],
+        };
+        var revisionReader = new FakeServiceRevisionCatalogQueryReader();
+        revisionReader.Revisions[ServiceKeys.Build(CreateServiceIdentity("orders"))] = new ServiceRevisionCatalogSnapshot(
+            ServiceKeys.Build(CreateServiceIdentity("orders")),
+            [CreateStaticRevisionSnapshot(
+                "rev-1",
+                "Tests.OrdersGAgent, Tests",
+                "tests.orders",
+                "run")],
+            DateTimeOffset.UtcNow);
+        await using var host = await ScopeGAgentEndpointHostedTestHost.StartAsync(
+            new FakeGAgentDraftRunInteractionPort(),
+            catalogReader,
+            revisionReader);
         using var response = await host.Client.GetAsync("/api/scopes/gagent-types");
 
-        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("\"agentKind\":\"tests.orders\"");
+        body.Should().Contain("\"diagnosticClrTypeName\":\"Tests.OrdersGAgent, Tests\"");
+        body.Should().NotContain("actorTypeName");
     }
 
     [Fact]
@@ -1641,7 +1661,9 @@ public sealed class ScopeGAgentEndpointsTests
         public InMemoryStreamProvider StreamProvider { get; }
 
         public static async Task<ScopeGAgentEndpointHostedTestHost> StartAsync(
-            FakeGAgentDraftRunInteractionPort interactionPort)
+            FakeGAgentDraftRunInteractionPort interactionPort,
+            IServiceCatalogQueryReader? catalogReader = null,
+            IServiceRevisionCatalogQueryReader? revisionCatalogReader = null)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
@@ -1657,6 +1679,8 @@ public sealed class ScopeGAgentEndpointsTests
             builder.Services.AddSingleton<IGAgentActorRegistryCommandPort>(actorStore);
             builder.Services.AddSingleton<IGAgentActorRegistryQueryPort>(actorStore);
             builder.Services.AddSingleton<IScopeResourceAdmissionPort>(actorStore);
+            builder.Services.AddSingleton(catalogReader ?? new FakeServiceCatalogQueryReader());
+            builder.Services.AddSingleton(revisionCatalogReader ?? new FakeServiceRevisionCatalogQueryReader());
 
             var app = builder.Build();
             app.Use(async (http, next) =>

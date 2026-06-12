@@ -54,7 +54,7 @@ describe("runtimeGAgentApi", () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe("/api/scopes/gagent-kinds");
+    expect(input).toBe("/api/scopes/gagent-types");
     expect(new Headers(init?.headers).get("Authorization")).toBe(
       "Bearer access-token"
     );
@@ -169,6 +169,7 @@ describe("runtimeGAgentApi", () => {
       preferredActorId: "orders-1",
       timeoutMs: undefined,
     });
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty("actorTypeName");
     expect(init?.signal).toBe(controller.signal);
   });
 

@@ -27,7 +27,7 @@ public static class ScopeGAgentEndpoints
     public static IEndpointRouteBuilder MapScopeGAgentCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/scopes").WithTags("ScopeGAgent");
-        group.MapGet("/gagent-kinds", HandleListGAgentKindsAsync);
+        group.MapGet("/gagent-types", HandleListGAgentKindsAsync);
         group.MapPost("/{scopeId}/gagent/draft-run", HandleDraftRunAsync);
         group.MapGet("/{scopeId}/gagent-actors", HandleListActorsAsync);
         group.MapPost("/{scopeId}/gagent-actors", HandleAddActorAsync);
