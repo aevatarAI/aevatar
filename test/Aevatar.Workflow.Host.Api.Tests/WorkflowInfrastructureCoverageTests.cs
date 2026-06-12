@@ -677,6 +677,35 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldFailClosedWhenNoInputFileRefsAreAvailable()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-zero-ref-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var tool = await GetDocumentExtractToolAsync(CreateFileArtifactPort(root));
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                "{}",
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Contain("fileRef object or exactly one input file ref");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WorkflowDocumentExtractTool_ShouldFailClosedWhenInputFileRefsAreAmbiguous()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-ambiguous-ref-tests", Guid.NewGuid().ToString("N"));
