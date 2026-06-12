@@ -83,9 +83,14 @@ public sealed class MEAILLMProvider : ILLMProvider
         _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} messages", messages.Count);
         var emittedStreamChunk = false;
         string? lastFinishReason = null;
+        var updateCount = 0;
+        var textEmits = 0;
+        var reasoningEmits = 0;
+        var toolCallEmits = 0;
 
         await foreach (var update in _client.GetStreamingResponseAsync(messages, options, ct))
         {
+            updateCount++;
             if (update.FinishReason != null)
                 lastFinishReason = update.FinishReason.Value.ToString();
 
@@ -100,6 +105,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                         case TextContent textContent when !string.IsNullOrEmpty(textContent.Text):
                             emittedTextFromContents = true;
                             emittedStreamChunk = true;
+                            textEmits++;
                             yield return new LLMStreamChunk
                             {
                                 DeltaContent = textContent.Text,
@@ -108,6 +114,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                         case TextReasoningContent reasoningContent when !string.IsNullOrEmpty(reasoningContent.Text):
                             emittedReasoningFromContents = true;
                             emittedStreamChunk = true;
+                            reasoningEmits++;
                             yield return new LLMStreamChunk
                             {
                                 DeltaReasoningContent = reasoningContent.Text,
@@ -115,6 +122,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                             break;
                         case FunctionCallContent functionCall:
                             emittedStreamChunk = true;
+                            toolCallEmits++;
                             yield return new LLMStreamChunk
                             {
                                 DeltaToolCall = ConvertFunctionCallDelta(functionCall),
@@ -141,6 +149,7 @@ public sealed class MEAILLMProvider : ILLMProvider
             if (!emittedTextFromContents && !string.IsNullOrEmpty(update.Text))
             {
                 emittedStreamChunk = true;
+                textEmits++;
                 yield return new LLMStreamChunk
                 {
                     DeltaContent = update.Text,
@@ -171,6 +180,17 @@ public sealed class MEAILLMProvider : ILLMProvider
                 yield return fallbackChunk;
             yield break;
         }
+
+        // Stream-shape probe for the 2026-06-12 empty-reply incident: counts only, no content.
+        _logger.LogInformation(
+            "MEAI stream completed: provider={Provider} updates={Updates} textEmits={TextEmits} reasoningEmits={ReasoningEmits} toolCallEmits={ToolCallEmits} finish={Finish} messages={MessageCount}",
+            Name,
+            updateCount,
+            textEmits,
+            reasoningEmits,
+            toolCallEmits,
+            lastFinishReason ?? "(none)",
+            messages.Count);
 
         // The final chunk marks the end
         yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason };
