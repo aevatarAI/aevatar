@@ -3,6 +3,10 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
+using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ProtoWorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
+using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Application.Runs;
 
@@ -54,7 +58,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        return new WorkflowChatInputPartPayload
+        var payload = new WorkflowChatInputPartPayload
         {
             Kind = source.Kind switch
             {
@@ -69,6 +73,41 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             MediaType = source.MediaType ?? string.Empty,
             Uri = source.Uri ?? string.Empty,
             Name = source.Name ?? string.Empty,
+        };
+        if (source.FileRef != null)
+            payload.FileRef = ToProto(source.FileRef);
+
+        return payload;
+    }
+
+    private static ProtoWorkflowFileRef ToProto(ApplicationWorkflowFileRef source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new ProtoWorkflowFileRef
+        {
+            FileId = source.FileId ?? string.Empty,
+            ArtifactId = source.ArtifactId ?? string.Empty,
+            SourceKind = source.SourceKind switch
+            {
+                ApplicationWorkflowFileSourceKind.ChatInput => ProtoWorkflowFileSourceKind.ChatInput,
+                ApplicationWorkflowFileSourceKind.FormUpload => ProtoWorkflowFileSourceKind.FormUpload,
+                ApplicationWorkflowFileSourceKind.ConnectedServiceResource =>
+                    ProtoWorkflowFileSourceKind.ConnectedServiceResource,
+                ApplicationWorkflowFileSourceKind.ExternalResource => ProtoWorkflowFileSourceKind.ExternalResource,
+                ApplicationWorkflowFileSourceKind.Generated => ProtoWorkflowFileSourceKind.Generated,
+                _ => ProtoWorkflowFileSourceKind.Unspecified,
+            },
+            SourceMessageId = source.SourceMessageId ?? string.Empty,
+            SourceResourceKey = source.SourceResourceKey ?? string.Empty,
+            FileName = source.FileName ?? string.Empty,
+            MediaType = source.MediaType ?? string.Empty,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId ?? string.Empty,
+            OwnerScopeId = source.OwnerScopeId ?? string.Empty,
         };
     }
 

@@ -281,12 +281,18 @@ public sealed class WorkflowRunGAgent
             ExecutionContextDelta = executionContextDelta,
         });
 
-        await PublishAsync(new StartWorkflowEvent
+        var startWorkflow = new StartWorkflowEvent
         {
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt,
             RunId = runId,
-        }, TopologyAudience.Self);
+        };
+        startWorkflow.InputFileRefs.Add(
+            request.InputParts
+                .Where(static part => part.FileRef != null)
+                .Select(static part => part.FileRef.Clone()));
+
+        await PublishAsync(startWorkflow, TopologyAudience.Self);
     }
 
     [EventHandler]

@@ -154,6 +154,74 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunGAgent_WhenChatInputHasFileRef_ShouldPublishStartWorkflowFileRefs()
+    {
+        var publisher = new RecordingEventPublisher();
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(runtime: runtime);
+        agent.EventPublisher = publisher;
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-1");
+        var inputFileRef = new WorkflowFileRef
+        {
+            FileId = "wf-file-chat",
+            ArtifactId = "workflow-file://wf-file-chat",
+            SourceKind = WorkflowFileSourceKind.ChatInput,
+            SourceMessageId = "message-1",
+            SourceResourceKey = "attachment-1",
+            FileName = "input.txt",
+            MediaType = "text/plain",
+            SizeBytes = 12,
+            Sha256 = "abc123",
+            CreatedAtUnixMs = 1,
+            ExpiresAtUnixMs = 2,
+            OwnerRunId = "incoming-run",
+            OwnerScopeId = "scope-1",
+        };
+
+        await agent.HandleChatRequest(new WorkflowChatRequestEvent
+        {
+            Prompt = "extract",
+            SessionId = "s1",
+            InputParts =
+            {
+                new WorkflowChatInputPartPayload
+                {
+                    Kind = WorkflowChatInputPartKind.Text,
+                    Text = "extract",
+                },
+                new WorkflowChatInputPartPayload
+                {
+                    Kind = WorkflowChatInputPartKind.Image,
+                    FileRef = inputFileRef,
+                },
+            },
+        });
+
+        var start = publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
+        start.WorkflowName.Should().Be("wf_valid");
+        start.RunId.Should().Be("run-1");
+        var startFileRef = start.InputFileRefs.Should().ContainSingle().Subject;
+        startFileRef.Should().NotBeSameAs(inputFileRef);
+        startFileRef.FileId.Should().Be("wf-file-chat");
+        startFileRef.ArtifactId.Should().Be("workflow-file://wf-file-chat");
+        startFileRef.SourceKind.Should().Be(WorkflowFileSourceKind.ChatInput);
+        startFileRef.SourceMessageId.Should().Be("message-1");
+        startFileRef.SourceResourceKey.Should().Be("attachment-1");
+        startFileRef.FileName.Should().Be("input.txt");
+        startFileRef.MediaType.Should().Be("text/plain");
+        startFileRef.SizeBytes.Should().Be(12);
+        startFileRef.Sha256.Should().Be("abc123");
+        startFileRef.CreatedAtUnixMs.Should().Be(1);
+        startFileRef.ExpiresAtUnixMs.Should().Be(2);
+        startFileRef.OwnerRunId.Should().Be("incoming-run");
+        startFileRef.OwnerScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
     public async Task WorkflowRunGAgent_ShouldPassFullRoleConfigurationToInitializeEvent()
     {
         var runtime = new RecordingActorRuntime();

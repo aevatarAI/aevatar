@@ -278,6 +278,7 @@ steps:
 
 - 作用：调用已注册工具（函数/工具链/MCP 工具）。
 - 常用参数：`tool`。
+- 当前 step 的 typed `input_file_refs` 会随 `WorkflowToolExecutionRequest` 传入工具。`document_extract` 支持显式 `fileRef/file_ref` 参数；未显式传入时，只在当前 step 恰好有 1 个输入文件引用时 fallback，0 个或多个输入文件都 fail closed，要求调用方显式选择。
 
 ```yaml
 steps:

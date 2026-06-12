@@ -1,0 +1,8 @@
+name: probe_document_extract
+description: Probe workflow for document_extract current-step file fallback.
+
+steps:
+  - id: extract_input_document
+    type: tool_call
+    parameters:
+      tool: document_extract

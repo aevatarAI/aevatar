@@ -655,6 +655,41 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldPreserveInputPartFileRef()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "extract",
+            InputParts =
+            [
+                new ChatInputContentPart
+                {
+                    Type = "text",
+                    Text = "extract",
+                    FileRef = new ChatInputFileRef
+                    {
+                        FileId = "file-1",
+                        ArtifactId = "workflow-file://file-1",
+                        SourceKind = "chat_input",
+                        FileName = "input.txt",
+                        MediaType = "text/plain",
+                        SizeBytes = 7,
+                    },
+                },
+            ],
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        var fileRef = result.Request!.InputParts.Should().ContainSingle().Subject.FileRef;
+        fileRef.Should().NotBeNull();
+        fileRef!.FileId.Should().Be("file-1");
+        fileRef.SourceKind.Should().Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind.ChatInput);
+        fileRef.SizeBytes.Should().Be(7);
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldDerivePlaceholderPrompt_FromMediaOnlyInput()
     {
         var input = new ChatInput
