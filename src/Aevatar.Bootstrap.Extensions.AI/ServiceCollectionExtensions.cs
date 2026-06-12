@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
@@ -110,6 +111,7 @@ public static class ServiceCollectionExtensions
         // fail closed instead of stranding a dead-letter approval (#2004).
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
+        services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
             new LocalWorkflowDefinitionCommandAdapter(
@@ -534,8 +536,9 @@ public static class ServiceCollectionExtensions
             {
                 var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
                 var logger = sp.GetService<ILogger<ReloadableLLMProviderFactory>>();
+                var loggerFactory = sp.GetService<ILoggerFactory>();
                 return new ReloadableLLMProviderFactory(
-                    () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor),
+                    () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, loggerFactory),
                     versionProvider,
                     logger);
             });
@@ -545,14 +548,15 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILLMProviderFactory>(sp =>
         {
             var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
-            return BuildLlmProviderFactory(configuration, options, secretsStoreAccessor);
+            return BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, sp.GetService<ILoggerFactory>());
         });
     }
 
     private static ILLMProviderFactory BuildLlmProviderFactory(
         IConfiguration configuration,
         AevatarAIFeatureOptions options,
-        Func<IAevatarSecretsStore> secretsStoreAccessor)
+        Func<IAevatarSecretsStore> secretsStoreAccessor,
+        ILoggerFactory? loggerFactory = null)
     {
         var secrets = secretsStoreAccessor();
         var configuredProviders = ReadConfiguredProviders(secrets, configuration, options);
@@ -592,16 +596,16 @@ public static class ServiceCollectionExtensions
         }
 
         if (nyxIdProviders.Count == 0)
-            return BuildPrimaryFactory(configuredProviders, defaultName, options);
+            return BuildPrimaryFactory(configuredProviders, defaultName, options, loggerFactory);
 
         var standardProviders = configuredProviders
             .Where(provider => !IsNyxIdProviderType(provider.ProviderType))
             .ToList();
-        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName);
+        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName, loggerFactory);
         if (standardProviders.Count == 0)
             return nyxIdFactory;
 
-        var primaryFactory = BuildPrimaryFactory(standardProviders, defaultName, options);
+        var primaryFactory = BuildPrimaryFactory(standardProviders, defaultName, options, loggerFactory);
         var extraProviders = nyxIdFactory
             .GetAvailableProviders()
             .Select(nyxIdFactory.GetProvider)
@@ -612,15 +616,16 @@ public static class ServiceCollectionExtensions
     private static ILLMProviderFactory BuildPrimaryFactory(
         IReadOnlyList<ConfiguredProvider> configuredProviders,
         string defaultName,
-        AevatarAIFeatureOptions options)
+        AevatarAIFeatureOptions options,
+        ILoggerFactory? loggerFactory = null)
     {
         var primaryDefaultName = ResolveDefaultProviderName(configuredProviders, defaultName);
-        var meaiFactory = BuildMeaiFactory(configuredProviders, primaryDefaultName);
+        var meaiFactory = BuildMeaiFactory(configuredProviders, primaryDefaultName, loggerFactory);
         if (!options.EnableMEAIToTornadoFailover)
             return meaiFactory;
 
         var tornadoDefaultName = ResolveTornadoDefaultProviderName(configuredProviders, primaryDefaultName, options);
-        var tornadoFactory = BuildTornadoFactory(configuredProviders, tornadoDefaultName);
+        var tornadoFactory = BuildTornadoFactory(configuredProviders, tornadoDefaultName, loggerFactory);
         return new FailoverLLMProviderFactory(
             meaiFactory,
             tornadoFactory,
@@ -667,16 +672,19 @@ public static class ServiceCollectionExtensions
 
     private static MEAILLMProviderFactory BuildMeaiFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
-        string defaultName)
+        string defaultName,
+        ILoggerFactory? loggerFactory = null)
     {
         var factory = new MEAILLMProviderFactory();
+        var providerLogger = loggerFactory?.CreateLogger<MEAILLMProvider>();
         foreach (var provider in configuredProviders)
         {
             factory.RegisterOpenAI(
                 provider.Name,
                 provider.Model,
                 provider.ApiKey,
-                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint,
+                providerLogger);
         }
 
         factory.SetDefault(defaultName);
@@ -685,16 +693,19 @@ public static class ServiceCollectionExtensions
 
     private static TornadoLLMProviderFactory BuildTornadoFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
-        string defaultName)
+        string defaultName,
+        ILoggerFactory? loggerFactory = null)
     {
         var factory = new TornadoLLMProviderFactory();
+        var providerLogger = loggerFactory?.CreateLogger<TornadoLLMProvider>();
         foreach (var provider in configuredProviders)
         {
             factory.RegisterOpenAICompatible(
                 provider.Name,
                 provider.ApiKey,
                 provider.Model,
-                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint,
+                providerLogger);
         }
 
         factory.SetDefault(defaultName);
@@ -703,9 +714,13 @@ public static class ServiceCollectionExtensions
 
     private static NyxIdLLMProviderFactory BuildNyxIdFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
-        string defaultName)
+        string defaultName,
+        ILoggerFactory? loggerFactory = null)
     {
         var factory = new NyxIdLLMProviderFactory();
+        // Providers default to NullLogger when no logger is supplied, which silenced every
+        // upstream LLM warning (and the 2026-06-12 incident probes) in production.
+        var providerLogger = loggerFactory?.CreateLogger<NyxIdLLMProvider>();
         foreach (var provider in configuredProviders)
         {
             if (string.IsNullOrWhiteSpace(provider.Endpoint))
@@ -721,7 +736,8 @@ public static class ServiceCollectionExtensions
                 provider.Endpoint,
                 // NyxID gateway token comes exclusively from per-request metadata
                 // (the caller's Bearer token). No local secrets fallback.
-                static () => null);
+                static () => null,
+                providerLogger);
         }
 
         factory.SetDefault(ResolveDefaultProviderName(configuredProviders.ToList(), defaultName));

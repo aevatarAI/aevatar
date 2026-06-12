@@ -170,6 +170,56 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithReasoningBearingPriorHistory_StripsReasoningFromLlmInput()
+    {
+        // Regression for the 2026-06-12 prod incident: prior turns' persisted
+        // reasoning_content was rehydrated verbatim into the next turn's LLM request.
+        // Replayed reasoning violates the reasoning-model contract (DeepSeek rejects it
+        // by spec; through the NyxID proxy it silently derails generation until every
+        // turn in the conversation completes empty). The rehydration boundary must strip
+        // reasoning while preserving the visible content.
+        var providerFactory = new SequentialResponseProviderFactory("next assistant");
+        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+
+        var priorHistory = new List<ConversationHistoryEntry>
+        {
+            new()
+            {
+                Role = "user",
+                Content = "first user",
+            },
+            new()
+            {
+                Role = "assistant",
+                Content = "first assistant",
+                ReasoningContent = "prior-turn chain of thought that must never be replayed",
+            },
+        };
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-msg-reasoning",
+                ChannelId = new ChannelId { Value = "lark" },
+                Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-reasoning" },
+                Content = new MessageContent { Text = "second user" },
+            },
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: priorHistory,
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        var rehydratedAssistant = request.Messages.Should()
+            .ContainSingle(message => message.Role == "assistant" && message.Content == "first assistant")
+            .Subject;
+        rehydratedAssistant.ReasoningContent.Should().BeNull(
+            "prior-turn reasoning_content must never be replayed into provider input");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithCurrentLarkImageAttachment_BuildsImageContentPart()
     {
         var imageBytes = new byte[] { 1, 2, 3, 4 };

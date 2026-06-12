@@ -226,7 +226,8 @@ public static class WorkflowCapabilityEndpoints
                     input.UserInput,
                     NormalizeMetadata(input.Metadata),
                     input.EditedContent,
-                    input.Feedback),
+                    input.Feedback,
+                    ToolApproval: ToToolApprovalResumeCommand(input.ToolApproval)),
                 ct);
             if (!dispatch.Succeeded || dispatch.Receipt == null)
             {
@@ -478,6 +479,27 @@ public static class WorkflowCapabilityEndpoints
                 }),
             },
         };
+
+    private static WorkflowToolApprovalResumeCommand? ToToolApprovalResumeCommand(
+        WorkflowToolApprovalResumeInput? input)
+    {
+        if (input == null)
+            return null;
+
+        return new WorkflowToolApprovalResumeCommand(
+            NormalizeRequired(input.ExecutionId, nameof(input.ExecutionId)),
+            NormalizeRequired(input.ToolCallId, nameof(input.ToolCallId)),
+            NormalizeRequired(input.ApprovalRequestId, nameof(input.ApprovalRequestId)));
+    }
+
+    private static string NormalizeRequired(string? value, string name)
+    {
+        var normalized = NormalizeOptional(value);
+        if (normalized == null)
+            throw new ArgumentException("Value is required.", name);
+
+        return normalized;
+    }
 
     private static IResult MapRunControlDispatchFailure(
         WorkflowRunControlStartError error,

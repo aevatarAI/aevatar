@@ -252,6 +252,60 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
+    public async Task HandleVoicePresenceEnableRequested_ShouldPersistDefaultsRuntimeStateAndCommittedEvents()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-voice-enable");
+        await agent.ActivateAsync();
+
+        await agent.HandleVoicePresenceEnableRequested(new VoicePresenceEnableRequested
+        {
+            ModuleName = "  voice_presence  ",
+            VoiceSessionDefaults = new VoiceSessionDefaults
+            {
+                Voice = "alloy",
+                Instructions = "keep replies short",
+                SampleRateHz = 16000,
+                TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+            },
+        });
+
+        agent.State.VoiceSessionDefaults.Should().ContainKey("voice_presence");
+        var defaults = agent.State.VoiceSessionDefaults["voice_presence"];
+        defaults.Voice.Should().Be("alloy");
+        defaults.Instructions.Should().Be("keep replies short");
+        defaults.SampleRateHz.Should().Be(16000);
+        defaults.TurnDetectionMode.Should().Be(VoiceTurnDetectionMode.ServerVad);
+
+        agent.State.VoicePresence.Should().ContainKey("voice_presence");
+        var runtimeState = agent.State.VoicePresence["voice_presence"];
+        runtimeState.Initialized.Should().BeTrue();
+        runtimeState.Status.Should().Be(VoicePresenceRuntimeStatus.Idle);
+        runtimeState.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.Supported);
+        runtimeState.PcmSampleRateHz.Should().Be(16000);
+
+        var persisted = await provider.GetRequiredService<IEventStore>().GetEventsAsync("role-voice-enable");
+        persisted.Should().HaveCount(2);
+        persisted.Select(x => x.EventType).Should().Equal(
+            VoicePresenceEnabledEvent.Descriptor.FullName,
+            VoicePresenceRuntimeStateChangedEvent.Descriptor.FullName);
+
+        var enabled = persisted[0].EventData.Unpack<VoicePresenceEnabledEvent>();
+        enabled.ModuleName.Should().Be("voice_presence");
+        enabled.VoiceSessionDefaults.Voice.Should().Be("alloy");
+        enabled.VoiceSessionDefaults.SampleRateHz.Should().Be(16000);
+        enabled.RuntimeState.Initialized.Should().BeTrue();
+        enabled.RuntimeState.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.Supported);
+        enabled.RuntimeState.PcmSampleRateHz.Should().Be(16000);
+
+        var changed = persisted[1].EventData.Unpack<VoicePresenceRuntimeStateChangedEvent>();
+        changed.ModuleName.Should().Be("voice_presence");
+        changed.State.Initialized.Should().BeTrue();
+        changed.State.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.Supported);
+        changed.State.PcmSampleRateHz.Should().Be(16000);
+    }
+
+    [Fact]
     public async Task HandleToolApprovalDecision_ShouldIgnoreMissingOrMismatchedPendingApproval()
     {
         using var provider = BuildServiceProvider();

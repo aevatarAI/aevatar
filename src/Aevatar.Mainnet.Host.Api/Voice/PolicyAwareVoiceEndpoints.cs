@@ -11,12 +11,14 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Mainnet.Host.Api.Voice;
 
 public static class PolicyAwareVoiceEndpoints
 {
     private const string DefaultPattern = "/ws/voice";
+    internal const string VoiceNotConfiguredReason = "voice_not_configured";
     private const string ScopeClaimType = "scope";
     private const string RemoteAudioTransportUnavailableReason = "remote_audio_transport_unavailable";
     private static readonly string[] RoleClaimTypes =
@@ -37,6 +39,33 @@ public static class PolicyAwareVoiceEndpoints
 
     public static IEndpointConventionBuilder MapPolicyAwareVoiceEndpoint(this IEndpointRouteBuilder app) =>
         app.Map(DefaultPattern, HandlePolicyAwareVoiceAsync);
+
+    /// <summary>
+    /// True when the voice feature registered its realtime session services.
+    /// Voice registration is conditional (no provider configured → skipped),
+    /// so the host must not map handlers whose [FromServices] dependencies
+    /// would crash request-time DI resolution (issue #2023).
+    /// </summary>
+    public static bool IsVoiceRealtimeConfigured(IServiceProvider services) =>
+        services.GetService<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>() is not null;
+
+    /// <summary>
+    /// Fail-closed stand-ins for deployments without a configured voice
+    /// provider: both voice routes answer 503 voice_not_configured instead
+    /// of throwing an unhandled DI exception.
+    /// </summary>
+    public static IEndpointRouteBuilder MapVoiceNotConfiguredEndpoints(this IEndpointRouteBuilder app)
+    {
+        app.Map(DefaultPattern, HandleVoiceNotConfiguredAsync);
+        app.Map(DefaultPattern + "/{actorId}", HandleVoiceNotConfiguredAsync);
+        return app;
+    }
+
+    private static async Task HandleVoiceNotConfiguredAsync(HttpContext http)
+    {
+        http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await http.Response.WriteAsync(VoiceNotConfiguredReason, http.RequestAborted);
+    }
 
     // Implement (issue #695):
     //   Behavior: resolve /ws/voice target through ChatRoutePolicy before WebSocket upgrade.

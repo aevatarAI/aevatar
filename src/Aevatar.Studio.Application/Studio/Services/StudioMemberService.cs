@@ -548,7 +548,7 @@ public sealed class StudioMemberService : IStudioMemberService
         RejectPresent(implementation.ScriptRevision, "implementationRef.scriptRevision", implementation.ImplementationKind);
         RejectPresent(
             implementation.DiagnosticActorTypeName,
-            "implementationRef.diagnostic\u0041ctorTypeName",
+            "implementationRef.diagnosticActorTypeName",
             implementation.ImplementationKind);
 
         return new StudioMemberImplementationRefResponse(
@@ -564,7 +564,7 @@ public sealed class StudioMemberService : IStudioMemberService
         RejectPresent(implementation.WorkflowRevision, "implementationRef.workflowRevision", implementation.ImplementationKind);
         RejectPresent(
             implementation.DiagnosticActorTypeName,
-            "implementationRef.diagnostic\u0041ctorTypeName",
+            "implementationRef.diagnosticActorTypeName",
             implementation.ImplementationKind);
 
         return new StudioMemberImplementationRefResponse(
@@ -585,7 +585,7 @@ public sealed class StudioMemberService : IStudioMemberService
             ImplementationKind: MemberImplementationKindNames.GAgent,
             DiagnosticActorTypeName: NormalizeRequired(
                 implementation.DiagnosticActorTypeName,
-                "implementationRef.diagnostic\u0041ctorTypeName"));
+                "implementationRef.diagnosticActorTypeName"));
     }
 
     private static string? NormalizeOptional(string? value)

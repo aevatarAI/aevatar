@@ -943,6 +943,44 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleResume_ShouldDispatchNestedToolApproval()
+    {
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt("actor-1", "run-1", "cmd-1", "cmd-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                StepId = "tool-step",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResumeInput
+                {
+                    ExecutionId = "exec-1",
+                    ToolCallId = "tool-call-1",
+                    ApprovalRequestId = "approval-1",
+                },
+            },
+            service,
+            ct: CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.Commands.Should().ContainSingle();
+        var command = service.Commands.Single();
+        command.ToolApproval.Should().NotBeNull();
+        command.ToolApproval!.ExecutionId.Should().Be("exec-1");
+        command.ToolApproval.ToolCallId.Should().Be("tool-call-1");
+        command.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
+    }
+
+    [Fact]
     public async Task HandleResume_ShouldTreatActorIdAsOpaqueAndForwardItUnchanged()
     {
         const string opaqueActorId = "static-gagent:script-runtime:mixed-shape";

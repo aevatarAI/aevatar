@@ -91,6 +91,52 @@ data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflo
     }
 
     [Fact]
+    public async Task ResumeAsync_ShouldSerializeNestedToolApprovalPayload()
+    {
+        var client = CreateClient(async (request, ct) =>
+        {
+            request.Method.Should().Be(HttpMethod.Post);
+            request.RequestUri?.AbsolutePath.Should().Be("/api/scopes/scope-a/services/approval/runs/run-1:resume");
+
+            var body = await request.Content!.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(body);
+            doc.RootElement.TryGetProperty("executionId", out _).Should().BeFalse();
+            doc.RootElement.TryGetProperty("approvalRequestId", out _).Should().BeFalse();
+            var toolApproval = doc.RootElement.GetProperty("toolApproval");
+            toolApproval.GetProperty("executionId").GetString().Should().Be("exec-1");
+            toolApproval.GetProperty("toolCallId").GetString().Should().Be("tool-call-1");
+            toolApproval.GetProperty("approvalRequestId").GetString().Should().Be("approval-1");
+
+            return new HttpResponseMessage(HttpStatusCode.Accepted)
+            {
+                Content = new StringContent(
+                    """{"accepted":true,"actorId":"actor-1","runId":"run-1","stepId":"tool-step","commandId":"cmd-1"}""",
+                    Encoding.UTF8,
+                    "application/json"),
+            };
+        });
+
+        var result = await client.ResumeAsync(new WorkflowResumeRequest
+        {
+            ScopeId = "scope-a",
+            ServiceId = "approval",
+            ActorId = "actor-1",
+            RunId = "run-1",
+            StepId = "tool-step",
+            Approved = true,
+            ToolApproval = new WorkflowToolApprovalResumeRequest
+            {
+                ExecutionId = "exec-1",
+                ToolCallId = "tool-call-1",
+                ApprovalRequestId = "approval-1",
+            },
+        });
+
+        result.Accepted.Should().BeTrue();
+        result.StepId.Should().Be("tool-step");
+    }
+
+    [Fact]
     public async Task SignalAsync_ShouldSerializeOptionalStepId()
     {
         var client = CreateClient(async (request, ct) =>

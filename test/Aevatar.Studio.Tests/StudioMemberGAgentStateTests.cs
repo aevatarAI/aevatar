@@ -108,7 +108,7 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
-    public async Task HandleCreated_ShouldRejectDuplicate_WhenImplementationRefDiffers()
+    public async Task HandleCreated_ShouldRejectDuplicate_WhenCoreCreateFieldsDiffer()
     {
         var existing = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
         {
@@ -118,10 +118,6 @@ public sealed class StudioMemberGAgentStateTests
             ImplementationKind = StudioMemberImplementationKind.Workflow,
             PublishedServiceId = "member-m-1",
             CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            ImplementationRef = new StudioMemberImplementationRef
-            {
-                Workflow = new StudioMemberWorkflowRef { WorkflowId = "wf-1" },
-            },
         });
         var eventSourcing = new RecordingEventSourcing(existing);
         var agent = NewHandlerAgent(existing, eventSourcing, new RecordingEventPublisher());
@@ -130,19 +126,101 @@ public sealed class StudioMemberGAgentStateTests
         {
             MemberId = "m-1",
             ScopeId = "scope-1",
-            DisplayName = "Original",
+            DisplayName = "Changed",
             ImplementationKind = StudioMemberImplementationKind.Workflow,
             PublishedServiceId = "member-m-1",
             CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
-            ImplementationRef = new StudioMemberImplementationRef
-            {
-                Workflow = new StudioMemberWorkflowRef { WorkflowId = "wf-2" },
-            },
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*implementationRef*");
+            .WithMessage("*displayName / description / implementationKind*");
         eventSourcing.RaisedEvents.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleCreated_ShouldNoOp_WhenDuplicateCreateWithoutRefArrivesAfterImplementationUpdate()
+    {
+        var createdAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var originalCreate = new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = createdAt,
+        };
+        var created = _agent.Apply(new StudioMemberState(), originalCreate);
+        var updated = _agent.Apply(created, new StudioMemberImplementationUpdatedEvent
+        {
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef
+                {
+                    WorkflowId = "wf-1",
+                    WorkflowRevision = "rev-1",
+                },
+            },
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+        var eventSourcing = new RecordingEventSourcing(updated);
+        var agent = NewHandlerAgent(updated, eventSourcing, new RecordingEventPublisher());
+
+        var act = () => agent.HandleCreated(originalCreate.Clone());
+
+        await act.Should().NotThrowAsync();
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        updated.ImplementationRef.Should().NotBeNull();
+        updated.ImplementationRef.Workflow.WorkflowId.Should().Be("wf-1");
+        updated.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-1");
+    }
+
+    [Fact]
+    public async Task HandleCreated_ShouldNoOp_WhenDuplicateCreateWithOriginalRefArrivesAfterImplementationRevisionUpdate()
+    {
+        var createdAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var originalCreate = new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = createdAt,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef
+                {
+                    WorkflowId = "wf-1",
+                    WorkflowRevision = "rev-a",
+                },
+            },
+        };
+        var created = _agent.Apply(new StudioMemberState(), originalCreate);
+        var updated = _agent.Apply(created, new StudioMemberImplementationUpdatedEvent
+        {
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef
+                {
+                    WorkflowId = "wf-1",
+                    WorkflowRevision = "rev-b",
+                },
+            },
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+        var eventSourcing = new RecordingEventSourcing(updated);
+        var agent = NewHandlerAgent(updated, eventSourcing, new RecordingEventPublisher());
+
+        var act = () => agent.HandleCreated(originalCreate.Clone());
+
+        await act.Should().NotThrowAsync();
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        updated.ImplementationRef.Should().NotBeNull();
+        updated.ImplementationRef.Workflow.WorkflowId.Should().Be("wf-1");
+        updated.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-b");
     }
 
     [Fact]

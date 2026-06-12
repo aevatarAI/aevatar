@@ -317,6 +317,7 @@ public static class MainnetHostBuilderExtensions
         app.UseAevatarDefaultHost();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
+        app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();
@@ -325,10 +326,23 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();
-        app.MapPolicyAwareVoiceEndpoint();
         app.MapStatusEndpoints();
-        app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
-            .RequireAuthorization("voice-dev");
+
+        // Voice service registration is conditional on a configured provider
+        // (RegisterVoicePresenceModules skips everything otherwise). Mapping
+        // the real handlers without those services turns every /ws/voice
+        // request into an unhandled DI 500 (issue #2023) — map the fail-closed
+        // 503 stand-ins instead.
+        if (PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(app.Services))
+        {
+            app.MapPolicyAwareVoiceEndpoint();
+            app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
+                .RequireAuthorization("voice-dev");
+        }
+        else
+        {
+            app.MapVoiceNotConfiguredEndpoints();
+        }
 
         return app;
     }
