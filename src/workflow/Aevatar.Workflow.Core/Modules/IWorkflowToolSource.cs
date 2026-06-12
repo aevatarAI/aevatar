@@ -11,11 +11,21 @@ public interface IWorkflowTool
 
 public sealed record WorkflowToolExecutionResult(
     string ResultJson,
-    WorkflowManagedHandoffOutcome? ManagedHandoff = null)
+    WorkflowManagedHandoffOutcome? ManagedHandoff = null,
+    WorkflowToolApprovalPendingOutcome? PendingApproval = null)
 {
     public static WorkflowToolExecutionResult Success(string resultJson) =>
         new(resultJson ?? string.Empty);
 }
+
+public sealed record WorkflowToolApprovalPendingOutcome(
+    string ApprovalRequestId,
+    string ToolName,
+    string ToolCallId,
+    string ArgumentsJson,
+    string ApprovalMode,
+    bool IsReadOnly,
+    bool IsDestructive);
 
 public sealed record WorkflowToolExecutionRequest(
     string ArgumentsJson,
@@ -25,7 +35,8 @@ public sealed record WorkflowToolExecutionRequest(
     string CallId,
     string ScopeId,
     WorkflowCallerCredential CallerCredential,
-    WorkflowToolRuntimeContext RuntimeContext)
+    WorkflowToolRuntimeContext RuntimeContext,
+    ToolApprovalGrant? ApprovalGrant = null)
 {
     public WorkflowToolExecutionRequest(
         string ArgumentsJson,
@@ -43,10 +54,16 @@ public sealed record WorkflowToolExecutionRequest(
             CallId,
             ScopeId,
             CallerCredential,
-            WorkflowToolRuntimeContext.Empty)
+            WorkflowToolRuntimeContext.Empty,
+            null)
     {
     }
 }
+
+public sealed record ToolApprovalGrant(
+    string ApprovalRequestId,
+    string ToolName,
+    string ToolCallId);
 
 public sealed record WorkflowToolRuntimeContext(
     string ParentActorId,

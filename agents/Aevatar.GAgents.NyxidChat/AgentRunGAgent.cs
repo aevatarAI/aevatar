@@ -692,11 +692,18 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(
         AgentRunReplyStepState stepState,
-        AgentRunChatMessage? llmVisibleNudge = null)
+        AgentRunChatMessage? llmVisibleNudge = null,
+        bool useOwnerFallbackRouting = false)
     {
         var next = stepState.Clone();
         next.FinalNoToolsStep = true;
         next.NextStepIndex++;
+        if (useOwnerFallbackRouting)
+        {
+            next.LlmControl = ResolveOwnerFallbackControl(stepState).ToPayload();
+            next.ToolContext = ResolveOwnerFallbackToolContext(stepState).ToPayload();
+            StripServerDefaultFallbackMetadata(next.ExternalMetadata);
+        }
         // The nudge is LLM-visible plumbing for the retry step only: it is deliberately
         // NOT mirrored into AppendedHistory, so it never lands in the durable
         // conversation history.
@@ -790,7 +797,13 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                     stepState.RunId,
                     stepState.CorrelationId,
                     command.StepIndex);
-                stepState = await AdvanceToFinalNoToolsStepAsync(stepState, BuildEmptyStepRecoveryNudge());
+                request.LlmControl = ResolveOwnerFallbackControl(stepState).ToPayload();
+                request.ToolContext = ResolveOwnerFallbackToolContext(stepState).ToPayload();
+                StripServerDefaultFallbackMetadata(request.Metadata);
+                stepState = await AdvanceToFinalNoToolsStepAsync(
+                    stepState,
+                    BuildEmptyStepRecoveryNudge(),
+                    useOwnerFallbackRouting: true);
                 await DispatchLlmStepExecutorAsync(request, stepState);
                 return;
             }
@@ -841,6 +854,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         request.Activity = ClearRuntimeUserAccessToken(request.Activity);
         request.LlmControl = ResolveOwnerFallbackControl(currentStep).ToPayload();
         request.ToolContext = ResolveOwnerFallbackToolContext(currentStep).ToPayload();
+        StripServerDefaultFallbackMetadata(request.Metadata);
 
         var fallbackStep = BuildOwnerFallbackStepState(currentStep, command.StepIndex);
         _logger.LogWarning(
@@ -966,6 +980,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.HasStreamedTextContent = false;
         next.LlmControl = ResolveOwnerFallbackControl(current).ToPayload();
         next.ToolContext = ResolveOwnerFallbackToolContext(current).ToPayload();
+        StripServerDefaultFallbackMetadata(next.ExternalMetadata);
         next.Messages.Clear();
         next.Messages.AddRange(current.Messages.Where(static message =>
             !string.Equals(message.Role, "assistant", StringComparison.Ordinal) &&
@@ -977,10 +992,10 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     {
         var fallback = LLMControlContextMapper.FromPayload(stepState.OwnerFallbackLlmControl);
         if (HasAnyOwnerFallbackControl(fallback))
-            return fallback with { SenderNyxIdAccessToken = null };
+            return UseServerDefaultRouting(fallback);
 
         var current = AgentRunReplyStepMappers.LlmControlFromProto(stepState);
-        return current with { SenderNyxIdAccessToken = null };
+        return UseServerDefaultRouting(current);
     }
 
     private static AgentToolExecutionContext ResolveOwnerFallbackToolContext(AgentRunReplyStepState stepState)
@@ -1027,7 +1042,32 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         {
             SenderBinding = AgentToolSenderBindingContext.Empty,
             Credentials = context.Credentials with { SenderNyxIdAccessToken = null },
+            Routing = context.Routing with
+            {
+                ModelOverride = null,
+                NyxIdRoutePreference = null,
+                MaxToolRoundsOverride = null,
+            },
         };
+
+    private static LLMControlContext UseServerDefaultRouting(LLMControlContext control) =>
+        control with
+        {
+            SenderNyxIdAccessToken = null,
+            ModelOverride = null,
+            NyxIdRoutePreference = null,
+            MaxToolRoundsOverride = null,
+        };
+
+    private static void StripServerDefaultFallbackMetadata(
+        Google.Protobuf.Collections.MapField<string, string> metadata)
+    {
+        metadata.Remove(LLMRequestMetadataKeys.SenderBindingId);
+        metadata.Remove(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        metadata.Remove(LLMRequestMetadataKeys.ModelOverride);
+        metadata.Remove(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Remove(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+    }
 
     private static ChatActivity? ClearRuntimeUserAccessToken(ChatActivity? activity)
     {

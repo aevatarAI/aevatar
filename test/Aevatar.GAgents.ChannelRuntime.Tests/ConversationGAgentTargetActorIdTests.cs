@@ -74,6 +74,73 @@ public sealed class ConversationGAgentTargetActorIdTests
     }
 
     [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_ShouldRetryAdmissionLocallyWhenRuntimeCredentialEnvelopeHitsOcc()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:dm:ou_user_1");
+        var eventStore = new InMemoryEventStore
+        {
+            BeforeNextAppend = store => store.SeedExternalEvent(
+                actorId,
+                new ConversationReplyLifecycleChangedEvent
+                {
+                    CorrelationId = "other-turn",
+                    ChangedAtUnixMs = 1,
+                    TerminalReason = "concurrent_update",
+                }),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = await CreateAgentAsync(
+            actorId,
+            new DeferredReplyTurnRunner(),
+            new RecordingLlmReplyRunDispatcher(),
+            workflowDispatcher: null,
+            eventStore,
+            publisher);
+        var activity = BuildInboundActivity("msg-dm-occ-1");
+        activity.Conversation = ConversationReference.Create(
+            ChannelId.From("lark"),
+            BotInstanceId.From("reg-1"),
+            ConversationScope.DirectMessage,
+            "ou_user_1",
+            "dm",
+            "ou_user_1");
+        activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "om_dm_1",
+            CorrelationId = "msg-dm-occ-1",
+        };
+        activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "runtime-user-token",
+        };
+
+        await agent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = activity,
+            CorrelationId = "msg-dm-occ-1",
+            RelayApiKeyId = "relay-key-1",
+            CallbackJti = "callback-jti-1",
+            ReplyToken = "runtime-reply-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            CallbackObservedAtUnixMs = 10,
+            CallbackReplayExpiresAtUnixMs = 20,
+        });
+
+        agent.State.PendingRelayAdmissions.Should().ContainSingle(x =>
+            x.ActivityId == "msg-dm-occ-1" &&
+            x.RelayApiKeyId == "relay-key-1" &&
+            x.CallbackJti == "callback-jti-1");
+        eventStore.AppendAttempts.Should().Be(2);
+        publisher.Sent.Should().ContainSingle();
+        var sent = publisher.Sent[0];
+        sent.TargetActorId.Should().Be(actorId);
+        var turn = sent.Event.Should().BeOfType<NyxRelayCallbackTurnRequestedEvent>().Subject;
+        turn.ActivityId.Should().Be("msg-dm-occ-1");
+        turn.ReplyToken.Should().Be("runtime-reply-token");
+        turn.NyxUserAccessToken.Should().Be("runtime-user-token");
+    }
+
+    [Fact]
     public async Task HandleInboundActivityAsync_ShouldRejectWorkflowDraftRunWithoutRunIdBeforePersistenceOrDispatch()
     {
         var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
@@ -310,7 +377,8 @@ public sealed class ConversationGAgentTargetActorIdTests
         IConversationTurnRunner runner,
         IChannelLlmReplyRunDispatcher dispatcher,
         IChannelWorkflowDraftRunInteractionPort? workflowDispatcher = null,
-        InMemoryEventStore? eventStore = null)
+        InMemoryEventStore? eventStore = null,
+        RecordingEventPublisher? eventPublisher = null)
     {
         eventStore ??= new InMemoryEventStore();
         var servicesCollection = new ServiceCollection()
@@ -329,7 +397,7 @@ public sealed class ConversationGAgentTargetActorIdTests
         var agent = new ConversationGAgent
         {
             Services = services,
-            EventPublisher = new RecordingEventPublisher(),
+            EventPublisher = eventPublisher ?? new RecordingEventPublisher(),
             EventSourcingBehaviorFactory =
                 services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
@@ -585,6 +653,8 @@ public sealed class ConversationGAgentTargetActorIdTests
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
+        public List<(string TargetActorId, IMessage Event)> Sent { get; } = [];
+
         public Task PublishAsync<TEvent>(
             TEvent evt,
             TopologyAudience audience = TopologyAudience.Children,
@@ -600,13 +670,21 @@ public sealed class ConversationGAgentTargetActorIdTests
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage =>
-            Task.CompletedTask;
+            where TEvent : IMessage
+        {
+            Sent.Add((targetActorId, (IMessage)evt.Descriptor.Parser.ParseFrom(evt.ToByteArray())));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class InMemoryEventStore : IEventStore
     {
         private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);
+        private bool _beforeNextAppendInvoked;
+
+        public Action<InMemoryEventStore>? BeforeNextAppend { get; init; }
+
+        public int AppendAttempts { get; private set; }
 
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId,
@@ -615,6 +693,13 @@ public sealed class ConversationGAgentTargetActorIdTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            AppendAttempts++;
+            if (!_beforeNextAppendInvoked && BeforeNextAppend is { } beforeNextAppend)
+            {
+                _beforeNextAppendInvoked = true;
+                beforeNextAppend(this);
+            }
+
             if (!_events.TryGetValue(agentId, out var stream))
             {
                 stream = [];
@@ -632,6 +717,25 @@ public sealed class ConversationGAgentTargetActorIdTests
                 AgentId = agentId,
                 LatestVersion = stream.Count == 0 ? 0 : stream[^1].Version,
                 CommittedEvents = { appended.Select(x => x.Clone()) },
+            });
+        }
+
+        public void SeedExternalEvent(string agentId, IMessage evt)
+        {
+            if (!_events.TryGetValue(agentId, out var stream))
+            {
+                stream = [];
+                _events[agentId] = stream;
+            }
+
+            stream.Add(new StateEvent
+            {
+                EventId = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Version = stream.Count == 0 ? 1 : stream[^1].Version + 1,
+                EventType = evt.Descriptor.FullName,
+                EventData = Any.Pack(evt),
+                AgentId = agentId,
             });
         }
 

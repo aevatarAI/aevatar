@@ -602,6 +602,74 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_OneShotWithExplicitNullRunAt_ShouldTreatNullAsUnsetAndSucceed()
+    {
+        // Regression for the 2026-06-12 group-chat incident: gpt-5.5 emitted the full schema
+        // with the unused field nulled (delay_seconds=180 alongside run_at_utc=null). The
+        // "exactly one of delay_seconds or run_at_utc" guard counted the present-but-null key
+        // as provided and rejected every reminder. A JSON null must be treated as unset.
+        var harness = CreateHarness();
+        InitializeSkillRunnerCommand? capturedNullRunAt = null;
+        harness.SkillRunnerPort.InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Do<InitializeSkillRunnerCommand>(value => capturedNullRunAt = value),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "schedule_mode": "one_shot",
+                  "delay_seconds": 180,
+                  "run_at_utc": null,
+                  "one_shot_message": "Send my daily report"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            capturedNullRunAt.Should().NotBeNull();
+            capturedNullRunAt!.ScheduleMode.Should().Be(SkillRunnerScheduleMode.OneShot);
+            capturedNullRunAt.OneShotRunAt.Should().NotBeNull();
+            capturedNullRunAt.OneShotMessage.Should().Be("Send my daily report");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OneShotWithBlankRunAt_ShouldTreatBlankAsUnsetAndSucceed()
+    {
+        var harness = CreateHarness();
+        InitializeSkillRunnerCommand? capturedBlankRunAt = null;
+        harness.SkillRunnerPort.InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Do<InitializeSkillRunnerCommand>(value => capturedBlankRunAt = value),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "schedule_mode": "one_shot",
+                  "delay_seconds": 180,
+                  "run_at_utc": "",
+                  "one_shot_message": "Remind me to join the meeting"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            capturedBlankRunAt.Should().NotBeNull();
+            capturedBlankRunAt!.ScheduleMode.Should().Be(SkillRunnerScheduleMode.OneShot);
+            capturedBlankRunAt.OneShotRunAt.Should().NotBeNull();
+            capturedBlankRunAt.OneShotMessage.Should().Be("Remind me to join the meeting");
+        });
+    }
+
+    [Fact]
     public async Task ExecuteAsync_OneShotReminder_ShouldMintLarkScopedKeyWithoutOrnnPreflight()
     {
         var handler = CreateSuccessHandler();

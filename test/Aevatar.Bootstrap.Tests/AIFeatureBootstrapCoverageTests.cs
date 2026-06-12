@@ -2,6 +2,7 @@ using System.Collections;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
@@ -171,6 +172,7 @@ public class AIFeatureBootstrapCoverageTests
         var services = new ServiceCollection();
         var config = new ConfigurationBuilder().Build();
         services.AddLogging();
+        services.AddSingleton<IActorRuntime, StaticActorRuntime>();
         services.AddSingleton<IActorDispatchPort, NoOpActorDispatchPort>();
         services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
             new EmptyVoicePresenceCapabilityReader());
@@ -200,6 +202,8 @@ public class AIFeatureBootstrapCoverageTests
             .Should().BeOfType<ActorOwnedVoiceRealtimeSession>();
         provider.GetRequiredService<IVoicePresenceCapabilityQueryPort>()
             .Should().NotBeNull();
+        provider.GetRequiredService<IVoicePresenceCapabilityCommandPort>()
+            .Should().BeOfType<VoicePresenceCapabilityCommandPort>();
         provider.GetRequiredService<IVoicePresenceSessionLeasePort>()
             .Should().NotBeNull();
         provider.GetRequiredService<IVoiceVolatileMediaStreamPort>()
@@ -866,6 +870,31 @@ public class AIFeatureBootstrapCoverageTests
     {
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
             Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+
+    private sealed class StaticActorRuntime : IActorRuntime
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<IActor?> GetAsync(string id) =>
+            Task.FromResult<IActor?>(null);
+
+        public Task<bool> ExistsAsync(string id) =>
+            Task.FromResult(true);
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class EmptyVoicePresenceCapabilityReader
