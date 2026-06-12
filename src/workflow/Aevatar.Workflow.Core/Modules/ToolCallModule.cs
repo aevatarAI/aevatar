@@ -76,7 +76,9 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         try
         {
-            var result = await tool.ExecuteAsync(argumentsJson, ct);
+            var result = await tool.ExecuteAsync(
+                new WorkflowToolExecutionRequest(argumentsJson, request.InputFileRefs),
+                ct);
 
             await ctx.PublishAsync(new WorkflowToolCallCompletedEvent
             {

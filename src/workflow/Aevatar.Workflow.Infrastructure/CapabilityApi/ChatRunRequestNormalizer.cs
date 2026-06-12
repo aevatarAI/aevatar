@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
+using System.Text;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -265,10 +266,61 @@ internal static class ChatRunRequestNormalizer
                 MediaType = string.IsNullOrWhiteSpace(part.MediaType) ? null : part.MediaType,
                 Uri = string.IsNullOrWhiteSpace(part.Uri) ? null : part.Uri,
                 Name = string.IsNullOrWhiteSpace(part.Name) ? null : part.Name,
+                FileRef = NormalizeFileRef(part.FileRef),
             });
         }
 
         return normalized.Count == 0 ? null : normalized;
+    }
+
+    private static WorkflowFileRef? NormalizeFileRef(ChatInputFileRef? source)
+    {
+        if (source == null)
+            return null;
+
+        return new WorkflowFileRef
+        {
+            FileId = NormalizeOptional(source.FileId),
+            ArtifactId = NormalizeOptional(source.ArtifactId),
+            SourceKind = NormalizeFileSourceKind(source.SourceKind),
+            SourceMessageId = NormalizeOptional(source.SourceMessageId),
+            SourceResourceKey = NormalizeOptional(source.SourceResourceKey),
+            FileName = NormalizeOptional(source.FileName),
+            MediaType = NormalizeOptional(source.MediaType),
+            SizeBytes = source.SizeBytes.GetValueOrDefault(),
+            Sha256 = NormalizeOptional(source.Sha256),
+            CreatedAtUnixMs = source.CreatedAtUnixMs.GetValueOrDefault(),
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs.GetValueOrDefault(),
+            OwnerRunId = NormalizeOptional(source.OwnerRunId),
+            OwnerScopeId = NormalizeOptional(source.OwnerScopeId),
+        };
+    }
+
+    private static WorkflowFileSourceKind NormalizeFileSourceKind(string? sourceKind) =>
+        NormalizeFileSourceKindKey(sourceKind) switch
+        {
+            "chatinput" => WorkflowFileSourceKind.ChatInput,
+            "formupload" => WorkflowFileSourceKind.FormUpload,
+            "connectedserviceresource" => WorkflowFileSourceKind.ConnectedServiceResource,
+            "externalresource" => WorkflowFileSourceKind.ExternalResource,
+            "generated" => WorkflowFileSourceKind.Generated,
+            _ => WorkflowFileSourceKind.Unspecified,
+        };
+
+    private static string NormalizeFileSourceKindKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var builder = new StringBuilder(value.Length);
+        foreach (var c in value)
+        {
+            if (c is '_' or '-' or ' ')
+                continue;
+            builder.Append(char.ToLowerInvariant(c));
+        }
+
+        return builder.ToString();
     }
 
     private static bool HasOnlyUnsupportedInputParts(

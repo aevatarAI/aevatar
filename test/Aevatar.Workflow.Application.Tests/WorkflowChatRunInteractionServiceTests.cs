@@ -3,16 +3,57 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Tests;
 
 public sealed class WorkflowChatRunInteractionServiceTests
 {
+    [Fact]
+    public void WorkflowChatRequestEnvelopeFactory_ShouldMapInputPartFileRef()
+    {
+        var factory = new WorkflowChatRequestEnvelopeFactory();
+
+        var envelope = factory.CreateEnvelope(
+            new WorkflowChatRunRequest(
+                "extract",
+                WorkflowChatSource.Direct(),
+                InputParts:
+                [
+                    new WorkflowChatInputPart
+                    {
+                        Kind = WorkflowChatInputPartKind.Text,
+                        Text = "extract",
+                        FileRef = new WorkflowFileRef
+                        {
+                            FileId = "file-1",
+                            ArtifactId = "workflow-file://file-1",
+                            SourceKind = WorkflowFileSourceKind.ChatInput,
+                            FileName = "input.txt",
+                            MediaType = "text/plain",
+                        },
+                    },
+                ]),
+            new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+                "run-1",
+                "cmd-1",
+                "corr-1",
+                new Dictionary<string, string>()));
+
+        envelope.Payload.Should().NotBeNull();
+        var request = envelope.Payload.Unpack<Aevatar.Workflow.Abstractions.WorkflowChatRequestEvent>();
+
+        var fileRef = request.InputParts.Should().ContainSingle().Subject.FileRef;
+        fileRef.FileId.Should().Be("file-1");
+        fileRef.SourceKind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput);
+    }
+
     [Fact]
     public async Task ExecuteAsync_ShouldReturnProjectionDisabled_BeforeActorResolutionOrActivation()
     {
