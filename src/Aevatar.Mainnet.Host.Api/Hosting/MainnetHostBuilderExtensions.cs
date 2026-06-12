@@ -326,6 +326,7 @@ public static class MainnetHostBuilderExtensions
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();
         app.MapStatusEndpoints();
+        app.MapVoicePresenceCapabilityAdminEndpoints();
 
         // Voice service registration is conditional on a configured provider
         // (RegisterVoicePresenceModules skips everything otherwise). Mapping

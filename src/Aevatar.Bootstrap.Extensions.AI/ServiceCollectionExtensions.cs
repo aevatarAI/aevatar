@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
@@ -164,6 +165,7 @@ public static class ServiceCollectionExtensions
             return;
 
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
+        services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, VoicePresenceTransportAttachmentPort>();
         services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
