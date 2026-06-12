@@ -40,7 +40,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 //   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
 //   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
 [GAgent("channel.runtime.conversation")]
-public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentState>
+public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentState>, IEventSourcingVersionDriftRecoverableActor
 {
     // Refactor (iter17/cluster-038):
     //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。

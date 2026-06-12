@@ -2113,6 +2113,41 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task ActivateAsync_WhenConversationEventStreamCompactedWithoutSnapshot_RecoversAndAcceptsNewTurn()
+    {
+        var store = new InMemoryEventStore();
+        const string agentId = "channel-conversation:lark:dm:user-1:scope:owner-1";
+
+        await AppendStateEventAsync(
+            store,
+            agentId,
+            new ConversationTurnCompletedEvent
+            {
+                ProcessedActivityId = "old-activity",
+                CompletedAtUnixMs = 1,
+            },
+            1);
+        (await store.DeleteEventsUpToAsync(agentId, 1)).ShouldBe(1);
+
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ => ConversationTurnResult.Sent(
+                "new-activity",
+                new MessageContent { Text = "pong" },
+                "reply-new-activity"),
+        };
+
+        var (agent, _) = CreateAgent(runner, agentId, store: store);
+
+        agent.EventSourcing!.CurrentVersion.ShouldBe(1);
+        await agent.HandleInboundActivityAsync(CreateActivity("new-activity", "lark:dm:user-1"));
+
+        agent.EventSourcing.CurrentVersion.ShouldBe(2);
+        var events = await store.GetEventsAsync(agentId);
+        events.ShouldHaveSingleItem().Version.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenStreamingDisabled_FallsBackToRunLlmReplyAsync()
     {
         var runner = new RecordingTurnRunner
