@@ -461,13 +461,45 @@ public sealed class ResponsesCommandFacade(
     {
         try
         {
-            var admission = await DispatchRunAsync(plan, ct);
-            await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, ct);
-            return ResponsesCreateCommandResult.FromAccepted(new ResponsesCreateAcceptedCommandResult(
-                plan.Normalized,
-                plan.CreatedAt.ToUnixTimeSeconds(),
-                plan.Session,
-                admission));
+            var observed = await observationService.ObserveAsync(
+                new LlmSessionRunObservationRequest(
+                    plan.Session.ActorId,
+                    plan.Session.ResponseId,
+                    $"{plan.Session.ResponseId}:llm-run",
+                    async token =>
+                    {
+                        var admission = await DispatchRunAsync(plan, token).ConfigureAwait(false);
+                        await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, token)
+                            .ConfigureAwait(false);
+                        return admission;
+                    },
+                    DefaultObservationTimeout),
+                null,
+                ct).ConfigureAwait(false);
+            if (observed.Error is not null)
+            {
+                await TryUpdateSessionStatusAsync(
+                    plan.Session,
+                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
+                        ? LlmSessionStatus.Cancelled
+                        : LlmSessionStatus.Failed,
+                    CancellationToken.None);
+                return ResponsesCreateCommandResult.FromError(
+                    observed.Error.StatusCode,
+                    observed.Error.Code,
+                    observed.Error.Message);
+            }
+
+            return observed.Completion is not null
+                ? ResponsesCreateCommandResult.FromCompleted(new ResponsesCreateCompletedCommandResult(
+                    plan.Normalized,
+                    plan.CreatedAt.ToUnixTimeSeconds(),
+                    ResponsesCompletionStage.ReadModelObserved,
+                    observed.Completion))
+                : ResponsesCreateCommandResult.FromError(
+                    503,
+                    "observation_unavailable",
+                    "LLM run observation ended without a terminal event.");
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {

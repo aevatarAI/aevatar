@@ -80,17 +80,18 @@ public sealed class MainnetResponsesEndpointsTests
         root.GetProperty("id").GetString().Should().StartWith("resp_");
         var responseId = root.GetProperty("id").GetString()!;
         root.GetProperty("object").GetString().Should().Be("response");
-        root.GetProperty("status").GetString().Should().Be("in_progress");
+        root.GetProperty("status").GetString().Should().Be("completed");
         root.GetProperty("model").GetString().Should().Be("gpt-5.4");
         root.GetProperty("max_output_tokens").GetInt32().Should().Be(128);
         root.GetProperty("temperature").GetDouble().Should().Be(0.2);
         root.GetProperty("parallel_tool_calls").GetBoolean().Should().BeTrue();
         root.GetProperty("reasoning").GetProperty("effort").ValueKind.Should().Be(JsonValueKind.Null);
-        root.GetProperty("output").GetArrayLength().Should().Be(1);
-        root.GetProperty("output")[0].GetProperty("status").GetString().Should().Be("in_progress");
-        root.GetProperty("usage").ValueKind.Should().Be(JsonValueKind.Null);
+        AssertCompletedMessage(root, "pong");
+        root.GetProperty("usage").GetProperty("input_tokens").GetInt32().Should().Be(3);
+        root.GetProperty("usage").GetProperty("output_tokens").GetInt32().Should().Be(2);
+        root.GetProperty("usage").GetProperty("total_tokens").GetInt32().Should().Be(5);
 
-        provider.StreamCallCount.Should().Be(0);
+        provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Model.Should().Be("gpt-5.4");
         provider.LastRequest.MaxTokens.Should().Be(128);
@@ -126,7 +127,6 @@ public sealed class MainnetResponsesEndpointsTests
         sessions.Registered[0].OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
         var snapshot = await sessions.GetByResponseIdAsync(responseId);
         snapshot!.ActorId.Should().NotContain(responseId);
-        sessions.RecordedCompletions.Should().BeEmpty();
     }
 
     [Fact]
@@ -161,9 +161,8 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("status").GetString().Should().Be("in_progress");
-        doc.RootElement.GetProperty("output").GetArrayLength().Should().Be(1);
-        doc.RootElement.GetProperty("output")[0].GetProperty("status").GetString().Should().Be("in_progress");
+        doc.RootElement.GetProperty("status").GetString().Should().Be("completed");
+        AssertCompletedMessage(doc.RootElement, "eventually visible");
     }
 
     [Fact]
@@ -216,6 +215,37 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WhenNonStreamObservationTimesOut_ShouldReturnTimeoutEnvelope()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        await using var app = await CreateAppAsync(
+            provider,
+            sessions,
+            observationService: StaticLlmSessionRunObservationService.Error(
+                LlmSessionRunObservedTerminalKind.TimedOut,
+                StatusCodes.Status504GatewayTimeout,
+                "response_timeout",
+                "Timed out waiting 30 seconds for the LLM run to emit a terminal event."));
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"gpt-5.4","input":"ping","stream":false}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.GatewayTimeout, body);
+        GetErrorCode(body).Should().Be("response_timeout");
+        body.Should().NotContain("\"status\":\"in_progress\"");
+        body.Should().NotContain("\"object\":\"response\"");
+        sessions.StatusUpdates.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
     public async Task PostResponses_WithDeclaredToolCall_ShouldPersistForwardedToolCallAndReturnFunctionCallItem()
     {
         const string parametersJson = """{"type":"object","properties":{"city":{"type":"string"}}}""";
@@ -263,9 +293,11 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("status").GetString().Should().Be("in_progress");
-        doc.RootElement.GetProperty("output").GetArrayLength().Should().Be(1);
-        doc.RootElement.GetProperty("output")[0].GetProperty("status").GetString().Should().Be("in_progress");
+        doc.RootElement.GetProperty("status").GetString().Should().Be("completed");
+        AssertCompletedMessage(doc.RootElement, string.Empty);
+        doc.RootElement.GetProperty("output").GetArrayLength().Should().Be(2);
+        doc.RootElement.GetProperty("output")[1].GetProperty("type").GetString().Should().Be("function_call");
+        doc.RootElement.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_weather_1");
 
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().NotBeNull();
@@ -338,7 +370,7 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        provider.StreamCallCount.Should().Be(0);
+        provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
@@ -351,9 +383,9 @@ public sealed class MainnetResponsesEndpointsTests
             .Which.Content.Should().Be("delegate work");
         sessions.ForwardedToolCalls.Should().BeEmpty();
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("status").GetString().Should().Be("in_progress");
-        doc.RootElement.GetProperty("output").GetArrayLength().Should().Be(1);
-        doc.RootElement.GetProperty("output")[0].GetProperty("status").GetString().Should().Be("in_progress");
+        doc.RootElement.GetProperty("status").GetString().Should().Be("completed");
+        AssertCompletedMessage(doc.RootElement, string.Empty);
+        doc.RootElement.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_task_1");
     }
 
     [Fact]
@@ -1589,13 +1621,12 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        provider.StreamCallCount.Should().Be(0);
+        provider.StreamCallCount.Should().Be(1);
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         var argumentsJson = ToolChoiceHintArgumentsJson(command, "aevatar_invoke_gagent");
         AssertToolArgument(argumentsJson, "actor_id", "auth-pipeline-member");
-        sessions.RecordedCompletions.Should().BeEmpty();
-        body.Should().Contain("\"status\":\"in_progress\"");
+        body.Should().Contain("\"status\":\"completed\"");
 
         await app.StopAsync();
     }
@@ -2081,8 +2112,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         responseSessions.Registered.Should().ContainSingle();
-        responseSessions.RecordedCompletions.Should().BeEmpty();
-        provider.StreamCallCount.Should().Be(0);
+        provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
@@ -2094,9 +2124,9 @@ public sealed class MainnetResponsesEndpointsTests
 
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
-        root.GetProperty("status").GetString().Should().Be("in_progress");
-        root.GetProperty("output").GetArrayLength().Should().Be(1);
-        root.GetProperty("output")[0].GetProperty("status").GetString().Should().Be("in_progress");
+        root.GetProperty("status").GetString().Should().Be("completed");
+        AssertCompletedMessage(root, string.Empty);
+        root.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_gagent_1");
     }
 
     [Fact]
@@ -2221,7 +2251,7 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        body.Should().Contain("\"status\":\"in_progress\"");
+        body.Should().Contain("\"status\":\"completed\"");
         responseSessions.ForwardedToolCalls.Should().BeEmpty();
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
@@ -2300,7 +2330,6 @@ public sealed class MainnetResponsesEndpointsTests
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         ToolChoiceHintArgumentsJson(command, "aevatar_invoke_gagent")
             .Should().Contain("\"actor_id\":\"ghost-member\"");
-        responseSessions.RecordedCompletions.Should().BeEmpty();
     }
 
     [Fact]
@@ -2377,7 +2406,6 @@ public sealed class MainnetResponsesEndpointsTests
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         ToolChoiceHintArgumentsJson(command, "aevatar_invoke_gagent")
             .Should().Contain("\"actor_id\":\"bad/member\"");
-        responseSessions.RecordedCompletions.Should().BeEmpty();
     }
 
     [Fact]
@@ -2411,8 +2439,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         responseSessions.Registered.Should().ContainSingle();
-        responseSessions.RecordedCompletions.Should().BeEmpty();
-        provider.StreamCallCount.Should().Be(0);
+        provider.StreamCallCount.Should().Be(1);
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         var argumentsJson = ToolChoiceHintArgumentsJson(command, "aevatar_invoke_team");
@@ -2421,9 +2448,9 @@ public sealed class MainnetResponsesEndpointsTests
 
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
-        root.GetProperty("status").GetString().Should().Be("in_progress");
-        root.GetProperty("output").GetArrayLength().Should().Be(1);
-        root.GetProperty("output")[0].GetProperty("status").GetString().Should().Be("in_progress");
+        root.GetProperty("status").GetString().Should().Be("completed");
+        AssertCompletedMessage(root, string.Empty);
+        root.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_team_1");
     }
 
     [Fact]
@@ -2507,7 +2534,6 @@ public sealed class MainnetResponsesEndpointsTests
         var argumentsJson = ToolChoiceHintArgumentsJson(command, "aevatar_invoke_team");
         AssertToolArgument(argumentsJson, "team_id", "missing-team");
         AssertToolArgument(argumentsJson, "endpoint_id", "chat");
-        responseSessions.RecordedCompletions.Should().BeEmpty();
     }
 
     [Fact]
@@ -2544,7 +2570,8 @@ public sealed class MainnetResponsesEndpointsTests
         IResponsesToolProvider? responsesToolProvider = null,
         IResponsesModelsAggregator? modelsAggregator = null,
         IResponsesRouteResolver? routeResolver = null,
-        IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null)
+        IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
+        ILlmSessionRunObservationService? observationService = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -2562,7 +2589,10 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<IActorDispatchPort>(static sp => sp.GetRequiredService<ResponsesRecordingActorDispatchPort>());
         builder.Services.AddSingleton<ILlmSessionObservationScopeLeasePreparationPort>(static sp => sp.GetRequiredService<ResponsesObservationRuntime>().ScopePreparationPort);
         builder.Services.AddSingleton<ILlmSessionObservationProjectionPort>(static sp => sp.GetRequiredService<ResponsesObservationRuntime>().ProjectionPort);
-        builder.Services.AddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
+        if (observationService is null)
+            builder.Services.AddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
+        else
+            builder.Services.AddSingleton(observationService);
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
@@ -2630,6 +2660,29 @@ public sealed class MainnetResponsesEndpointsTests
             }
 
             return DispatchAdmissionFactory.Create(actorId, envelope);
+        }
+    }
+
+    private sealed class StaticLlmSessionRunObservationService(LlmSessionRunObservedResult result)
+        : ILlmSessionRunObservationService
+    {
+        public static StaticLlmSessionRunObservationService Error(
+            LlmSessionRunObservedTerminalKind kind,
+            int statusCode,
+            string code,
+            string message) =>
+            new(new LlmSessionRunObservedResult(
+                null,
+                null,
+                new LlmSessionRunObservedError(kind, statusCode, code, message)));
+
+        public async Task<LlmSessionRunObservedResult> ObserveAsync(
+            LlmSessionRunObservationRequest request,
+            Func<LlmSessionRunObservedDelta, CancellationToken, ValueTask>? onDelta,
+            CancellationToken ct = default)
+        {
+            var admission = await request.DispatchAsync(ct);
+            return result with { Admission = admission };
         }
     }
 
@@ -2809,6 +2862,20 @@ public sealed class MainnetResponsesEndpointsTests
     {
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.GetProperty("error").GetProperty("code").GetString();
+    }
+
+    private static void AssertCompletedMessage(JsonElement response, string expectedText)
+    {
+        var output = response.GetProperty("output");
+        output.GetArrayLength().Should().BeGreaterThan(0);
+        output[0].GetProperty("status").GetString().Should().Be("completed");
+        if (string.IsNullOrWhiteSpace(expectedText))
+        {
+            output[0].GetProperty("content").GetArrayLength().Should().Be(0);
+            return;
+        }
+
+        output[0].GetProperty("content")[0].GetProperty("text").GetString().Should().Be(expectedText);
     }
 
     private static IReadOnlyList<IReadOnlyList<LLMStreamChunk>> ToolThenTextBatches(
