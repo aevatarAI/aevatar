@@ -22,7 +22,7 @@ endpoint_lifecycle_hits="$(
   rg -n "EnsureAndAttachLeaseAsync|EnsureChatProjectionAsync|EnsureSubscriptionProjectionAsync|INyxIdChatSessionProjectionPort" \
     agents/Aevatar.GAgents.StreamingProxy/StreamingProxyEndpoints.cs \
     agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs \
-    agents/Aevatar.GAgents.NyxidChat/NyxIdChatStreamingRunner.cs \
+    agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs \
     || true
 )"
 
