@@ -87,7 +87,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 .ConfigureAwait(false);
             var ownerFallbackControl = ResolveInitialOwnerFallbackControl(
                 generationContext.OwnerFallbackLlmControl,
-                plan.OwnerFallbackLlmControl);
+                plan.OwnerFallbackLlmControl,
+                fallbackToServerDefaultRouting: true);
             var ownerFallbackToolContext = ResolveInitialOwnerFallbackToolContext(
                 generationContext.OwnerFallbackToolContext,
                 plan.OwnerFallbackToolContext,
@@ -678,16 +679,23 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
     private static LLMControlContext ResolveInitialOwnerFallbackControl(
         LLMControlContext ownerSnapshot,
-        LLMControlContext? planFallback)
+        LLMControlContext? planFallback,
+        bool fallbackToServerDefaultRouting = false)
     {
         var candidate = planFallback ?? LLMControlContext.Empty;
         return new LLMControlContext(
             NormalizeOptional(ownerSnapshot.NyxIdAccessToken),
             NormalizeOptional(ownerSnapshot.NyxIdOrgToken),
             SenderNyxIdAccessToken: null,
-            NormalizeOptional(candidate.ModelOverride) ?? NormalizeOptional(ownerSnapshot.ModelOverride),
-            NormalizeOptional(candidate.NyxIdRoutePreference) ?? NormalizeOptional(ownerSnapshot.NyxIdRoutePreference),
-            candidate.MaxToolRoundsOverride ?? ownerSnapshot.MaxToolRoundsOverride,
+            fallbackToServerDefaultRouting
+                ? null
+                : NormalizeOptional(candidate.ModelOverride) ?? NormalizeOptional(ownerSnapshot.ModelOverride),
+            fallbackToServerDefaultRouting
+                ? null
+                : NormalizeOptional(candidate.NyxIdRoutePreference) ?? NormalizeOptional(ownerSnapshot.NyxIdRoutePreference),
+            fallbackToServerDefaultRouting
+                ? null
+                : candidate.MaxToolRoundsOverride ?? ownerSnapshot.MaxToolRoundsOverride,
             NormalizeOptional(candidate.UserMemoryPrompt) ?? NormalizeOptional(ownerSnapshot.UserMemoryPrompt));
     }
 
@@ -704,6 +712,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 NormalizeOptional(ownerControl.NyxIdAccessToken),
                 NormalizeOptional(ownerControl.NyxIdOrgToken),
                 SenderNyxIdAccessToken: null),
+            Routing = new LLMRequestRoutingContext(
+                NormalizeOptional(ownerControl.ModelOverride),
+                NormalizeOptional(ownerControl.NyxIdRoutePreference),
+                ownerControl.MaxToolRoundsOverride,
+                NormalizeOptional(ownerControl.UserMemoryPrompt)),
         };
         return ownerControl.ToToolContext(source);
     }

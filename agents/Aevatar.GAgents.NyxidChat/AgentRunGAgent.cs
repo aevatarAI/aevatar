@@ -692,11 +692,17 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(
         AgentRunReplyStepState stepState,
-        AgentRunChatMessage? llmVisibleNudge = null)
+        AgentRunChatMessage? llmVisibleNudge = null,
+        bool useOwnerFallbackRouting = false)
     {
         var next = stepState.Clone();
         next.FinalNoToolsStep = true;
         next.NextStepIndex++;
+        if (useOwnerFallbackRouting)
+        {
+            next.LlmControl = ResolveOwnerFallbackControl(stepState).ToPayload();
+            next.ToolContext = ResolveOwnerFallbackToolContext(stepState).ToPayload();
+        }
         // The nudge is LLM-visible plumbing for the retry step only: it is deliberately
         // NOT mirrored into AppendedHistory, so it never lands in the durable
         // conversation history.
@@ -790,7 +796,12 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                     stepState.RunId,
                     stepState.CorrelationId,
                     command.StepIndex);
-                stepState = await AdvanceToFinalNoToolsStepAsync(stepState, BuildEmptyStepRecoveryNudge());
+                request.LlmControl = ResolveOwnerFallbackControl(stepState).ToPayload();
+                request.ToolContext = ResolveOwnerFallbackToolContext(stepState).ToPayload();
+                stepState = await AdvanceToFinalNoToolsStepAsync(
+                    stepState,
+                    BuildEmptyStepRecoveryNudge(),
+                    useOwnerFallbackRouting: true);
                 await DispatchLlmStepExecutorAsync(request, stepState);
                 return;
             }

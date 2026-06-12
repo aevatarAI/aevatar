@@ -50,7 +50,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         AgentToolExecutionContext? OwnerFallbackToolContext,
         bool DisableTools);
 
-    private sealed record SenderPreferenceApplication(bool AnyApplied, bool RouteApplied);
+    private sealed record SenderPreferenceApplication(
+        bool ModelApplied,
+        bool RouteApplied,
+        bool MaxToolRoundsApplied)
+    {
+        public bool AnyApplied => ModelApplied || RouteApplied || MaxToolRoundsApplied;
+    }
 
     private sealed record SenderPreferenceResult(LLMControlContext Control, SenderPreferenceApplication Application);
 
@@ -823,6 +829,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 var preferenceResult = await ApplyPreferencesAsync(senderBindingId, effectiveControl, ct);
                 effectiveControl = preferenceResult.Control;
                 var applied = preferenceResult.Application;
+                _logger.LogInformation(
+                    "Resolved sender LLM config: bindingId={BindingId} applied={Applied} modelApplied={ModelApplied} routeApplied={RouteApplied} maxToolRoundsApplied={MaxToolRoundsApplied} effectiveModel={Model} effectiveRoute={Route} effectiveMaxToolRounds={MaxToolRounds}",
+                    senderBindingId,
+                    applied.AnyApplied,
+                    applied.ModelApplied,
+                    applied.RouteApplied,
+                    applied.MaxToolRoundsApplied,
+                    string.IsNullOrWhiteSpace(effectiveControl.ModelOverride) ? "<server-default>" : effectiveControl.ModelOverride,
+                    string.IsNullOrWhiteSpace(effectiveControl.NyxIdRoutePreference) ? "<server-default>" : effectiveControl.NyxIdRoutePreference,
+                    effectiveControl.MaxToolRoundsOverride);
                 if (applied.RouteApplied)
                 {
                     if (!string.IsNullOrWhiteSpace(llmControl?.SenderNyxIdAccessToken))
@@ -845,6 +861,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                         ownerFallbackToolContext = null;
                     }
                 }
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Sender binding is present but LLM preferences store is unavailable; using bot owner/default LLM config: bindingId={BindingId}",
+                    senderBindingId);
             }
         }
 
@@ -895,7 +917,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         CancellationToken ct)
     {
         if (_preferencesStore is null)
-            return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false));
+            return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false, false));
 
         NyxIdUserLlmPreferences preferences;
         try
@@ -906,9 +928,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
-            return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false));
+            _logger.LogWarning(
+                ex,
+                "Failed to load sender LLM config; using bot owner/default LLM config: bindingId={BindingId}",
+                senderBindingId);
+            return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false, false));
         }
 
         var modelApplied = !string.IsNullOrWhiteSpace(preferences.DefaultModel);
@@ -925,7 +951,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
         return new SenderPreferenceResult(
             effectiveControl,
-            new SenderPreferenceApplication(modelApplied || routeApplied || roundsApplied, routeApplied));
+            new SenderPreferenceApplication(modelApplied, routeApplied, roundsApplied));
     }
 
     private static Dictionary<string, string> CreateOwnerFallbackSnapshot(Dictionary<string, string> effective)
