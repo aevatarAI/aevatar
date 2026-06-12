@@ -183,6 +183,74 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextLlmStepAsync_EmptyStepWithoutCapturedReasoning_StillRetriesOnce()
+    {
+        // Regression for the 2026-06-12 prod incident: deepseek slash-skill turns
+        // completed with finishReason=stop, no text, no tool calls AND no captured
+        // ReasoningContent (reasoning deltas are not guaranteed to survive the
+        // provider boundary). The reasoning-gated retry refused to fire and every
+        // run terminated as the generic apology. The recovery gate must not require
+        // an observed reasoning trace.
+        var actorRuntime = new DispatchingActorRuntime();
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-empty-no-reasoning",
+            CorrelationId = "corr-empty-no-reasoning",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-empty-no-reasoning",
+                CorrelationId = "corr-empty-no-reasoning",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 1,
+                MaxToolRounds = 4,
+            },
+        });
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-empty-no-reasoning",
+            CorrelationId = "corr-empty-no-reasoning",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 2,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-empty-no-reasoning",
+                RunId = "run-empty-no-reasoning",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+            },
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                AccumulatedText = string.Empty,
+                Content = string.Empty,
+                ReasoningContent = string.Empty,
+                FinishReason = "stop",
+                HasStreamedTextContent = false,
+            },
+        });
+
+        var step = runtime.State.GenerationStep;
+        step.Should().NotBeNull();
+        step!.FinalNoToolsStep.Should().BeTrue(
+            "an empty completed step must advance to the bounded no-tools retry even when no reasoning trace was captured");
+        executor.LlmStepExecutions.Should().ContainSingle("the run must re-dispatch one LLM retry step");
+        runtime.State.Status.Should().Be(
+            AgentRunStatus.ReplyGenerationRequested,
+            "the run must not terminate while the retry step is in flight");
+    }
+
+    [Fact]
     public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_OnFinalNoToolsStep_FailsWithEmptyReply()
     {
         // The reasoning-only retry is bounded: when the final no-tools step itself
