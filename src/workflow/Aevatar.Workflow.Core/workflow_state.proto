@@ -390,6 +390,7 @@ message PendingToolCallApprovalState
   string approval_request_id = 6;
   string arguments_json = 7;
   string input = 8;
+  repeated WorkflowFileRef input_file_refs = 9;
 }
 
 message ToolCallModuleState
