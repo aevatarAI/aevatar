@@ -62,8 +62,6 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         if (!observation.Succeeded)
             return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(observation.Error);
 
-        _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct);
-
         var receipt = _receiptFactory == null
             ? execution.Receipt
             : _receiptFactory.Create(target, execution.Context);
@@ -71,17 +69,47 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         var observedCompletion = _completionPolicy.IncompleteCompletion;
         var durableCompletion = CommandDurableCompletionObservation<TCompletion>.Incomplete;
         var durableCompletionAttempted = false;
+        var dispatchAdmitted = false;
         CommandInteractionResult<TReceipt, TError, TCompletion>? interactionResult = null;
         Exception? executionException = null;
+        using var pumpCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var emissionGate = new SemaphoreSlim(1, 1);
+        Task? pumpTask = null;
+
+        async ValueTask EmitSerializedAsync(TFrame frame, CancellationToken token)
+        {
+            await emissionGate.WaitAsync(token);
+            try
+            {
+                await emitAsync(frame, token);
+            }
+            finally
+            {
+                emissionGate.Release();
+            }
+        }
+
+        async ValueTask AcceptedSerializedAsync(TReceipt acceptedReceipt, CancellationToken token)
+        {
+            if (onAcceptedAsync == null)
+                return;
+
+            await emissionGate.WaitAsync(token);
+            try
+            {
+                await onAcceptedAsync(acceptedReceipt, token);
+            }
+            finally
+            {
+                emissionGate.Release();
+            }
+        }
 
         try
         {
-            if (onAcceptedAsync != null)
-                await onAcceptedAsync(receipt, ct);
-
-            await _outputStream.PumpAsync(
-                target.RequireLiveSink().ReadAllAsync(ct),
-                emitAsync,
+            pumpTask = _outputStream.PumpAsync(
+                target.RequireLiveSink().ReadAllAsync(pumpCancellation.Token),
+                EmitSerializedAsync,
                 evt =>
                 {
                     if (!_completionPolicy.TryResolve(evt, out var completion))
@@ -91,7 +119,14 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                     observedCompletion = completion;
                     return true;
                 },
-                ct);
+                pumpCancellation.Token);
+
+            _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct);
+            dispatchAdmitted = true;
+
+            await AcceptedSerializedAsync(receipt, ct);
+
+            await pumpTask;
 
             if (!observedCompleted)
             {
@@ -108,7 +143,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                 receipt,
                 observedCompletion,
                 observedCompleted,
-                emitAsync,
+                EmitSerializedAsync,
                 ct);
 
             interactionResult = CommandInteractionResult<TReceipt, TError, TCompletion>.Success(
@@ -125,18 +160,43 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         {
             try
             {
-                if (!observedCompleted && !durableCompletionAttempted)
+                if (executionException != null && pumpTask != null)
+                {
+                    await pumpCancellation.CancelAsync();
+                    try
+                    {
+                        await pumpTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                    catch (Exception pumpException)
+                    {
+                        _logger.LogWarning(
+                            pumpException,
+                            "Command interaction live pump failed after execution failure. command={CommandType}, target={TargetType}",
+                            typeof(TCommand).FullName,
+                            typeof(TTarget).FullName);
+                    }
+                }
+
+                if (dispatchAdmitted && !observedCompleted && !durableCompletionAttempted)
                 {
                     durableCompletion = await _durableCompletionResolver.ResolveAsync(
                         receipt,
                         CancellationToken.None);
                 }
 
+                var cleanupObservedCompleted = dispatchAdmitted && observedCompleted;
+                var cleanupObservedCompletion = dispatchAdmitted
+                    ? observedCompletion
+                    : _completionPolicy.IncompleteCompletion;
+
                 await target.ReleaseAfterInteractionAsync(
                     receipt,
                     new CommandInteractionCleanupContext<TCompletion>(
-                        observedCompleted,
-                        observedCompletion,
+                        cleanupObservedCompleted,
+                        cleanupObservedCompletion,
                         durableCompletion),
                     CancellationToken.None);
             }

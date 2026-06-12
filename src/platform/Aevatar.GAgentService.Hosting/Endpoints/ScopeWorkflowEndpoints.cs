@@ -393,7 +393,7 @@ public static class ScopeWorkflowEndpoints
                 },
                 async (receipt, token) =>
                 {
-                    if (!string.IsNullOrWhiteSpace(receipt.CorrelationId))
+                    if (!started && !http.Response.HasStarted && !string.IsNullOrWhiteSpace(receipt.CorrelationId))
                         http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
 
                     await StartAsync(token);

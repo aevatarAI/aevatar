@@ -104,7 +104,7 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task CommandInteractionService_ShouldNotifyAcceptedAfterPreparedDispatchBeforePumpingOutput()
+    public async Task CommandInteractionService_ShouldStartLivePumpBeforePreparedDispatchCompletes_ThenNotifyAccepted()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
@@ -144,13 +144,15 @@ public sealed class WorkflowApplicationLayerTests
             },
             CancellationToken.None);
 
+        await outputStream.PumpStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         pipeline.DispatchPreparedCalls.Should().Be(1);
-        outputStream.PumpCalls.Should().Be(0);
+        outputStream.PumpCalls.Should().Be(1);
+        accepted.Task.IsCompleted.Should().BeFalse();
 
         dispatchRelease.SetResult(null);
         (await accepted.Task.WaitAsync(TimeSpan.FromSeconds(5))).Should().Be(receipt);
         pipeline.DispatchPreparedCalls.Should().Be(1);
-        outputStream.PumpCalls.Should().Be(0);
+        outputStream.PumpCalls.Should().Be(1);
 
         acceptedRelease.SetResult(null);
         var result = await executeTask.WaitAsync(TimeSpan.FromSeconds(5));
