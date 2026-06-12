@@ -47,7 +47,7 @@ public sealed class StudioMemberEndpointsRouteBindingTests
             .ToList();
 
         // Ten routes mapped: create, list, get, bind, get-binding,
-        // get-binding-run, contract, activate, retire, patch (ADR-0017).
+        // get-binding-run, contract, activate, retire, patch.
         endpoints.Should().HaveCount(10);
     }
 

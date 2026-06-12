@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.Hosting;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -317,7 +318,8 @@ internal static class StudioMemberEndpoints
     /// </summary>
     public sealed class StudioMemberPatchBody
     {
-        public System.Text.Json.JsonElement? TeamId { get; set; }
+        public JsonElement? TeamId { get; set; }
+        public JsonElement? ImplementationRef { get; set; }
     }
 
     internal static async Task<IResult> HandlePatchAsync(
@@ -369,10 +371,40 @@ internal static class StudioMemberEndpoints
             }
         }
 
+        PatchValue<StudioMemberImplementationRefResponse> implementationRefPatch;
+        if (!body.ImplementationRef.HasValue)
+        {
+            implementationRefPatch = PatchValue<StudioMemberImplementationRefResponse>.Absent;
+        }
+        else
+        {
+            var jsonValue = body.ImplementationRef.Value;
+            if (jsonValue.ValueKind == JsonValueKind.Null)
+            {
+                return BadRequest(
+                    "INVALID_STUDIO_MEMBER_REQUEST",
+                    "implementationRef must be an object when present.");
+            }
+
+            if (jsonValue.ValueKind != JsonValueKind.Object)
+            {
+                return BadRequest(
+                    "INVALID_STUDIO_MEMBER_REQUEST",
+                    "implementationRef must be an object or absent.");
+            }
+
+            var implementationRef = jsonValue.Deserialize<StudioMemberImplementationRefResponse>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            implementationRefPatch = PatchValue<StudioMemberImplementationRefResponse>.Of(implementationRef);
+        }
+
         try
         {
             var detail = await memberService.UpdateAsync(
-                scopeId, memberId, new UpdateStudioMemberRequest(teamIdPatch), ct);
+                scopeId,
+                memberId,
+                new UpdateStudioMemberRequest(teamIdPatch, implementationRefPatch),
+                ct);
             return Results.Ok(detail);
         }
         catch (StudioMemberNotFoundException ex)
