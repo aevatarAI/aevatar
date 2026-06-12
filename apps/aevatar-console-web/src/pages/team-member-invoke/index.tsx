@@ -274,7 +274,7 @@ const TeamMemberInvokePage: React.FC = () => {
       breadcrumbRender={false}
       layoutMode="document"
       onBack={() => history.push(backHref)}
-      title={t("pages.teammemberinvoke.title", "Run member")}
+      title={t("pages.teammemberinvoke.title", "Run workflow member")}
     >
       <div style={invokeStageStyle}>
         {isLoading ? (
@@ -318,6 +318,7 @@ const TeamMemberInvokePage: React.FC = () => {
             initialServiceId={publishedServiceId}
             memberId={route.memberId}
             memberRevision={memberRevision}
+            runtimeTarget="service"
             teamId={route.teamId}
             scopeId={route.scopeId}
             selectedMemberLabel={memberLabel}

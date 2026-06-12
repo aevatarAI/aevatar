@@ -33,9 +33,6 @@ namespace Aevatar.GAgentService.Integration.Tests;
 
 public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
 {
-    private static readonly TimeSpan ReadModelVisibilityTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan ReadModelVisibilityPollInterval = TimeSpan.FromMilliseconds(100);
-
     [Fact]
     public async Task DraftRunEndpoint_ShouldExposeCompletedWorkflowActorCurrentStateViaWorkflowActorCurrentState()
     {
@@ -68,46 +65,36 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         HttpClient client,
         string actorId)
     {
-        using var timeout = new CancellationTokenSource();
-        timeout.CancelAfter(ReadModelVisibilityTimeout);
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        WorkflowActorCurrentStateHttpResponse? last = null;
 
-        WorkflowActorCurrentStateHttpResponse? lastSnapshot = null;
-        HttpStatusCode? lastStatus = null;
         try
         {
             while (true)
             {
                 using var snapshotResponse = await client.GetAsync(
                     $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state",
-                    timeout.Token);
-                lastStatus = snapshotResponse.StatusCode;
-                if (snapshotResponse.StatusCode == HttpStatusCode.OK)
-                {
-                    lastSnapshot = await snapshotResponse.Content
-                        .ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>(timeout.Token);
-                    if (lastSnapshot is
-                        {
-                            CompletionStatus: WorkflowRunCompletionStatus.Completed,
-                            LastSuccess: true,
-                            LastOutput: "y\nz"
-                        })
+                    timeoutCts.Token);
+                snapshotResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+                last = await snapshotResponse.Content.ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>(
+                    cancellationToken: timeoutCts.Token);
+                if (last is
                     {
-                        return lastSnapshot;
-                    }
+                        CompletionStatus: WorkflowRunCompletionStatus.Completed,
+                        LastSuccess: true,
+                        LastOutput: "y\nz"
+                    })
+                {
+                    return last;
                 }
 
-                await Task.Delay(ReadModelVisibilityPollInterval, timeout.Token);
+                await Task.Delay(TimeSpan.FromMilliseconds(100), timeoutCts.Token);
             }
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             throw new InvalidOperationException(
-                "Timed out waiting for workflow actor current-state read model to reach completed output. " +
-                $"actor_id={actorId}, last_status={(int?)lastStatus}, " +
-                $"last_completion_status={lastSnapshot?.CompletionStatus.ToString() ?? "<none>"}, " +
-                $"last_state_version={lastSnapshot?.StateVersion.ToString() ?? "<none>"}, " +
-                $"last_success={lastSnapshot?.LastSuccess.ToString() ?? "<none>"}, " +
-                $"last_output={lastSnapshot?.LastOutput ?? "<none>"}");
+                $"Workflow actor current-state did not reach completed. actor_id={actorId}, last_status={last?.CompletionStatus}, last_output={last?.LastOutput}");
         }
     }
 
@@ -328,7 +315,6 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         steps:
           - id: call_level1
             type: workflow_call
-            next: format_final_output
             parameters:
               workflow: "subworkflow_level1"
 
@@ -345,7 +331,6 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         steps:
           - id: call_level2
             type: workflow_call
-            next: reverse_lines_level1
             parameters:
               workflow: "subworkflow_level2"
 
@@ -361,7 +346,6 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         steps:
           - id: call_level3
             type: workflow_call
-            next: distinct_level2
             parameters:
               workflow: "subworkflow_level3"
 

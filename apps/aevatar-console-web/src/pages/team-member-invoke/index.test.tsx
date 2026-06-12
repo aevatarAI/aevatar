@@ -181,7 +181,7 @@ describe("TeamMemberInvokePage", () => {
   it("renders the invoke workbench with Studio team-context routing", async () => {
     renderWithQueryClient(React.createElement(TeamMemberInvokePage));
 
-    expect(await screen.findByText("Run member")).toBeTruthy();
+    expect(await screen.findByText("Run workflow member")).toBeTruthy();
     expect(await screen.findByTestId("member-invoke-panel")).toHaveTextContent(
       "scope:scope-1",
     );
@@ -189,7 +189,7 @@ describe("TeamMemberInvokePage", () => {
       "member:member-alpha",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
-      "target:default",
+      "target:service",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
       "team:team-1",
