@@ -106,7 +106,7 @@ report_filtered_matches \
 report_filtered_matches \
   "GAgent bind request and command paths must not accept caller actorTypeName aliases" \
   "ActorTypeName|actorTypeName|gAgentType|gagentType|gagent_type" \
-  "LEGACY_ACTOR_TYPE_NAME_REJECTED|HasLegacyActorTypeName|gagent\\.actorTypeName is not accepted|string\\.Equals\\(key, \"actorTypeName\"|string\\.Equals\\(key, \"ActorTypeName\"|ActorTypeName = diagnosticClrTypeName|StaticSpec\\.ActorTypeName|staticSpec\\.ActorTypeName|Implementation\\?\\.Static\\?\\.ActorTypeName|DiagnosticClrTypeName|DiagnosticActorTypeName|StaticActorTypeName|result\\.GAgent\\?\\.DiagnosticClrTypeName" \
+  "LEGACY_ACTOR_TYPE_NAME_REJECTED|HasLegacyActorTypeName|gagent\\.actorTypeName is not accepted|string\\.Equals\\(key, \"actorTypeName\"|string\\.Equals\\(key, \"ActorTypeName\"|ActorTypeName = diagnosticClrTypeName|StaticSpec\\.ActorTypeName|staticSpec\\.ActorTypeName|Implementation\\?\\.Static\\?\\.ActorTypeName|DiagnosticClrTypeName|DiagnosticActorTypeName|diagnosticActorTypeName|StaticActorTypeName|result\\.GAgent\\?\\.DiagnosticClrTypeName" \
   "${bind_identity_paths[@]}"
 
 set +e
