@@ -103,6 +103,10 @@ llm-anthropic/claude-haiku-4-5
 - `max_output_tokens`、`temperature`
 - response session 注册、查询可见性校验、24 小时 TTL
 
+默认非 streaming create 是 completed-only：Aevatar 会先把 run command dispatch 到 response session actor，再通过 observation/projection 链等待 terminal event。成功时 HTTP 200 只返回 `status:"completed"` 的 response JSON，`output` 包含 completed message 和已完成的 function-call output item，`usage` 来自 terminal observation。
+
+非 streaming create 不返回 `status:"in_progress"` accepted 空壳。观察超时返回 HTTP 504 error envelope，`code:"response_timeout"`；terminal failure 返回非 2xx error envelope，默认 HTTP 500 或 terminal failure 指定状态；terminal cancellation 返回 HTTP 409，`code:"run_cancelled"`；请求取消或客户端中断沿用 HTTP 408，`code:"request_timeout"`。这些失败不会返回 failed response JSON。真正的 `background:true` 和 `GET /v1/responses/{id}` retrieve 属于后续独立协议与 readmodel，不属于当前入口。
+
 `previous_response_id` 的约束是诚实的：只能继续同一 caller scope 可见、未过期、未失败、未取消的 session。带 `function_call_output` 且显式带 `previous_response_id` 时，Aevatar 会按上一轮记录的 forwarded tool call 对账。
 
 为了兼容 Anthropic 到 OpenAI 的转换器，如果请求里有 `function_call_output`，但没有 `previous_response_id`，Aevatar 不会直接报错，而是把这些 tool result 折进 prompt，形如：
