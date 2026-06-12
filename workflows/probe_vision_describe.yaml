@@ -1,0 +1,22 @@
+name: probe_vision_describe
+description: "Probe whether the active route receives image input through the workflow LLM path."
+roles:
+  - id: observer
+    name: Vision Probe Observer
+    system_prompt: |
+      You are a deterministic multimodal route probe.
+      Inspect the user request and any attached image content.
+      Return only compact JSON with these keys:
+      saw_image: boolean
+      description: string
+      evidence: string
+      If no image is available, set saw_image to false, description to "no image received", and do not invent visual details.
+      If an image is available, set saw_image to true and describe only visible geometry, colors, text, and layout.
+steps:
+  - id: describe
+    type: llm_call
+    role: observer
+    parameters:
+      prompt_prefix: |
+        This run verifies whether the configured LLM route is vision-capable.
+        Use attached image input when present. Return only the requested JSON object.
