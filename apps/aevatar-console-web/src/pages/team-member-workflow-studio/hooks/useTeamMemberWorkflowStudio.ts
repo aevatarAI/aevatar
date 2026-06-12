@@ -918,10 +918,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const loadedDocument =
     normalizeWorkflowDocument(workflowQuery.data?.document) ??
     normalizeWorkflowDocument(parseQuery.data?.document);
+  const workflowDraftTitle =
+    route.mode === "existing"
+      ? trimOptional(workflowQuery.data?.name) ||
+        trimOptional(loadedDocument?.name)
+      : "";
   const routeFallbackTitle =
     route.mode === "new"
       ? "Untitled member"
-      : trimOptional(memberQuery.data?.summary.displayName) ||
+      : workflowDraftTitle ||
+        trimOptional(memberQuery.data?.summary.displayName) ||
         route.memberId ||
         "Workflow member";
   const activeMemberTitle =
@@ -949,6 +955,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         ? [
             "workflow",
             workflowQuery.data.workflowId,
+            workflowQuery.data.name,
             workflowQuery.data.updatedAtUtc,
             workflowQuery.data.yaml,
             parseQuery.data ? "parsed" : "document",
@@ -978,9 +985,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       cloneWorkflowDocument(sourceDocument) ??
       buildBlankWorkflowDocument(routeFallbackTitle);
     const nextTitle =
-      route.mode === "existing"
-        ? routeFallbackTitle
-        : trimOptional(nextDocument.name) || routeFallbackTitle;
+      workflowDraftTitle ||
+      trimOptional(nextDocument.name) ||
+      routeFallbackTitle;
     sourceKeyRef.current = sourceKey;
     setEditableDocument({
       ...nextDocument,
@@ -995,7 +1002,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setYamlImportError("");
     setYamlPanelOpen(false);
     setDirty(false);
-  }, [routeFallbackTitle, sourceDocument, sourceKey, workflowQuery.data?.layout]);
+  }, [
+    routeFallbackTitle,
+    sourceDocument,
+    sourceKey,
+    workflowDraftTitle,
+    workflowQuery.data?.layout,
+  ]);
 
   const graph = React.useMemo(
     () => buildStudioGraphElements(editableDocument, editableLayout),
@@ -1006,42 +1019,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     const selectedStep = graph.steps.find((step) => step.id === selectedStepId);
     return selectedStep ? createStepInspectorDraft(selectedStep) : null;
   }, [graph.steps, selectedNodeId]);
-  const syncMemberDisplayName = React.useCallback(
-    async (nextTitle: string) => {
-      const normalizedTitle = trimOptional(nextTitle);
-      if (
-        route.mode !== "existing" ||
-        !route.scopeId ||
-        !route.memberId ||
-        !normalizedTitle ||
-        trimOptional(memberQuery.data?.summary.displayName) === normalizedTitle
-      ) {
-        return;
-      }
-
-      const updatedMember = await studioApi.updateMemberDisplayName({
-        scopeId: route.scopeId,
-        memberId: route.memberId,
-        displayName: normalizedTitle,
-      });
-      queryClient.setQueryData(
-        getTeamMemberWorkflowStudioMemberQueryKey(route.scopeId, route.memberId),
-        updatedMember,
-      );
-      if (route.teamId) {
-        void refreshTeamMemberSurfaces(route.scopeId, route.teamId);
-      }
-    },
-    [
-      memberQuery.data?.summary.displayName,
-      queryClient,
-      refreshTeamMemberSurfaces,
-      route.memberId,
-      route.mode,
-      route.scopeId,
-      route.teamId,
-    ],
-  );
   const applySavedDraft = React.useCallback((saved: SavedWorkflowDraft) => {
     setEditableDocument(cloneWorkflowDocument(saved.document));
     setEditableLayout(saved.layout);
@@ -1079,14 +1056,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   );
 
   const saveMutation = useMutation({
-    mutationFn: async (variables: SaveWorkflowDraftVariables) => {
-      const saved = await saveWorkflowDraft({
+    mutationFn: (variables: SaveWorkflowDraftVariables) =>
+      saveWorkflowDraft({
         ...variables,
         routeScopeId: route.scopeId,
-      });
-      await syncMemberDisplayName(saved.title);
-      return saved;
-    },
+      }),
     onError: (error) => {
       void message.error(
         error instanceof Error ? error.message : "Failed to save workflow draft.",
@@ -1350,7 +1324,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
 
       const normalizedTitle = trimOptional(title) || "Workflow draft";
-      const resolvedRunMessage = trimOptional(runMessage) || `Run ${normalizedTitle}`;
+      const userRunMessage = trimOptional(runMessage);
       const serialized = await studioApi.serializeYaml({
         document: {
           ...document,
@@ -1375,7 +1349,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           error,
           executionId,
           frames,
-          runMessage: resolvedRunMessage,
+          runMessage: userRunMessage,
           serviceId: "",
           startedAtUtc,
           status,
@@ -1388,7 +1362,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         const response = await runtimeRunsApi.streamDraftRun(
           route.scopeId,
           {
-            prompt: resolvedRunMessage,
+            prompt: userRunMessage,
             workflowYamls: [serialized.yaml],
           },
           controller.signal,

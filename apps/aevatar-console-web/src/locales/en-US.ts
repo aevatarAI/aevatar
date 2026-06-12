@@ -648,7 +648,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
     'Step outputs will appear here after the workflow draft runs.',
   'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
-    'No input captured.',
+    'No user input provided.',
   'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
     'No output captured.',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
@@ -769,7 +769,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.draftRunPanel.closeAria':
     'Close draft run panel',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
-    'Leave blank to run this draft with its default prompt.',
+    'Leave blank to run this draft without user input.',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':

@@ -607,7 +607,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
     'Workflow 草稿运行后，这里会展示每个步骤的输出。',
   'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
-    '未捕获输入。',
+    '未提供用户输入。',
   'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
     '未捕获输出。',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
@@ -726,7 +726,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.resize.sidePanel': '调整侧边面板大小',
   'teamMemberWorkflowStudio.draftRunPanel.closeAria': '关闭草稿运行面板',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
-    '留空会使用当前草稿的默认提示运行。',
+    '留空则不携带用户输入运行。',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     '草稿运行输入',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':

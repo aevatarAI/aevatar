@@ -17,10 +17,17 @@ type WorkflowStudioExecutionPanelProps = {
 type DetailMode = "logs" | "evidence";
 
 type NodeRunCard = {
-  readonly completedLog: ExecutionLogItem;
+  readonly statusLog: ExecutionLogItem;
   readonly inputText: string;
   readonly outputText: string;
   readonly stepId: string;
+};
+
+type MutableNodeRunCard = {
+  statusLog: ExecutionLogItem;
+  inputText: string;
+  outputText: string;
+  stepId: string;
 };
 
 const categoryLabels: Record<NonNullable<ExecutionLogItem["category"]>, string> = {
@@ -77,24 +84,60 @@ function isEvidenceLog(log: ExecutionLogItem): boolean {
   return ["custom", "raw", "snapshot", "usage"].includes(log.category || "");
 }
 
+function isTerminalStepLog(log: ExecutionLogItem | undefined): boolean {
+  return log?.tone === "completed" || log?.tone === "failed";
+}
+
 function buildNodeRunCards(logs: readonly ExecutionLogItem[]): NodeRunCard[] {
-  const inputByStepId = new Map<string, string>();
-  const cards: NodeRunCard[] = [];
+  const activeCardIndexByStepId = new Map<string, number>();
+  const cards: MutableNodeRunCard[] = [];
 
   logs.forEach((log) => {
     if (log.category !== "step" || !log.stepId) {
       return;
     }
 
-    if (log.tone === "started" && log.clipboardText.trim()) {
-      inputByStepId.set(log.stepId, log.clipboardText.trim());
+    const activeIndex = activeCardIndexByStepId.get(log.stepId);
+    const activeCard =
+      typeof activeIndex === "number" ? cards[activeIndex] : undefined;
+
+    if (log.tone === "started") {
+      cards.push({
+        statusLog: log,
+        inputText: log.clipboardText.trim(),
+        outputText: "",
+        stepId: log.stepId,
+      });
+      activeCardIndexByStepId.set(log.stepId, cards.length - 1);
+      return;
+    }
+
+    if (log.tone === "pending" || log.tone === "run") {
+      if (activeCard && !isTerminalStepLog(activeCard.statusLog)) {
+        activeCard.statusLog = log;
+      } else {
+        cards.push({
+          statusLog: log,
+          inputText: "",
+          outputText: "",
+          stepId: log.stepId,
+        });
+        activeCardIndexByStepId.set(log.stepId, cards.length - 1);
+      }
       return;
     }
 
     if (log.tone === "completed" || log.tone === "failed") {
+      if (activeCard && !isTerminalStepLog(activeCard.statusLog)) {
+        activeCard.statusLog = log;
+        activeCard.outputText = log.clipboardText.trim();
+        activeCardIndexByStepId.delete(log.stepId);
+        return;
+      }
+
       cards.push({
-        completedLog: log,
-        inputText: inputByStepId.get(log.stepId) || "",
+        statusLog: log,
+        inputText: "",
         outputText: log.clipboardText.trim(),
         stepId: log.stepId,
       });
@@ -217,7 +260,7 @@ function renderNodeTextBlock(
 }
 
 function renderNodeRunCard(card: NodeRunCard, index: number): React.ReactNode {
-  const log = card.completedLog;
+  const log = card.statusLog;
 
   return (
     <div
@@ -267,7 +310,7 @@ function renderNodeRunCard(card: NodeRunCard, index: number): React.ReactNode {
         card.inputText,
         t(
           "teamMemberWorkflowStudio.executionPanel.emptyNodeInput",
-          "No input captured.",
+          "No user input provided.",
         ),
       )}
       {renderNodeTextBlock(

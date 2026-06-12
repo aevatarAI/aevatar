@@ -37,6 +37,12 @@ const WorkflowStudioDraftRunPanel: React.FC<WorkflowStudioDraftRunPanelProps> = 
         "teamMemberWorkflowStudio.draftRunPanel.sectionAria",
         "Draft run panel",
       )}
+      bodyStyle={{
+        alignContent: "start",
+        gap: 14,
+        gridAutoRows: "max-content",
+        overflow: "auto",
+      }}
       closeAriaLabel={t(
         "teamMemberWorkflowStudio.draftRunPanel.closeAria",
         "Close draft run panel",
@@ -48,21 +54,29 @@ const WorkflowStudioDraftRunPanel: React.FC<WorkflowStudioDraftRunPanelProps> = 
       <section
         style={{
           display: "grid",
-          gap: 8,
+          gap: 10,
         }}
       >
-        <Typography.Text strong>
-          {t(
-            "teamMemberWorkflowStudio.draftRunPanel.messageLabel",
-            "Draft run input",
-          )}
-        </Typography.Text>
+        <div style={{ display: "grid", gap: 3 }}>
+          <Typography.Text strong>
+            {t(
+              "teamMemberWorkflowStudio.draftRunPanel.messageLabel",
+              "Draft run input",
+            )}
+          </Typography.Text>
+          <Typography.Text style={{ color: "#64748b", fontSize: 12 }}>
+            {t(
+              "teamMemberWorkflowStudio.draftRunPanel.emptyInputHint",
+              "Leave blank to run this draft without user input.",
+            )}
+          </Typography.Text>
+        </div>
         <Input.TextArea
           aria-label={t(
             "teamMemberWorkflowStudio.draftRunPanel.messageLabel",
             "Draft run input",
           )}
-          autoSize={{ minRows: 5, maxRows: 10 }}
+          autoSize={{ minRows: 4, maxRows: 8 }}
           onChange={(event) => onRunMessageChange(event.target.value)}
           placeholder={t(
             "teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder",
@@ -70,20 +84,15 @@ const WorkflowStudioDraftRunPanel: React.FC<WorkflowStudioDraftRunPanelProps> = 
           )}
           value={runMessage}
         />
-        <Typography.Text style={{ color: "#64748b", fontSize: 12 }}>
-          {t(
-            "teamMemberWorkflowStudio.draftRunPanel.emptyInputHint",
-            "Leave blank to run this draft with its default prompt.",
-          )}
-        </Typography.Text>
       </section>
       <div
         style={{
           alignItems: "center",
           display: "flex",
           flexWrap: "wrap",
-          gap: 10,
+          gap: 8,
           justifyContent: "space-between",
+          paddingTop: 2,
         }}
       >
         <Button
