@@ -196,6 +196,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
         var generator = RequireStepGenerator();
+        var stepMetadata = AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata);
+        var stepControl = AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState);
         var planToolContext = AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState);
         if (workItem.StepState.FinalNoToolsStep)
         {
@@ -203,12 +205,18 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             // slash silently consumed.
             // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
             // non-slash text path unchanged (owner-LLM chat fallback).
-            planToolContext = planToolContext with { SenderBinding = AgentToolSenderBindingContext.Empty };
+            planToolContext = ClearSenderBinding(planToolContext);
+            if (UsesServerDefaultFallbackRouting(stepControl))
+            {
+                stepMetadata = StripServerDefaultFallbackMetadata(stepMetadata);
+                stepControl = UseServerDefaultRouting(stepControl);
+                planToolContext = UseServerDefaultRouting(planToolContext, stepControl);
+            }
         }
         var plan = await generator.BuildStepPlanAsync(
                 request.Activity!,
-                AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
-                AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
+                stepMetadata,
+                stepControl,
                 planToolContext,
                 priorHistory: null,
                 attachmentContext: null,
@@ -676,6 +684,47 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             SenderBinding = AgentToolSenderBindingContext.Empty,
             Credentials = context.Credentials with { SenderNyxIdAccessToken = null },
         };
+
+    private static LLMControlContext UseServerDefaultRouting(LLMControlContext control) =>
+        control with
+        {
+            SenderNyxIdAccessToken = null,
+            ModelOverride = null,
+            NyxIdRoutePreference = null,
+            MaxToolRoundsOverride = null,
+        };
+
+    private static bool UsesServerDefaultFallbackRouting(LLMControlContext control) =>
+        string.IsNullOrWhiteSpace(control.ModelOverride) &&
+        string.IsNullOrWhiteSpace(control.NyxIdRoutePreference) &&
+        !control.MaxToolRoundsOverride.HasValue;
+
+    private static AgentToolExecutionContext UseServerDefaultRouting(
+        AgentToolExecutionContext context,
+        LLMControlContext control)
+    {
+        var sanitized = ClearSenderBinding(context) with
+        {
+            Routing = new LLMRequestRoutingContext(
+                ModelOverride: null,
+                NyxIdRoutePreference: null,
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: NormalizeOptional(control.UserMemoryPrompt) ?? NormalizeOptional(context.Routing.UserMemoryPrompt)),
+        };
+        return control.ToToolContext(sanitized);
+    }
+
+    private static Dictionary<string, string> StripServerDefaultFallbackMetadata(
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        var sanitized = new Dictionary<string, string>(metadata, StringComparer.Ordinal);
+        sanitized.Remove(LLMRequestMetadataKeys.SenderBindingId);
+        sanitized.Remove(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        sanitized.Remove(LLMRequestMetadataKeys.ModelOverride);
+        sanitized.Remove(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        sanitized.Remove(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        return sanitized;
+    }
 
     private static LLMControlContext ResolveInitialOwnerFallbackControl(
         LLMControlContext ownerSnapshot,
