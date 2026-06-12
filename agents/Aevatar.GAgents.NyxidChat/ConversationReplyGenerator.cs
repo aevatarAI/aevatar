@@ -641,12 +641,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    // Reasoning content is per-turn working memory, never conversation input: replaying a
+    // prior turn's reasoning_content to the provider violates the reasoning-model contract
+    // (DeepSeek documents it as a request error; through the NyxID proxy it instead silently
+    // derails generation — the 2026-06-12 prod incident where every turn in a
+    // reasoning-history-bearing conversation completed empty). History entries keep the
+    // reasoning durably for audit; the rehydration boundary strips it from LLM input.
     private static ChatMessage ToChatMessage(ConversationHistoryEntry entry) =>
         new()
         {
             Role = string.IsNullOrWhiteSpace(entry.Role) ? "user" : entry.Role,
             Content = string.IsNullOrEmpty(entry.Content) ? null : entry.Content,
-            ReasoningContent = string.IsNullOrEmpty(entry.ReasoningContent) ? null : entry.ReasoningContent,
+            ReasoningContent = null,
             ContentParts = entry.ContentParts.Select(ContentPartProtoMapper.FromProto).ToArray(),
             ToolCallId = string.IsNullOrEmpty(entry.ToolCallId) ? null : entry.ToolCallId,
             ToolCalls = entry.ToolCalls.Select(ToToolCall).ToArray(),
