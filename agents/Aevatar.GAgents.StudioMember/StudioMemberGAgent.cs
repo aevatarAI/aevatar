@@ -434,9 +434,11 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             DisplayName = evt.DisplayName,
             Description = evt.Description,
             ImplementationKind = evt.ImplementationKind,
-            ImplementationRef = null,
+            ImplementationRef = evt.ImplementationRef?.Clone(),
             PublishedServiceId = derivedPublishedServiceId,
-            LifecycleStage = StudioMemberLifecycleStage.Created,
+            LifecycleStage = HasResolvedImplementationRef(evt.ImplementationRef)
+                ? StudioMemberLifecycleStage.BuildReady
+                : StudioMemberLifecycleStage.Created,
             CreatedAtUtc = evt.CreatedAtUtc,
             UpdatedAtUtc = evt.CreatedAtUtc,
             LastBinding = null,
