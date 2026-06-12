@@ -101,6 +101,13 @@ function getTeamMemberWorkflowStudioTeamQueryKey(
   return ["team-member-workflow-studio", "team", scopeId, teamId] as const;
 }
 
+function getTeamMemberWorkflowStudioMemberQueryKey(
+  scopeId: string,
+  memberId: string,
+) {
+  return ["team-member-workflow-studio", "member", scopeId, memberId] as const;
+}
+
 function getTeamMemberWorkflowStudioWorkflowQueryKey(
   scopeId: string,
   workflowId: string,
@@ -851,12 +858,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   });
   const memberQuery = useQuery({
     enabled: route.mode === "existing" && Boolean(route.scopeId && route.memberId),
-    queryKey: [
-      "team-member-workflow-studio",
-      "member",
+    queryKey: getTeamMemberWorkflowStudioMemberQueryKey(
       route.scopeId,
       route.memberId,
-    ],
+    ),
     queryFn: () => studioApi.getMember(route.scopeId, route.memberId),
   });
   const routeDraftWorkflowId =
@@ -1001,6 +1006,42 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     const selectedStep = graph.steps.find((step) => step.id === selectedStepId);
     return selectedStep ? createStepInspectorDraft(selectedStep) : null;
   }, [graph.steps, selectedNodeId]);
+  const syncMemberDisplayName = React.useCallback(
+    async (nextTitle: string) => {
+      const normalizedTitle = trimOptional(nextTitle);
+      if (
+        route.mode !== "existing" ||
+        !route.scopeId ||
+        !route.memberId ||
+        !normalizedTitle ||
+        trimOptional(memberQuery.data?.summary.displayName) === normalizedTitle
+      ) {
+        return;
+      }
+
+      const updatedMember = await studioApi.updateMemberDisplayName({
+        scopeId: route.scopeId,
+        memberId: route.memberId,
+        displayName: normalizedTitle,
+      });
+      queryClient.setQueryData(
+        getTeamMemberWorkflowStudioMemberQueryKey(route.scopeId, route.memberId),
+        updatedMember,
+      );
+      if (route.teamId) {
+        void refreshTeamMemberSurfaces(route.scopeId, route.teamId);
+      }
+    },
+    [
+      memberQuery.data?.summary.displayName,
+      queryClient,
+      refreshTeamMemberSurfaces,
+      route.memberId,
+      route.mode,
+      route.scopeId,
+      route.teamId,
+    ],
+  );
   const applySavedDraft = React.useCallback((saved: SavedWorkflowDraft) => {
     setEditableDocument(cloneWorkflowDocument(saved.document));
     setEditableLayout(saved.layout);
@@ -1038,11 +1079,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   );
 
   const saveMutation = useMutation({
-    mutationFn: (variables: SaveWorkflowDraftVariables) =>
-      saveWorkflowDraft({
+    mutationFn: async (variables: SaveWorkflowDraftVariables) => {
+      const saved = await saveWorkflowDraft({
         ...variables,
         routeScopeId: route.scopeId,
-      }),
+      });
+      await syncMemberDisplayName(saved.title);
+      return saved;
+    },
     onError: (error) => {
       void message.error(
         error instanceof Error ? error.message : "Failed to save workflow draft.",

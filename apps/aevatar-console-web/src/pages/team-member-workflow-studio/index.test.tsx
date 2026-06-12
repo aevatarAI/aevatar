@@ -138,6 +138,7 @@ jest.mock("@/shared/studio/api", () => {
       startExecution: jest.fn(),
       createMember: jest.fn(),
       createMemberWithId: jest.fn(),
+      updateMemberDisplayName: jest.fn(),
       updateMemberImplementationRef: jest.fn(),
       updateMemberTeamAssignment: jest.fn(),
     },
@@ -1900,6 +1901,105 @@ describe("TeamMemberWorkflowStudioPage", () => {
     await waitFor(() => {
       expect(saveButton).toBeDisabled();
     });
+  });
+
+  it("saves a title-only edit to the workflow draft and member display name", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    const loadedWorkflow = {
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    };
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue(loadedWorkflow);
+    (studioApi.saveWorkflow as jest.Mock).mockResolvedValue({
+      ...loadedWorkflow,
+      document: null,
+      name: "Workflow Renamed",
+      updatedAtUtc: "2026-06-08T00:00:01Z",
+      yaml: "name: Workflow Renamed\nsteps:\n  - id: triage\n    type: llm_call\n",
+    });
+    (studioApi.updateMemberDisplayName as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        memberId: "member-alpha",
+        displayName: "Workflow Renamed",
+      },
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const saveButton = await screen.findByRole("button", { name: "Save" });
+    const titleInput = await screen.findByLabelText("Workflow title");
+    await waitFor(() => {
+      expect(saveButton).toBeDisabled();
+    });
+
+    fireEvent.change(titleInput, {
+      target: { value: "Workflow Renamed" },
+    });
+
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "workflow-alpha",
+          workflowName: "Workflow Renamed",
+        }),
+      );
+      expect(studioApi.serializeYaml).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            name: "Workflow Renamed",
+          }),
+        }),
+      );
+      expect(studioApi.updateMemberDisplayName).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "member-alpha",
+        displayName: "Workflow Renamed",
+      });
+    });
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.startExecution).not.toHaveBeenCalled();
   });
 
   it("renders unsaved graph edits in the YAML view", async () => {

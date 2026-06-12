@@ -1673,6 +1673,24 @@ export const studioApi = {
     );
   },
 
+  updateMemberDisplayName(input: {
+    scopeId: string;
+    memberId: string;
+    displayName: string;
+  }): Promise<StudioMemberDetail> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeStudioMemberDetail,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          displayName: input.displayName.trim(),
+        }),
+      }
+    );
+  },
+
   updateMemberImplementationRef(input: {
     scopeId: string;
     memberId: string;
