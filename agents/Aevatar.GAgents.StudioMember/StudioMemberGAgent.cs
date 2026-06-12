@@ -79,10 +79,11 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 
             if (!string.Equals(State.DisplayName, evt.DisplayName, StringComparison.Ordinal)
                 || !string.Equals(State.Description, evt.Description, StringComparison.Ordinal)
-                || State.ImplementationKind != evt.ImplementationKind)
+                || State.ImplementationKind != evt.ImplementationKind
+                || !ImplementationRefsEqual(State.ImplementationRef, evt.ImplementationRef))
             {
                 throw new InvalidOperationException(
-                    $"member '{State.MemberId}' already exists with different displayName / description / implementationKind. " +
+                    $"member '{State.MemberId}' already exists with different displayName / description / implementationKind / implementationRef. " +
                     "First-write-wins on member identity; use rename / updateImplementation to change later.");
             }
 
@@ -434,9 +435,11 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             DisplayName = evt.DisplayName,
             Description = evt.Description,
             ImplementationKind = evt.ImplementationKind,
-            ImplementationRef = null,
+            ImplementationRef = evt.ImplementationRef?.Clone(),
             PublishedServiceId = derivedPublishedServiceId,
-            LifecycleStage = StudioMemberLifecycleStage.Created,
+            LifecycleStage = HasResolvedImplementationRef(evt.ImplementationRef)
+                ? StudioMemberLifecycleStage.BuildReady
+                : StudioMemberLifecycleStage.Created,
             CreatedAtUtc = evt.CreatedAtUtc,
             UpdatedAtUtc = evt.CreatedAtUtc,
             LastBinding = null,
@@ -800,6 +803,44 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             return true;
 
         return false;
+    }
+
+    private static bool ImplementationRefsEqual(
+        StudioMemberImplementationRef? left,
+        StudioMemberImplementationRef? right)
+    {
+        if (left == null || right == null)
+            return left == null && right == null;
+
+        return WorkflowRefsEqual(left.Workflow, right.Workflow)
+               && ScriptRefsEqual(left.Script, right.Script)
+               && GAgentRefsEqual(left.Gagent, right.Gagent);
+    }
+
+    private static bool WorkflowRefsEqual(StudioMemberWorkflowRef? left, StudioMemberWorkflowRef? right)
+    {
+        if (left == null || right == null)
+            return left == null && right == null;
+
+        return string.Equals(left.WorkflowId, right.WorkflowId, StringComparison.Ordinal)
+               && string.Equals(left.WorkflowRevision, right.WorkflowRevision, StringComparison.Ordinal);
+    }
+
+    private static bool ScriptRefsEqual(StudioMemberScriptRef? left, StudioMemberScriptRef? right)
+    {
+        if (left == null || right == null)
+            return left == null && right == null;
+
+        return string.Equals(left.ScriptId, right.ScriptId, StringComparison.Ordinal)
+               && string.Equals(left.ScriptRevision, right.ScriptRevision, StringComparison.Ordinal);
+    }
+
+    private static bool GAgentRefsEqual(StudioMemberGAgentRef? left, StudioMemberGAgentRef? right)
+    {
+        if (left == null || right == null)
+            return left == null && right == null;
+
+        return string.Equals(left.ActorTypeName, right.ActorTypeName, StringComparison.Ordinal);
     }
 
     private static StudioMemberImplementationKind GetRequestImplementationKind(StudioMemberBindingRequest request) =>

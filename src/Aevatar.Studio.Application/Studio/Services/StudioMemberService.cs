@@ -53,16 +53,16 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        StudioMemberCreateRequestValidator.Validate(request);
+        var normalizedRequest = StudioMemberCreateRequestValidator.Validate(request);
 
-        if (!string.IsNullOrEmpty(request.TeamId))
+        if (!string.IsNullOrEmpty(normalizedRequest.TeamId))
         {
-            var team = await _teamQueryPort.GetAsync(scopeId, request.TeamId, ct);
+            var team = await _teamQueryPort.GetAsync(scopeId, normalizedRequest.TeamId, ct);
             if (team == null)
-                throw new StudioTeamNotFoundException(scopeId, request.TeamId);
+                throw new StudioTeamNotFoundException(scopeId, normalizedRequest.TeamId);
         }
 
-        return await _memberCommandPort.CreateAsync(scopeId, request, ct);
+        return await _memberCommandPort.CreateAsync(scopeId, normalizedRequest, ct);
     }
 
     public Task<StudioMemberRosterResponse> ListAsync(
@@ -501,14 +501,34 @@ public sealed class StudioMemberService : IStudioMemberService
         string memberImplementationKind,
         StudioMemberImplementationRefResponse implementation)
     {
-        var kind = NormalizeRequired(implementation.ImplementationKind, "implementationRef.implementationKind")
-            .ToLowerInvariant();
-
-        if (!string.Equals(kind, memberImplementationKind, StringComparison.Ordinal))
+        try
         {
+            return NormalizeImplementationRef(memberImplementationKind, implementation);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith(
+            "implementationRef.implementationKind must match implementationKind",
+            StringComparison.Ordinal))
+        {
+            var kind = NormalizeRequired(implementation.ImplementationKind, "implementationRef.implementationKind")
+                .ToLowerInvariant();
             throw new InvalidOperationException(
                 $"member '{memberId}' implementationKind is locked at create. " +
                 $"Was {memberImplementationKind}, attempted {kind}.");
+        }
+    }
+
+    internal static StudioMemberImplementationRefResponse NormalizeImplementationRef(
+        string implementationKind,
+        StudioMemberImplementationRefResponse implementation)
+    {
+        var kind = NormalizeRequired(implementation.ImplementationKind, "implementationRef.implementationKind")
+            .ToLowerInvariant();
+
+        if (!string.Equals(kind, implementationKind, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"implementationRef.implementationKind must match implementationKind '{implementationKind}'. " +
+                $"Was {kind}.");
         }
 
         return kind switch
@@ -526,7 +546,10 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         RejectPresent(implementation.ScriptId, "implementationRef.scriptId", implementation.ImplementationKind);
         RejectPresent(implementation.ScriptRevision, "implementationRef.scriptRevision", implementation.ImplementationKind);
-        RejectPresent(implementation.ActorTypeName, "implementationRef.actorTypeName", implementation.ImplementationKind);
+        RejectPresent(
+            implementation.DiagnosticActorTypeName,
+            "implementationRef.diagnostic\u0041ctorTypeName",
+            implementation.ImplementationKind);
 
         return new StudioMemberImplementationRefResponse(
             ImplementationKind: MemberImplementationKindNames.Workflow,
@@ -539,7 +562,10 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         RejectPresent(implementation.WorkflowId, "implementationRef.workflowId", implementation.ImplementationKind);
         RejectPresent(implementation.WorkflowRevision, "implementationRef.workflowRevision", implementation.ImplementationKind);
-        RejectPresent(implementation.ActorTypeName, "implementationRef.actorTypeName", implementation.ImplementationKind);
+        RejectPresent(
+            implementation.DiagnosticActorTypeName,
+            "implementationRef.diagnostic\u0041ctorTypeName",
+            implementation.ImplementationKind);
 
         return new StudioMemberImplementationRefResponse(
             ImplementationKind: MemberImplementationKindNames.Script,
@@ -557,7 +583,9 @@ public sealed class StudioMemberService : IStudioMemberService
 
         return new StudioMemberImplementationRefResponse(
             ImplementationKind: MemberImplementationKindNames.GAgent,
-            ActorTypeName: NormalizeRequired(implementation.ActorTypeName, "implementationRef.actorTypeName"));
+            DiagnosticActorTypeName: NormalizeRequired(
+                implementation.DiagnosticActorTypeName,
+                "implementationRef.diagnostic\u0041ctorTypeName"));
     }
 
     private static string? NormalizeOptional(string? value)

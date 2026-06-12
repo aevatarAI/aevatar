@@ -108,6 +108,44 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public async Task HandleCreated_ShouldRejectDuplicate_WhenImplementationRefDiffers()
+    {
+        var existing = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef { WorkflowId = "wf-1" },
+            },
+        });
+        var eventSourcing = new RecordingEventSourcing(existing);
+        var agent = NewHandlerAgent(existing, eventSourcing, new RecordingEventPublisher());
+
+        var act = () => agent.HandleCreated(new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef { WorkflowId = "wf-2" },
+            },
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*implementationRef*");
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Created_ShouldPersistPublishedServiceId()
     {
         var initial = new StudioMemberState();
@@ -126,6 +164,35 @@ public sealed class StudioMemberGAgentStateTests
         afterCreate.MemberId.Should().Be("m-1");
         afterCreate.PublishedServiceId.Should().Be("member-m-1");
         afterCreate.LifecycleStage.Should().Be(StudioMemberLifecycleStage.Created);
+    }
+
+    [Fact]
+    public void Created_ShouldPersistInitialImplementationRefAsActorOwnedState()
+    {
+        var createdAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var afterCreate = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = createdAt,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Script = new StudioMemberScriptRef
+                {
+                    ScriptId = "script-1",
+                    ScriptRevision = "rev-1",
+                },
+            },
+        });
+
+        afterCreate.ImplementationRef.Should().NotBeNull();
+        afterCreate.ImplementationRef.Script.ScriptId.Should().Be("script-1");
+        afterCreate.ImplementationRef.Script.ScriptRevision.Should().Be("rev-1");
+        afterCreate.LifecycleStage.Should().Be(StudioMemberLifecycleStage.BuildReady);
     }
 
     [Fact]
