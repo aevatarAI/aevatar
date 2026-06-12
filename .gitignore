@@ -514,6 +514,7 @@ entities.json
 .refactor-loop/
 .worktrees/
 .config/consensus-rnd/host.env*
+.config/consensus-rnd/host.*.env
 
 .vmap/
 
