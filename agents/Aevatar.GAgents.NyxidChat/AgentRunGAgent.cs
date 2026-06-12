@@ -497,30 +497,82 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         });
     }
 
-    private async Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    private Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
-        await _generationExecutor.ExecuteLlmStepAsync(
-            new AgentRunReplyStepExecutionRequest(
-                stepState.RunId,
-                Id,
-                stepState.Attempt,
-                stepState.NextStepIndex,
-                request.Clone(),
-                stepState.Clone()),
-            CancellationToken.None);
+        var executionRequest = new AgentRunReplyStepExecutionRequest(
+            stepState.RunId,
+            Id,
+            stepState.Attempt,
+            stepState.NextStepIndex,
+            request.Clone(),
+            stepState.Clone());
+        StartDetachedStepExecution(
+            () => _generationExecutor.ExecuteLlmStepAsync(executionRequest, CancellationToken.None),
+            "llm",
+            executionRequest);
+        return Task.CompletedTask;
     }
 
-    private async Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    private Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
-        await _generationExecutor.ExecuteToolStepAsync(
-            new AgentRunReplyStepExecutionRequest(
-                stepState.RunId,
-                Id,
-                stepState.Attempt,
-                stepState.NextStepIndex,
-                request.Clone(),
-                stepState.Clone()),
-            CancellationToken.None);
+        var executionRequest = new AgentRunReplyStepExecutionRequest(
+            stepState.RunId,
+            Id,
+            stepState.Attempt,
+            stepState.NextStepIndex,
+            request.Clone(),
+            stepState.Clone());
+        StartDetachedStepExecution(
+            () => _generationExecutor.ExecuteToolStepAsync(executionRequest, CancellationToken.None),
+            "tool",
+            executionRequest);
+        return Task.CompletedTask;
+    }
+
+    private void StartDetachedStepExecution(
+        Func<Task> startExecution,
+        string stepKind,
+        AgentRunReplyStepExecutionRequest request)
+    {
+        Task execution;
+        try
+        {
+            execution = startExecution();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to start detached agent run {StepKind} step executor: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+                stepKind,
+                request.RunId,
+                request.Request.CorrelationId,
+                request.StepIndex);
+            return;
+        }
+
+        _ = ObserveDetachedStepExecutionAsync(execution, stepKind, request);
+    }
+
+    private async Task ObserveDetachedStepExecutionAsync(
+        Task execution,
+        string stepKind,
+        AgentRunReplyStepExecutionRequest request)
+    {
+        try
+        {
+            await execution.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Detached agent run {StepKind} step executor failed after handoff: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+                stepKind,
+                request.RunId,
+                request.Request.CorrelationId,
+                request.StepIndex);
+        }
     }
 
     private async Task CompletePerStepReplyAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
@@ -690,7 +742,21 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         if (ShouldCompleteAfterLlmStep(stepState, hasResult))
         {
-            await CompletePerStepReplyAsync(request, stepState);
+            try
+            {
+                await CompletePerStepReplyAsync(request, stepState);
+            }
+            catch (AgentRunOutputDispatchException ex)
+            {
+                if (await TryHandleOutputDispatchFailureAsync(request, stepState.RunId, ex))
+                    return;
+
+                await PersistFailedAsync(
+                    request,
+                    stepState.RunId,
+                    "agent_run_output_dispatch_failed",
+                    ex.Message);
+            }
             return;
         }
 
