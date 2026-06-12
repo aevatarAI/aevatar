@@ -276,6 +276,18 @@ message InitializeRoleAgentEvent {
   reserved "stream_buffer_capacity";
 }
 
+message VoicePresenceEnableRequested {
+  string module_name = 1;
+  aevatar.voice.VoiceSessionDefaults voice_session_defaults = 2;
+  aevatar.voice.VoiceRemoteAudioSupport remote_audio_support = 3;
+}
+
+message VoicePresenceEnabledEvent {
+  string module_name = 1;
+  aevatar.voice.VoiceSessionDefaults voice_session_defaults = 2;
+  aevatar.voice.VoicePresenceRuntimeState runtime_state = 3;
+}
+
 message AIAgentConfigOverrides {
   // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
   //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity

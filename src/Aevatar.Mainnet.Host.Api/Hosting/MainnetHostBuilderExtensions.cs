@@ -317,6 +317,7 @@ public static class MainnetHostBuilderExtensions
         app.UseAevatarDefaultHost();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
+        app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();
