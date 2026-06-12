@@ -2,15 +2,19 @@ using System.Net;
 using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Orleans;
@@ -219,10 +223,57 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         }
     }
 
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldSurfaceOriginalHandlerFailure_WhenDurableRetryEnvelopeCarriesRuntimeCredential()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        var callbackScheduler = new CredentialGuardedRecordingCallbackScheduler();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = null,
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(siloPort, gatewayPort, callbackScheduler: callbackScheduler);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = CreateCredentialCarryingEnvelope();
+
+            var act = () => grain.HandleEnvelopeAsync(envelope.ToByteArray());
+
+            // Durable retry must be skipped (the callback store rejects runtime
+            // credentials), and the delivery must fail with the handler's own
+            // exception so stream redelivery semantics stay intact — not with the
+            // credential-guard InvalidOperationException.
+            await act.Should()
+                .ThrowAsync<EventStoreOptimisticConcurrencyException>()
+                .WithMessage("*Optimistic concurrency conflict*");
+            callbackScheduler.TimeoutRequests.Should().BeEmpty();
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(1);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
     private static async Task<IHost> StartSiloHostAsync(
         int siloPort,
         int gatewayPort,
-        ILoggerProvider? loggerProvider = null)
+        ILoggerProvider? loggerProvider = null,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
         var host = Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
@@ -247,6 +298,11 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             {
                 services.AddAevatarAgentKindRegistry(builder =>
                     builder.Register<RetryAwareDirectDispatchAgent>());
+                if (callbackScheduler != null)
+                {
+                    services.Replace(
+                        ServiceDescriptor.Singleton(callbackScheduler));
+                }
             })
             .Build();
 
@@ -267,6 +323,14 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Payload = Any.Pack(new StringValue { Value = payload }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
+        };
+
+    private static EventEnvelope CreateCredentialCarryingEnvelope() =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Payload = Any.Pack(new NeedsCredentialPayload { ReplyToken = "runtime-reply-token" }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
 
@@ -294,6 +358,51 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         {
             foreach (var pair in _originalValues)
                 Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+        }
+    }
+
+    private sealed class CredentialGuardedRecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            // Mirrors RuntimeCallbackSchedulerGrain.ValidateScheduleRequest: the
+            // durable callback store rejects credential-carrying envelopes before
+            // persisting anything.
+            DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(request.TriggerEnvelope);
+            TimeoutRequests.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Generation: 1,
+                RuntimeCallbackBackend.Dedicated));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            throw new NotSupportedException();
+        }
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
         }
     }
 
@@ -439,6 +548,14 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 : string.Empty;
 
             RecordAttempt(envelope.Id);
+
+            if (envelope.Payload?.Is(NeedsCredentialPayload.Descriptor) == true)
+            {
+                throw new EventStoreOptimisticConcurrencyException(
+                    envelope.Id,
+                    expectedVersion: 1,
+                    actualVersion: 2);
+            }
 
             if (payload == "always-fail-no-retry")
                 throw new InvalidOperationException("always-fail-no-retry");

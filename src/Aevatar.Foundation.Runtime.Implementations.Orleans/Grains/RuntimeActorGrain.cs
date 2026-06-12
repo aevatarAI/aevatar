@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.ExceptionServices;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -13,6 +14,7 @@ using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Observability;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Streams;
@@ -517,6 +519,22 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         if (_runtimeEnvelopeRetryPolicy.RetryDelayMs > 0)
         {
+            if (DurableCallbackEnvelopeCredentialGuard.TryFindRuntimeCredential(retryEnvelope, out var credentialFieldPath))
+            {
+                // The durable callback store rejects runtime credentials
+                // (RuntimeCallbackSchedulerGrain.ValidateScheduleRequest), and the
+                // handler cannot re-resolve a stripped credential on redelivery.
+                // Fail the delivery with the original handler exception instead of
+                // the guard error so stream redelivery semantics stay intact.
+                _logger.LogWarning(
+                    ex,
+                    "Durable runtime retry unavailable for actor {ActorId}, envelope {EnvelopeId}: envelope carries runtime credential field '{CredentialFieldPath}'.",
+                    this.GetPrimaryKeyString(),
+                    envelope.Id,
+                    credentialFieldPath);
+                ExceptionDispatchInfo.Capture(ex).Throw();
+            }
+
             var scheduler = ServiceProvider.GetRequiredService<IActorRuntimeCallbackScheduler>();
             await scheduler.ScheduleTimeoutAsync(
                 new RuntimeCallbackTimeoutRequest
