@@ -656,11 +656,51 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
     }
 
-    private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(AgentRunReplyStepState stepState)
+    // A reasoning-capable model can finish a step having spent its entire output on
+    // reasoning tokens: no reply text, no tool calls, finishReason=stop. That is a
+    // recoverable provider behavior, not a terminal business outcome — the run gets
+    // exactly one no-tools step to produce the user-visible answer (FinalNoToolsStep
+    // guarantees the retry itself terminates) before failing as empty_reply.
+    private static bool ShouldRecoverReasoningOnlyStep(AgentRunReplyStepState stepState)
+    {
+        if (stepState.FinalNoToolsStep)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(stepState.AccumulatedText) ||
+            stepState.HasStreamedTextContent ||
+            stepState.OutboundIntent is not null ||
+            stepState.PendingToolCalls.Count > 0)
+        {
+            return false;
+        }
+
+        var lastAssistantMessage = stepState.Messages.LastOrDefault(message =>
+            string.Equals(message.Role, "assistant", StringComparison.Ordinal));
+        return lastAssistantMessage is not null &&
+            string.IsNullOrWhiteSpace(lastAssistantMessage.Content) &&
+            !string.IsNullOrWhiteSpace(lastAssistantMessage.ReasoningContent);
+    }
+
+    private static AgentRunChatMessage BuildReasoningOnlyRecoveryNudge() =>
+        new()
+        {
+            Role = "user",
+            Content = "Your previous step produced internal reasoning but no user-visible reply. " +
+                      "Provide your final answer now as plain text.",
+        };
+
+    private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(
+        AgentRunReplyStepState stepState,
+        AgentRunChatMessage? llmVisibleNudge = null)
     {
         var next = stepState.Clone();
         next.FinalNoToolsStep = true;
         next.NextStepIndex++;
+        // The nudge is LLM-visible plumbing for the retry step only: it is deliberately
+        // NOT mirrored into AppendedHistory, so it never lands in the durable
+        // conversation history.
+        if (llmVisibleNudge is not null)
+            next.Messages.Add(llmVisibleNudge);
         await PersistStepStateAsync(next);
         return next;
     }
@@ -742,6 +782,18 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         if (ShouldCompleteAfterLlmStep(stepState, hasResult))
         {
+            if (hasResult && ShouldRecoverReasoningOnlyStep(stepState))
+            {
+                _logger.LogWarning(
+                    "Agent run LLM step produced reasoning-only output with no reply text; retrying once with a final no-tools step: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+                    stepState.RunId,
+                    stepState.CorrelationId,
+                    command.StepIndex);
+                stepState = await AdvanceToFinalNoToolsStepAsync(stepState, BuildReasoningOnlyRecoveryNudge());
+                await DispatchLlmStepExecutorAsync(request, stepState);
+                return;
+            }
+
             try
             {
                 await CompletePerStepReplyAsync(request, stepState);

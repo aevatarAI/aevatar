@@ -109,6 +109,149 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_RetriesOnceWithFinalNoToolsStepInsteadOfFailing()
+    {
+        // Regression for the prod incident where a reasoning model spent the whole
+        // step on reasoning tokens (content empty, reasoning_content set, no tool
+        // calls, finishReason=stop) and the run terminated as empty_reply with the
+        // generic apology. A reasoning-only step must get exactly one bounded
+        // no-tools retry before failing.
+        var actorRuntime = new DispatchingActorRuntime();
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-reasoning-only",
+            CorrelationId = "corr-reasoning-only",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-reasoning-only",
+                CorrelationId = "corr-reasoning-only",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 1,
+                MaxToolRounds = 4,
+            },
+        });
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-reasoning-only",
+            CorrelationId = "corr-reasoning-only",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 2,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-reasoning-only",
+                RunId = "run-reasoning-only",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+            },
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                AccumulatedText = string.Empty,
+                Content = string.Empty,
+                ReasoningContent = "internal chain of thought without an answer",
+                FinishReason = "stop",
+                HasStreamedTextContent = false,
+            },
+        });
+
+        var step = runtime.State.GenerationStep;
+        step.Should().NotBeNull();
+        step!.FinalNoToolsStep.Should().BeTrue("a reasoning-only step must advance to the bounded no-tools retry");
+        step.NextStepIndex.Should().Be(3);
+        executor.LlmStepExecutions.Should().ContainSingle("the run must re-dispatch one LLM retry step");
+        executor.LlmStepExecutions[0].StepState.FinalNoToolsStep.Should().BeTrue();
+        var nudge = step.Messages[^1];
+        nudge.Role.Should().Be("user");
+        nudge.Content.Should().NotBeNullOrWhiteSpace();
+        step.AppendedHistory.Should().NotContain(
+            entry => entry.Content == nudge.Content,
+            "the synthetic nudge must not leak into the durable conversation history");
+        runtime.State.Status.Should().Be(
+            AgentRunStatus.ReplyGenerationRequested,
+            "the run must not terminate while the retry step is in flight");
+    }
+
+    [Fact]
+    public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_OnFinalNoToolsStep_FailsWithEmptyReply()
+    {
+        // The reasoning-only retry is bounded: when the final no-tools step itself
+        // comes back reasoning-only, the run must fail as empty_reply exactly like
+        // before instead of looping.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        EventEnvelope? handled = null;
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled = call.Arg<EventEnvelope>());
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-reasoning-final",
+            CorrelationId = "corr-reasoning-final",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-reasoning-final",
+                CorrelationId = "corr-reasoning-final",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 3,
+                MaxToolRounds = 4,
+                FinalNoToolsStep = true,
+            },
+        });
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-reasoning-final",
+            CorrelationId = "corr-reasoning-final",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 4,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-reasoning-final",
+                RunId = "run-reasoning-final",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+            },
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                AccumulatedText = string.Empty,
+                Content = string.Empty,
+                ReasoningContent = "still only reasoning on the retry step",
+                FinishReason = "stop",
+                HasStreamedTextContent = false,
+            },
+        });
+
+        executor.LlmStepExecutions.Should().BeEmpty("the bounded retry must not re-dispatch a second time");
+        handled.Should().NotBeNull();
+        var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
+        ready.ErrorCode.Should().Be("empty_reply");
+        ready.ErrorSummary.Should().Contain("reasoningOnly=True");
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldCreateRunActorAndDispatchStartCommand()
     {
         var actorRuntime = new DispatchingActorRuntime();
@@ -2850,6 +2993,8 @@ public sealed class AgentRunGAgentTests
     {
         public List<AgentRunReplyGenerationExecutionRequest> Starts { get; } = [];
 
+        public List<AgentRunReplyStepExecutionRequest> LlmStepExecutions { get; } = [];
+
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
             CancellationToken ct)
@@ -2865,8 +3010,15 @@ public sealed class AgentRunGAgentTests
             });
         }
 
-        public Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct) =>
-            Task.CompletedTask;
+        public Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+        {
+            LlmStepExecutions.Add(request with
+            {
+                Request = request.Request.Clone(),
+                StepState = request.StepState.Clone(),
+            });
+            return Task.CompletedTask;
+        }
 
         public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct) =>
             Task.CompletedTask;
