@@ -189,6 +189,14 @@ public sealed class WorkflowValidator
 
         ValidateStepTypeParameters(step, stepPath, availableStepTypes, findings);
         ValidateTypeSpecificRules(step, stepPath, stepIds, availableWorkflowNames, findings);
+
+        if (visit.Index < visit.SiblingCount - 1 && string.IsNullOrWhiteSpace(step.Next) && step.Branches.Count == 0)
+        {
+            findings.Add(ValidationFinding.Warning(
+                stepPath,
+                $"Step '{step.Id}' relies on implicit sequential ordering because `next` is not set.",
+                code: "implicit_next"));
+        }
     }
 
     private void ValidateStepTypeParameters(

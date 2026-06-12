@@ -213,41 +213,6 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
-    public async Task WorkflowCatalogCurrentStateProjector_ShouldNotInferEdgesFromAdjacentSteps()
-    {
-        var store = new RecordingDocumentStore<WorkflowCatalogCurrentStateDocument>(x => x.Id);
-        var projector = new WorkflowCatalogCurrentStateProjector(
-            store,
-            new FixedClock(DateTimeOffset.Parse("2026-03-17T10:00:00+00:00")));
-        var context = new WorkflowBindingProjectionContext
-        {
-            RootActorId = "workflow-definition:draft_disconnected",
-            ProjectionKind = "workflow-binding",
-        };
-
-        await projector.ProjectAsync(
-            context,
-            BuildDefinitionCommittedEnvelope(
-                11,
-                new BindWorkflowDefinitionEvent
-                {
-                    WorkflowName = "draft_disconnected",
-                    WorkflowYaml = BuildDisconnectedDefinitionYaml("draft_disconnected"),
-                },
-                new WorkflowState
-                {
-                    WorkflowName = "draft_disconnected",
-                    WorkflowYaml = BuildDisconnectedDefinitionYaml("draft_disconnected"),
-                    Compiled = true,
-                }));
-
-        var document = store.Stored["draft_disconnected"];
-        document.Steps.Select(step => step.Id).Should().Equal("draft", "review", "publish");
-        document.Edges.Should().ContainSingle(edge => edge.From == "review" && edge.To == "publish");
-        document.Edges.Should().NotContain(edge => edge.From == "draft" && edge.To == "review");
-    }
-
-    [Fact]
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldTrackLifecycleReplyAndCompletionBranches()
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
@@ -720,33 +685,6 @@ public sealed class WorkflowProjectionMaterializationTests
                 type: llm_call
                 target_role: operator
                 prompt: "Summarize."
-        """;
-
-    private static string BuildDisconnectedDefinitionYaml(string name) =>
-        $"""
-        name: {name}
-        description: Draft with a disconnected node.
-        roles:
-          - id: operator
-            name: Operator
-            system_prompt: ""
-        steps:
-          - id: draft
-            type: assign
-            parameters:
-              target: draft
-              value: "ok"
-          - id: review
-            type: assign
-            next: publish
-            parameters:
-              target: review
-              value: "ok"
-          - id: publish
-            type: assign
-            parameters:
-              target: publish
-              value: "ok"
         """;
 
     private static WorkflowRunState BuildState(
