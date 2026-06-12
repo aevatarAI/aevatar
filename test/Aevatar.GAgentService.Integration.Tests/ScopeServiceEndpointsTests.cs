@@ -2753,6 +2753,12 @@ public sealed class ScopeServiceEndpointsTests
             stepId = "approval-1",
             approved = true,
             userInput = "approved",
+            toolApproval = new
+            {
+                executionId = "exec-default-1",
+                toolCallId = "tool-call-default-1",
+                approvalRequestId = "approval-default-1",
+            },
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
@@ -2761,6 +2767,10 @@ public sealed class ScopeServiceEndpointsTests
         host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-default-1");
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-default-1");
         host.ResumeDispatchService.LastCommand.StepId.Should().Be("approval-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.Should().NotBeNull();
+        host.ResumeDispatchService.LastCommand.ToolApproval!.ExecutionId.Should().Be("exec-default-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ToolCallId.Should().Be("tool-call-default-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ApprovalRequestId.Should().Be("approval-default-1");
     }
 
     [Fact]
@@ -3400,6 +3410,12 @@ public sealed class ScopeServiceEndpointsTests
             approved = true,
             userInput = "approved",
             metadata = new Dictionary<string, string> { ["source"] = "test" },
+            toolApproval = new
+            {
+                executionId = "exec-1",
+                toolCallId = "tool-call-1",
+                approvalRequestId = "approval-1",
+            },
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
@@ -3409,6 +3425,10 @@ public sealed class ScopeServiceEndpointsTests
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-1");
         host.ResumeDispatchService.LastCommand.StepId.Should().Be("approval-1");
         host.ResumeDispatchService.LastCommand.Approved.Should().BeTrue();
+        host.ResumeDispatchService.LastCommand.ToolApproval.Should().NotBeNull();
+        host.ResumeDispatchService.LastCommand.ToolApproval!.ExecutionId.Should().Be("exec-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ToolCallId.Should().Be("tool-call-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
     }
 
     [Fact]
@@ -3819,6 +3839,12 @@ public sealed class ScopeServiceEndpointsTests
         {
             stepId = "approval-1",
             approved = true,
+            toolApproval = new
+            {
+                executionId = "exec-member-1",
+                toolCallId = "tool-call-member-1",
+                approvalRequestId = "approval-member-1",
+            },
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
@@ -3827,6 +3853,10 @@ public sealed class ScopeServiceEndpointsTests
         host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-resume-1");
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-member-resume-1");
         host.ResumeDispatchService.LastCommand.StepId.Should().Be("approval-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.Should().NotBeNull();
+        host.ResumeDispatchService.LastCommand.ToolApproval!.ExecutionId.Should().Be("exec-member-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ToolCallId.Should().Be("tool-call-member-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ApprovalRequestId.Should().Be("approval-member-1");
     }
 
     [Fact]

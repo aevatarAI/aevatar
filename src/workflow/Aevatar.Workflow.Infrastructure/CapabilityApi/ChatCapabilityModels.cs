@@ -163,6 +163,7 @@ public sealed record ChatInputFileRef
     public string? OwnerScopeId { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record WorkflowResumeInput
 {
     public required string ActorId { get; init; }
@@ -174,6 +175,15 @@ public sealed record WorkflowResumeInput
     public string? EditedContent { get; init; }
     public string? Feedback { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
+    public WorkflowToolApprovalResumeInput? ToolApproval { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record WorkflowToolApprovalResumeInput
+{
+    public required string ExecutionId { get; init; }
+    public required string ToolCallId { get; init; }
+    public required string ApprovalRequestId { get; init; }
 }
 
 public sealed record WorkflowSignalInput

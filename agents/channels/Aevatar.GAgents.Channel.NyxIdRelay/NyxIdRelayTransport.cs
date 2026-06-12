@@ -463,7 +463,10 @@ public sealed class NyxIdRelayTransport
                 "actor_id",
                 "run_id",
                 "step_id",
-                "approved");
+                "approved",
+                "execution_id",
+                "tool_call_id",
+                "approval_request_id");
         }
 
         if (TryBuildLlmSelectionPayload(submission, out var llmSelection))
@@ -570,6 +573,27 @@ public sealed class NyxIdRelayTransport
         if (submission.FormFields.TryGetValue("feedback", out var feedback))
             payload.Feedback = feedback ?? string.Empty;
 
+        if (TryBuildWorkflowToolApprovalResumePayload(submission, out var toolApproval))
+            payload.ToolApproval = toolApproval;
+
+        return true;
+    }
+
+    private static bool TryBuildWorkflowToolApprovalResumePayload(
+        CardActionSubmission submission,
+        out WorkflowToolApprovalResumeActionPayload payload)
+    {
+        payload = new WorkflowToolApprovalResumeActionPayload();
+        if (!TryGetRequiredValue(submission.Arguments, "execution_id", out var executionId) ||
+            !TryGetRequiredValue(submission.Arguments, "tool_call_id", out var toolCallId) ||
+            !TryGetRequiredValue(submission.Arguments, "approval_request_id", out var approvalRequestId))
+        {
+            return false;
+        }
+
+        payload.ExecutionId = executionId;
+        payload.ToolCallId = toolCallId;
+        payload.ApprovalRequestId = approvalRequestId;
         return true;
     }
 

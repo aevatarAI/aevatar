@@ -342,6 +342,79 @@ public class ToolApprovalMiddlewareTests
     }
 
     [Fact]
+    public async Task MatchingToolApprovalGrant_ShouldBypassApprovalAndExecuteNext()
+    {
+        var handler = new ScriptedApprovalHandler(ToolApprovalResult.Denied("should-not-run"));
+        var middleware = new ToolApprovalMiddleware(handler);
+        var ctx = NewContext("danger", "tc-grant-1");
+        ctx.ApprovalGrant = new ToolApprovalGrant(
+            ApprovalRequestId: "approval-1",
+            ToolName: "danger",
+            ToolCallId: "tc-grant-1");
+
+        var nextExecuted = false;
+        await middleware.InvokeAsync(ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeTrue();
+        handler.Requests.Should().BeEmpty();
+        ctx.Terminate.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MismatchedToolApprovalGrant_ShouldFailClosedWithoutCallingHandlerOrTool()
+    {
+        var handler = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
+        var middleware = new ToolApprovalMiddleware(handler);
+        var ctx = NewContext("danger", "tc-grant-2");
+        ctx.ApprovalGrant = new ToolApprovalGrant(
+            ApprovalRequestId: "approval-1",
+            ToolName: "other_tool",
+            ToolCallId: "tc-grant-2");
+
+        var nextExecuted = false;
+        await middleware.InvokeAsync(ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeFalse();
+        handler.Requests.Should().BeEmpty();
+        ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.Result.Should().Contain("approval grant does not match");
+    }
+
+    [Fact]
+    public async Task IncompleteToolApprovalGrant_ShouldFailClosedWithoutCallingHandlerOrTool()
+    {
+        var handler = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
+        var middleware = new ToolApprovalMiddleware(handler);
+        var ctx = NewContext("danger", "tc-grant-3");
+        ctx.ApprovalGrant = new ToolApprovalGrant(
+            ApprovalRequestId: " ",
+            ToolName: "danger",
+            ToolCallId: "tc-grant-3");
+
+        var nextExecuted = false;
+        await middleware.InvokeAsync(ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeFalse();
+        handler.Requests.Should().BeEmpty();
+        ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.Result.Should().Contain("approval grant does not match");
+    }
+
+    [Fact]
     public async Task RequestScopedDenialCountBlocksExecutionWithoutCallingHandler()
     {
         var handler = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
