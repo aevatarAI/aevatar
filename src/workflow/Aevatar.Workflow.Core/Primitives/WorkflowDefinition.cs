@@ -31,7 +31,7 @@ public sealed class WorkflowDefinition
     public required List<RoleDefinition> Roles { get; init; }
 
     /// <summary>
-    /// 步骤定义列表，按文档顺序排列；执行流由显式 Next 或 Branches 定义。
+    /// 步骤定义列表，按执行顺序排列。
     /// </summary>
     public required List<StepDefinition> Steps { get; init; }
 
@@ -53,7 +53,8 @@ public sealed class WorkflowDefinition
     public StepDefinition? GetStep(string id) => Steps.Find(s => s.Id == id);
 
     /// <summary>
-    /// 获取当前步骤的显式后继步骤。
+    /// 获取当前步骤的后继步骤。
+    /// 优先使用步骤的 Next 字段，否则按顺序取下一项。
     /// </summary>
     /// <param name="currentId">当前步骤 ID。</param>
     /// <returns>后继步骤定义，若无则返回 null。</returns>
@@ -62,7 +63,7 @@ public sealed class WorkflowDefinition
     /// <summary>
     /// 获取后继步骤，支持 switch/conditional 分支。
     /// 当 <paramref name="branchKey"/> 非空时，优先从 <c>Branches[branchKey]</c> 查找目标步骤，
-    /// 找不到则尝试 <c>Branches["_default"]</c>，最后回退到显式 <c>Next</c>。
+    /// 找不到则尝试 <c>Branches["_default"]</c>，最后回退到 <see cref="GetNextStep(string)"/>。
     /// </summary>
     public StepDefinition? GetNextStep(string currentId, string? branchKey)
     {
@@ -77,7 +78,9 @@ public sealed class WorkflowDefinition
                 return defFound;
         }
 
-        return string.IsNullOrWhiteSpace(s.Next) ? null : GetStep(s.Next);
+        if (s.Next != null) return GetStep(s.Next);
+        var idx = Steps.FindIndex(x => x.Id == currentId);
+        return idx >= 0 && idx + 1 < Steps.Count ? Steps[idx + 1] : null;
     }
 }
 
