@@ -266,7 +266,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             ChatMessage.System(BuildSystemPrompt(externalMetadata, input.AttachmentVisibilityInstruction)),
         };
-        initialMessages.AddRange((priorHistory ?? []).Select(ToChatMessage));
+        initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
 
         return new AgentRunReplyStepPlan(
@@ -336,7 +336,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             MaxMessages = MaxHistoryMessages + Math.Min(priorHistory?.Count ?? 0, MaxHistoryMessages),
         };
-        history.AddRange((priorHistory ?? []).Select(ToChatMessage));
+        history.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).Select(ToChatMessage));
         var importedPriorCount = history.Messages.Count;
         var runtime = new ChatRuntime(
             providerFactory: ResolveProvider,
@@ -651,6 +651,21 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             ToolCallId = string.IsNullOrEmpty(entry.ToolCallId) ? null : entry.ToolCallId,
             ToolCalls = entry.ToolCalls.Select(ToToolCall).ToArray(),
         };
+
+    // Assistant entries with no wire-visible content (no text, no content parts, no tool
+    // calls — e.g. reasoning-only turns persisted before AgentRunGAgent stopped appending
+    // them to durable history) are skipped on replay: providers drop bare reasoning on
+    // assistant history messages, so such entries degenerate into empty assistant turns
+    // that corrupt every later request in the conversation.
+    private static bool IsReplayableHistoryEntry(ConversationHistoryEntry entry)
+    {
+        if (!string.Equals(entry.Role, "assistant", StringComparison.Ordinal))
+            return true;
+
+        return !string.IsNullOrWhiteSpace(entry.Content)
+               || entry.ContentParts.Count > 0
+               || entry.ToolCalls.Count > 0;
+    }
 
     private static ConversationHistoryEntry ToConversationHistoryEntry(ChatMessage message)
     {

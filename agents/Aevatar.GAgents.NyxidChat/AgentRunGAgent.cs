@@ -919,7 +919,13 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             };
             message.ToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
             next.Messages.Add(message);
-            next.AppendedHistory.Add(AgentRunReplyStepMappers.ToConversationHistoryEntry(message));
+            // Reasoning-only results stay in the intra-run step messages (diagnostics,
+            // same-run continuation) but must NOT enter durable conversation history:
+            // providers drop bare reasoning on assistant history messages, so a
+            // reasoning-only entry replays as an empty assistant turn that pollutes
+            // every later request in this conversation.
+            if (!string.IsNullOrEmpty(result.Content) || result.ToolCalls.Count > 0)
+                next.AppendedHistory.Add(AgentRunReplyStepMappers.ToConversationHistoryEntry(message));
         }
 
         return next;

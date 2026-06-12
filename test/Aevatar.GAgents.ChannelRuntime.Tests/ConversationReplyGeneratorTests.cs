@@ -169,6 +169,51 @@ public sealed class ConversationReplyGeneratorTests
             .NotContain(message => message.Content == "first user" || message.Content == "first assistant");
     }
 
+    // Conversations poisoned before AgentRunGAgent stopped persisting reasoning-only
+    // turns still carry assistant entries with no wire-visible content. Replay must
+    // skip them: providers drop bare reasoning on assistant history messages, so such
+    // entries degenerate into empty assistant turns that corrupt every later request.
+    [Fact]
+    public async Task GenerateReplyAsync_WithEmptyAssistantHistoryEntries_SkipsThemOnReplay()
+    {
+        var providerFactory = new SequentialResponseProviderFactory("recovered assistant");
+        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+
+        var poisonedHistory = new[]
+        {
+            new ConversationHistoryEntry { Role = "user", Content = "建一个定时任务" },
+            new ConversationHistoryEntry { Role = "assistant", ReasoningContent = "reasoning only, no answer" },
+            new ConversationHistoryEntry { Role = "user", Content = "怎么没反应" },
+            new ConversationHistoryEntry { Role = "assistant", Content = "我已经收到了" },
+        };
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-msg-poisoned",
+                ChannelId = new ChannelId { Value = "lark" },
+                Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-poisoned" },
+                Content = new MessageContent { Text = "帮我建一个定时任务，每天早上9点提醒我喝水" },
+            },
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: poisonedHistory,
+            streamingSink: null,
+            CancellationToken.None);
+
+        providerFactory.Requests.Should().NotBeEmpty();
+        var messages = providerFactory.Requests[0].Messages;
+        messages.Should().NotContain(
+            message => message.Role == "assistant" &&
+                       string.IsNullOrEmpty(message.Content) &&
+                       (message.ToolCalls == null || message.ToolCalls.Count == 0),
+            "assistant history entries without wire-visible content must be skipped on replay");
+        messages.Should().Contain(message => message.Role == "assistant" && message.Content == "我已经收到了");
+        messages.Should().Contain(message => message.Role == "user" && message.Content == "建一个定时任务");
+        messages.Should().Contain(message => message.Role == "user" && message.Content == "怎么没反应");
+    }
+
     [Fact]
     public async Task GenerateReplyAsync_WithCurrentLarkImageAttachment_BuildsImageContentPart()
     {

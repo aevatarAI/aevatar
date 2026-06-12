@@ -251,6 +251,74 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextLlmStepAsync_ReasoningOnlyResult_StaysInStepMessagesButOutOfDurableHistory()
+    {
+        // Reasoning-only results keep their intra-run record (step messages feed the
+        // retry request and diagnostics) but must not enter AppendedHistory: providers
+        // drop bare reasoning on assistant history messages, so a persisted
+        // reasoning-only entry replays as an empty assistant turn that poisons every
+        // later request in the conversation.
+        var actorRuntime = new DispatchingActorRuntime();
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-reasoning-history",
+            CorrelationId = "corr-reasoning-history",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-reasoning-history",
+                CorrelationId = "corr-reasoning-history",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 1,
+                MaxToolRounds = 4,
+            },
+        });
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-reasoning-history",
+            CorrelationId = "corr-reasoning-history",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 2,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-reasoning-history",
+                RunId = "run-reasoning-history",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+            },
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                AccumulatedText = string.Empty,
+                Content = string.Empty,
+                ReasoningContent = "internal chain of thought without an answer",
+                FinishReason = "stop",
+                HasStreamedTextContent = false,
+            },
+        });
+
+        var step = runtime.State.GenerationStep;
+        step.Should().NotBeNull();
+        step!.Messages.Should().Contain(
+            message => message.Role == "assistant" &&
+                       message.ReasoningContent == "internal chain of thought without an answer",
+            "the intra-run step record keeps the reasoning-only result");
+        step.AppendedHistory.Should().NotContain(
+            entry => entry.Role == "assistant",
+            "reasoning-only assistant turns must not be persisted into durable conversation history");
+    }
+
+    [Fact]
     public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_OnFinalNoToolsStep_FailsWithEmptyReply()
     {
         // The reasoning-only retry is bounded: when the final no-tools step itself
