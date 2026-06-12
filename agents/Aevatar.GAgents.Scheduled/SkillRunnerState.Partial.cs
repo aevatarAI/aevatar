@@ -1,26 +1,9 @@
-using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
 
-public sealed partial class SkillRunnerState : ISchedulable
+public sealed partial class SkillRunnerState
 {
-    /// <inheritdoc />
-    ScheduleState ISchedulable.Schedule => new()
-    {
-        Enabled = Enabled,
-        Cron = ScheduleCron ?? string.Empty,
-        Timezone = ScheduleTimezone ?? string.Empty,
-        NextRunAt = NextRunAt,
-        LastRunAt = LastRunAt,
-        ErrorCount = ErrorCount,
-        Mode = ScheduleMode == SkillRunnerScheduleMode.OneShot
-            ? ScheduleState.ModeOneShot
-            : ScheduleState.ModeCron,
-        RunAt = OneShotRunAt,
-        RetiredAt = RetiredAt,
-    };
-
     public ExternalTriggerSource? FindExternalTriggerSource(string? sourceId)
     {
         var normalized = sourceId?.Trim();

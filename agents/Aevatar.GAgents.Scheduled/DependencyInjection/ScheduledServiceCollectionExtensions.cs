@@ -44,7 +44,6 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IRetiredActorSpec, ScheduledRetiredActorSpec>());
         services.TryAddSingleton<IClock, SystemClock>();
-        services.TryAddSingleton<ITimeZoneResolver, TimeZoneResolver>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
@@ -88,6 +87,7 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddSingleton<IUserAgentDeliveryTargetReader, UserAgentDeliveryTargetReader>();
         services.TryAddSingleton<UserAgentCatalogProjectionBootstrapActivator>();
         services.TryAddSingleton<IUserAgentCatalogCommandPort, UserAgentCatalogCommandPort>();
+        services.TryAddSingleton<ISkillRunnerCronSchedulePort, SkillRunnerCronSchedulePort>();
         services.TryAddSingleton<ISkillRunnerCommandPort, SkillRunnerCommandPort>();
         // Caller-scope resolver chain (issue #466 §B). Channel resolver runs first so
         // a request with channel metadata produces the per-sender scope rather than

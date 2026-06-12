@@ -232,20 +232,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         //   Old pattern: the runner dispatched UserAgentCatalogExecutionUpdateCommand after membership upsert.
         //   New principle: runner committed state is sufficient for the catalog projector to materialize execution fields.
         var captured = new List<EventEnvelope>();
-        var scheduler = Substitute.For<Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>();
-        scheduler
-            .ScheduleTimeoutAsync(
-                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>(),
-                Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                var req = call.Arg<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>();
-                return Task.FromResult(new Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
-                    req.ActorId,
-                    req.CallbackId,
-                    1L,
-                    Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
-            });
+        var scheduler = new RecordingCallbackScheduler();
         var runtime = Substitute.For<IActorRuntime>();
         runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
@@ -275,7 +262,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         captured.Should().ContainSingle();
         captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
         var persisted = await provider.GetRequiredService<IEventStore>().GetEventsAsync("skill-runner-projection-regression");
-        persisted.Should().HaveCount(2);
+        persisted.Should().ContainSingle();
+        scheduler.Timeouts.Should().BeEmpty();
 
         var runnerState = agent.State.Clone();
         var writeDispatcher = new RecordingExecutionWriteDispatcher();
@@ -308,8 +296,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         doc.Id.Should().Be("skill-runner-projection-regression");
         doc.ActorId.Should().Be("skill-runner-projection-regression");
         doc.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
-        doc.NextRunAtUtc.Should().NotBeNull();
-        doc.StateVersion.Should().Be(2);
+        doc.NextRunAtUtc.Should().BeNull();
+        doc.StateVersion.Should().Be(1);
     }
 
     [Fact]

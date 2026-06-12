@@ -367,6 +367,24 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldMapSkillRunnerScheduleKind()
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
+        var configuration = CreateEnvelopeConfiguration("skill-runner:runner-1") with
+        {
+            ScheduleKind = ScheduledDispatchScheduleKind.SkillRunner,
+        };
+        var prepared = await new ScheduledDispatchTargetPreparationService()
+            .PrepareAsync(configuration, "cmd-1", "corr-1");
+
+        await port.DispatchEnsureAsync("scheduled-dispatch:skill-runner:runner-1", configuration, prepared);
+
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchEnsureCommand>();
+        command.ScheduleKind.Should().Be(ScheduledDispatchScheduleKindState.SkillRunner);
+    }
+
+    [Fact]
     public async Task ScheduledDispatchActorPort_ShouldMapEnvelopeUpdateAndRejectUnsupportedTarget()
     {
         var dispatchPort = new RecordingActorDispatchPort();
