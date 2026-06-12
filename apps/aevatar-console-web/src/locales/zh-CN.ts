@@ -740,7 +740,6 @@ const zhCNMessages = {
     '端点详情、类型化载荷和最近运行记录会在这里按需打开，不改变主控制台布局。',
   'pages.studio.studiomemberinvokeinspector.current.run': '当前运行',
   'pages.studio.studiomemberinvokeinspector.close': '关闭详情',
-  'pages.studio.studiomemberinvokeinspector.drag.handle': '拖拽详情面板',
   'pages.studio.studiomemberinvokeinspector.endpoint': '端点',
   'pages.studio.studiomemberinvokeinspector.endpoint.2': '端点',
   'pages.studio.studiomemberinvokeinspector.history': '历史',
@@ -755,8 +754,6 @@ const zhCNMessages = {
   'pages.studio.studiomemberinvokeinspector.paste.encoded.protobuf.payload.when':
     '当文本无法构造该类型时，粘贴编码后的 protobuf 载荷。',
   'pages.studio.studiomemberinvokeinspector.revision': '版本',
-  'pages.studio.studiomemberinvokeinspector.resize.handle':
-    '调整调用检查器宽度',
   'pages.studio.studiomemberinvokeinspector.run': '运行',
   'pages.studio.studiomemberinvokeinspector.service.target': '服务目标',
   'pages.studio.studiomemberinvokeinspector.title': '详情',

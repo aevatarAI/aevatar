@@ -783,8 +783,6 @@ const enUSMessages = {
   'pages.studio.studiomemberinvokeinspector.current.run': 'Current run',
   'pages.studio.studiomemberinvokeinspector.close':
     'Close details',
-  'pages.studio.studiomemberinvokeinspector.drag.handle':
-    'Drag details panel',
   'pages.studio.studiomemberinvokeinspector.endpoint': 'Endpoint',
   'pages.studio.studiomemberinvokeinspector.endpoint.2': 'Endpoint',
   'pages.studio.studiomemberinvokeinspector.history': 'History',
@@ -799,8 +797,6 @@ const enUSMessages = {
   'pages.studio.studiomemberinvokeinspector.paste.encoded.protobuf.payload.when':
     'Paste encoded protobuf payload when this type cannot be built from text.',
   'pages.studio.studiomemberinvokeinspector.revision': 'Revision',
-  'pages.studio.studiomemberinvokeinspector.resize.handle':
-    'Resize details panel',
   'pages.studio.studiomemberinvokeinspector.run': 'Run',
   'pages.studio.studiomemberinvokeinspector.service.target': 'Service target',
   'pages.studio.studiomemberinvokeinspector.title': 'Details',

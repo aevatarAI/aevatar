@@ -123,19 +123,6 @@ describe('StudioMemberInvokePanel', () => {
     );
   });
 
-  function dispatchWindowPointerEvent(
-    type: 'pointercancel' | 'pointermove' | 'pointerup',
-    init: MouseEventInit = {},
-  ): void {
-    window.dispatchEvent(
-      new MouseEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        ...init,
-      }),
-    );
-  }
-
   it('renders the workflow run surface with a compact summary and closed details', async () => {
     render(
       React.createElement(StudioMemberInvokePanel, {
@@ -258,56 +245,15 @@ describe('StudioMemberInvokePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     const inspector = await screen.findByTestId('studio-invoke-inspector');
     expect(inspector).toBeTruthy();
-    expect(inspector.style.position).toBe('fixed');
-    expect(inspector.style.width).toBe('420px');
-    expect(inspector.style.left).toBe('572px');
-    expect(inspector.style.top).toBe('96px');
     expect(screen.getAllByText('Details').length).toBeGreaterThanOrEqual(1);
-    const dragHandle = screen.getByTestId('studio-invoke-inspector-drag-handle');
-    const initialDetailsLeft = inspector.style.left;
-    const initialDetailsTop = inspector.style.top;
-    fireEvent.pointerDown(dragHandle, { clientX: 800, clientY: 120 });
-    await waitFor(() => {
-      expect(document.body.style.cursor).toBe('grabbing');
-    });
-    dispatchWindowPointerEvent('pointermove', { clientX: 780, clientY: 150 });
-    await waitFor(() => {
-      expect(inspector.style.left).not.toBe(initialDetailsLeft);
-      expect(inspector.style.top).not.toBe(initialDetailsTop);
-    });
-    expect(Number.parseFloat(inspector.style.left)).toBeGreaterThanOrEqual(16);
-    expect(Number.parseFloat(inspector.style.left)).toBeLessThanOrEqual(
-      1024 - 420 - 16,
-    );
-    expect(Number.parseFloat(inspector.style.top)).toBeGreaterThanOrEqual(16);
-    expect(Number.parseFloat(inspector.style.top)).toBeLessThanOrEqual(
-      768 - 220 - 16,
-    );
-    dispatchWindowPointerEvent('pointerup');
-    await waitFor(() => {
-      expect(document.body.style.cursor).toBe('');
-    });
-    const resizeHandle = screen.getByTestId(
-      'studio-invoke-inspector-resize-handle',
-    );
-    fireEvent.pointerDown(resizeHandle, { clientX: 552, clientY: 180 });
-    await waitFor(() => {
-      expect(document.body.style.cursor).toBe('ew-resize');
-    });
-    dispatchWindowPointerEvent('pointermove', {
-      clientX: -1000,
-      clientY: 180,
-    });
-    await waitFor(() => {
-      expect(inspector.style.width).toBe('500px');
-    });
-    dispatchWindowPointerEvent('pointerup');
-    fireEvent.pointerDown(resizeHandle, { clientX: 472, clientY: 180 });
-    dispatchWindowPointerEvent('pointermove', { clientX: 700, clientY: 180 });
-    await waitFor(() => {
-      expect(inspector.style.width).toBe('360px');
-    });
-    dispatchWindowPointerEvent('pointerup');
+    expect(screen.getByText('Service target')).toBeTruthy();
+    expect(screen.getByText('Revision')).toBeTruthy();
+    expect(
+      screen.queryByTestId('studio-invoke-inspector-drag-handle'),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId('studio-invoke-inspector-resize-handle'),
+    ).toBeNull();
     fireEvent.click(screen.getByText('Payload'));
     expect(screen.getByLabelText('Payload type URL')).toHaveValue(
       'type.googleapis.com/google.protobuf.StringValue',
