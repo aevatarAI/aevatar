@@ -1,0 +1,4 @@
+interface:
+  display_name: "Address Own PR Comments"
+  short_description: "Fix PR comments and failing tests"
+  default_prompt: "Use $address-own-pr-comments to handle review comments and failing tests on my current PR."
