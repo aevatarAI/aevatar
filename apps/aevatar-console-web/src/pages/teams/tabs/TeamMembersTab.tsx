@@ -4,7 +4,7 @@ import {
   PlusOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
-import { Button, Tooltip, Typography, theme } from "antd";
+import { Button, Skeleton, Tooltip, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
 import {
@@ -210,6 +210,24 @@ const entryActionStyle: React.CSSProperties = {
   paddingInline: 12,
 };
 
+const memberRosterSkeletonRowKeys = ["primary", "secondary", "tertiary"] as const;
+
+const SkeletonLine: React.FC<{
+  readonly height?: number;
+  readonly width: number | string;
+}> = ({ height = 16, width }) => (
+  <Skeleton.Input
+    active
+    size="small"
+    style={{
+      borderRadius: 999,
+      height,
+      maxWidth: "100%",
+      width,
+    }}
+  />
+);
+
 const panelHeaderStyle: React.CSSProperties = {
   alignItems: "center",
   display: "flex",
@@ -284,6 +302,110 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
     borderBottom: `1px solid ${token.colorBorderSecondary}`,
     color: token.colorTextSecondary,
   };
+  const renderTableHeader = () => (
+    <div className="team-members-table-header" style={tableHeadStyle}>
+      <span>{intl.formatMessage({ id: "teams.members.columns.member" })}</span>
+      <span>
+        {intl.formatMessage({ id: "teams.members.columns.implementation" })}
+      </span>
+      <span>{intl.formatMessage({ id: "teams.members.columns.service" })}</span>
+      <span style={tableHeaderActionStyle}>
+        {intl.formatMessage({ id: "teams.members.columns.actions" })}
+      </span>
+    </div>
+  );
+  const renderTableSkeleton = (status: "loading" | "syncing") => {
+    const statusTitle = intl.formatMessage({
+      id:
+        status === "syncing"
+          ? "teams.members.syncing.title"
+          : "teams.members.loading.title",
+    });
+    const statusDescription = intl.formatMessage({
+      id:
+        status === "syncing"
+          ? "teams.members.syncing.description"
+          : "teams.members.loading.description",
+    });
+
+    return (
+      <div
+        aria-busy="true"
+        aria-label={statusTitle}
+        data-testid="team-members-skeleton"
+        role="status"
+        style={{ display: "flex", flexDirection: "column", gap: 12 }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <Typography.Text strong>{statusTitle}</Typography.Text>
+          <Typography.Text style={{ fontSize: 13 }} type="secondary">
+            {statusDescription}
+          </Typography.Text>
+        </div>
+        <div style={tableFrameStyle}>
+          <div style={tableScrollStyle}>
+            <div style={tableInnerStyle}>
+              <style>{responsiveTableStyle}</style>
+              {renderTableHeader()}
+              {memberRosterSkeletonRowKeys.map((key, index) => (
+                <div
+                  className="team-members-table-row"
+                  data-testid="team-members-skeleton-row"
+                  key={key}
+                  style={{
+                    ...rosterRowBaseStyle,
+                    background: token.colorBgContainer,
+                    borderTop:
+                      index === 0
+                        ? "none"
+                        : `1px solid ${token.colorBorderSecondary}`,
+                  }}
+                >
+                  <div style={memberCellStyle}>
+                    <SkeletonLine height={22} width="64%" />
+                    <SkeletonLine width="88%" />
+                  </div>
+                  <div style={implementationCellStyle}>
+                    <SkeletonLine width="58%" />
+                    <SkeletonLine height={24} width={92} />
+                  </div>
+                  <div style={serviceCellStyle}>
+                    <SkeletonLine width="72%" />
+                    <SkeletonLine width="86%" />
+                  </div>
+                  <div className="team-members-table-actions" style={actionCellStyle}>
+                    <div
+                      className="team-members-table-primary-actions"
+                      style={primaryActionsStyle}
+                    >
+                      <Skeleton.Button
+                        active
+                        className="team-members-table-invoke-action"
+                        size="small"
+                        style={invokeActionStyle}
+                      />
+                      <Skeleton.Button
+                        active
+                        className="team-members-table-studio-action"
+                        size="small"
+                        style={studioActionStyle}
+                      />
+                    </div>
+                    <Skeleton.Button
+                      active
+                      className="team-members-table-entry-action"
+                      size="small"
+                      style={entryActionStyle}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
   const handleNavigate = React.useCallback(
     (href: string) => (event: React.MouseEvent<HTMLElement>) => {
       if (!href || !onNavigate) {
@@ -338,21 +460,9 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
           {intl.formatMessage({ id: "teams.members.description" })}
         </Typography.Text>
         {rosterSyncing ? (
-          <AevatarInspectorEmpty
-            compact
-            title={intl.formatMessage({ id: "teams.members.syncing.title" })}
-            description={intl.formatMessage({
-              id: "teams.members.syncing.description",
-            })}
-          />
+          renderTableSkeleton("syncing")
         ) : rosterLoading ? (
-          <AevatarInspectorEmpty
-            compact
-            title={intl.formatMessage({ id: "teams.members.loading.title" })}
-            description={intl.formatMessage({
-              id: "teams.members.loading.description",
-            })}
-          />
+          renderTableSkeleton("loading")
         ) : rosterError ? (
           <AevatarInspectorEmpty
             compact
@@ -366,16 +476,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             <div style={tableScrollStyle}>
               <div style={tableInnerStyle}>
                 <style>{responsiveTableStyle}</style>
-                <div className="team-members-table-header" style={tableHeadStyle}>
-                  <span>{intl.formatMessage({ id: "teams.members.columns.member" })}</span>
-                  <span>
-                    {intl.formatMessage({ id: "teams.members.columns.implementation" })}
-                  </span>
-                  <span>{intl.formatMessage({ id: "teams.members.columns.service" })}</span>
-                  <span style={tableHeaderActionStyle}>
-                    {intl.formatMessage({ id: "teams.members.columns.actions" })}
-                  </span>
-                </div>
+                {renderTableHeader()}
                 {rosterRows.map((row, index) => {
                   const invokeDisabledReason = row.workflowSupported
                     ? intl.formatMessage({

@@ -1226,6 +1226,33 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("button", { name: "打开 Services" })).toBeNull();
   });
 
+  it("shows the members table skeleton while the Team member roster loads", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
+    );
+    let resolveTeamMembers: (value: unknown) => void = () => undefined;
+    (studioApi.listTeamMembers as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveTeamMembers = resolve;
+        }),
+    );
+
+    const { unmount } = renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByTestId("team-members-skeleton")).toBeTruthy();
+    expect(screen.getAllByTestId("team-members-skeleton-row")).toHaveLength(3);
+    expect(screen.queryByText("这支团队还没有成员")).toBeNull();
+    expect(screen.queryByText("Team Alpha Operator")).toBeNull();
+
+    unmount();
+    await act(async () => {
+      resolveTeamMembers(mockCreateTeamMembersCatalog());
+    });
+  });
+
   it("marks the route-selected member in the members tab", async () => {
     window.history.replaceState(
       {},

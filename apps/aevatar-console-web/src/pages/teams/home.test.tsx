@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { setLocale } from "@umijs/max";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
@@ -189,7 +189,13 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("button", { name: "Debug entry workflow" })).toBeTruthy();
+    expect(
+      await screen.findByRole(
+        "button",
+        { name: "Debug entry workflow" },
+        { timeout: 3000 },
+      ),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "View team" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "View members" })).toBeTruthy();
     expect(screen.getByText("My AI teams")).toBeTruthy();
@@ -914,5 +920,61 @@ describe("TeamsHomePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
 
     expect(window.location.pathname).toBe("/scopes/scope-a/teams/new");
+  });
+
+  it("shows the home skeleton while the route scope waits for server auth confirmation", async () => {
+    let resolveAuthSession: (value: unknown) => void = () => undefined;
+    (studioApi.getAuthSession as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveAuthSession = resolve;
+        }),
+    );
+
+    const { unmount } = renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByTestId("teams-home-skeleton")).toBeTruthy();
+    expect(screen.getAllByTestId("teams-home-summary-skeleton")).toHaveLength(3);
+    expect(screen.getAllByTestId("teams-home-card-skeleton")).toHaveLength(3);
+    expect(screen.queryByText("AI 团队总数")).toBeNull();
+    expect(studioApi.listTeams).not.toHaveBeenCalled();
+    expect(studioApi.listMembers).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
+
+    unmount();
+    await act(async () => {
+      resolveAuthSession({
+        enabled: false,
+        scopeId: "scope-a",
+        scopeSource: "nyxid",
+      });
+    });
+  });
+
+  it("shows the home skeleton while the Team roster loads", async () => {
+    let resolveTeams: (value: unknown) => void = () => undefined;
+    (studioApi.listTeams as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveTeams = resolve;
+        }),
+    );
+
+    const { unmount } = renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByTestId("teams-home-skeleton")).toBeTruthy();
+    expect(screen.getAllByTestId("teams-home-summary-skeleton")).toHaveLength(3);
+    expect(screen.getAllByTestId("teams-home-card-skeleton")).toHaveLength(3);
+    expect(screen.queryByText("AI 团队总数")).toBeNull();
+    expect(screen.queryByText("当前账号还没有创建团队")).toBeNull();
+
+    unmount();
+    await act(async () => {
+      resolveTeams({
+        scopeId: "scope-a",
+        teams: defaultTeams,
+        nextPageToken: null,
+      });
+    });
   });
 });

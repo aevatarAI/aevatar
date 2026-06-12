@@ -10,6 +10,7 @@ import {
   Alert,
   Button,
   Empty,
+  Skeleton,
   Space,
   Tooltip,
   Typography,
@@ -32,10 +33,7 @@ import {
   type StudioMemberSummary,
   type StudioTeamSummary,
 } from "@/shared/studio/models";
-import {
-  AevatarInspectorEmpty,
-  AevatarPageShell,
-} from "@/shared/ui/aevatarPageShells";
+import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
 import { describeError } from "@/shared/ui/errorText";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
 import {
@@ -345,6 +343,46 @@ const SummaryStatCard: React.FC<{
   );
 };
 
+const SkeletonLine: React.FC<{
+  readonly height?: number;
+  readonly width: number | string;
+}> = ({ height = 16, width }) => (
+  <Skeleton.Input
+    active
+    size="small"
+    style={{
+      borderRadius: 999,
+      height,
+      maxWidth: "100%",
+      width,
+    }}
+  />
+);
+
+const SummaryStatSkeletonCard: React.FC = () => {
+  const { token } = theme.useToken();
+
+  return (
+    <div
+      data-testid="teams-home-summary-skeleton"
+      style={{
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 22,
+        boxShadow: token.boxShadowTertiary,
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        minHeight: 104,
+        padding: 18,
+      }}
+    >
+      <SkeletonLine height={30} width={68} />
+      <SkeletonLine width="72%" />
+    </div>
+  );
+};
+
 const TeamTitle: React.FC<{
   readonly level: 3 | 4;
   readonly title: string;
@@ -414,6 +452,150 @@ const TeamFact: React.FC<{
     </div>
   );
 };
+
+const TeamRosterCardSkeleton: React.FC = () => {
+  const { token } = theme.useToken();
+
+  return (
+    <article
+      data-testid="teams-home-card-skeleton"
+      style={{
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 24,
+        boxShadow: token.boxShadowTertiary,
+        display: "flex",
+        flexDirection: "column",
+        gap: 16,
+        minWidth: 0,
+        padding: 18,
+      }}
+    >
+      <div
+        style={{
+          alignItems: "flex-start",
+          display: "flex",
+          gap: 16,
+          justifyContent: "space-between",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            flex: "1 1 auto",
+            flexDirection: "column",
+            gap: 10,
+            minWidth: 0,
+          }}
+        >
+          <SkeletonLine height={26} width="62%" />
+          <SkeletonLine width="88%" />
+        </div>
+        <Skeleton.Button active shape="round" size="small" style={{ width: 92 }} />
+      </div>
+      <SkeletonLine width="38%" />
+      <div
+        style={{
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          display: "grid",
+          gap: 14,
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          paddingTop: 14,
+        }}
+      >
+        <SkeletonLine width="78%" />
+        <SkeletonLine width="68%" />
+        <SkeletonLine width="74%" />
+      </div>
+      <div
+        style={{
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          display: "grid",
+          gap: 14,
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          paddingTop: 14,
+        }}
+      >
+        <SkeletonLine width="80%" />
+        <SkeletonLine width="72%" />
+      </div>
+      <Space size={8} wrap>
+        <Skeleton.Button active shape="round" style={{ width: 132 }} />
+        <Skeleton.Button active shape="round" style={{ width: 108 }} />
+        <Skeleton.Button active shape="round" style={{ width: 126 }} />
+      </Space>
+    </article>
+  );
+};
+
+const summaryStatSkeletonKeys = ["total", "actionable", "healthy"] as const;
+const rosterCardSkeletonKeys = ["primary", "secondary", "tertiary"] as const;
+
+const TeamsHomeLoadingSkeleton: React.FC = () => (
+  <section
+    aria-busy="true"
+    aria-label={t("pages.teams.home.copy.53", "Reading the team list.")}
+    data-testid="teams-home-skeleton"
+    role="status"
+    style={{ display: "flex", flexDirection: "column", gap: 20 }}
+  >
+    <div
+      style={{
+        display: "grid",
+        gap: 16,
+        gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+      }}
+    >
+      {summaryStatSkeletonKeys.map((key) => (
+        <SummaryStatSkeletonCard key={key} />
+      ))}
+    </div>
+
+    <div
+      style={{
+        alignItems: "center",
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 12,
+        justifyContent: "space-between",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          minWidth: 240,
+        }}
+      >
+        <SkeletonLine height={22} width={128} />
+        <SkeletonLine width={360} />
+      </div>
+      <Space.Compact>
+        <Skeleton.Button active style={{ height: 44, width: 44 }} />
+        <Skeleton.Button active style={{ height: 44, width: 44 }} />
+      </Space.Compact>
+    </div>
+
+    <ul
+      aria-hidden="true"
+      style={{
+        display: "grid",
+        gap: 16,
+        gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+        listStyle: "none",
+        margin: 0,
+        padding: 0,
+      }}
+    >
+      {rosterCardSkeletonKeys.map((key) => (
+        <li key={key}>
+          <TeamRosterCardSkeleton />
+        </li>
+      ))}
+    </ul>
+  </section>
+);
 
 function compareMembers(
   left: StudioMemberSummary,
@@ -723,7 +905,6 @@ function renderMemberQuickActionIcon(
       return <BarsOutlined />;
     case "edit-entry-member":
     case "edit-member":
-    default:
       return <EditOutlined />;
   }
 }
@@ -1064,6 +1245,8 @@ const TeamsHomePage: React.FC = () => {
   const queryScopeId =
     serverResolvedScope?.scopeId?.trim() === scopeId ? scopeId : "";
   const canLoadRoster = queryScopeId.length > 0;
+  const scopeAuthResolving =
+    scopeId.length > 0 && !canLoadRoster && authSessionQuery.isLoading;
 
   React.useEffect(() => {
     if (!scopeId) {
@@ -1232,6 +1415,8 @@ const TeamsHomePage: React.FC = () => {
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
   const useCompactRoster = resolvedRosterView === "list";
+  const rosterBootstrapLoading =
+    scopeAuthResolving || (!teamsQuery.isError && teamsQuery.isLoading);
   const emptyRosterHint =
     canLoadRoster
       ? t("pages.teams.home.team.ai", "This account has not created any teams yet. Your AI team list will appear here after you create one.")
@@ -1319,8 +1504,17 @@ const TeamsHomePage: React.FC = () => {
           />
         ) : null}
 
-        {canLoadRoster ? (
-          <>
+        {canLoadRoster || scopeAuthResolving ? (
+          rosterBootstrapLoading ? (
+            <TeamsHomeLoadingSkeleton />
+          ) : teamsQuery.isError ? (
+            <Alert
+              showIcon
+              title={t("pages.teams.home.copy.54", "The team list cannot be loaded right now.")}
+              type="error"
+            />
+          ) : (
+            <>
             <div
               style={{
                 display: "grid",
@@ -1333,15 +1527,7 @@ const TeamsHomePage: React.FC = () => {
               <SummaryStatCard label={t("pages.teams.home.copy.52", "Stable runs exist")} value={healthyTeamCount} />
             </div>
 
-            {teamsQuery.isLoading ? (
-              <AevatarInspectorEmpty description={t("pages.teams.home.copy.53", "Reading the team list.")} />
-            ) : teamsQuery.isError ? (
-              <Alert
-                showIcon
-                title={t("pages.teams.home.copy.54", "The team list cannot be loaded right now.")}
-                type="error"
-              />
-            ) : teamPreviews.length > 0 ? (
+            {teamPreviews.length > 0 ? (
               <>
                 <div
                   style={{
@@ -1444,8 +1630,8 @@ const TeamsHomePage: React.FC = () => {
                   {t("pages.teams.home.copy.62", "Create team")}</Button>
               </Empty>
             )}
-
-          </>
+            </>
+          )
         ) : null}
       </div>
     </AevatarPageShell>
