@@ -36,6 +36,46 @@ namespace Aevatar.ChatRouting.Voice.Integration.Tests;
 public sealed class PolicyAwareVoiceEndpointsTests
 {
     [Fact]
+    public async Task VoiceRoutes_WhenVoiceFeatureIsNotConfigured_ShouldReturn503InsteadOfDiCrash()
+    {
+        // Mirrors an unconfigured deployment (issue #2023): no voice provider
+        // → RegisterVoicePresenceModules registered nothing → the host maps
+        // the fail-closed stand-ins instead of handlers whose [FromServices]
+        // dependencies would throw on every request.
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        var app = builder.Build();
+
+        PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(app.Services).Should().BeFalse();
+        app.MapVoiceNotConfiguredEndpoints();
+
+        foreach (var uri in new[] { "/ws/voice", "/ws/voice/voice-agent-lark" })
+        {
+            var context = CreateVoiceContext(app, uri);
+            var pattern = uri == "/ws/voice" ? "/ws/voice" : "/ws/voice/{actorId}";
+            await GetEndpoint(app, pattern).RequestDelegate!(context);
+
+            context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable, uri);
+            (await ReadBodyAsync(context)).Should().Be("voice_not_configured", uri);
+        }
+    }
+
+    [Fact]
+    public void IsVoiceRealtimeConfigured_ShouldReflectRealtimeSessionRegistration()
+    {
+        var without = new ServiceCollection().BuildServiceProvider();
+        PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(without).Should().BeFalse();
+
+        var with = new ServiceCollection()
+            .AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(
+                new RecordingVoiceRealtimeSession(VoiceRealtimeSessionStartError.NotFound))
+            .BuildServiceProvider();
+        PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(with).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task PolicyAwareVoice_WhenForwardToModelHasGAgentToolHint_ShouldReturnNotImplementedBeforeUpgrade()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
