@@ -16,6 +16,13 @@ type WorkflowStudioExecutionPanelProps = {
 
 type DetailMode = "logs" | "evidence";
 
+type NodeRunCard = {
+  readonly completedLog: ExecutionLogItem;
+  readonly inputText: string;
+  readonly outputText: string;
+  readonly stepId: string;
+};
+
 const categoryLabels: Record<NonNullable<ExecutionLogItem["category"]>, string> = {
   custom: "Custom",
   lifecycle: "Run",
@@ -64,6 +71,37 @@ function formatConsoleDateTime(value: string | null | undefined): string {
 function trimConsoleText(value: string, maxLength: number): string {
   const text = value.trim();
   return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function isEvidenceLog(log: ExecutionLogItem): boolean {
+  return ["custom", "raw", "snapshot", "usage"].includes(log.category || "");
+}
+
+function buildNodeRunCards(logs: readonly ExecutionLogItem[]): NodeRunCard[] {
+  const inputByStepId = new Map<string, string>();
+  const cards: NodeRunCard[] = [];
+
+  logs.forEach((log) => {
+    if (log.category !== "step" || !log.stepId) {
+      return;
+    }
+
+    if (log.tone === "started" && log.clipboardText.trim()) {
+      inputByStepId.set(log.stepId, log.clipboardText.trim());
+      return;
+    }
+
+    if (log.tone === "completed" || log.tone === "failed") {
+      cards.push({
+        completedLog: log,
+        inputText: inputByStepId.get(log.stepId) || "",
+        outputText: log.clipboardText.trim(),
+        stepId: log.stepId,
+      });
+    }
+  });
+
+  return cards;
 }
 
 function buildOutputText(
@@ -129,10 +167,129 @@ function renderPayloadBlock(text: string): React.ReactNode {
   );
 }
 
-function renderLogRow(log: ExecutionLogItem, index: number): React.ReactNode {
+function renderNodeTextBlock(
+  label: string,
+  value: string,
+  emptyText: string,
+): React.ReactNode {
+  const text = value.trim();
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 4,
+        minWidth: 0,
+      }}
+    >
+      <Typography.Text
+        style={{
+          color: "#64748b",
+          fontSize: 11,
+          fontWeight: 600,
+          textTransform: "uppercase",
+        }}
+      >
+        {label}
+      </Typography.Text>
+      <pre
+        style={{
+          background: text ? "#f8fafc" : "#ffffff",
+          border: "1px solid #e5e7eb",
+          borderRadius: 6,
+          color: text ? "#334155" : "#94a3b8",
+          fontFamily: "inherit",
+          fontSize: 12,
+          lineHeight: "18px",
+          margin: 0,
+          maxHeight: 120,
+          minHeight: 34,
+          overflow: "auto",
+          padding: "8px 10px",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+      >
+        {text || emptyText}
+      </pre>
+    </div>
+  );
+}
+
+function renderNodeRunCard(card: NodeRunCard, index: number): React.ReactNode {
+  const log = card.completedLog;
+
+  return (
+    <div
+      aria-label={t(
+        "teamMemberWorkflowStudio.executionPanel.nodeRunCardAria",
+        "{stepId} node run",
+        { stepId: card.stepId },
+      )}
+      key={[index, card.stepId, log.timestamp].join(":")}
+      style={{
+        border: "1px solid #e5e7eb",
+        borderRadius: 8,
+        display: "grid",
+        gap: 10,
+        padding: 10,
+      }}
+    >
+      <div
+        style={{
+          alignItems: "center",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 6,
+          minWidth: 0,
+        }}
+      >
+        <Tag color="cyan" style={{ marginInlineEnd: 0 }}>
+          {t("teamMemberWorkflowStudio.executionPanel.node", "Node")}
+        </Tag>
+        <Tag color={toneColors[log.tone]} style={{ marginInlineEnd: 0 }}>
+          {log.tone}
+        </Tag>
+        <Typography.Text strong style={{ fontSize: 12 }}>
+          {card.stepId}
+        </Typography.Text>
+        {log.meta ? (
+          <Typography.Text style={{ color: "#64748b", fontSize: 11 }}>
+            {log.meta}
+          </Typography.Text>
+        ) : null}
+        <Typography.Text style={{ color: "#94a3b8", fontSize: 11 }}>
+          {formatConsoleDateTime(log.timestamp)}
+        </Typography.Text>
+      </div>
+      {renderNodeTextBlock(
+        t("teamMemberWorkflowStudio.executionPanel.nodeInput", "Input"),
+        card.inputText,
+        t(
+          "teamMemberWorkflowStudio.executionPanel.emptyNodeInput",
+          "No input captured.",
+        ),
+      )}
+      {renderNodeTextBlock(
+        t("teamMemberWorkflowStudio.executionPanel.nodeOutput", "Output"),
+        card.outputText,
+        t(
+          "teamMemberWorkflowStudio.executionPanel.emptyNodeOutput",
+          "No output captured.",
+        ),
+      )}
+    </div>
+  );
+}
+
+function renderLogRow(
+  log: ExecutionLogItem,
+  index: number,
+  options: { readonly showPayload?: boolean } = {},
+): React.ReactNode {
   const category = log.category || "custom";
   const payloadText =
-    log.category && log.category !== "step" && log.payloadText
+    options.showPayload && log.payloadText
       ? log.payloadText
       : "";
 
@@ -205,15 +362,18 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
   const logs = trace?.logs ?? [];
   const rawFrames = detail?.frames ?? [];
   const hasExecutionContent = Boolean(error || detail);
-  const evidenceLogs = logs.filter((log) =>
-    ["custom", "raw", "snapshot", "usage"].includes(log.category || ""),
-  );
-  const stepLogCount = logs.filter((log) => log.category === "step").length;
+  const nodeRunCards = React.useMemo(() => buildNodeRunCards(logs), [logs]);
+  const evidenceLogs = logs.filter(isEvidenceLog);
+  const stepLogCount = new Set(
+    logs
+      .filter((log) => log.category === "step" && log.stepId)
+      .map((log) => log.stepId),
+  ).size;
   const outputText = detail ? buildOutputText(detail, logs) : "";
   const duration = detail
     ? formatDurationBetween(detail.startedAtUtc, detail.completedAtUtc)
     : "";
-  const visibleLogs = detailMode === "evidence" ? evidenceLogs : logs;
+  const visibleLogs = detailMode === "evidence" ? evidenceLogs : [];
 
   if (!hasExecutionContent) {
     return null;
@@ -304,7 +464,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                 )}
                 {renderMetric(
                   t("teamMemberWorkflowStudio.executionPanel.logs", "Logs"),
-                  logs.length,
+                  nodeRunCards.length,
                 )}
               </div>
             </div>
@@ -453,19 +613,39 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                     paddingRight: 4,
                   }}
                 >
-                  {visibleLogs.length ? (
-                    visibleLogs.map((log, index) => renderLogRow(log, index))
+                  {detailMode === "logs" && nodeRunCards.length ? (
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 10,
+                      }}
+                    >
+                      {nodeRunCards.map((card, index) =>
+                        renderNodeRunCard(card, index),
+                      )}
+                    </div>
+                  ) : visibleLogs.length ? (
+                    visibleLogs.map((log, index) =>
+                      renderLogRow(log, index, {
+                        showPayload: detailMode === "evidence",
+                      }),
+                    )
                   ) : (
                     <Typography.Text style={{ color: "#64748b", fontSize: 12 }}>
-                      {rawFrames.length
+                      {detailMode === "evidence"
                         ? t(
+                            "teamMemberWorkflowStudio.executionPanel.emptyEvidence",
+                            "Usage, snapshots, and raw observed events will appear here when the backend emits them.",
+                          )
+                        : rawFrames.length
+                          ? t(
                             "teamMemberWorkflowStudio.executionPanel.rawFrames",
-                            "{count} run event(s) received, but no step logs are available yet.",
+                            "{count} run event(s) received, but no step output is available yet.",
                             { count: rawFrames.length },
                           )
                         : t(
                             "teamMemberWorkflowStudio.executionPanel.emptyLogs",
-                            "Run logs will appear here after the workflow draft returns events.",
+                            "Step outputs will appear here after the workflow draft runs.",
                           )}
                     </Typography.Text>
                   )}

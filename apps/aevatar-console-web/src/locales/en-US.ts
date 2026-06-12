@@ -646,16 +646,25 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
     'Usage, snapshots, and raw observed events will appear here when the backend emits them.',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Run logs will appear here after the workflow draft returns events.',
+    'Step outputs will appear here after the workflow draft runs.',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
+    'No input captured.',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
+    'No output captured.',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
     'Output will appear after the draft run emits a result.',
   'teamMemberWorkflowStudio.executionPanel.evidence': 'Evidence frames',
   'teamMemberWorkflowStudio.executionPanel.events': 'Events',
   'teamMemberWorkflowStudio.executionPanel.items': 'items',
   'teamMemberWorkflowStudio.executionPanel.logs': 'Logs',
+  'teamMemberWorkflowStudio.executionPanel.node': 'Node',
+  'teamMemberWorkflowStudio.executionPanel.nodeInput': 'Input',
+  'teamMemberWorkflowStudio.executionPanel.nodeOutput': 'Output',
+  'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
+    '{stepId} node run',
   'teamMemberWorkflowStudio.executionPanel.output': 'Output',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '{count} run event(s) received, but no step logs are available yet.',
+    '{count} run event(s) received, but no step output is available yet.',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': 'Result',
   'teamMemberWorkflowStudio.executionPanel.runLog': 'Run log',
   'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
@@ -759,6 +768,8 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
   'teamMemberWorkflowStudio.draftRunPanel.closeAria':
     'Close draft run panel',
+  'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
+    'Leave blank to run this draft with its default prompt.',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':

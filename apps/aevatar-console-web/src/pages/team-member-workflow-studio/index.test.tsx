@@ -3336,6 +3336,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(draftRunPanel).toHaveStyle({
       borderLeft: "1px solid #e5e7eb",
     });
+    expect(
+      within(draftRunPanel).getByText(
+        "Leave blank to run this draft with its default prompt.",
+      ),
+    ).toBeTruthy();
     expect(runtimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
     const draftRunInput = within(draftRunPanel).getByRole("textbox");
     fireEvent.change(draftRunInput, {
@@ -3348,6 +3353,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     );
     const resultPanel = await screen.findByTestId("member-run-result-panel");
     const consolePanel = screen.getByLabelText("Draft run console");
+    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
     const consoleResizeHandle = screen.getByRole("separator", {
       name: "Resize run console",
     });
@@ -3386,16 +3392,25 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "Workflow complete",
     );
     expect(within(consolePanel).getByText("Run log")).toBeTruthy();
-    expect(consolePanel).toHaveTextContent("Run started");
-    expect(consolePanel).toHaveTextContent("triage started");
-    expect(consolePanel).toHaveTextContent("triage completed");
-    expect(consolePanel).toHaveTextContent("Run finished");
+    const triageRunCard = within(consolePanel).getByLabelText("triage node run");
+    expect(within(triageRunCard).getByText("Input")).toBeTruthy();
+    expect(within(triageRunCard).getByText("Output")).toBeTruthy();
+    expect(triageRunCard).toHaveTextContent("Run the workflow");
+    expect(triageRunCard).toHaveTextContent("Workflow complete");
+    expect(triageRunCard).toHaveTextContent("triage");
+    expect(triageRunCard).toHaveTextContent("completed");
+    expect(consolePanel).not.toHaveTextContent("Run started");
+    expect(consolePanel).not.toHaveTextContent("triage started");
+    expect(consolePanel).not.toHaveTextContent("Run finished");
+    expect(consolePanel).not.toHaveTextContent("aevatar.usage");
+    expect(consolePanel).not.toHaveTextContent("STATE_SNAPSHOT");
+    expect(consolePanel).not.toHaveTextContent("stateVersion");
+    expect(consolePanel).not.toHaveTextContent("raw-observation-1");
+    fireEvent.click(
+      within(consolePanel).getByRole("radio", { name: "Evidence frames" }),
+    );
     const consoleEvidenceMarkers = [
-      "Run started",
-      "triage started",
-      "triage completed",
       "aevatar.usage",
-      "Run finished",
       "STATE_SNAPSHOT",
       "stateVersion",
       "42",
@@ -3487,9 +3502,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     expect(resultPanel).not.toHaveTextContent("Member run");
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
-    expect(
-      screen.getByLabelText("Draft run panel"),
-    ).toBeTruthy();
+    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
   });
 
   it("runs draft workflow members before they are published", async () => {
@@ -3552,6 +3565,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.click(
       within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
     );
+    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
 
     await waitFor(() => {
       expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(

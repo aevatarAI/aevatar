@@ -2061,14 +2061,21 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           ? "No workflow draft is linked to this member yet. Build or paste a workflow, then save to create a reusable draft."
           : "Start this workflow by adding the first step.",
     runActiveMember: () => {
-      if (route.memberId && editableDocument) {
-        activeMemberRunMutation.mutate({
-          document: editableDocument,
-          memberId: route.memberId,
-          runMessage: trimOptional(executionRunMessage),
-          title: activeMemberTitle,
-        });
+      if (
+        !route.memberId ||
+        !editableDocument ||
+        activeMemberRunMutation.isPending
+      ) {
+        return;
       }
+
+      activeMemberRunMutation.mutate({
+        document: editableDocument,
+        memberId: route.memberId,
+        runMessage: trimOptional(executionRunMessage),
+        title: activeMemberTitle,
+      });
+      setDraftRunPanelOpen(false);
     },
     activeMemberRunPending: activeMemberRunMutation.isPending,
     activeMemberRunPlaceholderReason,

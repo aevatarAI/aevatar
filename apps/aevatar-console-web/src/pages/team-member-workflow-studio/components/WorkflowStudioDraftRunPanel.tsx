@@ -45,7 +45,12 @@ const WorkflowStudioDraftRunPanel: React.FC<WorkflowStudioDraftRunPanelProps> = 
       title={t("teamMemberWorkflowStudio.draftRunPanel.title", "Draft run")}
       width={width}
     >
-      <section>
+      <section
+        style={{
+          display: "grid",
+          gap: 8,
+        }}
+      >
         <Typography.Text strong>
           {t(
             "teamMemberWorkflowStudio.draftRunPanel.messageLabel",
@@ -57,23 +62,28 @@ const WorkflowStudioDraftRunPanel: React.FC<WorkflowStudioDraftRunPanelProps> = 
             "teamMemberWorkflowStudio.draftRunPanel.messageLabel",
             "Draft run input",
           )}
-          autoSize={{ minRows: 8, maxRows: 16 }}
+          autoSize={{ minRows: 5, maxRows: 10 }}
           onChange={(event) => onRunMessageChange(event.target.value)}
           placeholder={t(
             "teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder",
             "Optional input sent to this workflow draft run",
           )}
-          style={{
-            marginTop: 8,
-          }}
           value={runMessage}
         />
+        <Typography.Text style={{ color: "#64748b", fontSize: 12 }}>
+          {t(
+            "teamMemberWorkflowStudio.draftRunPanel.emptyInputHint",
+            "Leave blank to run this draft with its default prompt.",
+          )}
+        </Typography.Text>
       </section>
       <div
         style={{
-          display: "grid",
-          gap: 8,
-          justifyItems: "start",
+          alignItems: "center",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 10,
+          justifyContent: "space-between",
         }}
       >
         <Button
@@ -94,6 +104,7 @@ const WorkflowStudioDraftRunPanel: React.FC<WorkflowStudioDraftRunPanelProps> = 
             style={{
               color: "#6b7280",
               fontSize: 12,
+              flex: "1 1 180px",
             }}
           >
             {disabledReason}

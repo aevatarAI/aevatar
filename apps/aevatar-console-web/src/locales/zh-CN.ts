@@ -605,16 +605,25 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
     '后端返回 Usage、Snapshot 或原始观察事件后，这里会展示对应证据。',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Workflow 草稿返回事件后，这里会展示运行日志。',
+    'Workflow 草稿运行后，这里会展示每个步骤的输出。',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
+    '未捕获输入。',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
+    '未捕获输出。',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
     '草稿运行返回结果后，这里会展示输出。',
   'teamMemberWorkflowStudio.executionPanel.evidence': '证据帧',
   'teamMemberWorkflowStudio.executionPanel.events': '事件',
   'teamMemberWorkflowStudio.executionPanel.items': '条',
   'teamMemberWorkflowStudio.executionPanel.logs': '日志',
+  'teamMemberWorkflowStudio.executionPanel.node': '节点',
+  'teamMemberWorkflowStudio.executionPanel.nodeInput': '输入',
+  'teamMemberWorkflowStudio.executionPanel.nodeOutput': '输出',
+  'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
+    '{stepId} 节点运行',
   'teamMemberWorkflowStudio.executionPanel.output': '输出',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '已收到 {count} 个运行事件，但暂时还没有步骤日志。',
+    '已收到 {count} 个运行事件，但暂时还没有步骤输出。',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': '结果',
   'teamMemberWorkflowStudio.executionPanel.runLog': '运行日志',
   'teamMemberWorkflowStudio.executionPanel.steps': '步骤',
@@ -716,6 +725,8 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.resize.executionPanel': '调整运行控制台大小',
   'teamMemberWorkflowStudio.resize.sidePanel': '调整侧边面板大小',
   'teamMemberWorkflowStudio.draftRunPanel.closeAria': '关闭草稿运行面板',
+  'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
+    '留空会使用当前草稿的默认提示运行。',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     '草稿运行输入',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
