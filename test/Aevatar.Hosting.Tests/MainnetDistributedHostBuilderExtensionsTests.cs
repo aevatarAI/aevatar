@@ -1,3 +1,4 @@
+using System.Net;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
@@ -7,6 +8,9 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using Orleans;
+using Orleans.Configuration;
 using Orleans.Streams;
 
 namespace Aevatar.Hosting.Tests;
@@ -88,6 +92,64 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         // Bare env var should win.
         builder.Configuration["Projection:Policies:Environment"]
             .Should().Be("Development", "bare env vars must override Distributed.json");
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_GarnetClusteringMode_ShouldUseGarnetBackedMembership()
+    {
+        using var clusteringMode = new EnvironmentVariableScope("AEVATAR_Orleans__ClusteringMode", "Garnet");
+        using var siloHost = new EnvironmentVariableScope("AEVATAR_Orleans__SiloHost", "10.255.0.7");
+        using var streamBackend = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansStreamBackend", "KafkaProvider");
+        using var persistence = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansPersistenceBackend", "Garnet");
+        using var garnetConn = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansGarnetConnectionString", "127.0.0.1:6379");
+
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost();
+        builder.AddMainnetDistributedOrleansHost();
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<IMembershipTable>().GetType().Name.Should().Be("RedisMembershipTable",
+            "Garnet clustering must store membership in the same Garnet instance as reminders and grain state");
+
+        var clusterOptions = app.Services.GetRequiredService<IOptions<ClusterOptions>>().Value;
+        clusterOptions.ClusterId.Should().Be("aevatar-mainnet-cluster");
+        clusterOptions.ServiceId.Should().Be("aevatar-mainnet-host-api");
+
+        var endpointOptions = app.Services.GetRequiredService<IOptions<EndpointOptions>>().Value;
+        endpointOptions.AdvertisedIPAddress.Should().Be(IPAddress.Parse("10.255.0.7"));
+        endpointOptions.SiloPort.Should().Be(11111);
+        endpointOptions.SiloListeningEndpoint.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_DistributedProfile_ShouldDefaultToGarnetClustering()
+    {
+        // Regression pin for the production rolling-deploy incident: the shipped
+        // Distributed profile combined Localhost clustering with a shared Garnet
+        // reminder table + grain state, so the old and new pod each ran as a
+        // complete single-silo cluster, both fired every reminder, and ping-ponged
+        // RuntimeCallbackSchedulerGrain etags (InconsistentStateException) until
+        // the old pod died. The profile must keep membership in Garnet.
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost();
+        builder.AddMainnetDistributedOrleansHost();
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<IMembershipTable>().GetType().Name.Should().Be("RedisMembershipTable");
+
+        var endpointOptions = app.Services.GetRequiredService<IOptions<EndpointOptions>>().Value;
+        endpointOptions.AdvertisedIPAddress.Should().NotBeNull(
+            "with no SiloHost configured the silo must advertise an interface address peers can reach");
     }
 
     private static WebApplicationBuilder CreateBuilder(Dictionary<string, string?> values)

@@ -24,6 +24,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Aevatar Observability — OTel Semantic Conventions](canon/observability.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
 - [Role 与工作流、Connector 配置指南](canon/role-model.md)
+- [Scheduled Skill Runners](canon/scheduled-skill-runners.md)
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
 - [.NET Workflow SDK Quick Start](canon/sdk-dotnet.md)
 - [Aevatar /status 状态面板架构](canon/status-dashboard.md)
@@ -61,6 +62,10 @@ Immutable records of architectural choices and their rationale.
 - [Lark Reply Run Dispatcher Plain Task Handoff](adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md)
 - [Studio Team Accepted Receipt Semantics](adr/0028-studio-team-accepted-receipt-semantics.md)
 - [Identity OAuth Accepted ACK Semantics](adr/0029-identity-oauth-accepted-ack-semantics.md)
+- [GAgent Registry Uses AgentKind As Business Key](adr/0030-gagent-registry-agent-kind-key.md)
+- [Voice Edge Local Tools](adr/0031-voice-edge-local-tools.md)
+- [Mainnet Production Clustering Uses Shared Garnet Membership](adr/0032-mainnet-garnet-clustering.md)
+- [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History
 
@@ -95,6 +100,7 @@ Point-in-time design snapshots. Not authoritative — for context only.
 - [2026-05-13-lark-bot-reply-chain-test-coverage-audit.md](audit-scorecard/2026-05-13-lark-bot-reply-chain-test-coverage-audit.md)
 - [2026-05-19-auto-refactor-loop-summary.md](audit-scorecard/2026-05-19-auto-refactor-loop-summary.md)
 - [2026-05-19-meta-audit-loop-depth-diagnosis.md](audit-scorecard/2026-05-19-meta-audit-loop-depth-diagnosis.md)
+- [2026-06-11-nyxid-workflow-scope-service-runbook.md](audit-scorecard/2026-06-11-nyxid-workflow-scope-service-runbook.md)
 - [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 
 ## Templates

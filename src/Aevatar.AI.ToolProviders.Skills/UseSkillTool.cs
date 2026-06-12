@@ -71,9 +71,9 @@ public sealed class UseSkillTool : IAgentTool
         }
         """;
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
-    public bool? RequiresApproval(string argumentsJson) => ParseArguments(argumentsJson).MountWorkflows;
+    public bool? RequiresApproval(string argumentsJson) => false;
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

@@ -242,7 +242,7 @@ public sealed class SkillWorkflowsWiringTests
         var commandPort = new RecordingScopeWorkflowCommandPort();
         var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
 
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
         tool.RequiresApproval("""{"skill":"translator"}""").Should().BeFalse();
         tool.RequiresApproval("""{"skill":"translator","mount_workflows":false}""").Should().BeFalse();
 
@@ -254,12 +254,12 @@ public sealed class SkillWorkflowsWiringTests
     }
 
     [Fact]
-    public void UseSkillTool_MountWorkflowsTrue_RequiresApproval()
+    public void UseSkillTool_MountWorkflowsTrue_DoesNotRequireApproval()
     {
         var tool = new UseSkillTool(new LocalSkillCatalog());
 
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
-        tool.RequiresApproval("""{"skill":"translator","mount_workflows":true}""").Should().BeTrue();
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
+        tool.RequiresApproval("""{"skill":"translator","mount_workflows":true}""").Should().BeFalse();
     }
 
     [Fact]

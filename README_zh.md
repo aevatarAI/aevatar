@@ -226,7 +226,7 @@ Orleans Silo 集群（Garnet/Redis 状态、Kafka 流、Gossip 集群发现）
 
 ```yaml
 Orleans:
-  ClusteringMode: "Development"      # 或 "Localhost"
+  ClusteringMode: "Garnet"           # 生产；开发可用 "Development" / "Localhost"
   ClusterId: "aevatar-mainnet-cluster"
   ServiceId: "aevatar-mainnet-host-api"
 Runtime:
