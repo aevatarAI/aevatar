@@ -199,7 +199,7 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
-    public void Parse_ShouldAcceptTextlessRelayAttachmentContent()
+    public void Parse_ShouldAcceptNormalizedAttachment_WhenTextContentIsEmpty()
     {
         var body = """
             {
@@ -210,6 +210,7 @@ public sealed class NyxIdRelayTransportTests
               "sender": { "platform_id": "456", "display_name": "User One" },
               "content": {
                 "type": "image",
+                "text": "   ",
                 "attachments": [
                   {
                     "content_type": "image",
@@ -226,16 +227,18 @@ public sealed class NyxIdRelayTransportTests
         var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
 
         parsed.Success.Should().BeTrue();
-        parsed.Activity!.Content.Text.Should().BeEmpty();
+        parsed.Ignored.Should().BeFalse();
+        parsed.Activity!.Type.Should().Be(ActivityType.Message);
+        parsed.Activity.Content.Text.Should().BeEmpty();
         parsed.Activity.Content.Attachments.Should().ContainSingle();
         var attachment = parsed.Activity.Content.Attachments.Single();
-        attachment.AttachmentId.Should().Be("telegram-file-id-1");
         attachment.Kind.Should().Be(AttachmentKind.Image);
         attachment.Name.Should().Be("photo.png");
         attachment.ContentType.Should().Be("image/png");
-        attachment.BlobRef.Should().BeEmpty();
-        attachment.ExternalUrl.Should().BeEmpty();
         attachment.SizeBytes.Should().Be(12345);
+        attachment.ExternalUrl.Should().BeEmpty();
+        attachment.BlobRef.Should().BeEmpty();
+        attachment.AttachmentId.Should().StartWith("telegram:msg-image-1:image:");
     }
 
     [Fact]
@@ -254,7 +257,7 @@ public sealed class NyxIdRelayTransportTests
                   {
                     "content_type": "file",
                     "url": "https://files.example.test/report.pdf",
-                    "filename": "report.pdf",
+                    "file_name": "report.pdf",
                     "mime_type": "application/pdf"
                   }
                 ]
@@ -267,14 +270,15 @@ public sealed class NyxIdRelayTransportTests
         parsed.Success.Should().BeTrue();
         parsed.Activity!.Content.Attachments.Should().ContainSingle();
         var attachment = parsed.Activity.Content.Attachments.Single();
-        attachment.AttachmentId.Should().Be("https://files.example.test/report.pdf");
+        attachment.AttachmentId.Should().StartWith("slack:msg-file-url-1:file:");
         attachment.Kind.Should().Be(AttachmentKind.File);
+        attachment.Name.Should().Be("report.pdf");
         attachment.ExternalUrl.Should().Be("https://files.example.test/report.pdf");
         attachment.BlobRef.Should().BeEmpty();
     }
 
     [Fact]
-    public void Parse_ShouldAcceptTextlessLarkImageKey_FromRawMessageContent()
+    public void Parse_ShouldAcceptLarkRawImageKey_WhenTextContentIsEmpty()
     {
         var body = """
             {
@@ -311,17 +315,17 @@ public sealed class NyxIdRelayTransportTests
         parsed.Activity.Content.Text.Should().BeEmpty();
         parsed.Activity.Content.Attachments.Should().ContainSingle();
         var attachment = parsed.Activity.Content.Attachments.Single();
-        attachment.AttachmentId.Should().Be("img_v3_abc");
         attachment.Kind.Should().Be(AttachmentKind.Image);
         attachment.Name.Should().Be("photo.png");
         attachment.ContentType.Should().Be("image");
-        attachment.BlobRef.Should().BeEmpty();
-        attachment.ExternalUrl.Should().BeEmpty();
         attachment.SizeBytes.Should().Be(42);
+        attachment.BlobRef.Should().Be("lark:image_key:img_v3_abc");
+        attachment.ExternalUrl.Should().BeEmpty();
+        attachment.AttachmentId.Should().StartWith("lark:om_image_1:image:");
     }
 
     [Fact]
-    public void Parse_ShouldAcceptTextlessLarkFileKey_FromRawMessageContentObject()
+    public void Parse_ShouldAcceptLarkRawFileKey_WhenTextContentIsEmpty()
     {
         var body = """
             {
@@ -356,12 +360,13 @@ public sealed class NyxIdRelayTransportTests
         parsed.Activity!.Content.Text.Should().BeEmpty();
         parsed.Activity.Content.Attachments.Should().ContainSingle();
         var attachment = parsed.Activity.Content.Attachments.Single();
-        attachment.AttachmentId.Should().Be("file_v3_abc");
+        attachment.AttachmentId.Should().StartWith("feishu:om_file_1:file:");
         attachment.Kind.Should().Be(AttachmentKind.File);
         attachment.Name.Should().Be("report.pdf");
         attachment.ContentType.Should().Be("application/pdf");
-        attachment.BlobRef.Should().BeEmpty();
         attachment.SizeBytes.Should().Be(2048);
+        attachment.BlobRef.Should().Be("lark:file_key:file_v3_abc");
+        attachment.ExternalUrl.Should().BeEmpty();
     }
 
     [Fact]

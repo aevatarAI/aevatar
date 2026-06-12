@@ -257,7 +257,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         var inputParts = new List<WorkflowChatInputPart>(attachments.Length);
         foreach (var attachment in attachments)
         {
-            var resourceKey = NormalizeOptional(attachment.AttachmentId);
+            var resourceKey = ResolveLarkResourceKey(attachment);
             if (resourceKey is null)
                 throw new WorkflowAttachmentIngressException("resource_key_missing");
 
@@ -355,7 +355,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         {
             if (attachment.Kind is not (AttachmentKind.Image or AttachmentKind.File))
                 continue;
-            var resourceKey = NormalizeOptional(attachment.AttachmentId);
+            var resourceKey = ResolveLarkResourceKey(attachment);
             if (resourceKey is null || IsHttpUrl(resourceKey))
                 continue;
             if (!string.IsNullOrWhiteSpace(attachment.ExternalUrl))
@@ -363,6 +363,36 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
 
             yield return attachment;
         }
+    }
+
+    private static string? ResolveLarkResourceKey(AttachmentRef attachment)
+    {
+        var blobRef = NormalizeOptional(attachment.BlobRef);
+        if (blobRef is not null)
+        {
+            if (TryReadLarkResourceBlobRef(blobRef, attachment.Kind, out var resourceKey))
+                return resourceKey;
+            if (blobRef.StartsWith("lark:", StringComparison.Ordinal))
+                return null;
+        }
+
+        return NormalizeOptional(attachment.AttachmentId);
+    }
+
+    private static bool TryReadLarkResourceBlobRef(
+        string blobRef,
+        AttachmentKind kind,
+        out string resourceKey)
+    {
+        var prefix = kind == AttachmentKind.Image ? "lark:image_key:" : "lark:file_key:";
+        if (!blobRef.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            resourceKey = string.Empty;
+            return false;
+        }
+
+        resourceKey = NormalizeOptional(blobRef[prefix.Length..]) ?? string.Empty;
+        return resourceKey.Length > 0;
     }
 
     private static bool IsLarkActivity(ChatActivity? activity)

@@ -87,7 +87,7 @@ public sealed class NyxIdRelayContentPayload
     public string? Text { get; set; }
 
     [JsonPropertyName("attachments")]
-    public List<NyxIdRelayAttachmentPayload>? Attachments { get; set; }
+    public List<NyxIdRelayAttachmentPayload> Attachments { get; set; } = [];
 }
 
 public sealed class NyxIdRelayAttachmentPayload

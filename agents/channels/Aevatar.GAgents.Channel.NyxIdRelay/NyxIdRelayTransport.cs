@@ -39,7 +39,9 @@ public sealed class NyxIdRelayTransport
 
         var text = payload.Content?.Text?.Trim();
         var platform = NormalizePlatform(payload.Platform);
-        var attachments = BuildAttachments(payload, platform);
+        var larkFacts = ResolveLarkRelayConversationFacts(platform, payload, isCardAction);
+        var platformMessageId = ResolvePlatformMessageId(payload, platform, larkFacts);
+        var attachments = NyxIdRelayAttachmentNormalizer.Normalize(payload, platform, platformMessageId);
         if (!isCardAction && string.IsNullOrWhiteSpace(text) && attachments.Count == 0)
             return NyxIdRelayParseResult.IgnoredPayload(payload, "empty_text", "Relay payload does not contain text content.");
 
@@ -55,8 +57,6 @@ public sealed class NyxIdRelayTransport
                     "Relay card_action payload text is not a JSON object.");
             }
         }
-
-        var larkFacts = ResolveLarkRelayConversationFacts(platform, payload, isCardAction);
 
         var conversationType = payload.Conversation?.Type ?? payload.Conversation?.ConversationType;
         ConversationScope scope;
@@ -102,7 +102,6 @@ public sealed class NyxIdRelayTransport
         var partition = conversationIdentity;
         var timestamp = ParseTimestamp(payload.Timestamp);
         var botId = payload.Agent?.ApiKeyId?.Trim();
-        var platformMessageId = ResolvePlatformMessageId(payload, platform, larkFacts);
         var correlationId = string.IsNullOrWhiteSpace(payload.CorrelationId)
             ? payload.MessageId.Trim()
             : payload.CorrelationId.Trim();
@@ -111,9 +110,9 @@ public sealed class NyxIdRelayTransport
         {
             Text = isCardAction ? string.Empty : text ?? string.Empty,
         };
-        content.Attachments.AddRange(attachments);
         if (cardAction is not null)
             content.CardAction = cardAction;
+        content.Attachments.AddRange(attachments);
 
         var activity = new ChatActivity
         {
@@ -166,13 +165,6 @@ public sealed class NyxIdRelayTransport
 
     private const string CardActionContentType = "card_action";
 
-    private sealed record LarkAttachmentCandidate(
-        string Key,
-        AttachmentKind Kind,
-        string ContentType,
-        string? Name,
-        long? SizeBytes);
-
     private readonly record struct LarkRelayConversationFacts(
         ConversationScope? Scope,
         string? GroupConversationIdentity,
@@ -190,178 +182,6 @@ public sealed class NyxIdRelayTransport
             value = content?.Type;
         return (value ?? string.Empty).Trim().ToLowerInvariant();
     }
-
-    private static List<AttachmentRef> BuildAttachments(NyxIdRelayCallbackPayload payload, string platform)
-    {
-        var attachments = new List<AttachmentRef>();
-        var seenAttachmentKeys = new HashSet<string>(StringComparer.Ordinal);
-
-        if (payload.Content?.Attachments is { Count: > 0 } callbackAttachments)
-        {
-            foreach (var callbackAttachment in callbackAttachments)
-            {
-                var attachment = BuildAttachment(callbackAttachment);
-                if (attachment is not null)
-                    AddAttachment(attachments, seenAttachmentKeys, attachment);
-            }
-        }
-
-        if (IsLark(platform))
-        {
-            foreach (var candidate in EnumerateLarkRawAttachmentCandidates(payload))
-                AddAttachment(attachments, seenAttachmentKeys, BuildLarkAttachment(candidate));
-        }
-
-        return attachments;
-    }
-
-    private static void AddAttachment(
-        List<AttachmentRef> attachments,
-        HashSet<string> seenAttachmentKeys,
-        AttachmentRef attachment)
-    {
-        var dedupeKey = $"{attachment.Kind}:{attachment.AttachmentId}";
-        if (seenAttachmentKeys.Add(dedupeKey))
-            attachments.Add(attachment);
-    }
-
-    private static AttachmentRef? BuildAttachment(NyxIdRelayAttachmentPayload attachment)
-    {
-        var locator = NormalizeOptional(attachment.Url);
-        if (locator is null)
-            return null;
-
-        var contentType = NormalizeOptional(attachment.MimeType)
-            ?? NormalizeOptional(attachment.ContentType)
-            ?? NormalizeOptional(attachment.Type)
-            ?? string.Empty;
-        var kind = MapAttachmentKind(attachment.ContentType ?? attachment.Type ?? attachment.MimeType);
-        var name = NormalizeOptional(attachment.Filename)
-            ?? NormalizeOptional(attachment.FileName)
-            ?? NormalizeOptional(attachment.Name)
-            ?? string.Empty;
-
-        return new AttachmentRef
-        {
-            AttachmentId = locator,
-            Kind = kind,
-            Name = name,
-            ContentType = contentType,
-            ExternalUrl = IsHttpUrl(locator) ? locator : string.Empty,
-            SizeBytes = NormalizeSizeBytes(attachment.SizeBytes),
-        };
-    }
-
-    private static AttachmentRef BuildLarkAttachment(LarkAttachmentCandidate candidate)
-    {
-        return new AttachmentRef
-        {
-            AttachmentId = candidate.Key,
-            Kind = candidate.Kind,
-            Name = candidate.Name ?? string.Empty,
-            ContentType = candidate.ContentType,
-            SizeBytes = NormalizeSizeBytes(candidate.SizeBytes),
-        };
-    }
-
-    private static IEnumerable<LarkAttachmentCandidate> EnumerateLarkRawAttachmentCandidates(
-        NyxIdRelayCallbackPayload payload)
-    {
-        if (payload.RawPlatformData is not { } raw || raw.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        if (!raw.TryGetProperty("event", out var evt) || evt.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        if (!evt.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        if (!TryReadLarkMessageContentObject(message, out var content))
-            yield break;
-
-        foreach (var candidate in EnumerateLarkAttachmentCandidates(content))
-            yield return candidate;
-    }
-
-    private static bool TryReadLarkMessageContentObject(JsonElement message, out JsonElement content)
-    {
-        content = default;
-        if (!message.TryGetProperty("content", out var contentProperty))
-            return false;
-
-        if (contentProperty.ValueKind == JsonValueKind.Object)
-        {
-            content = contentProperty.Clone();
-            return true;
-        }
-
-        if (contentProperty.ValueKind != JsonValueKind.String)
-            return false;
-
-        var rawContent = contentProperty.GetString();
-        if (string.IsNullOrWhiteSpace(rawContent))
-            return false;
-
-        try
-        {
-            using var document = JsonDocument.Parse(rawContent);
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
-                return false;
-
-            content = document.RootElement.Clone();
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static IEnumerable<LarkAttachmentCandidate> EnumerateLarkAttachmentCandidates(JsonElement content)
-    {
-        if (TryReadString(content, "image_key", out var imageKey))
-        {
-            yield return new LarkAttachmentCandidate(
-                imageKey,
-                AttachmentKind.Image,
-                "image",
-                ReadOptionalStringProperty(content, "file_name")
-                    ?? ReadOptionalStringProperty(content, "name"),
-                ReadOptionalInt64Property(content, "file_size"));
-        }
-
-        if (TryReadString(content, "file_key", out var fileKey))
-        {
-            yield return new LarkAttachmentCandidate(
-                fileKey,
-                AttachmentKind.File,
-                ReadOptionalStringProperty(content, "mime_type") ?? "file",
-                ReadOptionalStringProperty(content, "file_name")
-                    ?? ReadOptionalStringProperty(content, "name"),
-                ReadOptionalInt64Property(content, "file_size"));
-        }
-    }
-
-    private static AttachmentKind MapAttachmentKind(string? value)
-    {
-        var normalized = NormalizeOptional(value)?.ToLowerInvariant() ?? string.Empty;
-        if (normalized.StartsWith("image/", StringComparison.Ordinal) || normalized is "image" or "photo")
-            return AttachmentKind.Image;
-        if (normalized.StartsWith("audio/", StringComparison.Ordinal) || normalized is "audio" or "voice")
-            return AttachmentKind.Audio;
-        if (normalized.StartsWith("video/", StringComparison.Ordinal) || normalized is "video")
-            return AttachmentKind.Video;
-        if (normalized.StartsWith("text/html", StringComparison.Ordinal) || normalized is "link" or "url")
-            return AttachmentKind.Link;
-        return AttachmentKind.File;
-    }
-
-    private static long NormalizeSizeBytes(long? sizeBytes) =>
-        sizeBytes is > 0 ? sizeBytes.Value : 0;
-
-    private static bool IsHttpUrl(string value) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     private static CardActionSubmission? BuildCardActionSubmission(string? rawText, NyxIdRelayCallbackPayload payload)
     {
@@ -862,29 +682,6 @@ public sealed class NyxIdRelayTransport
 
         var value = property.GetString();
         return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
-    }
-
-    private static string? ReadOptionalStringProperty(JsonElement element, string propertyName)
-    {
-        var value = ReadStringProperty(element, propertyName);
-        return string.IsNullOrWhiteSpace(value) ? null : value;
-    }
-
-    private static long? ReadOptionalInt64Property(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property))
-            return null;
-
-        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var number))
-            return number;
-
-        if (property.ValueKind == JsonValueKind.String &&
-            long.TryParse(property.GetString()?.Trim(), out var parsed))
-        {
-            return parsed;
-        }
-
-        return null;
     }
 
     private static string BuildCanonicalKey(

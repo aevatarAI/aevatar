@@ -1776,6 +1776,81 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDispatchAttachmentOnlyPayload()
+    {
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-attachment");
+        var payload = """
+            {
+              "message_id":"msg-image-relay",
+              "correlation_id":"corr-image-relay",
+              "platform":"slack",
+              "reply_token":"reply-token-image",
+              "agent":{"api_key_id":"scope-attachment"},
+              "conversation":{"platform_id":"room-image","type":"group"},
+              "sender":{"platform_id":"user-image","display_name":"Image User"},
+              "content":{
+                "type":"image",
+                "text":"   ",
+                "attachments":[
+                  {
+                    "content_type":"image",
+                    "url":"https://files.example.test/image.png",
+                    "filename":"image.png",
+                    "mime_type":"image/png",
+                    "size_bytes":2048
+                  }
+                ]
+              }
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        AttachRelayHeaders(context, relay, payload, "msg-image-relay");
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            relay.Transport,
+            relay.Validator,
+            relay.Options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("accepted");
+        response.Body.Should().Contain("msg-image-relay");
+
+        var expectedActorId = BuildScopedRelayConversationActorId("scope-attachment", "slack:group:room-image");
+        runtime.CreateCalls.Should().ContainSingle(call =>
+            call.Type == typeof(ConversationGAgent) &&
+            call.Id == expectedActorId);
+        var actor = (StubActor)runtime.Actors[expectedActorId];
+        var relayInbound = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<NyxRelayInboundActivity>();
+        relayInbound.ReplyToken.Should().Be("reply-token-image");
+        relayInbound.CorrelationId.Should().Be("corr-image-relay");
+        relayInbound.RelayApiKeyId.Should().Be(relay.RelayApiKeyId);
+        var activity = relayInbound.Activity;
+        activity.Content.Text.Should().BeEmpty();
+        activity.Content.Attachments.Should().ContainSingle();
+        var attachment = activity.Content.Attachments[0];
+        attachment.Kind.Should().Be(AttachmentKind.Image);
+        attachment.Name.Should().Be("image.png");
+        attachment.ContentType.Should().Be("image/png");
+        attachment.SizeBytes.Should().Be(2048);
+        attachment.ExternalUrl.Should().Be("https://files.example.test/image.png");
+        attachment.BlobRef.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleRelayWebhookAsync_ShouldIgnoreInvalidCardActionPayload()
     {
         var relay = CreateRelayInvocationDependencies();
