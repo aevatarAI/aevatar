@@ -154,7 +154,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 ScopeId: ctx.ScopeId ?? string.Empty,
                 CallerCredential: callerCredential,
                 RuntimeContext: runtimeContext,
-                ApprovalGrant: approvalGrant),
+                ApprovalGrant: approvalGrant,
+                InputFileRefs: request.InputFileRefs),
             ct);
     }
 
@@ -290,6 +291,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ApprovalRequestId = NormalizeRequired(pending.ApprovalRequestId),
             ArgumentsJson = pending.ArgumentsJson ?? string.Empty,
         };
+        pendingState.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         state.PendingApprovals[BuildPendingKey(pendingState)] = pendingState;
         await SaveStateAsync(state, ctx, ct);
 
@@ -372,6 +374,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ExecutionId = pending.ExecutionId,
             Input = pending.ArgumentsJson,
             Parameters = { ["tool"] = pending.ToolName },
+            InputFileRefs = { pending.InputFileRefs.Select(static fileRef => fileRef.Clone()) },
         };
 
     private static string BuildRejectedApprovalError(WorkflowResumedEvent resumed)
