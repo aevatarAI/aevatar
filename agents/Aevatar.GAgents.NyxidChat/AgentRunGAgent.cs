@@ -616,9 +616,15 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     // model that spent its output budget on reasoning tokens and emitted no answer text.
     private static string BuildEmptyReplyDiagnostics(AgentRunReplyStepState stepState)
     {
-        var hasReasoning = stepState.Messages.Any(message =>
-            string.Equals(message.Role, "assistant", StringComparison.Ordinal) &&
-            !string.IsNullOrEmpty(message.ReasoningContent));
+        // Scope the reasoning signal to the LAST assistant message: stepState.Messages
+        // also carries rehydrated conversation history, and an Any() scan reports
+        // reasoning from earlier turns as if it belonged to the failing step
+        // (mis-diagnosed the 2026-06-12 empty-skill-turn incident as "reasoning-only").
+        var lastAssistantMessage = stepState.Messages.LastOrDefault(message =>
+            string.Equals(message.Role, "assistant", StringComparison.Ordinal));
+        var hasReasoning = lastAssistantMessage is not null &&
+            string.IsNullOrWhiteSpace(lastAssistantMessage.Content) &&
+            !string.IsNullOrEmpty(lastAssistantMessage.ReasoningContent);
         var usage = stepState.AggregatedUsage;
         return string.Format(
             System.Globalization.CultureInfo.InvariantCulture,
@@ -656,36 +662,31 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
     }
 
-    // A reasoning-capable model can finish a step having spent its entire output on
-    // reasoning tokens: no reply text, no tool calls, finishReason=stop. That is a
-    // recoverable provider behavior, not a terminal business outcome — the run gets
-    // exactly one no-tools step to produce the user-visible answer (FinalNoToolsStep
-    // guarantees the retry itself terminates) before failing as empty_reply.
-    private static bool ShouldRecoverReasoningOnlyStep(AgentRunReplyStepState stepState)
+    // A model can finish a step with nothing user-visible: no reply text, no tool
+    // calls, no outbound intent, finishReason=stop. Reasoning models do this when the
+    // whole output budget goes to reasoning tokens, and the reasoning deltas are not
+    // guaranteed to survive the provider boundary — so the gate must NOT require an
+    // observed reasoning trace (the 2026-06-12 prod incident: deepseek skill turns
+    // completed empty with ReasoningContent never captured, the reasoning-gated retry
+    // refused to fire, and every run terminated as the generic apology). Any completed
+    // empty step gets exactly one no-tools retry (FinalNoToolsStep guarantees the
+    // retry itself terminates) before failing as empty_reply.
+    private static bool ShouldRecoverEmptyLlmStep(AgentRunReplyStepState stepState)
     {
         if (stepState.FinalNoToolsStep)
             return false;
 
-        if (!string.IsNullOrWhiteSpace(stepState.AccumulatedText) ||
-            stepState.HasStreamedTextContent ||
-            stepState.OutboundIntent is not null ||
-            stepState.PendingToolCalls.Count > 0)
-        {
-            return false;
-        }
-
-        var lastAssistantMessage = stepState.Messages.LastOrDefault(message =>
-            string.Equals(message.Role, "assistant", StringComparison.Ordinal));
-        return lastAssistantMessage is not null &&
-            string.IsNullOrWhiteSpace(lastAssistantMessage.Content) &&
-            !string.IsNullOrWhiteSpace(lastAssistantMessage.ReasoningContent);
+        return string.IsNullOrWhiteSpace(stepState.AccumulatedText) &&
+            !stepState.HasStreamedTextContent &&
+            stepState.OutboundIntent is null &&
+            stepState.PendingToolCalls.Count == 0;
     }
 
-    private static AgentRunChatMessage BuildReasoningOnlyRecoveryNudge() =>
+    private static AgentRunChatMessage BuildEmptyStepRecoveryNudge() =>
         new()
         {
             Role = "user",
-            Content = "Your previous step produced internal reasoning but no user-visible reply. " +
+            Content = "Your previous step produced no user-visible reply. " +
                       "Provide your final answer now as plain text.",
         };
 
@@ -782,14 +783,14 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         if (ShouldCompleteAfterLlmStep(stepState, hasResult))
         {
-            if (hasResult && ShouldRecoverReasoningOnlyStep(stepState))
+            if (hasResult && ShouldRecoverEmptyLlmStep(stepState))
             {
                 _logger.LogWarning(
-                    "Agent run LLM step produced reasoning-only output with no reply text; retrying once with a final no-tools step: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+                    "Agent run LLM step completed with no reply text, no tool calls and no outbound intent; retrying once with a final no-tools step: runId={RunId} correlation={CorrelationId} step={StepIndex}",
                     stepState.RunId,
                     stepState.CorrelationId,
                     command.StepIndex);
-                stepState = await AdvanceToFinalNoToolsStepAsync(stepState, BuildReasoningOnlyRecoveryNudge());
+                stepState = await AdvanceToFinalNoToolsStepAsync(stepState, BuildEmptyStepRecoveryNudge());
                 await DispatchLlmStepExecutorAsync(request, stepState);
                 return;
             }
