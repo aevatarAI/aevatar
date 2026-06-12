@@ -913,14 +913,17 @@ const TeamRosterActionGroup: React.FC<{
   readonly large?: boolean;
   readonly preview: TeamRosterPreview;
 }> = ({ large = false, preview }) => {
-  const buttonSize = large ? "large" : "middle";
+  const buttonSize = "middle";
   const { token } = theme.useToken();
   const showViewMembersAction =
     preview.memberQuickAction.href !== preview.membersHref;
   const buttonStyle: React.CSSProperties = {
     borderRadius: 999,
+    fontSize: large ? 13 : 12,
     fontWeight: 600,
-    paddingInline: large ? 12 : 10,
+    height: large ? 34 : 30,
+    lineHeight: "20px",
+    paddingInline: large ? 10 : 8,
   };
   const renderSeparator = () => (
     <span
@@ -929,7 +932,7 @@ const TeamRosterActionGroup: React.FC<{
         alignSelf: "center",
         background: token.colorBorderSecondary,
         display: "inline-block",
-        height: large ? 18 : 16,
+        height: large ? 15 : 14,
         width: 1,
       }}
     />
@@ -943,7 +946,7 @@ const TeamRosterActionGroup: React.FC<{
         background: token.colorFillQuaternary,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: 999,
-        padding: large ? 4 : 3,
+        padding: large ? 3 : 2,
         width: "fit-content",
       }}
       wrap
