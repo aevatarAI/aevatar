@@ -636,7 +636,7 @@ const enUSMessages = {
   'pages.teammemberinvoke.workflow.only.description':
     "This page only runs workflow members. Use the member's own surface for other implementation kinds.",
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
-    'This Phase 1 page only loads workflow members through a stable workflow reference. Add that backend/read-model reference before editing this member here.',
+    'You can build or paste the workflow here. Saving creates a reusable workflow draft until the member link is materialized.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     'No workflow draft is linked to this member yet.',
   'teamMemberWorkflowStudio.common.close': 'Close',
@@ -693,8 +693,8 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
+  'teamMemberWorkflowStudio.header.prepareDraftRun': 'Prepare draft run',
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
-  'teamMemberWorkflowStudio.header.runOptionsAria': 'Run options',
   'teamMemberWorkflowStudio.header.runActiveMember': 'Run draft',
   'teamMemberWorkflowStudio.header.runDraft': 'Run draft',
   'teamMemberWorkflowStudio.header.save': 'Save',
@@ -711,6 +711,9 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.publishMemberShort': 'Publish member',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
   'teamMemberWorkflowStudio.header.unsavedChanges': 'Unsaved changes',
+  'teamMemberWorkflowStudio.header.viewYaml': 'View YAML',
+  'teamMemberWorkflowStudio.header.viewYamlUnavailable':
+    'Load the workflow draft before viewing YAML.',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
@@ -754,12 +757,14 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
   'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
-  'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
+  'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
-  'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
+  'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     'Optional input sent to this workflow draft run',
-  'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': 'Run options panel',
-  'teamMemberWorkflowStudio.runOptionsPanel.title': 'Run options',
+  'teamMemberWorkflowStudio.draftRunPanel.sectionAria': 'Draft run panel',
+  'teamMemberWorkflowStudio.draftRunPanel.startDraftRun':
+    'Start draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.title': 'Draft run',
   'teamMemberWorkflowStudio.runsPanel.description':
     'This tab only shows runs with an explicit link to the current workflow member.',
   'teamMemberWorkflowStudio.runsPanel.empty':
@@ -772,11 +777,29 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.title': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': 'unknown',
-  'teamMemberWorkflowStudio.yamlModal.import': 'Import',
-  'teamMemberWorkflowStudio.yamlModal.placeholder':
+  'teamMemberWorkflowStudio.yamlImportPanel.cancel': 'Cancel',
+  'teamMemberWorkflowStudio.yamlImportPanel.closeAria':
+    'Close paste YAML panel',
+  'teamMemberWorkflowStudio.yamlImportPanel.import': 'Import',
+  'teamMemberWorkflowStudio.yamlImportPanel.placeholder':
     'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
-  'teamMemberWorkflowStudio.yamlModal.textareaAria': 'Workflow YAML',
-  'teamMemberWorkflowStudio.yamlModal.title': 'Paste workflow YAML',
+  'teamMemberWorkflowStudio.yamlImportPanel.sectionAria':
+    'Paste workflow YAML panel',
+  'teamMemberWorkflowStudio.yamlImportPanel.subtitle':
+    'Import into the current draft',
+  'teamMemberWorkflowStudio.yamlImportPanel.textareaAria': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlImportPanel.title': 'Paste YAML',
+  'teamMemberWorkflowStudio.yamlPanel.closeAria': 'Close YAML panel',
+  'teamMemberWorkflowStudio.yamlPanel.copy': 'Copy',
+  'teamMemberWorkflowStudio.yamlPanel.copyFailed': 'Failed to copy YAML.',
+  'teamMemberWorkflowStudio.yamlPanel.copySuccess': 'YAML copied.',
+  'teamMemberWorkflowStudio.yamlPanel.empty':
+    'No YAML is available for this draft.',
+  'teamMemberWorkflowStudio.yamlPanel.retry': 'Retry',
+  'teamMemberWorkflowStudio.yamlPanel.sectionAria': 'Workflow YAML panel',
+  'teamMemberWorkflowStudio.yamlPanel.subtitle': 'Current draft source',
+  'teamMemberWorkflowStudio.yamlPanel.textareaAria': 'Current workflow YAML',
+  'teamMemberWorkflowStudio.yamlPanel.title': 'Workflow YAML',
   'pages.studio.studiomembercurrentrunpanel.details': 'Details',
   'pages.studio.studiomemberinvokeinspector.copy':
     'Endpoint, payload, run events, and recent history are available here without taking over the task page.',

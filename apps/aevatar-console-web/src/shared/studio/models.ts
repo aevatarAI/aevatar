@@ -468,6 +468,7 @@ export interface StudioMemberSummary {
   readonly displayName: string;
   readonly description: string;
   readonly implementationKind: StudioMemberImplementationKind;
+  readonly implementationRef?: StudioMemberImplementationRef | null;
   readonly lifecycleStage: StudioMemberLifecycleStage;
   readonly publishedServiceId: string;
   readonly lastBoundRevisionId: string | null;

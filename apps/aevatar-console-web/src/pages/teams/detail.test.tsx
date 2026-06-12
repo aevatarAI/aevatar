@@ -239,6 +239,11 @@ function mockCreateTeamMembersCatalog() {
         displayName: "Team Alpha Operator",
         description: "负责处理升级工单",
         implementationKind: "workflow",
+        implementationRef: {
+          implementationKind: "workflow",
+          workflowId: "wf-team-alpha",
+          workflowRevision: "rev-alpha",
+        },
         lifecycleStage: "bind_ready",
         publishedServiceId: "alpha-service",
         lastBoundRevisionId: "rev-alpha",
@@ -802,6 +807,7 @@ describe("TeamDetailPage", () => {
   beforeEach(() => {
     setLocale("zh-CN", false);
     window.history.replaceState({}, "", "/scopes/scope-1/teams/t-alpha");
+    window.sessionStorage.clear();
     (scopesApi.listWorkflows as jest.Mock).mockClear();
     (scopesApi.listScripts as jest.Mock).mockClear();
     (runtimeGAgentApi.listActors as jest.Mock).mockClear();
@@ -1740,6 +1746,92 @@ describe("TeamDetailPage", () => {
 
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-team-alpha",
+    );
+  });
+
+  it("uses the roster implementation workflow id instead of the route workflow hint", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&workflowId=wf-route-stale&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-team-alpha",
+    );
+  });
+
+  it("does not recover workflow ids from session storage when the roster has no implementation workflow id", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
+    );
+    window.sessionStorage.setItem(
+      [
+        "aevatar.teamMemberDraftWorkflowHint.v1",
+        "scope-1",
+        "t-alpha",
+        "member-team-alpha",
+      ].join(":"),
+      "wf-team-alpha",
+    );
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-team-alpha",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Team Alpha Operator",
+          description: "负责处理升级工单",
+          implementationKind: "workflow",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "alpha-service",
+          lastBoundRevisionId: "rev-alpha",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBeNull();
+  });
+
+  it("does not reuse a route workflow hint for another Team member row", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-other&workflowId=wf-other&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-team-alpha",
     );
   });
 

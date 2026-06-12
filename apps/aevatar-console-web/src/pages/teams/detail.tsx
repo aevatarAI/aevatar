@@ -738,11 +738,17 @@ const TeamDetailPage: React.FC = () => {
         const isBoundMember =
           normalizeStatus(member.lifecycleStage) === "bind_ready" &&
           publishedServiceId.length > 0;
+        const memberDraftWorkflowId =
+          trimText(member.implementationRef?.implementationKind).toLowerCase() ===
+          "workflow"
+            ? trimText(member.implementationRef?.workflowId)
+            : "";
         const workflowStudioHref = buildTeamMemberWorkflowStudioHref({
           memberId: member.memberId,
           mode: "edit-member",
           scopeId,
           teamId: selectedTeamId,
+          workflowId: memberDraftWorkflowId || undefined,
         });
         const memberInvokeHref = buildTeamMemberInvokeHref({
           memberId: member.memberId,
@@ -778,6 +784,8 @@ const TeamDetailPage: React.FC = () => {
       selectedRosterMemberId,
       scopeId,
       selectedTeamId,
+      routeState.memberId,
+      routeState.workflowId,
       teamMembersQuery.data?.members,
       token,
     ],

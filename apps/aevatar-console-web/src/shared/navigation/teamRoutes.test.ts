@@ -97,10 +97,10 @@ describe("teamRoutes", () => {
         mode: "edit-member",
         scopeId: "scope-alpha",
         teamId: "t-alpha",
-        workflowId: " member-member-alpha ",
+        workflowId: " wf-alpha-next ",
       }),
     ).toBe(
-      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=member-member-alpha",
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=wf-alpha-next",
     );
   });
 

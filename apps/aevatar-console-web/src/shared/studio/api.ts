@@ -1091,6 +1091,13 @@ function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
       "implementationKind",
       "ImplementationKind",
     ]),
+    ...(record.implementationRef == null && record.ImplementationRef == null
+      ? {}
+      : {
+          implementationRef: decodeStudioMemberImplementationRef(
+            record.implementationRef ?? record.ImplementationRef
+          ),
+        }),
     lifecycleStage: readStudioMemberLifecycle(record, [
       "lifecycleStage",
       "LifecycleStage",
@@ -1661,6 +1668,31 @@ export const studioApi = {
         headers: JSON_HEADERS,
         body: JSON.stringify({
           teamId: input.teamId === null ? null : input.teamId.trim(),
+        }),
+      }
+    );
+  },
+
+  updateMemberImplementationRef(input: {
+    scopeId: string;
+    memberId: string;
+    implementationRef: StudioMemberImplementationRef;
+  }): Promise<StudioMemberDetail> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeStudioMemberDetail,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          implementationRef: compactObject({
+            implementationKind: input.implementationRef.implementationKind,
+            workflowId: trimOptional(input.implementationRef.workflowId),
+            workflowRevision: trimOptional(input.implementationRef.workflowRevision),
+            scriptId: trimOptional(input.implementationRef.scriptId),
+            scriptRevision: trimOptional(input.implementationRef.scriptRevision),
+            actorTypeName: trimOptional(input.implementationRef.actorTypeName),
+          }),
         }),
       }
     );
