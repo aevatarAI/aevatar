@@ -7,6 +7,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Tests;
 
@@ -202,6 +203,38 @@ public class NyxIdSshExecToolTests
             result.Should().Contain("\"exit_code\":0");
             handler.Recorded.Should().Contain(r =>
                 r.Method == HttpMethod.Post && r.Path == $"/api/v1/ssh/{CatalogId}/exec");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LogsWarning_WhenListLookupFallbackCannotParse()
+    {
+        var rawCatalogId = "catalog-from-caller";
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, $"/api/v1/keys/{rawCatalogId}", """{"id":"u"}""");
+        handler.Map(HttpMethod.Get, "/api/v1/keys", "not-json");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{rawCatalogId}/exec", SshOk);
+        var logger = new RecordingLogger();
+
+        var tool = new NyxIdSshExecTool(
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+                new HttpClient(handler)),
+            logger: logger);
+        SetMetadata("test-token");
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                $$"""{"service":"{{rawCatalogId}}","command":"uname -a","principal":"ubuntu"}""");
+
+            result.Should().Contain("\"exit_code\":0");
+            logger.Entries.Should().Contain(entry =>
+                entry.Level == LogLevel.Warning &&
+                entry.Message.Contains("/keys list lookup failed", StringComparison.Ordinal));
         }
         finally
         {
@@ -551,6 +584,29 @@ public class NyxIdSshExecToolTests
     private static void ClearMetadata() => AgentToolRequestContext.Current = null;
 
     private sealed record RecordedRequest(HttpMethod Method, string Path, string? Body, string? Authorization);
+
+    private sealed record LogEntry(LogLevel Level, string Message, Exception? Exception);
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<LogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull =>
+            null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(new LogEntry(logLevel, formatter(state, exception), exception));
+        }
+    }
 
     private sealed class PathHandler : HttpMessageHandler
     {
