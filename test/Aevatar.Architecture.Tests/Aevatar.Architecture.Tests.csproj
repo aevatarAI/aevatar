@@ -35,6 +35,7 @@
     <ProjectReference Include="../../src/Aevatar.CQRS.Projection.Stores.Abstractions/Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="../../src/Aevatar.CQRS.Projection.Providers.InMemory/Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
     <ProjectReference Include="../../src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Mainnet.Host.Api/Aevatar.Mainnet.Host.Api.csproj" />
     <ProjectReference Include="../../src/Aevatar.Scripting.Abstractions/Aevatar.Scripting.Abstractions.csproj" />
     <ProjectReference Include="../../src/Aevatar.Scripting.Core/Aevatar.Scripting.Core.csproj" />
     <ProjectReference Include="../../src/Aevatar.Scripting.Projection/Aevatar.Scripting.Projection.csproj" />

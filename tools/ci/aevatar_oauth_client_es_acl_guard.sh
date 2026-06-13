@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-allowed_document_files_regex='^(agents/Aevatar\.GAgents\.Channel\.Identity/(DependencyInjection/IdentityServiceCollectionExtensions\.cs|Provisioning/AevatarOAuthClient(Document\.Partial|DocumentMetadataProvider|EsAclOptions|EsAclStartupGuard|ProjectionProvider|Projector)\.cs|protos/aevatar_oauth_client\.proto)|test/)'
+allowed_document_files_regex='^(agents/Aevatar\.GAgents\.Channel\.Identity/(DependencyInjection/IdentityServiceCollectionExtensions\.cs|Provisioning/AevatarOAuthClient(Document\.Partial|DocumentMetadataProvider|EsAclOptions|EsAclStartupGuard|ProjectionProvider|Projector)\.cs|protos/aevatar_oauth_client\.proto)|src/Aevatar\.Mainnet\.Host\.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions\.cs|test/)'
 
 document_hits="$(
   rg -n "AevatarOAuthClientDocument|IProjectionDocumentReader<AevatarOAuthClientDocument|IProjectionDocumentWriter<AevatarOAuthClientDocument" \
@@ -32,8 +32,9 @@ event_store_hits="$(
 )"
 
 guard_registration_hits="$(
-  rg -n "AevatarOAuthClientEsAclStartupGuard|GrantMatchesGrainEventStoreInternal|Refactor \\(iter97/cluster-526\\)" \
-    agents/Aevatar.GAgents.Channel.Identity/DependencyInjection/IdentityServiceCollectionExtensions.cs \
+  rg -n "AevatarOAuthClientEsAclStartupGuard|GrantMatchesGrainEventStoreInternal|AevatarOAuthClientEsAclOptions" \
+    src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs \
+    src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs \
     agents/Aevatar.GAgents.Channel.Identity/Provisioning/AevatarOAuthClientEsAclStartupGuard.cs \
     agents/Aevatar.GAgents.Channel.Identity/Provisioning/AevatarOAuthClientProjectionProvider.cs \
     agents/Aevatar.GAgents.Channel.Identity/Provisioning/AevatarOAuthClientProjector.cs \
@@ -42,7 +43,7 @@ guard_registration_hits="$(
 
 if [[ -n "${document_hits}" ]]; then
   echo "${document_hits}"
-  echo "AevatarOAuthClientDocument carries HMAC keys. Only the projector, internal provider, metadata, startup guard, DI registration, proto, and tests may reference it."
+  echo "AevatarOAuthClientDocument carries HMAC keys. Only the projector, internal provider, metadata, startup guard, Mainnet Host composition root, proto, and tests may reference it."
   exit 1
 fi
 
@@ -54,9 +55,9 @@ fi
 
 if ! grep -q "AevatarOAuthClientEsAclStartupGuard" <<<"${guard_registration_hits}" ||
    ! grep -q "GrantMatchesGrainEventStoreInternal" <<<"${guard_registration_hits}" ||
-   ! grep -q "Refactor (iter97/cluster-526)" <<<"${guard_registration_hits}"; then
+   ! grep -q "AevatarOAuthClientEsAclOptions" <<<"${guard_registration_hits}"; then
   echo "${guard_registration_hits}"
-  echo "AevatarOAuthClient ES ACL startup guard, explicit ACL assertion, and iter97 refactor comments are required."
+  echo "Mainnet Host must own the AevatarOAuthClient ES ACL startup guard and explicit ACL assertion."
   exit 1
 fi
 

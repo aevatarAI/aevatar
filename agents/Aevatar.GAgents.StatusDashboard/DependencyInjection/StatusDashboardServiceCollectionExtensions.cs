@@ -1,8 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
-using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -20,8 +18,7 @@ public static class StatusDashboardServiceCollectionExtensions
     /// Registers the status dashboard projection pipeline (per-target actor,
     /// current-state projector, query port, default executors, startup service),
     /// and binds the probe manifest from the <c>Aevatar:Status</c> configuration
-    /// section. The document store backend follows the same Elasticsearch /
-    /// InMemory selection rule used by the other agent modules.
+    /// section.
     /// </summary>
     public static IServiceCollection AddStatusDashboard(
         this IServiceCollection services,
@@ -70,24 +67,6 @@ public static class StatusDashboardServiceCollectionExtensions
             IProjectionActivationPlanProvider,
             HealthProbeCommittedStateProjectionActivationPlanProvider>());
         services.AddHostedService<HealthProbeStartupService>();
-
-        var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
-            configuration,
-            storeName: "StatusDashboard");
-        if (useElasticsearch)
-        {
-            services.AddElasticsearchDocumentProjectionStore<HealthProbeTargetDocument, string>(
-                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration),
-                metadataFactory: sp =>
-                    sp.GetRequiredService<IProjectionDocumentMetadataProvider<HealthProbeTargetDocument>>().Metadata,
-                keySelector: static doc => doc.Id,
-                keyFormatter: static key => key);
-        }
-        else
-        {
-            services.AddInMemoryDocumentProjectionStore<HealthProbeTargetDocument, string>(
-                static doc => doc.Id, static key => key);
-        }
 
         return services;
     }

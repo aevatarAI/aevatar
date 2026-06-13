@@ -128,12 +128,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChatbotClassifier();
         builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
-        // Composition root owns the ES vs InMemory store choice for the
-        // Identity module: AddChannelIdentity registers actors / projector /
-        // broker / slash-commands and AddChannelIdentityProjectionStores
-        // wires the document store. Tests / demos can mix and match.
         builder.Services.AddChannelIdentity(builder.Configuration);
-        builder.Services.AddChannelIdentityProjectionStores(builder.Configuration);
         builder.Services.Configure<AevatarOAuthClientEsAclOptions>(options =>
         {
             // Mainnet stores the cluster-singleton OAuth client readmodel in Elasticsearch.
@@ -150,10 +145,8 @@ public static class MainnetHostBuilderExtensions
             ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHealthProbeExecutor, AevatarCoreLoopStatusProbeExecutor>());
-        // Ingress layer v1: registers the ChatRoutePolicy current-state readmodel
-        // document store (Elasticsearch in prod, InMemory otherwise — same
-        // selection pattern as AddScheduledAgents / AddDeviceRegistration).
         builder.Services.AddChatRoutingAgents(builder.Configuration);
+        builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddChatRoutingCore();
         builder.Services.Configure<ChatRoutingOptions>(options =>
         {
