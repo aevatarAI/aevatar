@@ -82,6 +82,8 @@ owner: eanzhao
 
 - `http`：
   - `baseUrl`、`allowedMethods`、`allowedPaths`、`allowedInputKeys`、`defaultHeaders`
+  - `auth.type=client_credentials`：OAuth client credentials provider
+  - `auth.type=secret_ref_header`：通过 `secretRef` 在 HTTP request edge 解析一个 secret，并写入一个固定 header
 - `cli`：
   - `command`、`fixedArguments`、`allowedOperations`、`allowedInputKeys`、`workingDirectory`、`environment`
 - `mcp`：
@@ -133,6 +135,8 @@ roles:
 - 会注入 `allowed_connectors=...` 到步骤参数中。
 
 这一步只负责“传授权信息”，不直接执行 connector。
+
+注意：`roles[].connectors` 只约束 `connector_call` 对中心化 connector 的访问；它不控制 LLM agent tool。`llm_call` 的 agent tool 可见范围使用 role/step 根部的 `allowed_tools`，并通过 typed `agent_tool_scope` 传到 AI 工具执行上下文。
 
 ## 3.2 connector_call 执行主链路
 
@@ -186,6 +190,31 @@ Ergonomic 别名（解析期归一化到 `connector_call`）：
 - 强制校验目标 URL 不能逃逸 `baseUrl` 的 scheme/host/port；
 - 可用 `allowedInputKeys` 校验 payload JSON key；
 - 返回 HTTP 状态和耗时元数据。
+- `defaultHeaders` 只用于非 secret 静态 header。secret-bearing header 必须使用 `auth.type=secret_ref_header`，避免 raw secret 被复制进 connector config、workflow 参数、annotations、read model 或通用 bag。
+
+`secret_ref_header` 配置形状：
+
+```json
+{
+  "type": "http",
+  "http": {
+    "baseUrl": "https://api.example.com",
+    "auth": {
+      "type": "secret_ref_header",
+      "secretRef": "secrets://connectors/example-api-key",
+      "headerName": "X-API-Key",
+      "headerValuePrefix": "Bearer "
+    }
+  }
+}
+```
+
+约束：
+
+- `secretRef` 与 `headerName` 必填；
+- `headerName` 必须是合法 HTTP header token，且不能与 `defaultHeaders` 冲突；
+- runtime 必须有可用 `ICredentialProvider`，且 secret 解析结果不能为空；
+- 只支持单 secret ref、单 header、可选静态 prefix；不支持多 header、body/path/query 模板或 request metadata 取值。
 
 ### CLI Connector
 

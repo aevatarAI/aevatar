@@ -36,7 +36,7 @@ public sealed class StudioTeamGAgentStreamInvocationService : IStudioTeamGAgentS
         var endpointId = NormalizeRequired(request.EndpointId, nameof(request.EndpointId));
         var input = request.Input ?? throw new InvalidOperationException("input is required.");
 
-        var resolution = await _teamEntryMemberResolver.ResolveAsync(scopeId, teamId, ct);
+        var resolution = await _teamEntryMemberResolver.ResolveAsync(scopeId, teamId, endpointId, ct);
         var identity = new ServiceIdentity
         {
             TenantId = NormalizeRequired(resolution.ScopeId, nameof(resolution.ScopeId)),

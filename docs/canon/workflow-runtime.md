@@ -47,6 +47,7 @@ owner: eanzhao
 - `EventEnvelope` 在这里是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - `WorkflowRunGAgent` / `WorkflowGAgent` 只有在显式 `PersistDomainEventAsync(...)` 时，才把领域事实写入 EventStore。
 - 定时触发属于 Aevatar workflow runtime 能力；NyxID 只保留 credential/proxy/audit 职责，ORNN 只保留 deterministic skill/payload-builder 职责。
+- 认证 webhook start-run 是 Host/Adapter 触发面：raw JSON、HMAC、route binding 与 prompt mapping 留在 Host；进入应用层后只使用 typed `WorkflowChatRunRequest` 与 `WorkflowExternalIngressContext`。
 
 ---
 
@@ -121,6 +122,25 @@ BindWorkflowDefinition(yaml)
 - timezone 为空时默认为 `UTC`，非空时必须能被 runtime `TimeZoneInfo` 解析。
 - `Headers` 是 command dispatch headers，不用于承载 schedule 核心语义。
 
+### Webhook Ingress API
+
+`POST /api/workflow-webhooks/{routeKey}` 是 workflow 的第四个 start-run 入口。它和 `/api/chat` 复用同一条 `WorkflowChatRunRequest` accepted-only command dispatch 主干；它不是 workflow YAML 顶级 trigger，也不复用 channel inbound 或 `WorkflowSignalCommand`。
+
+运行边界：
+
+- Binding 由 Host-owned `WorkflowWebhookIngress` options/config 承载，包含 `routeKey`、`sourceId`、workflow 名称、scope、delivery id 来源、prompt 映射与 HMAC 策略。
+- Host/Adapter 负责读取 raw body、校验 HMAC、解析简单 JSON path/template，并生成稳定 `webhook:{routeKey}:{sourceId}:{deliveryId}` command/correlation seed。
+- 应用层只接收 typed `WorkflowChatRunRequest.ExternalIngress`，command envelope 写入 `WorkflowChatRequestEvent.external_ingress`；不得把 route、delivery、fingerprint、auth 等稳定语义塞进 `Metadata`。
+- Replay/idempotency 权威是 `IWorkflowWebhookReplayStore`，生产实现必须是 durable/distributed first-writer-wins store；admission 先占位为 in-progress，run dispatch accepted 后标记为 completed，重复 delivery 只返回既有 command/correlation，不重新启动 run；`InMemoryWorkflowWebhookReplayStore` 只在显式配置时用于本地或测试。
+- Host 启用 webhook ingress 但没有 replay store 时返回 `503 WEBHOOK_REPLAY_STORE_UNAVAILABLE`，不能退化为无幂等的生产路径。
+- HTTP 成功响应只返回 `202 Accepted + commandId/correlationId/actorId/statusUrl/deliveryId`，不暗示 committed、result 或 readmodel-observed。
+
+不属于 v1 的范围：
+
+- 不新增 `WorkflowWebhookTriggerGAgent`、trigger state proto、trigger projection/readmodel 或 `/api/workflow-triggers/{triggerId}/deliveries` endpoint family。
+- 不在 endpoint 或中间层维护生产 `Dictionary` / `ConcurrentDictionary` / `MemoryCache` delivery ledger。
+- 不依赖 NyxID、chrono-storage 或 Ornn 新增端点、schema 或能力。
+
 ### Workflow Lease
 
 `WorkflowLeaseGAgent` 是 workflow 跨 run 单例 lease 的唯一事实源。一个 canonical `lease_key` 对应一个 deterministic lease actor；`WorkflowRunGAgent` 与 `LeaseModule` 只是 client，不保存可复用 credential，也不把进程内状态当成互斥事实。
@@ -169,6 +189,7 @@ roles:
     event_routes: |
       event.type == ChatRequestEvent -> llm_handler
     connectors: [incident_api, search_mcp]
+    allowed_tools: [web_search, issue_lookup]
     extensions:
       event_modules: "fallback_module"
       event_routes: "event.type == X -> fallback_module"
@@ -178,6 +199,9 @@ roles:
 
 - `workflow roles` 与 `role yaml` 共用同一份解析归一化逻辑（`RoleConfigurationNormalizer`）。
 - `agent_kind` 是 role-level actor lifecycle 入口，可指向任意已注册 primary `[GAgent]` kind；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
+- `allowed_tools` 是 role actor 上 agent tool 可见范围的上限；未配置表示兼容旧行为的全量工具，配置为空数组表示默认不暴露工具。
+- `llm_call` step 可在根部配置 `allowed_tools` 继续收窄本次调用；role scope 与 step scope 取交集后写入 `WorkflowStepParameters.agent_tool_scope`，再由 `WorkflowLlmExecutionIntent.agent_tool_scope` 传给 AI `AgentToolExecutionContext.ToolVisibility`。
+- 工具可见范围同时作用于 provider 看到的 `LLMRequest.Tools` 和 streaming tool executor 的实际 lookup；未授权工具调用会得到 not-available tool result，不会执行工具。
 - `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
 - 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。
 - Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):

@@ -356,10 +356,13 @@ public sealed class ChannelCardConversationTurnRunnerTests
         public Task<string> DeleteMessageReactionAsync(string token, LarkMessageReactionDeleteRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
-        public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct) =>
+        public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
-        public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct) =>
+        public Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+            string token,
+            LarkMessageResourceDownloadRequest request,
+            CancellationToken ct) =>
             throw new NotSupportedException();
 
         public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct) =>
@@ -369,6 +372,9 @@ public sealed class ChannelCardConversationTurnRunnerTests
             throw new NotSupportedException();
 
         public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
         public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct) =>
@@ -381,6 +387,12 @@ public sealed class ChannelCardConversationTurnRunnerTests
             throw new NotSupportedException();
 
         public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
     }
 }

@@ -13,6 +13,31 @@ enum WorkflowChatInputPartKind {
   WORKFLOW_CHAT_INPUT_PART_KIND_VIDEO = 4;
 }
 
+enum WorkflowFileSourceKind {
+  WORKFLOW_FILE_SOURCE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_FILE_SOURCE_KIND_CHAT_INPUT = 1;
+  WORKFLOW_FILE_SOURCE_KIND_FORM_UPLOAD = 2;
+  WORKFLOW_FILE_SOURCE_KIND_CONNECTED_SERVICE_RESOURCE = 3;
+  WORKFLOW_FILE_SOURCE_KIND_EXTERNAL_RESOURCE = 4;
+  WORKFLOW_FILE_SOURCE_KIND_GENERATED = 5;
+}
+
+message WorkflowFileRef {
+  string file_id = 1;
+  string artifact_id = 2;
+  WorkflowFileSourceKind source_kind = 3;
+  string source_message_id = 4;
+  string source_resource_key = 5;
+  string file_name = 6;
+  string media_type = 7;
+  int64 size_bytes = 8;
+  string sha256 = 9;
+  int64 created_at_unix_ms = 10;
+  int64 expires_at_unix_ms = 11;
+  string owner_run_id = 12;
+  string owner_scope_id = 13;
+}
+
 message WorkflowChatInputPartPayload {
   WorkflowChatInputPartKind kind = 1;
   string text = 2;
@@ -20,6 +45,7 @@ message WorkflowChatInputPartPayload {
   string media_type = 4;
   string uri = 5;
   string name = 6;
+  WorkflowFileRef file_ref = 7;
 }
 
 message WorkflowLlmControlContext {
@@ -32,6 +58,28 @@ message WorkflowLlmControlContext {
 
 message WorkflowCallerCredential {
   string bearer_token = 1;
+}
+
+message WorkflowExternalIngressContext {
+  string route_key = 1;
+  string source_id = 2;
+  string delivery_id = 3;
+  int64 received_at_unix_ms = 4;
+  string content_type = 5;
+  string payload_fingerprint = 6;
+  string auth_scheme = 7;
+  string principal_subject = 8;
+}
+
+message WorkflowWebhookReplayRecord {
+  string route_key = 1;
+  string source_id = 2;
+  string delivery_id = 3;
+  string payload_fingerprint = 4;
+  int64 received_at_unix_ms = 5;
+  string command_id = 6;
+  string correlation_id = 7;
+  bool completed = 8;
 }
 
 message WorkflowChatRequestEvent {
@@ -47,6 +95,7 @@ message WorkflowChatRequestEvent {
   WorkflowLlmControlContext llm_control = 8;
   WorkflowCallerCredential caller_credential = 10;
   WorkflowRunForkSeed fork_seed = 11;
+  WorkflowExternalIngressContext external_ingress = 12;
 }
 
 message WorkflowRunForkSeed
@@ -73,6 +122,7 @@ message StartWorkflowEvent
   string run_id = 4;
   WorkflowRunForkSeed fork_seed = 5;
   WorkflowToolRuntimeContextPayload workflow_runtime = 6;
+  repeated WorkflowFileRef input_file_refs = 7;
 }
 message BindWorkflowRunDefinitionEvent
 {
@@ -100,6 +150,7 @@ message WorkflowRunExecutionStartedEvent
   string scope_id = 5;
   WorkflowRunExecutionContextDelta execution_context_delta = 6;
   int32 attempt = 7;
+  repeated WorkflowFileRef input_file_refs = 8;
 }
 message WorkflowRunExecutionContextDelta
 {
@@ -230,6 +281,33 @@ message VoteAgreementDecision {
   map<string, int32> label_counts = 6;
 }
 
+enum TransformOperationKind {
+  TRANSFORM_OPERATION_KIND_UNSPECIFIED = 0;
+  TRANSFORM_OPERATION_KIND_SUM = 1;
+  TRANSFORM_OPERATION_KIND_SUBTRACT = 2;
+  TRANSFORM_OPERATION_KIND_MULTIPLY = 3;
+  TRANSFORM_OPERATION_KIND_DIVIDE = 4;
+  TRANSFORM_OPERATION_KIND_ROUND = 5;
+  TRANSFORM_OPERATION_KIND_MIN = 6;
+  TRANSFORM_OPERATION_KIND_MAX = 7;
+  TRANSFORM_OPERATION_KIND_GROUP_BY = 8;
+}
+
+enum TransformAggregateKind {
+  TRANSFORM_AGGREGATE_KIND_UNSPECIFIED = 0;
+  TRANSFORM_AGGREGATE_KIND_SUM = 1;
+  TRANSFORM_AGGREGATE_KIND_COUNT = 2;
+  TRANSFORM_AGGREGATE_KIND_AVG = 3;
+}
+
+message TransformOperationSpec {
+  TransformOperationKind kind = 1;
+  optional int32 precision = 2;
+  string key = 3;
+  string value = 4;
+  TransformAggregateKind aggregate = 5;
+}
+
 message WorkflowStepParameters
 {
   map<string, string> parameters = 1;
@@ -238,6 +316,8 @@ message WorkflowStepParameters
   aevatar.foundation.interactions.InteractionSpec interaction_spec = 4;
   aevatar.foundation.interactions.InteractionTemplateSpec interaction_template_spec = 5;
   string delivery_target_id = 6;
+  TransformOperationSpec transform_operation = 7;
+  WorkflowAgentToolScope agent_tool_scope = 8;
 }
 message StepRequestEvent
 {
@@ -249,6 +329,7 @@ message StepRequestEvent
   string run_id = 6;
   string execution_id = 7;
   WorkflowStepParameters step_parameters = 8;
+  repeated WorkflowFileRef input_file_refs = 9;
 }
 message WorkflowUsageMetrics {
   int32 prompt_tokens = 1;
@@ -411,7 +492,14 @@ message WorkflowToolApprovalSuspension
   string tool_name = 2;
   string tool_call_id = 3;
   string approval_request_id = 4;
-  string arguments_json = 5;
+  reserved 5;
+  reserved "arguments_json";
+}
+message WorkflowToolApprovalResume
+{
+  string execution_id = 1;
+  string tool_call_id = 2;
+  string approval_request_id = 3;
 }
 message WorkflowResumedEvent
 {
@@ -422,6 +510,7 @@ message WorkflowResumedEvent
   map<string, string> metadata = 5;
   string edited_content = 6;
   string feedback = 7;
+  WorkflowToolApprovalResume tool_approval = 8;
 }
 message WorkflowHumanApprovalResolvedEvent
 {
@@ -492,6 +581,8 @@ message WorkflowLlmExecutionIntent
   string route_preference = 13;
   string sender_nyx_id_access_token = 14;
   WorkflowToolRuntimeContextPayload workflow_runtime_context = 15;
+  repeated WorkflowFileRef input_file_refs = 16;
+  WorkflowAgentToolScope agent_tool_scope = 17;
 }
 
 message WorkflowToolRuntimeContextPayload
@@ -501,6 +592,11 @@ message WorkflowToolRuntimeContextPayload
   string parent_step_id = 3;
   string root_run_id = 4;
   int32 depth = 5;
+}
+
+message WorkflowAgentToolScope
+{
+  repeated string allowed_tool_names = 1;
 }
 
 message WorkflowLlmInvocationStartedEvent

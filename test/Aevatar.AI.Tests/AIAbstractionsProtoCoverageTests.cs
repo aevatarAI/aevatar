@@ -292,6 +292,25 @@ public sealed class AIAbstractionsProtoCoverageTests
         sessionCompleted.ToolReceipts.Should().ContainSingle(x => x.SubjectHash == "hash-1");
         sessionCompleted.OutputParts.Should().ContainSingle();
 
+        var voiceEnable = RoundTrip(new VoicePresenceEnableRequested
+        {
+            ModuleName = "voice_presence",
+            PcmSampleRateHz = 24000,
+            RemoteAudioSupport = VoiceRemoteAudioSupport.Supported,
+            SessionDefaults = new VoiceSessionDefaults
+            {
+                Voice = "verse",
+                Instructions = "stay concise",
+                SampleRateHz = 16000,
+                TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+            },
+        }, VoicePresenceEnableRequested.Parser);
+        voiceEnable.ModuleName.Should().Be("voice_presence");
+        voiceEnable.PcmSampleRateHz.Should().Be(24000);
+        voiceEnable.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.Supported);
+        voiceEnable.SessionDefaults.Voice.Should().Be("verse");
+        voiceEnable.SessionDefaults.SampleRateHz.Should().Be(16000);
+
         var initialize = RoundTrip(new InitializeRoleAgentEvent
         {
             RoleName = "assistant",
@@ -304,9 +323,29 @@ public sealed class AIAbstractionsProtoCoverageTests
             MaxHistoryMessages = 40,
             EventModules = "demo",
             EventRoutes = "event.type == X -> demo",
+            VoiceSessionDefaults =
+            {
+                ["voice_presence"] = new VoiceSessionDefaults
+                {
+                    Voice = "verse",
+                    Instructions = "agent voice defaults",
+                    SampleRateHz = 16000,
+                    TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+                    VadDetectionThreshold = 0.4f,
+                    VadPrefixPaddingMs = 120,
+                    VadSilenceDurationMs = 240,
+                },
+            },
+            VoicePresenceEnables =
+            {
+                voiceEnable.Clone(),
+            },
         }, InitializeRoleAgentEvent.Parser);
         initialize.RoleName.Should().Be("assistant");
         initialize.HasTemperature.Should().BeTrue();
+        initialize.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("verse");
+        initialize.VoicePresenceEnables.Should().ContainSingle()
+            .Which.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.Supported);
 
         var overrides = RoundTrip(new AIAgentConfigOverrides
         {
@@ -343,7 +382,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                     new AgentToolRequestIdentity("req-1", "call-1"),
                     AgentToolCredentials.Empty,
                     new AgentToolCallerContext("scope-a", "owner-a", "response-a"),
-                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a"),
+                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a", "delivery-target-a"),
                     new AgentToolSenderBindingContext("binding-a"),
                     new LLMRequestRoutingContext("model-a", "route-a", 4, "remember-a"),
                     new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
@@ -363,6 +402,22 @@ public sealed class AIAbstractionsProtoCoverageTests
                     LastDrainAckPlayoutSequence = 3400,
                     NextResponseId = 13,
                     ActiveProviderResponseId = "provider-response-12",
+                    ActiveSessionConfig = new VoiceSessionConfig
+                    {
+                        Voice = "verse",
+                        Instructions = "active voice",
+                        SampleRateHz = 16000,
+                        TurnDetectionMode = VoiceTurnDetectionMode.Disabled,
+                    },
+                },
+            },
+            VoiceSessionDefaults =
+            {
+                ["voice_presence"] = new VoiceSessionDefaults
+                {
+                    Voice = "marin",
+                    SampleRateHz = 16000,
+                    TurnDetectionMode = VoiceTurnDetectionMode.ClientVad,
                 },
             },
             Sessions =
@@ -427,6 +482,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         pendingContext.Credentials.Should().Be(AgentToolCredentials.Empty);
         pendingContext.Caller.ScopeId.Should().Be("scope-a");
         pendingContext.Channel.SenderId.Should().Be("sender-a");
+        pendingContext.Channel.DeliveryTargetId.Should().Be("delivery-target-a");
         pendingContext.SenderBinding.BindingId.Should().Be("binding-a");
         pendingContext.Routing.ModelOverride.Should().Be("model-a");
         pendingContext.Routing.MaxToolRoundsOverride.Should().Be(4);
@@ -434,6 +490,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         pendingContext.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-from-context");
         state.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(12);
         state.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-12");
+        state.VoicePresence["voice_presence"].ActiveSessionConfig.TurnDetectionMode.Should().Be(VoiceTurnDetectionMode.Disabled);
+        state.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("marin");
     }
 
     [Fact]
@@ -493,6 +551,18 @@ public sealed class AIAbstractionsProtoCoverageTests
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
             .Contain((12, "tool_receipts"));
+        InitializeRoleAgentEvent.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Contain((17, "voice_presence_enables"));
+        VoicePresenceEnableRequested.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Equal(
+                (1, "module_name"),
+                (2, "pcm_sample_rate_hz"),
+                (3, "remote_audio_support"),
+                (4, "session_defaults"));
     }
 
     [Fact]
@@ -513,7 +583,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                 Request = new AgentToolRequestIdentity("req-typed", "call-typed"),
                 Credentials = new AgentToolCredentials("token-should-only-appear-in-this-explicit-roundtrip", null, null),
                 Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
-                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1"),
+                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1", "delivery-target-1"),
                 SenderBinding = new AgentToolSenderBindingContext("binding-1"),
                 Routing = new LLMRequestRoutingContext("model-typed", "route-typed", 4, "memory-typed"),
                 ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),
@@ -528,6 +598,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         pending.ToolContext.Request.RequestId.Should().Be("req-typed");
         pending.ToolContext.Caller.ScopeId.Should().Be("scope-typed");
         pending.ToolContext.Channel.Platform.Should().Be("lark");
+        pending.ToolContext.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
         pending.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
         pending.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
         pending.ToolContext.ConnectedServices.ContextJson.Should().Be("{\"service\":\"ok\"}");
@@ -566,6 +637,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolResultEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionStartedEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionCompletedEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(VoicePresenceEnableRequested));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(InitializeRoleAgentEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(AIAgentConfigOverrides));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionState));

@@ -23,6 +23,7 @@ public sealed class WorkflowExecutionReadModelMapper
             RequestedSteps = 0,
             CompletedSteps = 0,
             RoleReplyCount = 0,
+            InputFileRefs = { source.InputFileRefs.Select(MapInputFileRef) },
         };
     }
 
@@ -153,6 +154,25 @@ public sealed class WorkflowExecutionReadModelMapper
             _ => WorkflowRunCompletionStatus.Unknown,
         };
     }
+
+    private static WorkflowRunFileRef MapInputFileRef(WorkflowExecutionInputFileRefReadModel source) =>
+        new()
+        {
+            FileId = source.FileId,
+            ArtifactId = source.ArtifactId,
+            SourceKindValue = source.SourceKindValue,
+            SourceMessageId = source.SourceMessageId,
+            SourceResourceKey = source.SourceResourceKey,
+            FileName = source.FileName,
+            MediaType = source.MediaType,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId,
+            OwnerScopeId = source.OwnerScopeId,
+        };
+
     private static WorkflowRunCompletionStatus MapCompletionStatus(
         WorkflowExecutionCompletionStatus status)
     {

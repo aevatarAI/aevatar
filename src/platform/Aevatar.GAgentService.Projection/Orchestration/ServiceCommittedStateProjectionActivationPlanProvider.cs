@@ -48,6 +48,7 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
     {
         if (!payload.Is(ServiceDefinitionCreatedEvent.Descriptor) &&
             !payload.Is(ServiceDefinitionUpdatedEvent.Descriptor) &&
+            !payload.Is(ServiceExternalExposureUpdatedEvent.Descriptor) &&
             !payload.Is(DefaultServingRevisionChangedEvent.Descriptor))
         {
             return [];

@@ -57,6 +57,23 @@ message WorkflowExecutionCurrentStateDocument {
   repeated string fork_seed_completed_step_id_entries = 21;
   string fork_seed_last_failed_step_id = 22;
   string scope_id = 23;
+  repeated WorkflowExecutionInputFileRefReadModel input_file_ref_entries = 24;
+}
+
+message WorkflowExecutionInputFileRefReadModel {
+  string file_id = 1;
+  string artifact_id = 2;
+  int32 source_kind_value = 3;
+  string source_message_id = 4;
+  string source_resource_key = 5;
+  string file_name = 6;
+  string media_type = 7;
+  int64 size_bytes = 8;
+  string sha256 = 9;
+  int64 created_at_unix_ms = 10;
+  int64 expires_at_unix_ms = 11;
+  string owner_run_id = 12;
+  string owner_scope_id = 13;
 }
 
 message WorkflowExecutionTopologyEdge {

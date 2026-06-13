@@ -28,6 +28,8 @@ target_repo: aevatarAI/aevatar
 
 **当前受支持生产契约**：post-ADR-0012 / issue `#308` 的 ChannelRuntime 已收敛到 Nyx-backed Lark relay。Lark inbound 的唯一活跃入口是 `Aevatar.GAgents.NyxidChat` 映射的 `/api/webhooks/nyxid-relay`，并由 `ConversationGAgent` 承接权威会话事实；`Aevatar.GAgents.Platform.Lark` 只保留 HTTP client、message composer、native message producer、payload redactor 等 outbound/rendering 能力，不拥有 inbound runtime state。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**，不是当前生产契约。
 
+NyxID relay ingress 的归一化边界必须把非文本消息的附件 locator 映射进 `ChatActivity.Content.Attachments`。附件只携带平台 locator（如 URL、Lark `image_key` / `file_key` 派生的 blob ref）、message id、media type、文件名和大小等引用信息；不得携带 bytes、base64 或要求 NyxID 增加新的下载/存储协议。只要 relay callback 有文本、card action 或至少一个有效 `AttachmentRef`，就应进入 `ChatActivity` 主链路。
+
 直接在这个大包里继续加 channel 会让边界进一步模糊。需要引入 **channel-agnostic 抽象层**，把业务逻辑和 channel 细节隔离，并把 ChannelRuntime 的多职责按概念拆成独立包。
 
 ## 2. 目标
@@ -488,6 +490,8 @@ public record MessageContent(
 ```
 
 **核心原则**：`MessageContent` 描述 "要表达什么"，不描述 "长什么样"。`IMessageComposer` 把它翻译成 channel-native 的具体 payload。
+
+**NyxID relay inbound attachment rule**：入站方向同样遵循引用语义，`AttachmentRef` 表示平台附件 locator，不表示附件内容本体。`Channel.NyxIdRelay` 在进入 channel runtime 前把 NyxID callback `content.attachments` 以及 Lark / Feishu raw `event.message.content` 中的 `image_key` / `file_key` 归一到现有 `MessageContent.Attachments` / `AttachmentRef`。非 card 入站只要有 text 或至少一个有效 attachment ref 就是有效内容；空 text 且无 attachment ref 才按 `empty_text` 忽略。attachment ref 只携带 platform locator / key / filename / MIME / size / URL 等引用事实，不下载 bytes、不塞 base64、不新增第二套 attachment abstraction，也不要求 NyxID 仓库改 schema。
 
 **Card action typed payload rule**：workflow resume 与 LLM selection 是仓库内可控的控制语义，必须通过 `WorkflowResumeActionPayload` / `LlmSelectionActionPayload` 挂在 `ActionElement` 与 `CardActionSubmission` 上。`ActionElement.arguments` / `CardActionSubmission.Arguments` 只作为第三方或平台扩展 map，以及旧 callback JSON 的入站兼容边界；进入 `ChannelConversationTurnRunner`、`ChannelCardActionRouting` 或 LLM selection handoff 后，不得把这些字段当成权威事实源。
 
@@ -2169,10 +2173,10 @@ v1 cutover step 2 细化为：
 
 | Modality | 入口 | 为什么不纳入 |
 |---|---|---|
-| **Voice Presence** | `VoicePresence` EventModule capability on a target actor; `/ws/voice` policy-aware Host entry; `/ws/voice/{actorId}` dev/admin bypass | 语音是独立 modality：wake word / AEC / VAD / ASR / LLM / TTS 链路完全不同于 IM webhook 模型。VoicePresence 不是独立 router/session GAgent，Voice ↔ Chat 互通接口见 §15.5 open question |
+| **Voice Presence** | Scope-bound admin provisioning `PUT /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/modules/{moduleName}?agentKind=...`; `/ws/voice` policy-aware Host attach; `/ws/voice/{actorId}` dev/admin bypass | 语音是独立 modality：wake word / AEC / VAD / ASR / LLM / TTS 链路完全不同于 IM webhook 模型。VoicePresence 不是独立 router/session GAgent。Capability 首行事实由目标 RoleGAgent 拥有：管理面只做 scope guard、actor admission 和 accepted-only command dispatch；`VoicePresenceEnableRequested -> RoleGAgent -> VoicePresenceRuntimeStateChangedEvent -> Projection Pipeline -> VoicePresenceCapabilityReadModel` 物化后，`/ws/voice` attach 只读 capability readmodel，不在 Host/query/projection miss 路径补写。Voice ↔ Chat 互通接口见 §15.5 open question |
 | **Aevatar Console Web chat 框** | `apps/aevatar-console-web/` | Console 是 aevatar 自有前端 UI，直接调 HTTP API，不走外部 IM channel 链路 |
 | **Direct HTTP API** | `/api/scopes/{scopeId}/...` | 同上 |
-| **DeviceRegistration / HouseholdEntity 设备事件** | `Aevatar.GAgents.Device` + `Aevatar.GAgents.Household` | 设备事件是 sensor push，业务语义和对话无关。transport 虽然也是 webhook，但强行套 channel adapter 抽象会让 `IChannelTransport` / `IChannelOutboundPort` 失焦 |
+| **DeviceRegistration / HouseholdEntity 设备事件** | `Aevatar.GAgents.Device` + `Aevatar.GAgents.Household` | 设备事件是 sensor push，业务语义和对话无关。transport 虽然也是 webhook，但强行套 channel adapter 抽象会让 `IChannelTransport` / `IChannelOutboundPort` 失焦。voice 主动播报复用此路径：NyxID HTTP Event Gateway -> `/api/device-events/{registrationId}` -> typed `DeviceInbound` -> target actor direct envelope；`VoicePresenceModule` 只在 Host 明确配置 exact `Any.TypeUrl`、publisher 为 `device-events.callback`、direct target 等于当前 actor 且存在 active voice session/lease 时注入，v1 无会话 drop+log，不新建 webhook、session router、readmodel lookup 或进程内 active-session registry |
 | **WeChat 个人 bot** | — | transport + capability gap 差异过大，单独 RFC 承接，继承本 RFC 的 `IChannelTransport` + `IChannelOutboundPort` 契约 |
 
 这是**显式的 scope 收缩**，避免抽象被"所有 aevatar 入口都要统一"的诱惑牵引而退化成 LCD（最小公约数）。

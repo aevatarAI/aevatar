@@ -100,6 +100,7 @@ message AgentToolExecutionContextPayload {
   map<string, string> external_metadata = 8;
   AgentSkillRecoveryContextPayload skill_recovery = 9;
   AgentWorkflowRuntimeContextPayload workflow_runtime = 10;
+  AgentToolVisibilityScopePayload tool_visibility = 11;
 }
 
 message AgentSkillRecoveryContextPayload {
@@ -111,6 +112,10 @@ message AgentSkillRecoveryContextPayload {
   int32 max_ornn_search_attempts = 6;
   string command_arguments = 7;
   bool discovery_requested = 8;
+}
+
+message AgentToolVisibilityScopePayload {
+  repeated string allowed_tool_names = 1;
 }
 
 message AgentToolRequestIdentityPayload {
@@ -136,6 +141,7 @@ message AgentToolChannelContextPayload {
   string registration_scope_id = 3;
   string message_id = 4;
   string platform_message_id = 5;
+  string delivery_target_id = 6;
 }
 
 message AgentToolSenderBindingContextPayload {
@@ -247,6 +253,13 @@ message RoleChatSessionCompletedEvent {
   repeated AgentToolReceipt tool_receipts = 11;
 }
 
+message VoicePresenceEnableRequested {
+  string module_name = 1;
+  int32 pcm_sample_rate_hz = 2;
+  aevatar.voice.VoiceRemoteAudioSupport remote_audio_support = 3;
+  aevatar.voice.VoiceSessionDefaults session_defaults = 4;
+}
+
 message InitializeRoleAgentEvent {
   // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
   //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
@@ -265,6 +278,8 @@ message InitializeRoleAgentEvent {
   double compression_threshold = 13;
   bool enable_summarization = 14;
   string role_id = 15;
+  map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 16;
+  repeated VoicePresenceEnableRequested voice_presence_enables = 17;
   reserved 9;
   reserved "stream_buffer_capacity";
 }
@@ -332,6 +347,7 @@ message RoleGAgentState {
   PendingToolApprovalState pending_approval = 7;
   string role_id = 8;
   map<string, aevatar.voice.VoicePresenceRuntimeState> voice_presence = 9;
+  map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 10;
 }
 
 // ─── Multi-turn tool approval continuation ───

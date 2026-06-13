@@ -90,6 +90,10 @@ public sealed record UserLlmOptionsView(
     UserLlmSetupHint? SetupHint)
 {
     public static readonly UserLlmOptionsView Empty = new(null, [], null);
+
+    public string? CurrentRouteValue { get; init; }
+
+    public string? CurrentModel { get; init; }
 }
 
 /// <summary>

@@ -29,7 +29,12 @@ public sealed class LarkApprovalsGetTool : AgentToolBase<LarkApprovalsGetTool.Pa
     public override string Name => "lark_approvals_get";
 
     public override string Description =>
+<<<<<<< HEAD
         "Get one Lark approval instance by instance_code and return stable status fields for workflow control flow.";
+=======
+        "Read one Lark approval instance by instance_code through Nyx-backed transport. " +
+        "Returns normalized terminal status and stable control-flow fields for workflow waiting.";
+>>>>>>> origin/crnd/integrate-1877
 
     public override ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
     public override bool IsReadOnly => true;
@@ -82,13 +87,20 @@ public sealed class LarkApprovalsGetTool : AgentToolBase<LarkApprovalsGetTool.Pa
             });
         }
 
+<<<<<<< HEAD
         var result = LarkProxyResponseParser.ParseApprovalInstanceGetSuccess(response);
         var status = NormalizeInstanceStatus(result.StatusRaw);
         var terminalKind = ResolveTerminalKind(status);
+=======
+        var result = LarkProxyResponseParser.ParseApprovalInstanceSuccess(response);
+        var status = NormalizeInstanceStatus(result.Status);
+        var terminal = IsTerminalStatus(status);
+>>>>>>> origin/crnd/integrate-1877
         return LarkProxyResponseParser.Serialize(new
         {
             success = true,
             instance_code = result.InstanceCode ?? instanceCode,
+<<<<<<< HEAD
             status,
             status_raw = result.StatusRaw,
             terminal = terminalKind != null,
@@ -99,12 +111,45 @@ public sealed class LarkApprovalsGetTool : AgentToolBase<LarkApprovalsGetTool.Pa
             initiator = result.Initiator,
             initiator_name = result.InitiatorName,
             link = result.Link,
+=======
+            approval_code = result.ApprovalCode,
+            approval_name = result.ApprovalName,
+            status,
+            raw_status = result.Status,
+            is_terminal = terminal,
+            terminal_status = terminal ? status : null,
+            should_continue_waiting = !terminal,
+            approved = status == "approved",
+            rejected = status == "rejected",
+            withdrawn = status == "withdrawn",
+            terminated = status == "terminated",
+            start_time = result.StartTime,
+            end_time = result.EndTime,
+            serial_number = result.SerialNumber,
+            user_id = result.UserId,
+            user_name = result.UserName,
+            department_id = result.DepartmentId,
+            department_name = result.DepartmentName,
+            uuid = result.Uuid,
+            task_count = result.TaskList.Count,
+            tasks = result.TaskList.Select(task => new
+            {
+                task_id = task.TaskId,
+                user_id = task.UserId,
+                user_name = task.UserName,
+                status = NormalizeTaskStatus(task.Status),
+                raw_status = task.Status,
+                start_time = task.StartTime,
+                end_time = task.EndTime,
+            }).ToArray(),
+>>>>>>> origin/crnd/integrate-1877
             form = result.Form.Select(field => new
             {
                 id = field.Id,
                 name = field.Name,
                 type = field.Type,
                 value = field.Value,
+<<<<<<< HEAD
             }).ToArray(),
             nodes = result.Nodes.Select(node => new
             {
@@ -120,10 +165,14 @@ public sealed class LarkApprovalsGetTool : AgentToolBase<LarkApprovalsGetTool.Pa
                 status_raw = task.StatusRaw,
                 user_id = task.UserId,
                 user_name = task.UserName,
+=======
+                ext = field.Ext,
+>>>>>>> origin/crnd/integrate-1877
             }).ToArray(),
         });
     }
 
+<<<<<<< HEAD
     private static string? ResolveTerminalKind(string? status) =>
         status switch
         {
@@ -132,6 +181,10 @@ public sealed class LarkApprovalsGetTool : AgentToolBase<LarkApprovalsGetTool.Pa
             "withdrawn" or "terminated" or "canceled" => "canceled",
             _ => null,
         };
+=======
+    private static bool IsTerminalStatus(string? status) =>
+        status is "approved" or "rejected" or "withdrawn" or "terminated";
+>>>>>>> origin/crnd/integrate-1877
 
     private static string? NormalizeInstanceStatus(string? value) =>
         value switch
@@ -142,6 +195,7 @@ public sealed class LarkApprovalsGetTool : AgentToolBase<LarkApprovalsGetTool.Pa
             "3" => "rejected",
             "4" => "withdrawn",
             "5" => "terminated",
+<<<<<<< HEAD
             "6" => "canceled",
             _ => value,
         };
@@ -155,6 +209,8 @@ public sealed class LarkApprovalsGetTool : AgentToolBase<LarkApprovalsGetTool.Pa
             "4" => "transferred",
             "5" => "done",
             "6" => "canceled",
+=======
+>>>>>>> origin/crnd/integrate-1877
             _ => value,
         };
 

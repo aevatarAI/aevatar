@@ -62,16 +62,40 @@ public sealed partial class OwnerScope
     public bool IsNyxIdNative => string.Equals(Platform, NyxIdPlatform, System.StringComparison.Ordinal);
 
     /// <summary>
-    /// Strict full-tuple equality used at the readmodel filter boundary. Two scopes match
-    /// iff every field is character-equal except <c>Platform</c>, which is matched
-    /// case-insensitively as defense in depth.
+    /// Strict identity equality used at the readmodel filter boundary. <c>Platform</c> is
+    /// matched case-insensitively as defense in depth.
+    ///
+    /// For the nyxid-native surface the identity is the NyxID account: all four fields
+    /// must be character-equal (registration/sender are empty by contract).
+    ///
+    /// For channel surfaces (lark/telegram/…) the identity is the relay-authenticated
+    /// triple <c>(platform, registration_scope_id, sender_id)</c>. <c>nyx_user_id</c> is
+    /// deliberately EXCLUDED from equality there: it is a mutable binding anchor, not part
+    /// of the caller's identity. The value recorded on a document depends on which
+    /// credential happened to flow on the producing request — the bot owner's relay token
+    /// on direct slash-command turns, but the sender's own binding token on LLM tool turns
+    /// once the sender's route preference is applied (ConversationReplyGenerator promotes
+    /// it to the primary credential). On a shared bot (registrant ≠ sender) those resolve
+    /// to two different NyxID accounts, so including nyx_user_id makes the same human
+    /// match their own agents on one path and miss them on the other — the silent
+    /// "/agents → No agents yet." failure. A sender re-binding to a different NyxID
+    /// account keeping their agents is the intended semantic, not a leak: the channel
+    /// sender_id is authenticated by the relay callback chain end-to-end.
     /// </summary>
     public bool MatchesStrictly(OwnerScope? other)
     {
         if (other is null) return false;
-        return string.Equals(NyxUserId, other.NyxUserId, System.StringComparison.Ordinal)
-               && string.Equals(Platform, other.Platform, System.StringComparison.OrdinalIgnoreCase)
-               && string.Equals(RegistrationScopeId, other.RegistrationScopeId, System.StringComparison.Ordinal)
+        if (!string.Equals(Platform, other.Platform, System.StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (IsNyxIdNative)
+        {
+            return string.Equals(NyxUserId, other.NyxUserId, System.StringComparison.Ordinal)
+                   && string.Equals(RegistrationScopeId, other.RegistrationScopeId, System.StringComparison.Ordinal)
+                   && string.Equals(SenderId, other.SenderId, System.StringComparison.Ordinal);
+        }
+
+        return string.Equals(RegistrationScopeId, other.RegistrationScopeId, System.StringComparison.Ordinal)
                && string.Equals(SenderId, other.SenderId, System.StringComparison.Ordinal);
     }
 

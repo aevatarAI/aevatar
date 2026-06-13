@@ -44,7 +44,10 @@ public sealed class ServiceEndpointsTests
                     "type.googleapis.com/demo.Submit",
                     string.Empty,
                     "submit command"),
-            ]));
+            ],
+            ExternalExposure: new ServiceEndpoints.ExternalExposureHttpRequest(
+                " aevatar-orders ",
+                DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))));
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
         host.CommandPort.CreateServiceCommand.Should().NotBeNull();
@@ -57,6 +60,53 @@ public sealed class ServiceEndpointsTests
         });
         host.CommandPort.CreateServiceCommand.Spec.Endpoints.Should().ContainSingle();
         host.CommandPort.CreateServiceCommand.Spec.Endpoints[0].Kind.Should().Be(ServiceEndpointKind.Command);
+        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.Should().NotBeNull();
+        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.NyxidSlug.Should().Be("aevatar-orders");
+        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.RegisteredAt.ToDateTimeOffset()
+            .Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+    }
+
+    [Fact]
+    public async Task UpdateServiceAsync_ShouldDispatchTypedExternalExposure()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        var response = await host.Client.PutAsJsonAsync("/api/services/orders/external-exposure", new ServiceEndpoints.UpdateServiceExternalExposureHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            "aevatar-orders",
+            DateTimeOffset.Parse("2026-06-11T01:02:03+00:00")));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.CommandPort.UpdateExternalExposureCommand.Should().NotBeNull();
+        host.CommandPort.UpdateExternalExposureCommand!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "ns",
+            ServiceId = "orders",
+        });
+        host.CommandPort.UpdateExternalExposureCommand.ExternalExposure.Should().NotBeNull();
+        host.CommandPort.UpdateExternalExposureCommand.ExternalExposure.NyxidSlug.Should().Be("aevatar-orders");
+        host.CommandPort.UpdateExternalExposureCommand.ExternalExposure.RegisteredAt.ToDateTimeOffset()
+            .Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+    }
+
+    [Fact]
+    public async Task UpdateServiceAsync_WhenReadModelMissing_ShouldStillDispatchAuthoritativeCommand()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        var response = await host.Client.PutAsJsonAsync("/api/services/orders/external-exposure", new ServiceEndpoints.UpdateServiceExternalExposureHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            "aevatar-orders",
+            DateTimeOffset.Parse("2026-06-11T01:02:03+00:00")));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.CommandPort.UpdateExternalExposureCommand.Should().NotBeNull();
     }
 
     [Fact]
@@ -492,7 +542,10 @@ public sealed class ServiceEndpointsTests
                     new ServiceEndpointSnapshot("submit", "Submit", "command", "req", string.Empty, "desc"),
                 ],
                 [],
-                DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")),
+                DateTimeOffset.Parse("2026-03-14T00:00:00+00:00"),
+                new ServiceExternalExposureSnapshot(
+                    "aevatar-orders",
+                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))),
             new ServiceCatalogSnapshot(
                 "tenant/app/ns/billing",
                 "tenant",
@@ -572,6 +625,10 @@ public sealed class ServiceEndpointsTests
 
         listResponse.Should().HaveCount(3);
         listResponse!.Single(x => x.ServiceId == "orders").InvokeReady.Should().BeTrue();
+        listResponse.Single(x => x.ServiceId == "orders").ExternalExposure.Should().NotBeNull();
+        listResponse.Single(x => x.ServiceId == "orders").ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
+        listResponse.Single(x => x.ServiceId == "orders").ExternalExposure!.RegisteredAt.Should()
+            .Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
         listResponse.Single(x => x.ServiceId == "orders").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         listResponse.Single(x => x.ServiceId == "orders").InvokeUnavailableReason.Should().BeNull();
         listResponse.Single(x => x.ServiceId == "billing").InvokeReady.Should().BeFalse();
@@ -581,9 +638,12 @@ public sealed class ServiceEndpointsTests
         listResponse.Single(x => x.ServiceId == "search").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unspecified.ToString());
         listResponse.Single(x => x.ServiceId == "search").InvokeUnavailableReason.Should().BeNull();
         getResponse!.ServiceId.Should().Be("orders");
+        getResponse.ExternalExposure.Should().NotBeNull();
         getResponse.InvokeReady.Should().BeTrue();
         getResponse.InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         getResponse.InvokeUnavailableReason.Should().BeNull();
+        getResponse.ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
+        getResponse.ExternalExposure.RegisteredAt.Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
         revisionResponse!.Revisions.Should().ContainSingle();
         host.QueryPort.LastListServicesTake.Should().Be(10);
         host.QueryPort.LastGetServiceIdentity!.ServiceId.Should().Be("orders");
@@ -1453,6 +1513,10 @@ public sealed class ServiceEndpointsTests
     {
         public CreateServiceDefinitionCommand? CreateServiceCommand { get; private set; }
 
+        public UpdateServiceDefinitionCommand? UpdateServiceCommand { get; private set; }
+
+        public UpdateServiceExternalExposureCommand? UpdateExternalExposureCommand { get; private set; }
+
         public CreateServiceRevisionCommand? CreateRevisionCommand { get; private set; }
 
         public PrepareServiceRevisionCommand? PrepareRevisionCommand { get; private set; }
@@ -1485,8 +1549,17 @@ public sealed class ServiceEndpointsTests
             return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-create-service", "corr-create-service"));
         }
 
-        public Task<ServiceCommandAcceptedReceipt> UpdateServiceAsync(UpdateServiceDefinitionCommand command, CancellationToken ct = default) =>
-            Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-update-service", "corr-update-service"));
+        public Task<ServiceCommandAcceptedReceipt> UpdateServiceAsync(UpdateServiceDefinitionCommand command, CancellationToken ct = default)
+        {
+            UpdateServiceCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-update-service", "corr-update-service"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateServiceExternalExposureAsync(UpdateServiceExternalExposureCommand command, CancellationToken ct = default)
+        {
+            UpdateExternalExposureCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-update-external-exposure", "corr-update-external-exposure"));
+        }
 
         public Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(CreateServiceRevisionCommand command, CancellationToken ct = default)
         {

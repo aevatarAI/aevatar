@@ -307,7 +307,8 @@ public static class ScopeServiceEndpoints
                 null,
                 [],
                 0,
-                string.Empty));
+                string.Empty,
+                null));
         }
 
         var revisions = await lifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);
@@ -769,7 +770,7 @@ public static class ScopeServiceEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, ct);
+            var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, endpointId, ct);
             await HandleInvokeStreamAsync(
                 http,
                 teamResolution.ScopeId,
@@ -826,7 +827,7 @@ public static class ScopeServiceEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, ct);
+            var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, endpointId, ct);
             return await HandleInvokeAsyncCore(
                 http,
                 teamResolution.ScopeId,
@@ -2085,6 +2086,14 @@ public static class ScopeServiceEndpoints
                 Approved = request.Approved,
                 UserInput = request.UserInput,
                 Metadata = request.Metadata,
+                ToolApproval = request.ToolApproval == null
+                    ? null
+                    : new WorkflowToolApprovalResumeInput
+                    {
+                        ExecutionId = request.ToolApproval.ExecutionId ?? string.Empty,
+                        ToolCallId = request.ToolApproval.ToolCallId ?? string.Empty,
+                        ApprovalRequestId = request.ToolApproval.ApprovalRequestId ?? string.Empty,
+                    },
             },
             resumeService,
             ct);
@@ -2404,7 +2413,8 @@ public static class ScopeServiceEndpoints
             service.UpdatedAt,
             revisionSnapshots,
             revisions?.StateVersion ?? 0,
-            revisions?.LastEventId ?? string.Empty);
+            revisions?.LastEventId ?? string.Empty,
+            ExternalExposure: MapExternalExposure(service.ExternalExposure));
     }
 
     private static async Task<IReadOnlyList<ScopeServiceHttpResponse>> JoinScopeInvokeReadinessAsync(
@@ -2451,7 +2461,8 @@ public static class ScopeServiceEndpoints
                 service.UpdatedAt,
                 ready,
                 status.ToString(),
-                reason));
+                reason,
+                MapExternalExposure(service.ExternalExposure)));
         }
 
         return responses;
@@ -2487,7 +2498,8 @@ public static class ScopeServiceEndpoints
             revisions?.StateVersion ?? 0,
             revisions?.LastEventId ?? string.Empty,
             revisions?.UpdatedAt ?? service.UpdatedAt,
-            BuildScopeRevisionResponses(service, revisions, servingSet));
+            BuildScopeRevisionResponses(service, revisions, servingSet),
+            ExternalExposure: MapExternalExposure(service.ExternalExposure));
     }
 
     private static ScopeServiceEndpointContractHttpResponse? BuildScopeServiceEndpointContractResponse(
@@ -2947,6 +2959,23 @@ const response = await fetch("{{invokePath}}", {
         return spec;
     }
 
+    private static ExternalExposureHttpResponse? MapExternalExposure(
+        ServiceExternalExposureSnapshot? externalExposure)
+    {
+        if (externalExposure == null)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(externalExposure.NyxidSlug) &&
+            externalExposure.RegisteredAt == null)
+        {
+            return null;
+        }
+
+        return new ExternalExposureHttpResponse(
+            externalExposure.NyxidSlug ?? string.Empty,
+            externalExposure.RegisteredAt);
+    }
+
     private static ServiceBindingKind ParseBindingKind(string? rawValue)
     {
         return rawValue?.Trim().ToLowerInvariant() switch
@@ -3357,7 +3386,9 @@ const response = await fetch("{{invokePath}}", {
     private static ScopeBindingWorkflowSpec? ToWorkflowSpec(UpsertScopeBindingHttpRequest request)
     {
         var workflowYamls = request.Workflow?.WorkflowYamls;
-        return workflowYamls == null ? null : new ScopeBindingWorkflowSpec(workflowYamls);
+        return workflowYamls == null
+            ? null
+            : new ScopeBindingWorkflowSpec(request.Workflow?.WorkflowId ?? string.Empty, workflowYamls);
     }
 
     private static string? NormalizeOptional(string? value)
@@ -3425,6 +3456,7 @@ const response = await fetch("{{invokePath}}", {
         string? ServiceId = null);
 
     public sealed record ScopeBindingWorkflowHttpRequest(
+        string? WorkflowId,
         IReadOnlyList<string>? WorkflowYamls);
 
     public sealed record ScopeBindingScriptHttpRequest(
@@ -3466,7 +3498,13 @@ const response = await fetch("{{invokePath}}", {
         bool Approved,
         string? UserInput = null,
         Dictionary<string, string>? Metadata = null,
-        string? ActorId = null);
+        string? ActorId = null,
+        WorkflowToolApprovalResumeHttpRequest? ToolApproval = null);
+
+    public sealed record WorkflowToolApprovalResumeHttpRequest(
+        string? ExecutionId,
+        string? ToolCallId,
+        string? ApprovalRequestId);
 
     public sealed record SignalScopeServiceRunHttpRequest(
         string? SignalName,
@@ -3527,7 +3565,8 @@ const response = await fetch("{{invokePath}}", {
         DateTimeOffset? UpdatedAt,
         IReadOnlyList<ScopeBindingRevisionHttpResponse> Revisions,
         long CatalogStateVersion = 0,
-        string CatalogLastEventId = "");
+        string CatalogLastEventId = "",
+        ExternalExposureHttpResponse? ExternalExposure = null);
 
     public sealed record MemberPublishedServiceHttpResponse(
         string ScopeId,
@@ -3585,7 +3624,8 @@ const response = await fetch("{{invokePath}}", {
         DateTimeOffset UpdatedAt,
         bool InvokeReady,
         string InvokeReadinessStatus,
-        string? InvokeUnavailableReason);
+        string? InvokeUnavailableReason,
+        ExternalExposureHttpResponse? ExternalExposure = null);
 
     public sealed record ScopeServiceRevisionCatalogHttpResponse(
         string ScopeId,
@@ -3600,7 +3640,12 @@ const response = await fetch("{{invokePath}}", {
         long CatalogStateVersion,
         string CatalogLastEventId,
         DateTimeOffset UpdatedAt,
-        IReadOnlyList<ScopeBindingRevisionHttpResponse> Revisions);
+        IReadOnlyList<ScopeBindingRevisionHttpResponse> Revisions,
+        ExternalExposureHttpResponse? ExternalExposure = null);
+
+    public sealed record ExternalExposureHttpResponse(
+        string NyxidSlug,
+        DateTimeOffset? RegisteredAt);
 
     public sealed record ScopeServiceRevisionActionHttpResponse(
         string ScopeId,

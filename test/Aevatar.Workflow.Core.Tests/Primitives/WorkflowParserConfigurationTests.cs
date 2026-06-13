@@ -1,3 +1,4 @@
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 
@@ -87,6 +88,39 @@ public class WorkflowParserConfigurationTests
         role.EventModules.Should().Be("llm_handler,tool_handler");
         role.EventRoutes.Should().Contain("event.type");
         role.Connectors.Should().BeEquivalentTo(["conn_a", "conn_b"]);
+    }
+
+    [Fact]
+    public void Parse_WhenRoleAndStepDeclareAllowedTools_ShouldBindTypedAgentToolScopes()
+    {
+        var yaml = """
+            name: tool_scope
+            roles:
+              - id: planner
+                allowed_tools: [search, calendar]
+            steps:
+              - id: scoped
+                type: llm_call
+                target_role: planner
+                allowed_tools: [calendar]
+                parameters:
+                  allowed_tools: [search]
+                  prompt_prefix: "Use scoped tool"
+              - id: no_tools
+                type: llm_call
+                target_role: planner
+                allowed_tools: []
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+
+        workflow.Roles.Should().ContainSingle().Subject.AgentToolScope.Should().NotBeNull();
+        workflow.Roles[0].AgentToolScope!.AllowedToolNames.Should().Equal("search", "calendar");
+        workflow.Steps[0].AgentToolScope.Should().NotBeNull();
+        workflow.Steps[0].AgentToolScope!.AllowedToolNames.Should().Equal("calendar");
+        workflow.Steps[0].Parameters.Should().NotContainKey("allowed_tools");
+        workflow.Steps[1].AgentToolScope.Should().NotBeNull();
+        workflow.Steps[1].AgentToolScope!.AllowedToolNames.Should().BeEmpty();
     }
 
     [Fact]
@@ -290,6 +324,88 @@ public class WorkflowParserConfigurationTests
         step.Parameters["op"].Should().Be("trim");
         step.Parameters["input"].Should().Contain("\"original_sentence\"");
         step.Parameters["input"].Should().Contain("\"story\"");
+    }
+
+    [Fact]
+    public void Parse_WhenTransformOperationParametersProvided_ShouldLiftTypedSpecAndPreserveMap()
+    {
+        var yaml = """
+            name: transform_operation_lift
+            roles: []
+            steps:
+              - id: sum_amounts
+                type: transform
+                op: group_by
+                group_by: department
+                value_field: amount
+                aggregate: avg
+                precision: 2
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+
+        step.Parameters["op"].Should().Be("group_by");
+        step.Parameters["group_by"].Should().Be("department");
+        step.Parameters["value_field"].Should().Be("amount");
+        step.Parameters["aggregate"].Should().Be("avg");
+        step.Parameters["precision"].Should().Be("2");
+        step.TransformOperation.Should().NotBeNull();
+        step.TransformOperation!.Kind.Should().Be(TransformOperationKind.GroupBy);
+        step.TransformOperation.Key.Should().Be("department");
+        step.TransformOperation.Value.Should().Be("amount");
+        step.TransformOperation.Aggregate.Should().Be(TransformAggregateKind.Avg);
+        step.TransformOperation.Precision.Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData("digits", "3")]
+    [InlineData("places", "4")]
+    public void Parse_WhenTransformPrecisionAliasProvidedAtRoot_ShouldLiftTypedSpecAndPreserveMap(
+        string precisionAlias,
+        string precision)
+    {
+        var yaml = $$"""
+            name: transform_precision_alias_lift
+            roles: []
+            steps:
+              - id: round_amount
+                type: transform
+                op: round
+                {{precisionAlias}}: {{precision}}
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+
+        step.Parameters["op"].Should().Be("round");
+        step.Parameters[precisionAlias].Should().Be(precision);
+        step.TransformOperation.Should().NotBeNull();
+        step.TransformOperation!.Kind.Should().Be(TransformOperationKind.Round);
+        step.TransformOperation.Precision.Should().Be(int.Parse(precision));
+    }
+
+    [Fact]
+    public void Parse_WhenTransformNumbersParameterProvided_ShouldPreserveMapAndTypedSpec()
+    {
+        var yaml = """
+            name: transform_numbers_parameter
+            roles: []
+            steps:
+              - id: sum_amounts
+                type: transform
+                parameters:
+                  op: sum
+                  numbers: "1.10, 2.20, 3.30"
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+
+        step.Parameters["op"].Should().Be("sum");
+        step.Parameters["numbers"].Should().Be("1.10, 2.20, 3.30");
+        step.TransformOperation.Should().NotBeNull();
+        step.TransformOperation!.Kind.Should().Be(TransformOperationKind.Sum);
     }
 
     [Fact]

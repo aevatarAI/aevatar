@@ -13,6 +13,7 @@ public sealed class NyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogClient
 {
     private static readonly TimeSpan ProxyServicesCacheTtl = TimeSpan.FromSeconds(30);
     private const string ProxyServicesCacheKeyPrefix = "nyxid-llm-svc:proxy-services:";
+    private const string UserKeysCacheKeyPrefix = "nyxid-llm-svc:user-keys:";
 
     private readonly NyxIdApiClient _nyxClient;
     private readonly IMemoryCache _proxyServicesCache;
@@ -38,6 +39,7 @@ public sealed class NyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogClient
 
         var response = await _nyxClient.GetLlmServicesAsync(accessToken, ct).ConfigureAwait(false);
         var result = NyxIdLlmServiceCatalogParser.ParseServicesResult(response);
+        result = await MergeUserKeyRouteCandidatesAsync(result, accessToken, ct).ConfigureAwait(false);
         return await MergeProxyRouteCandidatesAsync(result, accessToken, ct).ConfigureAwait(false);
     }
 
@@ -87,6 +89,31 @@ public sealed class NyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogClient
         }
     }
 
+    private async Task<NyxIdLlmServicesResult> MergeUserKeyRouteCandidatesAsync(
+        NyxIdLlmServicesResult result,
+        string accessToken,
+        CancellationToken ct)
+    {
+        try
+        {
+            var userKeys = await FetchCachedAsync(
+                UserKeysCacheKeyPrefix,
+                accessToken,
+                () => _nyxClient.ListServicesAsync(accessToken, ct),
+                ct).ConfigureAwait(false);
+            return NyxIdLlmServiceCatalogParser.MergeUserKeyRouteCandidates(result, userKeys);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to merge NyxID user keys into LLM route catalog");
+            return result;
+        }
+    }
+
     /// <summary>
     /// Cache the per-user <c>/api/v1/proxy/services</c> response for a short TTL so a flurry
     /// of /model invocations from the same user collapses onto one upstream call. We use
@@ -94,18 +121,30 @@ public sealed class NyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogClient
     /// store is shared, sized, and evicted per the host's standard memory-cache policy
     /// (CLAUDE.md §"中间层状态约束" — services don't own per-caller state directly).
     /// </summary>
-    private async Task<string> DiscoverProxyServicesCachedAsync(
+    private Task<string> DiscoverProxyServicesCachedAsync(
         string accessToken,
+        CancellationToken ct) =>
+        FetchCachedAsync(
+            ProxyServicesCacheKeyPrefix,
+            accessToken,
+            () => _nyxClient.DiscoverProxyServicesAsync(accessToken, ct),
+            ct);
+
+    private async Task<string> FetchCachedAsync(
+        string cacheKeyPrefix,
+        string accessToken,
+        Func<Task<string>> fetch,
         CancellationToken ct)
     {
-        var cacheKey = ProxyServicesCacheKeyPrefix + ComputeTokenFingerprint(accessToken);
+        ct.ThrowIfCancellationRequested();
+        var cacheKey = cacheKeyPrefix + ComputeTokenFingerprint(accessToken);
         if (_proxyServicesCache.TryGetValue(cacheKey, out string? cached) &&
             !string.IsNullOrEmpty(cached))
         {
             return cached;
         }
 
-        var response = await _nyxClient.DiscoverProxyServicesAsync(accessToken, ct).ConfigureAwait(false);
+        var response = await fetch().ConfigureAwait(false);
         // Size is not set on the entry — IMemoryCache only enforces Size when the host
         // configured a SizeLimit on MemoryCacheOptions. The cache backing store is owned
         // by the host (we register IMemoryCache via AddMemoryCache, no per-entry size

@@ -10,6 +10,8 @@ owner: eanzhao
 
 NyxID 始终是唯一真实源：service 列表与 OpenAPI spec 每次发现都从 NyxID live surface 读取，仓库内不保留 service/endpoint 影子目录，执行始终回到 NyxID proxy。
 
+Aevatar service 自身“对外暴露到了哪个 NyxID slug”是另一类事实：它由 `ServiceDefinitionSpec.ExternalExposure` 持有，写侧只通过 service definition owner command 更新，读侧只通过 `ServiceCatalogReadModel` / service catalog 查询暴露。这个字段只记录本 service 的外部暴露身份，不缓存 NyxID catalog、endpoint 列表、凭据或 live lookup 结果，也不属于 scope binding 的下游依赖描述。
+
 ## 1. 显式标记：`x-aevatar-tool`
 
 注册是 **allow-list**：没有标记的 operation 永远不会变成工具。标记写在 NyxID 返回的 proxy-aware OpenAPI 文档里（vendor extension），分两级：

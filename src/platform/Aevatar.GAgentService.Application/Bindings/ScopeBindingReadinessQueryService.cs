@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Microsoft.Extensions.Options;
 
@@ -10,15 +11,18 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
 {
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IServiceServingQueryPort _serviceServingQueryPort;
+    private readonly IServiceRevisionCatalogQueryReader _revisionCatalogQueryReader;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
     public ScopeBindingReadinessQueryService(
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IServiceServingQueryPort serviceServingQueryPort,
+        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader,
         IOptions<ScopeWorkflowCapabilityOptions> options)
     {
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
         _serviceServingQueryPort = serviceServingQueryPort ?? throw new ArgumentNullException(nameof(serviceServingQueryPort));
+        _revisionCatalogQueryReader = revisionCatalogQueryReader ?? throw new ArgumentNullException(nameof(revisionCatalogQueryReader));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("Scope workflow capability options are required.");
     }
@@ -117,6 +121,23 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: observedAtUtc);
         }
 
+        var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(identity, ct).ConfigureAwait(false);
+        var artifact = FindPreparedArtifact(revisionCatalog, eligibleTarget.RevisionId);
+        if (!DoesArtifactExposeEndpoints(artifact, serviceEndpointIds))
+        {
+            return new ScopeBindingReadinessSnapshot(
+                normalizedScopeId,
+                normalizedServiceId,
+                ScopeBindingReadinessStatus.PreparedArtifactMissing,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: false,
+                RevisionId: eligibleTarget.RevisionId,
+                DeploymentId: eligibleTarget.DeploymentId,
+                ObservedAtUtc: observedAtUtc);
+        }
+
         return new ScopeBindingReadinessSnapshot(
             normalizedScopeId,
             normalizedServiceId,
@@ -191,6 +212,23 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
             .ToList();
         return observedEndpointViews.Count == 0 || observedEndpointViews.All(endpoint => endpoint.Targets.Any(target =>
             IsEligibleTrafficTarget(target, expectedRevisionId, expectedDeploymentId)));
+    }
+
+    private static PreparedServiceRevisionArtifact? FindPreparedArtifact(
+        ServiceRevisionCatalogSnapshot? catalog,
+        string revisionId) =>
+        catalog?.Revisions.FirstOrDefault(revision =>
+            string.Equals(revision.RevisionId, revisionId, StringComparison.Ordinal))?.PreparedArtifact;
+
+    private static bool DoesArtifactExposeEndpoints(
+        PreparedServiceRevisionArtifact? artifact,
+        IReadOnlyList<string> serviceEndpointIds)
+    {
+        if (artifact == null)
+            return false;
+
+        return serviceEndpointIds.Count == 0 || serviceEndpointIds.All(endpointId =>
+            artifact.Endpoints.Any(endpoint => string.Equals(endpoint.EndpointId, endpointId, StringComparison.Ordinal)));
     }
 
     private static bool IsEligibleServingTarget(

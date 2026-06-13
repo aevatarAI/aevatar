@@ -78,6 +78,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly ChannelPlatformReplyService? _replyService;
     private readonly ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? _workflowResumeService;
     private readonly ChannelWorkflowDraftRunAdmission? _workflowDraftRunAdmission;
+    private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
 
     public ChannelConversationTurnRunner(
@@ -99,7 +100,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IUserConfigQueryPort? userConfigQueryPort = null,
         ChannelPlatformReplyService? replyService = null,
         ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
-        ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null)
+        ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null,
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -119,6 +121,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _replyService = replyService;
         _workflowResumeService = workflowResumeService;
         _workflowDraftRunAdmission = workflowDraftRunAdmission;
+        _remoteToolApprovalPort = remoteToolApprovalPort;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -148,6 +151,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // that looks like /init is still a card-action. (deepseek-v4-pro L65)
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
             return workflowResumeResult;
+
+        if (await TryHandleNyxIdApprovalCardActionAsync(activity, inbound, registration, runtimeContext, ct)
+                .ConfigureAwait(false) is { } nyxIdApprovalResult)
+        {
+            return nyxIdApprovalResult;
+        }
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound);
 
@@ -586,7 +595,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         if (activity.Type != ActivityType.CardAction)
             return null;
-        if (!TryResolveLlmSelectionAction(activity.Content?.CardAction, inbound, out var action, out var value))
+        if (!TryResolveLlmSelectionAction(activity.Content?.CardAction, inbound, out var llmAction))
             return null;
 
         MessageContent reply;
@@ -627,8 +636,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     registration.ScopeId ?? string.Empty);
 
                 reply = await ExecuteLlmSelectionCardActionAsync(
-                        action,
-                        value,
+                        llmAction,
                         selectionContext,
                         query,
                         selectionService,
@@ -650,8 +658,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     }
 
     private async Task<MessageContent> ExecuteLlmSelectionCardActionAsync(
-        string action,
-        string value,
+        ResolvedLlmSelectionAction action,
         UserLlmSelectionContext selectionContext,
         UserLlmOptionsQuery query,
         IUserLlmSelectionService selectionService,
@@ -661,31 +668,37 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         try
         {
-            if (string.Equals(action, TextUserLlmOptionsRenderer.SelectServiceAction, StringComparison.Ordinal))
+            if (string.Equals(action.Action, TextUserLlmOptionsRenderer.SelectServiceAction, StringComparison.Ordinal))
             {
-                if (string.IsNullOrWhiteSpace(value))
+                if (string.IsNullOrWhiteSpace(action.Value))
                     return new MessageContent { Text = "缺少要切换的 LLM service,请重新发送 /models。" };
 
-                await selectionService.SetByServiceAsync(selectionContext, value.Trim(), modelOverride: null, ct)
+                await selectionService.SetByServiceAsync(selectionContext, action.Value.Trim(), modelOverride: null, ct)
                     .ConfigureAwait(false);
                 var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
                 var picked = updated.Current ?? updated.Available.FirstOrDefault(option =>
-                    string.Equals(option.ServiceId, value.Trim(), StringComparison.OrdinalIgnoreCase));
+                    string.Equals(option.ServiceId, action.Value.Trim(), StringComparison.OrdinalIgnoreCase));
                 return picked is null
                     ? new MessageContent { Text = "已切换 LLM service。下一条消息会用新的设置回复。" }
                     : renderer.RenderSelectionConfirm(picked, picked.DefaultModel);
             }
 
-            if (string.Equals(action, TextUserLlmOptionsRenderer.ApplyPresetAction, StringComparison.Ordinal))
+            if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ApplyPresetAction, StringComparison.Ordinal))
             {
-                if (string.IsNullOrWhiteSpace(value))
+                if (string.IsNullOrWhiteSpace(action.Value))
                     return new MessageContent { Text = "缺少要应用的 LLM preset,请重新发送 /models。" };
 
-                await selectionService.ApplyPresetAsync(selectionContext, value.Trim(), ct).ConfigureAwait(false);
+                await selectionService.ApplyPresetAsync(selectionContext, action.Value.Trim(), ct).ConfigureAwait(false);
                 var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
                 return updated.Current is null
-                    ? new MessageContent { Text = $"已应用 preset **{value.Trim()}**。下一条消息会用新的 LLM 设置回复。" }
+                    ? new MessageContent { Text = $"已应用 preset **{action.Value.Trim()}**。下一条消息会用新的 LLM 设置回复。" }
                     : renderer.RenderSelectionConfirm(updated.Current, updated.Current.DefaultModel);
+            }
+
+            if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ListPageAction, StringComparison.Ordinal))
+            {
+                var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
+                return renderer.RenderOptions(updated, action.DisplayMode, action.Page);
             }
 
             return new MessageContent { Text = "未识别的模型设置操作,请重新发送 /models。" };
@@ -707,6 +720,134 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return new MessageContent { Text = ex.Message };
         }
     }
+
+    private async Task<ConversationTurnResult?> TryHandleNyxIdApprovalCardActionAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (activity.Type != ActivityType.CardAction)
+            return null;
+
+        var payload = activity.Content?.CardAction?.NyxIdApproval;
+        if (payload is null)
+            return null;
+
+        var reply = await ExecuteNyxIdApprovalCardActionAsync(activity, runtimeContext, payload, ct)
+            .ConfigureAwait(false);
+
+        return await SendReplyAsync(
+                reply,
+                string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id,
+                activity.Conversation,
+                inbound,
+                registration,
+                runtimeContext,
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<MessageContent> ExecuteNyxIdApprovalCardActionAsync(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        NyxIdApprovalActionPayload payload,
+        CancellationToken ct)
+    {
+        var requestId = NormalizeOptional(payload.RequestId);
+        if (requestId is null)
+            return new MessageContent { Text = "Approval action is missing the NyxID request id." };
+
+        var token = ResolveUserAccessToken(activity, runtimeContext);
+        if (token is null)
+        {
+            return new MessageContent
+            {
+                Text = "Approval action cannot be decided because the NyxID user credential is missing or expired. Open the current approval list and decide it there.",
+            };
+        }
+
+        var port = _remoteToolApprovalPort;
+        if (port is null)
+        {
+            return new MessageContent
+            {
+                Text = "Approval action cannot be decided because the remote approval decision service is unavailable.",
+            };
+        }
+
+        RemoteToolApprovalDecisionResult decision;
+        try
+        {
+            using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = token },
+            });
+            decision = await port.DecideAsync(
+                    new RemoteToolApprovalDecision(requestId, payload.Approved),
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "NyxID approval card decision failed before response: request={RequestId}, approved={Approved}",
+                requestId,
+                payload.Approved);
+            return new MessageContent { Text = $"Approval decision failed before reaching NyxID: {ex.Message}" };
+        }
+
+        if (!decision.Succeeded &&
+            TryResolveNyxIdApprovalDecisionError(decision, out var errorText))
+        {
+            return new MessageContent { Text = errorText };
+        }
+
+        return new MessageContent
+        {
+            Text = payload.Approved
+                ? $"Approval request `{requestId}` approved."
+                : $"Approval request `{requestId}` rejected.",
+        };
+    }
+
+    private static bool TryResolveNyxIdApprovalDecisionError(
+        RemoteToolApprovalDecisionResult result,
+        out string message)
+    {
+        if (result.Succeeded)
+        {
+            message = string.Empty;
+            return false;
+        }
+
+        var detail = NormalizeOptional(result.Detail) ?? "NyxID rejected the approval decision.";
+        var key = NormalizeOptional(result.ErrorKey) ?? string.Empty;
+        message = key switch
+        {
+            "already_decided" => "Approval request was already decided.",
+            "not_found" => "Approval request was not found or is no longer available.",
+            "forbidden" => BuildForbiddenApprovalMessage(detail),
+            "unauthorized" or "authentication_failed" => "Approval decision requires a valid NyxID user credential. Please sign in again and retry.",
+            _ when result.Status is 401 => "Approval decision requires a valid NyxID user credential. Please sign in again and retry.",
+            _ when result.Status is 403 => BuildForbiddenApprovalMessage(detail),
+            _ when result.Status is 404 => "Approval request was not found or is no longer available.",
+            _ when result.Status is 409 => "Approval request was already decided.",
+            _ => $"Approval decision was rejected by NyxID: {detail}",
+        };
+        return true;
+    }
+
+    private static string BuildForbiddenApprovalMessage(string detail) =>
+        detail.Contains("expired", StringComparison.OrdinalIgnoreCase)
+            ? "Approval request expired."
+            : $"Approval decision is not allowed for the current NyxID user: {detail}";
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
     // slash silently consumed.
@@ -750,35 +891,44 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static bool TryResolveLlmSelectionAction(
         CardActionSubmission? cardAction,
         InboundMessage inbound,
-        out string action,
-        out string value)
+        out ResolvedLlmSelectionAction action)
     {
-        action = string.Empty;
-        value = string.Empty;
+        action = ResolvedLlmSelectionAction.Empty;
         if (cardAction is null)
             return false;
 
         var payload = cardAction.LlmSelection;
         if (payload is not null && !string.IsNullOrWhiteSpace(payload.Action))
         {
-            action = payload.Action.Trim();
-            value = action switch
+            var resolvedAction = payload.Action.Trim();
+            var value = resolvedAction switch
             {
-                TextUserLlmOptionsRenderer.SelectServiceAction => payload.ServiceId?.Trim() ?? string.Empty,
-                TextUserLlmOptionsRenderer.ApplyPresetAction => payload.PresetId?.Trim() ?? string.Empty,
+                TextUserLlmOptionsRenderer.SelectServiceAction => !string.IsNullOrWhiteSpace(payload.ServiceId)
+                    ? payload.ServiceId.Trim()
+                    : ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.ServiceIdArgument),
+                TextUserLlmOptionsRenderer.ApplyPresetAction => !string.IsNullOrWhiteSpace(payload.PresetId)
+                    ? payload.PresetId.Trim()
+                    : ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.PresetIdArgument),
                 _ => string.Empty,
             };
+            action = new ResolvedLlmSelectionAction(
+                resolvedAction,
+                value,
+                payload.Page <= 0 ? 1 : payload.Page,
+                ResolveDisplayMode(payload.DisplayMode));
             return true;
         }
 
+        string actionName;
         if (!inbound.Extra.TryGetValue(TextUserLlmOptionsRenderer.LlmActionArgument, out var actionValue) ||
             string.IsNullOrWhiteSpace(actionValue))
         {
             // Deprecated inbound compatibility only. New producers must use LlmSelectionActionPayload.
-            action = cardAction.ActionId switch
+            actionName = cardAction.ActionId switch
             {
                 TextUserLlmOptionsRenderer.SelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
                 TextUserLlmOptionsRenderer.ApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
+                TextUserLlmOptionsRenderer.ListPageActionId => TextUserLlmOptionsRenderer.ListPageAction,
                 TextUserLlmOptionsRenderer.LegacySelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
                 TextUserLlmOptionsRenderer.LegacyApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
                 _ => string.Empty,
@@ -786,20 +936,27 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
         else
         {
-            action = actionValue;
+            actionName = actionValue;
         }
 
-        action = action.Trim();
-        value = action switch
+        actionName = actionName.Trim();
+        var resolvedValue = actionName switch
         {
             TextUserLlmOptionsRenderer.SelectServiceAction =>
                 ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.ServiceIdArgument),
             TextUserLlmOptionsRenderer.ApplyPresetAction =>
                 ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.PresetIdArgument),
+            TextUserLlmOptionsRenderer.ListPageAction =>
+                ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.PageArgument),
             _ => string.Empty,
         };
 
-        return !string.IsNullOrWhiteSpace(action);
+        action = new ResolvedLlmSelectionAction(
+            actionName,
+            resolvedValue,
+            ResolvePage(resolvedValue),
+            ResolveDisplayMode(ResolveCardActionValue(inbound, cardAction, "display_mode")));
+        return !string.IsNullOrWhiteSpace(actionName);
     }
 
     private static string ResolveCardActionValue(
@@ -813,7 +970,40 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return argumentValue.Trim();
         }
 
+        if (cardAction.Arguments.TryGetValue(argumentName, out var cardArgumentValue) &&
+            !string.IsNullOrWhiteSpace(cardArgumentValue))
+        {
+            return cardArgumentValue.Trim();
+        }
+
+        if (cardAction.FormFields.TryGetValue(argumentName, out var formFieldValue) &&
+            !string.IsNullOrWhiteSpace(formFieldValue))
+        {
+            return formFieldValue.Trim();
+        }
+
         return cardAction.SubmittedValue?.Trim() ?? string.Empty;
+    }
+
+    private static int ResolvePage(string? value) =>
+        int.TryParse(value?.Trim(), out var page) && page > 0 ? page : 1;
+
+    private static UserLlmSelectionDisplayMode ResolveDisplayMode(string? value) =>
+        string.Equals(value?.Trim(), "route", StringComparison.OrdinalIgnoreCase)
+            ? UserLlmSelectionDisplayMode.Route
+            : UserLlmSelectionDisplayMode.Model;
+
+    private readonly record struct ResolvedLlmSelectionAction(
+        string Action,
+        string Value,
+        int Page,
+        UserLlmSelectionDisplayMode DisplayMode)
+    {
+        public static readonly ResolvedLlmSelectionAction Empty = new(
+            string.Empty,
+            string.Empty,
+            1,
+            UserLlmSelectionDisplayMode.Model);
     }
 
     public async Task<ConversationTurnResult> RunLlmReplyAsync(
@@ -1696,8 +1886,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // Typed payloads belong to their dedicated routers; reaching this point with one
         // attached means that router declined, and promoting it to a generic LLM turn
         // would bypass the typed contract.
-        if (cardAction.WorkflowResume is not null || cardAction.LlmSelection is not null)
+        if (cardAction.WorkflowResume is not null ||
+            cardAction.LlmSelection is not null ||
+            cardAction.NyxIdApproval is not null)
+        {
             return false;
+        }
 
         text = string.IsNullOrWhiteSpace(cardAction.SubmittedValue)
             ? $"[card_action] {cardAction.ActionId}"

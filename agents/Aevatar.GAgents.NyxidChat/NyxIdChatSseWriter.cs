@@ -47,6 +47,22 @@ internal sealed class NyxIdChatSseWriter
     public ValueTask WriteRunStartedAsync(string actorId, CancellationToken ct) =>
         WriteFrameAsync(new { type = "RUN_STARTED", actorId }, ct);
 
+    public ValueTask WriteKeepAliveAsync(string actorId, string sessionId, CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "CUSTOM",
+            custom = new
+            {
+                name = "aevatar.nyxid_chat.keepalive",
+                payload = new
+                {
+                    actorId,
+                    sessionId,
+                    status = "running",
+                },
+            },
+        }, ct);
+
     public ValueTask WriteTextDeltaAsync(string delta, CancellationToken ct) =>
         WriteFrameAsync(new { type = "TEXT_MESSAGE_CONTENT", textMessageContent = new { delta } }, ct);
 

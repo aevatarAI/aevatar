@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -27,11 +28,14 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
 {
     private readonly IProjectionDocumentReader<UserAgentCatalogDocument, string> _documentReader;
+    private readonly ILogger<UserAgentCatalogQueryPort>? _logger;
 
     public UserAgentCatalogQueryPort(
-        IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader)
+        IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader,
+        ILogger<UserAgentCatalogQueryPort>? logger = null)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _logger = logger;
     }
 
     public async Task<UserAgentCatalogReadModelEntry?> GetForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)
@@ -43,9 +47,29 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         // the projection reader's Get path doesn't take filters. The push-down is on the
         // QueryByCallerAsync sweep path where it actually matters for scale.
         var document = await _documentReader.GetAsync(agentId, ct);
-        if (document == null || document.Tombstoned) return null;
+        if (document == null || document.Tombstoned)
+        {
+            _logger?.LogInformation(
+                "Catalog get-for-caller miss: agentId={AgentId} reason={Reason}",
+                agentId,
+                document == null ? "document_missing" : "tombstoned");
+            return null;
+        }
 
-        return DocumentMatchesCaller(document, caller) ? ToEntry(document) : null;
+        if (!DocumentMatchesCaller(document, caller))
+        {
+            var documentScope = document.OwnerScope;
+            _logger?.LogWarning(
+                "Catalog get-for-caller owner mismatch: agentId={AgentId} " +
+                "callerPlatform={CallerPlatform} callerNyxUser={CallerNyxUser} callerScope={CallerScope} callerSender={CallerSender} " +
+                "docPlatform={DocPlatform} docNyxUser={DocNyxUser} docScope={DocScope} docSender={DocSender}",
+                agentId,
+                caller.Platform, caller.NyxUserId, caller.RegistrationScopeId, caller.SenderId,
+                documentScope?.Platform, documentScope?.NyxUserId, documentScope?.RegistrationScopeId, documentScope?.SenderId);
+            return null;
+        }
+
+        return ToEntry(document);
     }
 
     /// <summary>
@@ -94,6 +118,16 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         }
         while (!string.IsNullOrEmpty(cursor));
 
+        if (entries.Count == 0)
+        {
+            _logger?.LogInformation(
+                "Catalog query-by-caller returned no entries: platform={Platform} nyxUser={NyxUserId} scope={RegistrationScopeId} sender={SenderId}",
+                caller.Platform,
+                caller.NyxUserId,
+                caller.RegistrationScopeId,
+                caller.SenderId);
+        }
+
         return entries;
     }
 
@@ -114,41 +148,52 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
     }
 
     /// <summary>
-    /// Builds the four strict-equality filters that scope a query to the caller's
-    /// <see cref="OwnerScope"/>. The field-path syntax (<c>OwnerScope.NyxUserId</c>) is
-    /// resolved by both projection-store providers: InMemory walks the C# property tree;
-    /// Elasticsearch resolves via the proto descriptor (proto field name → ES JSON path)
-    /// and adds the <c>.keyword</c> suffix for exact-match string fields.
+    /// Builds the strict-equality filters that scope a query to the caller's
+    /// <see cref="OwnerScope"/> identity, mirroring <see cref="OwnerScope.MatchesStrictly"/>:
+    /// nyxid-native callers filter on the full tuple; channel callers filter on the
+    /// relay-authenticated <c>(platform, registration_scope_id, sender_id)</c> triple and
+    /// deliberately exclude <c>nyx_user_id</c>, which drifts with the credential path that
+    /// produced the document (bot-owner relay token vs sender binding token on a shared
+    /// bot). The field-path syntax (<c>OwnerScope.NyxUserId</c>) is resolved by both
+    /// projection-store providers: InMemory walks the C# property tree; Elasticsearch
+    /// resolves via the proto descriptor (proto field name → ES JSON path) and adds the
+    /// <c>.keyword</c> suffix for exact-match string fields.
     /// </summary>
     private static IReadOnlyList<ProjectionDocumentFilter> BuildOwnerScopeFilters(OwnerScope caller)
     {
-        return new[]
+        var filters = new List<ProjectionDocumentFilter>
         {
-            new ProjectionDocumentFilter
-            {
-                FieldPath = $"{nameof(UserAgentCatalogDocument.OwnerScope)}.{nameof(OwnerScope.NyxUserId)}",
-                Operator = ProjectionDocumentFilterOperator.Eq,
-                Value = ProjectionDocumentValue.FromString(caller.NyxUserId),
-            },
-            new ProjectionDocumentFilter
+            new()
             {
                 FieldPath = $"{nameof(UserAgentCatalogDocument.OwnerScope)}.{nameof(OwnerScope.Platform)}",
                 Operator = ProjectionDocumentFilterOperator.Eq,
                 Value = ProjectionDocumentValue.FromString(caller.Platform),
             },
-            new ProjectionDocumentFilter
+            new()
             {
                 FieldPath = $"{nameof(UserAgentCatalogDocument.OwnerScope)}.{nameof(OwnerScope.RegistrationScopeId)}",
                 Operator = ProjectionDocumentFilterOperator.Eq,
                 Value = ProjectionDocumentValue.FromString(caller.RegistrationScopeId),
             },
-            new ProjectionDocumentFilter
+            new()
             {
                 FieldPath = $"{nameof(UserAgentCatalogDocument.OwnerScope)}.{nameof(OwnerScope.SenderId)}",
                 Operator = ProjectionDocumentFilterOperator.Eq,
                 Value = ProjectionDocumentValue.FromString(caller.SenderId),
             },
         };
+
+        if (caller.IsNyxIdNative)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = $"{nameof(UserAgentCatalogDocument.OwnerScope)}.{nameof(OwnerScope.NyxUserId)}",
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(caller.NyxUserId),
+            });
+        }
+
+        return filters;
     }
 
     /// <summary>

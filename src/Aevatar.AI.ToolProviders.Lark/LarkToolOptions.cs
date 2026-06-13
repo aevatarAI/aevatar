@@ -8,7 +8,6 @@ public sealed class LarkToolOptions
     public bool EnableMessageReactionCreate { get; set; } = true;
     public bool EnableMessageReactionList { get; set; } = true;
     public bool EnableMessageReactionDelete { get; set; } = true;
-    public bool EnableMessageSearch { get; set; } = true;
     public bool EnableMessageBatchGet { get; set; } = true;
     public bool EnableChatLookup { get; set; } = true;
     public bool EnableSheetsAppendRows { get; set; } = true;
@@ -16,4 +15,5 @@ public sealed class LarkToolOptions
     public bool EnableApprovalsGet { get; set; } = true;
     public bool EnableApprovalsAct { get; set; } = true;
     public bool EnableDocxCreate { get; set; } = true;
+    public bool EnableWorkflowFileSubmit { get; set; }
 }

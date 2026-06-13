@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
@@ -14,6 +15,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -252,6 +255,135 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task PostChat_ShouldReturnInvalidFileInput_WhenInlineFileSizeBytesMismatchesDecodedBytes()
+    {
+        var service = new FakeCommandDispatchService();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "sizeBytes": 6
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            input,
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_FILE_INPUT");
+        service.DispatchCalls.Should().Be(0);
+        service.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostChat_ShouldReturnInvalidFileInput_WhenUnsupportedInputPartHasInvalidInlineFileSizeBytes()
+    {
+        var service = new FakeCommandDispatchService();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "prompt": "describe this",
+              "inputParts": [
+                {
+                  "type": "unsupported",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "sizeBytes": -1
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            input,
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_FILE_INPUT");
+        service.DispatchCalls.Should().Be(0);
+        service.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostChat_ShouldDispatch_WhenInlineFileSizeBytesMatchesDecodedBytes()
+    {
+        var service = new FakeCommandDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1")),
+        };
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "name": "hello.png",
+                    "sizeBytes": 5
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            input,
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None,
+            fileIngressPort: ingressPort);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.DispatchCalls.Should().Be(1);
+        ingressPort.Requests.Should().ContainSingle();
+        ingressPort.Requests[0].Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("hello"));
+        ingressPort.Requests[0].SourceKind.Should().Be(ApplicationWorkflowFileSourceKind.ChatInput);
+        ingressPort.Requests[0].FileName.Should().Be("hello.png");
+        ingressPort.Requests[0].MediaType.Should().Be("image/png");
+        service.LastCommand.Should().NotBeNull();
+        var part = service.LastCommand!.InputParts.Should().ContainSingle().Which;
+        part.DataBase64.Should().BeNull();
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.FileId.Should().Be("file-1");
+        part.FileRef.ArtifactId.Should().Be("workflow-file://file-1");
+        part.FileRef.SizeBytes.Should().Be(5);
+        part.Uri.Should().Be("workflow-file://file-1");
+    }
+
+    [Fact]
     public async Task HandleCommand_ShouldRejectUnsupportedOnlyInputParts()
     {
         var service = new FakeCommandDispatchService();
@@ -435,6 +567,60 @@ public sealed class ChatEndpointsInternalTests
         capturedCommand.Should().NotBeNull();
         capturedCommand!.CallerCredential!.BearerToken.Should().Be("trusted-token");
         capturedCommand.Metadata.Should().NotContainKey("connector.http.authorization");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldResolveIngressPortAndDispatchFileRefForInlineFile()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var http = CreateHttpContext();
+        http.RequestServices = new ServiceCollection()
+            .AddLogging()
+            .AddOptions()
+            .AddSingleton<IWorkflowFileIngressPort>(ingressPort)
+            .BuildServiceProvider();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "name": "hello.png",
+                    "sizeBytes": 5
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            input,
+            interactionService,
+            CancellationToken.None);
+
+        ingressPort.Requests.Should().ContainSingle();
+        capturedCommand.Should().NotBeNull();
+        var part = capturedCommand!.InputParts.Should().ContainSingle().Which;
+        part.DataBase64.Should().BeNull();
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.ArtifactId.Should().Be("workflow-file://file-1");
+        part.FileRef.SizeBytes.Should().Be(5);
     }
 
     [Fact]
@@ -754,6 +940,44 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().EditedContent.Should().Be("approved edited");
         service.Commands.Single().Feedback.Should().Be("looks good");
         service.Commands.Single().Metadata.Should().ContainKey("source").WhoseValue.Should().Be("host");
+    }
+
+    [Fact]
+    public async Task HandleResume_ShouldDispatchNestedToolApproval()
+    {
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt("actor-1", "run-1", "cmd-1", "cmd-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                StepId = "tool-step",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResumeInput
+                {
+                    ExecutionId = "exec-1",
+                    ToolCallId = "tool-call-1",
+                    ApprovalRequestId = "approval-1",
+                },
+            },
+            service,
+            ct: CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.Commands.Should().ContainSingle();
+        var command = service.Commands.Single();
+        command.ToolApproval.Should().NotBeNull();
+        command.ToolApproval!.ExecutionId.Should().Be("exec-1");
+        command.ToolApproval.ToolCallId.Should().Be("tool-call-1");
+        command.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
     }
 
     [Fact]
@@ -1431,6 +1655,31 @@ public sealed class ChatEndpointsInternalTests
             if (DispatchException != null)
                 throw DispatchException;
             return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    {
+        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+
+        public ValueTask<WorkflowFileIngressResult> IngestAsync(
+            WorkflowFileIngressRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return ValueTask.FromResult(new WorkflowFileIngressResult(new ApplicationWorkflowFileRef
+            {
+                FileId = "file-1",
+                ArtifactId = "workflow-file://file-1",
+                SourceKind = request.SourceKind,
+                FileName = request.FileName,
+                MediaType = request.MediaType,
+                SizeBytes = request.Content.Length,
+                Sha256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+                CreatedAtUnixMs = 1710000000000,
+                ExpiresAtUnixMs = 1710003600000,
+            }));
         }
     }
 

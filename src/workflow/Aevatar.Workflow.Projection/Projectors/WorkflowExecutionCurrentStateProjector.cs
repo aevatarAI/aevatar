@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection.ReadModels;
 
@@ -69,6 +70,29 @@ public sealed class WorkflowExecutionCurrentStateProjector
                 StringComparer.Ordinal),
             ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
             ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
+            InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
+        };
+    }
+
+    private static WorkflowExecutionInputFileRefReadModel MapInputFileRef(WorkflowFileRef source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new WorkflowExecutionInputFileRefReadModel
+        {
+            FileId = source.FileId ?? string.Empty,
+            ArtifactId = source.ArtifactId ?? string.Empty,
+            SourceKindValue = (int)source.SourceKind,
+            SourceMessageId = source.SourceMessageId ?? string.Empty,
+            SourceResourceKey = source.SourceResourceKey ?? string.Empty,
+            FileName = source.FileName ?? string.Empty,
+            MediaType = source.MediaType ?? string.Empty,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId ?? string.Empty,
+            OwnerScopeId = source.OwnerScopeId ?? string.Empty,
         };
     }
 

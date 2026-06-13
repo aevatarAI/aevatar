@@ -95,11 +95,13 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddSingleton<INyxIdCurrentUserResolver, NyxIdCurrentUserResolver>();
         services.TryAddSingleton<ChannelMetadataCallerScopeResolver>();
         services.TryAddSingleton<NyxIdNativeCallerScopeResolver>();
-        services.TryAddSingleton<ICallerScopeResolver>(sp => new CompositeCallerScopeResolver(new ICallerScopeResolver[]
-        {
-            sp.GetRequiredService<ChannelMetadataCallerScopeResolver>(),
-            sp.GetRequiredService<NyxIdNativeCallerScopeResolver>(),
-        }));
+        services.TryAddSingleton<ICallerScopeResolver>(sp => new CompositeCallerScopeResolver(
+            new ICallerScopeResolver[]
+            {
+                sp.GetRequiredService<ChannelMetadataCallerScopeResolver>(),
+                sp.GetRequiredService<NyxIdNativeCallerScopeResolver>(),
+            },
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<CompositeCallerScopeResolver>>()));
         services.AddHostedService<UserAgentCatalogStartupService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ITombstoneCompactionTarget, UserAgentCatalogTombstoneCompactionTarget>());

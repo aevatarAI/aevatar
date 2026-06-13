@@ -927,6 +927,151 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRouteNyxIdApprovalCardAction_WithCurrentUserToken()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler("""{"id":"nyx-approval-1","status":"approved"}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+        var activity = BuildCardActionActivity("evt-nyx-approval-1");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.NyxIdApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = "nyx-approval-1",
+            Approved = true,
+        };
+
+        var result = await runner.RunInboundAsync(
+            activity,
+            new ConversationTurnRuntimeContext(null, "current-user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("direct-reply:evt-nyx-approval-1");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("approved");
+        result.LlmReplyRequest.Should().BeNull();
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Method.Should().Be("POST");
+        nyxHandler.Requests[0].Path.Should().Be("/api/v1/approvals/requests/nyx-approval-1/decide");
+        nyxHandler.Requests[0].Authorization.Should().Be("Bearer current-user-token-1");
+        nyxHandler.Requests[0].Body.Should().Be("""{"approved":true}""");
+        nyxHandler.Requests[0].Body.Should().NotContain("decision");
+    }
+
+    [Theory]
+    [InlineData(null, "Approval action is missing the NyxID request id.")]
+    [InlineData("   ", "Approval action is missing the NyxID request id.")]
+    public async Task RunInboundAsync_ShouldRejectNyxIdApprovalCardAction_WhenRequestIdMissing(
+        string? requestId,
+        string expectedReply)
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler("""{"id":"unexpected"}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+        var activity = BuildCardActionActivity("evt-nyx-approval-missing-request");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.NyxIdApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = requestId ?? string.Empty,
+            Approved = true,
+        };
+
+        var result = await runner.RunInboundAsync(
+            activity,
+            new ConversationTurnRuntimeContext(null, "current-user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Be(expectedReply);
+        nyxHandler.Requests.Should().BeEmpty();
+        result.LlmReplyRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRejectNyxIdApprovalCardAction_WhenCredentialMissing()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler("""{"id":"unexpected"}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+        var activity = BuildCardActionActivity("evt-nyx-approval-missing-token");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.NyxIdApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = "nyx-approval-1",
+            Approved = false,
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("credential is missing or expired");
+        nyxHandler.Requests.Should().BeEmpty();
+        result.LlmReplyRequest.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("""{"error":true,"status":403,"body":"{\"error\":\"forbidden\",\"message\":\"Approval request expired\"}"}""", "Approval request expired.")]
+    [InlineData("""{"error":true,"status":409,"body":"{\"error\":\"already_decided\"}"}""", "Approval request was already decided.")]
+    [InlineData("""{"error":true,"status":404,"body":"{\"error\":\"not_found\"}"}""", "Approval request was not found or is no longer available.")]
+    [InlineData("""{"error":true,"status":401,"body":"{\"error\":\"unauthorized\"}"}""", "Approval decision requires a valid NyxID user credential. Please sign in again and retry.")]
+    public async Task RunInboundAsync_ShouldMapNyxIdApprovalDecisionErrors(
+        string nyxResponse,
+        string expectedReply)
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler(nyxResponse);
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+        var activity = BuildCardActionActivity("evt-nyx-approval-error");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.NyxIdApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = "nyx-approval-1",
+            Approved = false,
+        };
+
+        var result = await runner.RunInboundAsync(
+            activity,
+            new ConversationTurnRuntimeContext(null, "current-user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Be(expectedReply);
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Body.Should().Be("""{"approved":false}""");
+        result.LlmReplyRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldNotPromoteNyxIdApprovalButtonToLlm_WhenCredentialMissing()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+        var activity = BuildCardActionActivity("evt-card-button-nyx-typed");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.ActionId = "nyxid-approval-approve";
+        activity.Content.CardAction.NyxIdApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = "nyx-approval-1",
+            Approved = true,
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("credential is missing or expired");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldRouteAgentBuilderCardAction_WhenCardPayloadCarriesAgentBuilderAction()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -1188,6 +1333,107 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldHandleLlmSelectFormSubmission_FromFormFields()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var option = new UserLlmOption(
+            ServiceId: "svc-form",
+            ServiceSlug: "form-route",
+            DisplayName: "Form Route",
+            RouteValue: "/api/v1/proxy/s/form-route",
+            DefaultModel: "gpt-5.4",
+            AvailableModels: ["gpt-5.4"],
+            Status: "ready",
+            Source: "user",
+            Allowed: true,
+            Description: null);
+        var optionsService = new StubUserLlmOptionsService(option);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
+        var activity = BuildCardActionActivity(
+            "evt-llm-select-form-1",
+            (TextUserLlmOptionsRenderer.ServiceIdArgument, option.ServiceId));
+        activity.Content.CardAction!.ActionKind = ActionElementKind.FormSubmit;
+        activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
+        {
+            Action = TextUserLlmOptionsRenderer.SelectServiceAction,
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        selectionService.SelectedServiceId.Should().Be(option.ServiceId);
+        selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRenderRequestedLlmListPage_WhenCardPaginationClicked()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var options = Enumerable.Range(1, 7)
+            .Select(i => new UserLlmOption(
+                ServiceId: $"svc-{i}",
+                ServiceSlug: $"route-{i}",
+                DisplayName: $"Route {i}",
+                RouteValue: $"/api/v1/proxy/s/route-{i}",
+                DefaultModel: $"model-{i}",
+                AvailableModels: [$"model-{i}"],
+                Status: "ready",
+                Source: "user",
+                Allowed: true,
+                Description: null))
+            .ToArray();
+        var optionsService = new StubUserLlmOptionsService(options, current: options[0]);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+        var activity = BuildCardActionActivity("evt-llm-page-2");
+        activity.Content.CardAction!.LlmSelection = new LlmSelectionActionPayload
+        {
+            Action = TextUserLlmOptionsRenderer.ListPageAction,
+            Page = 2,
+            DisplayMode = "route",
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        selectionService.SelectedServiceId.Should().BeNull();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("**可选 route**");
+        adapter.Replies[0].ReplyText.Should().Contain("第 2/2 页");
+        adapter.Replies[0].ReplyText.Should().Contain("Route 6");
+        adapter.Replies[0].ReplyText.Should().Contain("Route 7");
+        adapter.Replies[0].ReplyText.Should().NotContain("Route 5");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldApplyTypedLlmPreset_WhenPayloadCarriesPresetId()
     {
         var subject = new ExternalSubjectRef
@@ -1235,7 +1481,8 @@ public sealed class ChannelConversationTurnRunnerTests
         selectionService.PresetId.Should().Be("work-fast");
         selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
         adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().Contain("work-fast");
+        adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
+        adapter.Replies[0].ReplyText.Should().Contain("/api/v1/proxy/s/openai-work");
     }
 
     [Fact]
@@ -3263,18 +3510,23 @@ public sealed class ChannelConversationTurnRunnerTests
             relayClient,
             NullLogger<NyxIdRelayOutboundPort>.Instance,
             [new RelayStubComposer("lark")]);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://example.com" },
+            new HttpClient(nyxHandler)
+            {
+                BaseAddress = new Uri("https://example.com"),
+            });
+        var remoteToolApprovalPort = services.GetService<IRemoteToolApprovalPort>() ??
+                                     new NyxIdRemoteToolApprovalPort(
+                                         nyxClient,
+                                         NullLogger<NyxIdRemoteToolApprovalPort>.Instance);
 
         return new ChannelConversationTurnRunner(
             services,
             registrationQueryPort,
             registrationQueryByNyxIdentityPort,
             [adapter],
-            new NyxIdApiClient(
-                new NyxIdToolOptions { BaseUrl = "https://example.com" },
-                new HttpClient(nyxHandler)
-                {
-                    BaseAddress = new Uri("https://example.com"),
-                }),
+            nyxClient,
             relayOutboundPort,
             interactiveReplyDispatcher,
             NullLogger<ChannelConversationTurnRunner>.Instance,
@@ -3292,7 +3544,8 @@ public sealed class ChannelConversationTurnRunnerTests
             userConfigQueryPort: services.GetService<IUserConfigQueryPort>(),
             replyService: services.GetService<ChannelPlatformReplyService>(),
             workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(),
-            workflowDraftRunAdmission: services.GetService<ChannelWorkflowDraftRunAdmission>());
+            workflowDraftRunAdmission: services.GetService<ChannelWorkflowDraftRunAdmission>(),
+            remoteToolApprovalPort: remoteToolApprovalPort);
     }
 
     private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)
@@ -3584,10 +3837,30 @@ public sealed class ChannelConversationTurnRunnerTests
         public NyxIdApiClient CreateClient() => _client;
     }
 
-    private sealed class StubUserLlmOptionsService(UserLlmOption option) : IUserLlmOptionsService
+    private sealed class StubUserLlmOptionsService : IUserLlmOptionsService
     {
+        private readonly IReadOnlyList<UserLlmOption> _options;
+        private readonly UserLlmOption? _current;
+
+        public StubUserLlmOptionsService(UserLlmOption option)
+            : this([option], option)
+        {
+        }
+
+        public StubUserLlmOptionsService(
+            IReadOnlyList<UserLlmOption> options,
+            UserLlmOption? current = null)
+        {
+            _options = options;
+            _current = current;
+        }
+
         public Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct) =>
-            Task.FromResult(new UserLlmOptionsView(null, [option], null));
+            Task.FromResult(new UserLlmOptionsView(_current, _options, null)
+            {
+                CurrentRouteValue = _current?.RouteValue,
+                CurrentModel = _current?.DefaultModel,
+            });
     }
 
     private sealed class RecordingUserLlmSelectionService : IUserLlmSelectionService

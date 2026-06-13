@@ -220,6 +220,134 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
+    public async Task VoicePresenceRuntimeStateOwner_ShouldReturnClonedSessionDefaults()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-voice-defaults");
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "voice role",
+            VoiceSessionDefaults =
+            {
+                ["voice_presence"] = new VoiceSessionDefaults
+                {
+                    Voice = "verse",
+                    Instructions = "be brief",
+                    SampleRateHz = 16000,
+                    TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+                },
+            },
+        });
+
+        agent.TryGetVoiceSessionDefaults("voice_presence", out var defaults).Should().BeTrue();
+        defaults.Voice.Should().Be("verse");
+        defaults.SampleRateHz.Should().Be(16000);
+
+        defaults.Voice = "mutated";
+
+        agent.State.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("verse");
+        agent.TryGetVoiceSessionDefaults("missing", out var missing).Should().BeFalse();
+        missing.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task HandleVoicePresenceEnableRequested_ShouldPersistInitializedCapabilityState()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-voice-enable");
+        await agent.ActivateAsync();
+
+        await agent.HandleVoicePresenceEnableRequested(new VoicePresenceEnableRequested
+        {
+            ModuleName = " voice_presence ",
+            PcmSampleRateHz = 16000,
+            RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly,
+            SessionDefaults = new VoiceSessionDefaults
+            {
+                Voice = "verse",
+                Instructions = "stay concise",
+                SampleRateHz = 12000,
+                TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+                VadDetectionThreshold = 0.5f,
+                VadPrefixPaddingMs = 80,
+                VadSilenceDurationMs = 240,
+            },
+        });
+
+        agent.State.VoicePresence.Should().ContainKey("voice_presence");
+        var state = agent.State.VoicePresence["voice_presence"];
+        state.Status.Should().Be(VoicePresenceRuntimeStatus.Idle);
+        state.Initialized.Should().BeTrue();
+        state.PcmSampleRateHz.Should().Be(12000);
+        state.NextResponseId.Should().Be(1);
+        state.LastDrainAckResponseId.Should().Be(-1);
+        state.LastDrainAckPlayoutSequence.Should().Be(-1);
+        state.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.LocalOnly);
+        state.ActiveSessionConfig.Voice.Should().Be("verse");
+        state.ActiveSessionConfig.Instructions.Should().Be("stay concise");
+        state.ActiveSessionConfig.SampleRateHz.Should().Be(12000);
+        state.ActiveSessionConfig.TurnDetectionMode.Should().Be(VoiceTurnDetectionMode.ServerVad);
+
+        var store = provider.GetRequiredService<IEventStore>() as InMemoryEventStoreForTests;
+        store.Should().NotBeNull();
+        var persisted = await store!.GetEventsAsync("role-voice-enable");
+        var changed = persisted.Should()
+            .ContainSingle(x => x.EventType.Contains(nameof(VoicePresenceRuntimeStateChangedEvent), StringComparison.Ordinal))
+            .Which
+            .EventData
+            .Unpack<VoicePresenceRuntimeStateChangedEvent>();
+        changed.ModuleName.Should().Be("voice_presence");
+        changed.State.Initialized.Should().BeTrue();
+        changed.State.ActiveSessionConfig.SampleRateHz.Should().Be(12000);
+    }
+
+    [Fact]
+    public async Task HandleInitializeRoleAgent_ShouldPersistVoicePresenceEnablesAndSessionDefaults()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-voice-init-enable");
+        await agent.ActivateAsync();
+
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleId = "role-voice",
+            RoleName = "voice role",
+            VoicePresenceEnables =
+            {
+                new VoicePresenceEnableRequested
+                {
+                    ModuleName = "voice_presence",
+                    PcmSampleRateHz = 24000,
+                    RemoteAudioSupport = VoiceRemoteAudioSupport.Supported,
+                    SessionDefaults = new VoiceSessionDefaults
+                    {
+                        Voice = "marin",
+                        Instructions = "answer warmly",
+                        SampleRateHz = 16000,
+                        TurnDetectionMode = VoiceTurnDetectionMode.ClientVad,
+                    },
+                },
+            },
+        });
+
+        agent.State.VoiceSessionDefaults.Should().ContainKey("voice_presence");
+        agent.State.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("marin");
+        agent.State.VoicePresence.Should().ContainKey("voice_presence");
+        agent.State.VoicePresence["voice_presence"].Initialized.Should().BeTrue();
+        agent.State.VoicePresence["voice_presence"].RemoteAudioSupport.Should()
+            .Be(VoiceRemoteAudioSupport.Supported);
+
+        var store = provider.GetRequiredService<IEventStore>() as InMemoryEventStoreForTests;
+        store.Should().NotBeNull();
+        var persisted = await store!.GetEventsAsync("role-voice-init-enable");
+        persisted.Should().ContainSingle(x => x.EventType.Contains(nameof(InitializeRoleAgentEvent), StringComparison.Ordinal));
+        persisted.Should().ContainSingle(x =>
+            x.EventType.Contains(nameof(VoicePresenceRuntimeStateChangedEvent), StringComparison.Ordinal) &&
+            x.EventData.Unpack<VoicePresenceRuntimeStateChangedEvent>().ModuleName == "voice_presence");
+    }
+
+    [Fact]
     public async Task HandleToolApprovalDecision_ShouldIgnoreMissingOrMismatchedPendingApproval()
     {
         using var provider = BuildServiceProvider();
@@ -632,6 +760,61 @@ public sealed class RoleGAgentStateCoverageTests
             .TimeoutRequests.Should().ContainSingle(x =>
                 x.CallbackId == "tool-approval-remote-status-req-1-remote-1-1" &&
                 x.ActorId == "role-timeout-submit");
+    }
+
+    [Fact]
+    public async Task HandleToolApprovalTimeout_ShouldKeepPendingAndScheduleStatus_WhenNotificationFails()
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: request => Task.FromResult(new RemoteToolApprovalSubmission(
+                "remote-1",
+                DateTimeOffset.FromUnixTimeSeconds(1_800))),
+            status: _ => throw new InvalidOperationException("status should not be called"));
+        var notificationPort = new StubRemoteApprovalNotificationPort(
+            _ => throw new InvalidOperationException("notification failed"));
+        var agent = CreateRoleAgent(
+            provider,
+            "role-timeout-notify-fails",
+            remotePort,
+            remoteToolApprovalNotificationPort: notificationPort);
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = """{"path":"/prod"}""",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                Channel = new AgentToolChannelContext(
+                    "lark",
+                    "sender-1",
+                    "scope-1",
+                    "msg-1",
+                    "om_1",
+                    "agent-delivery-1"),
+            }).ToPayload(),
+        };
+
+        await agent.HandleToolApprovalTimeout(new ToolApprovalTimeoutFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+        });
+
+        agent.State.PendingApproval.Should().NotBeNull();
+        agent.State.PendingApproval!.RequestId.Should().Be("req-1");
+        agent.State.PendingApproval.RemoteApprovalId.Should().Be("remote-1");
+        notificationPort.Notifications.Should().ContainSingle();
+        notificationPort.Notifications[0].Request.RequestId.Should().Be("req-1");
+        notificationPort.Notifications[0].Submission.RemoteApprovalId.Should().Be("remote-1");
+        notificationPort.Notifications[0].ToolContext.Channel.DeliveryTargetId.Should().Be("agent-delivery-1");
+        ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
+            .TimeoutRequests.Should().ContainSingle(x =>
+                x.CallbackId == "tool-approval-remote-status-req-1-remote-1-1" &&
+                x.ActorId == "role-timeout-notify-fails");
     }
 
     [Fact]
@@ -1348,12 +1531,14 @@ public sealed class RoleGAgentStateCoverageTests
         IServiceProvider provider,
         string actorId,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         ILLMProviderFactory? llmProviderFactory = null)
     {
         var agent = new TestRoleGAgent(
             llmProviderFactory,
             remoteToolApprovalPort,
+            remoteToolApprovalNotificationPort,
             toolSources ?? Enumerable.Empty<IAgentToolSource>())
         {
             Services = provider,
@@ -1406,11 +1591,13 @@ public sealed class RoleGAgentStateCoverageTests
     private sealed class TestRoleGAgent(
         ILLMProviderFactory? llmProviderFactory,
         IRemoteToolApprovalPort? remoteToolApprovalPort,
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort,
         IEnumerable<IAgentToolSource> toolSources)
         : RoleGAgent(
             llmProviderFactory: llmProviderFactory,
             toolSources: toolSources,
-            remoteToolApprovalPort: remoteToolApprovalPort)
+            remoteToolApprovalPort: remoteToolApprovalPort,
+            remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
     {
     }
 
@@ -1443,6 +1630,7 @@ public sealed class RoleGAgentStateCoverageTests
     {
         public List<RemoteToolApprovalRequest> Submitted { get; } = [];
         public List<RemoteToolApprovalStatusQuery> StatusQueries { get; } = [];
+        public List<RemoteToolApprovalDecision> Decisions { get; } = [];
 
         public Task<RemoteToolApprovalSubmission> SubmitAsync(RemoteToolApprovalRequest request, CancellationToken ct)
         {
@@ -1454,6 +1642,25 @@ public sealed class RoleGAgentStateCoverageTests
         {
             StatusQueries.Add(query);
             return status(query);
+        }
+
+        public Task<RemoteToolApprovalDecisionResult> DecideAsync(RemoteToolApprovalDecision decision, CancellationToken ct)
+        {
+            Decisions.Add(decision);
+            return Task.FromResult(new RemoteToolApprovalDecisionResult(true));
+        }
+    }
+
+    private sealed class StubRemoteApprovalNotificationPort(
+        Func<RemoteToolApprovalNotification, Task> notify)
+        : IRemoteToolApprovalNotificationPort
+    {
+        public List<RemoteToolApprovalNotification> Notifications { get; } = [];
+
+        public Task NotifyAsync(RemoteToolApprovalNotification notification, CancellationToken ct)
+        {
+            Notifications.Add(notification);
+            return notify(notification);
         }
     }
 

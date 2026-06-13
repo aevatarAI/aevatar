@@ -355,18 +355,19 @@ public sealed class IdempotentStepExecutionTests
         var ctx = new RecordingEventHandlerContext();
         var host = new RecordingStateHost();
         var kernel = new WorkflowExecutionKernel(workflow, host);
+        var start = new StartWorkflowEvent { RunId = "run-1", Input = "hello" };
+        start.InputFileRefs.Add(BuildWorkflowFileRef("file-retry"));
 
         // Start workflow → first dispatch
-        await kernel.HandleAsync(
-            Wrap(new StartWorkflowEvent { RunId = "run-1", Input = "hello" }),
-            ctx, CancellationToken.None);
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
 
-        var firstExecutionId = ctx.Published
+        var firstRequest = ctx.Published
             .Select(p => p.Event)
             .Where(e => e.Is(StepRequestEvent.Descriptor))
             .Select(e => e.Unpack<StepRequestEvent>())
-            .First(r => r.StepId == "step-1")
-            .ExecutionId;
+            .First(r => r.StepId == "step-1");
+        var firstExecutionId = firstRequest.ExecutionId;
+        firstRequest.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-retry");
 
         ctx.Published.Clear();
 
@@ -391,6 +392,7 @@ public sealed class IdempotentStepExecutionTests
         secondRequest.Should().NotBeNull("retry with delayMs=0 should immediately re-dispatch");
         secondRequest!.ExecutionId.Should().NotBeNullOrEmpty();
         secondRequest.ExecutionId.Should().NotBe(firstExecutionId, "retry must generate a new execution_id");
+        secondRequest.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-retry");
     }
 
     [Fact]
@@ -578,6 +580,65 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
+    public async Task StartWorkflow_WithInputFileRefs_ShouldDispatchFirstStepAndPersistCurrentStepRefs()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "run-files",
+            Input = "fresh-input",
+        };
+        start.InputFileRefs.Add(BuildWorkflowFileRef("file-first"));
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.StepId.Should().Be("step-a");
+        request.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-first");
+
+        var state = LoadKernelState(host);
+        state.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-first");
+        state.CurrentStepInputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-first");
+    }
+
+    [Fact]
+    public async Task StepCompleted_ShouldNotCarryStartInputFileRefsToNextStep()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "run-files",
+            Input = "fresh-input",
+        };
+        start.InputFileRefs.Add(BuildWorkflowFileRef("file-first"));
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+        var first = StepRequests(ctx).Single();
+        ctx.Published.Clear();
+
+        await kernel.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-a",
+                RunId = "run-files",
+                Success = true,
+                Output = "alpha",
+                ExecutionId = first.ExecutionId,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var second = StepRequests(ctx).Single();
+        second.StepId.Should().Be("step-b");
+        second.InputFileRefs.Should().BeEmpty();
+        LoadKernelState(host).CurrentStepInputFileRefs.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task StartWorkflow_WithStepPresentation_ShouldDispatchTypedInteractionSpec()
     {
         var ctx = new RecordingEventHandlerContext();
@@ -632,6 +693,89 @@ public sealed class IdempotentStepExecutionTests
         request.StepParameters.InteractionSpec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
     }
 
+    [Fact]
+    public async Task StartWorkflow_WithRoleAndStepToolScopes_ShouldDispatchIntersection()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var workflow = new WorkflowDefinition
+        {
+            Name = "tool-scope-workflow",
+            Roles =
+            [
+                new RoleDefinition
+                {
+                    Id = "worker",
+                    Name = "Worker",
+                    AgentToolScope = new WorkflowAgentToolScopeDefinition
+                    {
+                        AllowedToolNames = ["search", "calendar"],
+                    },
+                },
+            ],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "scoped",
+                    Type = "llm_call",
+                    TargetRole = "worker",
+                    AgentToolScope = new WorkflowAgentToolScopeDefinition
+                    {
+                        AllowedToolNames = ["calendar", "forbidden"],
+                    },
+                },
+            ],
+        };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-tools", Input = "hello" }), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.StepParameters.AgentToolScope.Should().NotBeNull();
+        request.StepParameters.AgentToolScope.AllowedToolNames.Should().Equal("calendar");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithPresentEmptyStepToolScope_ShouldDispatchNoToolsScope()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var workflow = new WorkflowDefinition
+        {
+            Name = "no-tools-workflow",
+            Roles =
+            [
+                new RoleDefinition
+                {
+                    Id = "worker",
+                    Name = "Worker",
+                    AgentToolScope = new WorkflowAgentToolScopeDefinition
+                    {
+                        AllowedToolNames = ["search"],
+                    },
+                },
+            ],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "scoped",
+                    Type = "llm_call",
+                    TargetRole = "worker",
+                    AgentToolScope = new WorkflowAgentToolScopeDefinition(),
+                },
+            ],
+        };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-no-tools", Input = "hello" }), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.StepParameters.AgentToolScope.Should().NotBeNull();
+        request.StepParameters.AgentToolScope.AllowedToolNames.Should().BeEmpty();
+    }
+
     // ──── Test infrastructure ────
 
     private static readonly string[] DefaultStartVariableKeys =
@@ -661,6 +805,22 @@ public sealed class IdempotentStepExecutionTests
 
     private static WorkflowExecutionKernelState LoadKernelState(RecordingStateHost host) =>
         host.GetExecutionState("workflow_execution_kernel")!.Unpack<WorkflowExecutionKernelState>();
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = "image_key_1",
+            FileName = $"{fileId}.png",
+            MediaType = "image/png",
+            SizeBytes = 3,
+            Sha256 = $"sha-{fileId}",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+        };
 
     private sealed class RecordingEventHandlerContext : IEventHandlerContext
     {

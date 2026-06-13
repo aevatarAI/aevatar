@@ -4,13 +4,20 @@ package aevatar.gagentservice;
 
 option csharp_namespace = "Aevatar.GAgentService.Abstractions";
 
+import "google/protobuf/timestamp.proto";
 import "service_endpoint.proto";
+
+message ExternalExposure {
+  string nyxid_slug = 1;
+  google.protobuf.Timestamp registered_at = 2;
+}
 
 message ServiceDefinitionSpec {
   ServiceIdentity identity = 1;
   string display_name = 2;
   repeated ServiceEndpointSpec endpoints = 3;
   repeated string policy_ids = 4;
+  ExternalExposure external_exposure = 5;
 }
 
 message ServiceDefinitionState {
@@ -28,6 +35,11 @@ message UpdateServiceDefinitionCommand {
   ServiceDefinitionSpec spec = 1;
 }
 
+message UpdateServiceExternalExposureCommand {
+  ServiceIdentity identity = 1;
+  ExternalExposure external_exposure = 2;
+}
+
 message SetDefaultServingRevisionCommand {
   ServiceIdentity identity = 1;
   string revision_id = 2;
@@ -39,6 +51,11 @@ message ServiceDefinitionCreatedEvent {
 
 message ServiceDefinitionUpdatedEvent {
   ServiceDefinitionSpec spec = 1;
+}
+
+message ServiceExternalExposureUpdatedEvent {
+  ServiceIdentity identity = 1;
+  ExternalExposure external_exposure = 2;
 }
 
 message DefaultServingRevisionChangedEvent {

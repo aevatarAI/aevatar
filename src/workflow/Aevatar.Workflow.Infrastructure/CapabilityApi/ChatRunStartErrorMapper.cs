@@ -20,6 +20,7 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.WorkflowNameMismatch => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.PromptRequired => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.InvalidCallerCredential => StatusCodes.Status400BadRequest,
+            WorkflowChatRunStartError.InvalidFileInput => StatusCodes.Status400BadRequest,
             _ => StatusCodes.Status400BadRequest,
         };
     }
@@ -29,7 +30,7 @@ internal static class ChatRunStartErrorMapper
         return error switch
         {
             WorkflowChatRunStartError.AgentNotFound => ("AGENT_NOT_FOUND", "Agent not found."),
-            WorkflowChatRunStartError.WorkflowNotFound => ("WORKFLOW_NOT_FOUND", "Workflow not found."),
+            WorkflowChatRunStartError.WorkflowNotFound => ("WORKFLOW_NOT_FOUND", WorkflowChatRunStartErrorGuidance.WorkflowNotFound),
             WorkflowChatRunStartError.AgentTypeNotSupported => ("AGENT_TYPE_NOT_SUPPORTED", "Actor is not workflow-capable."),
             WorkflowChatRunStartError.ProjectionDisabled => ("PROJECTION_DISABLED", "Projection pipeline is disabled."),
             WorkflowChatRunStartError.ProjectionUnavailable => ("WORKFLOW_PROJECTION_UNAVAILABLE", "Workflow projection is unavailable."),
@@ -39,6 +40,7 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.WorkflowNameMismatch => ("WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             WorkflowChatRunStartError.PromptRequired => ("PROMPT_REQUIRED", "Prompt is required."),
             WorkflowChatRunStartError.InvalidCallerCredential => ("INVALID_CALLER_CREDENTIAL", "Caller credential is invalid."),
+            WorkflowChatRunStartError.InvalidFileInput => ("INVALID_FILE_INPUT", "File input is invalid."),
             _ => ("RUN_START_FAILED", "Failed to resolve actor."),
         };
     }

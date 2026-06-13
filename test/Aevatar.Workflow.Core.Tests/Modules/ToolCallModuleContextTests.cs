@@ -94,6 +94,34 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_ShouldPreferExplicitArgumentsParameter()
+    {
+        var tool = new CapturingWorkflowTool("echo");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "call_proxy",
+                StepType = "tool_call",
+                RunId = ctx.RunId,
+                Input = """{"from":"input"}""",
+                Parameters =
+                {
+                    ["tool"] = tool.Name,
+                    ["arguments"] = """{"from":"parameters"}""",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        tool.LastRequest.Should().NotBeNull();
+        tool.LastRequest!.ArgumentsJson.Should().Be("""{"from":"parameters"}""");
+        LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldPassTypedWorkflowToolExecutionRequestToDirectTool()
     {
         var tool = new CapturingWorkflowTool("nyxid_tool");

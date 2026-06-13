@@ -38,7 +38,11 @@ public sealed class NyxIdRelayTransport
         var isCardAction = string.Equals(normalizedContentType, CardActionContentType, StringComparison.Ordinal);
 
         var text = payload.Content?.Text?.Trim();
-        if (!isCardAction && string.IsNullOrWhiteSpace(text))
+        var platform = NormalizePlatform(payload.Platform);
+        var larkFacts = ResolveLarkRelayConversationFacts(platform, payload, isCardAction);
+        var platformMessageId = ResolvePlatformMessageId(payload, platform, larkFacts);
+        var attachments = NyxIdRelayAttachmentNormalizer.Normalize(payload, platform, platformMessageId);
+        if (!isCardAction && string.IsNullOrWhiteSpace(text) && attachments.Count == 0)
             return NyxIdRelayParseResult.IgnoredPayload(payload, "empty_text", "Relay payload does not contain text content.");
 
         CardActionSubmission? cardAction = null;
@@ -53,9 +57,6 @@ public sealed class NyxIdRelayTransport
                     "Relay card_action payload text is not a JSON object.");
             }
         }
-
-        var platform = NormalizePlatform(payload.Platform);
-        var larkFacts = ResolveLarkRelayConversationFacts(platform, payload, isCardAction);
 
         var conversationType = payload.Conversation?.Type ?? payload.Conversation?.ConversationType;
         ConversationScope scope;
@@ -101,7 +102,6 @@ public sealed class NyxIdRelayTransport
         var partition = conversationIdentity;
         var timestamp = ParseTimestamp(payload.Timestamp);
         var botId = payload.Agent?.ApiKeyId?.Trim();
-        var platformMessageId = ResolvePlatformMessageId(payload, platform, larkFacts);
         var correlationId = string.IsNullOrWhiteSpace(payload.CorrelationId)
             ? payload.MessageId.Trim()
             : payload.CorrelationId.Trim();
@@ -112,6 +112,7 @@ public sealed class NyxIdRelayTransport
         };
         if (cardAction is not null)
             content.CardAction = cardAction;
+        content.Attachments.AddRange(attachments);
 
         var activity = new ChatActivity
         {
@@ -282,7 +283,10 @@ public sealed class NyxIdRelayTransport
                 "actor_id",
                 "run_id",
                 "step_id",
-                "approved");
+                "approved",
+                "execution_id",
+                "tool_call_id",
+                "approval_request_id");
         }
 
         if (TryBuildLlmSelectionPayload(submission, out var llmSelection))
@@ -292,7 +296,19 @@ public sealed class NyxIdRelayTransport
                 submission.Arguments,
                 "llm_action",
                 "service_id",
-                "preset_id");
+                "preset_id",
+                "model",
+                "page",
+                "display_mode");
+        }
+
+        if (TryBuildNyxIdApprovalPayload(submission, out var nyxIdApproval))
+        {
+            submission.NyxIdApproval = nyxIdApproval;
+            RemoveKeys(
+                submission.Arguments,
+                "nyxid_approval_request_id",
+                "nyxid_approval_approved");
         }
     }
 
@@ -377,6 +393,27 @@ public sealed class NyxIdRelayTransport
         if (submission.FormFields.TryGetValue("feedback", out var feedback))
             payload.Feedback = feedback ?? string.Empty;
 
+        if (TryBuildWorkflowToolApprovalResumePayload(submission, out var toolApproval))
+            payload.ToolApproval = toolApproval;
+
+        return true;
+    }
+
+    private static bool TryBuildWorkflowToolApprovalResumePayload(
+        CardActionSubmission submission,
+        out WorkflowToolApprovalResumeActionPayload payload)
+    {
+        payload = new WorkflowToolApprovalResumeActionPayload();
+        if (!TryGetRequiredValue(submission.Arguments, "execution_id", out var executionId) ||
+            !TryGetRequiredValue(submission.Arguments, "tool_call_id", out var toolCallId) ||
+            !TryGetRequiredValue(submission.Arguments, "approval_request_id", out var approvalRequestId))
+        {
+            return false;
+        }
+
+        payload.ExecutionId = executionId;
+        payload.ToolCallId = toolCallId;
+        payload.ApprovalRequestId = approvalRequestId;
         return true;
     }
 
@@ -421,6 +458,51 @@ public sealed class NyxIdRelayTransport
             payload.PresetId = submission.SubmittedValue.Trim();
         }
 
+        if (submission.Arguments.TryGetValue("model", out var model) &&
+            !string.IsNullOrWhiteSpace(model))
+        {
+            payload.Model = model.Trim();
+        }
+
+        if (submission.Arguments.TryGetValue("page", out var rawPage) &&
+            int.TryParse(rawPage, out var page) &&
+            page > 0)
+        {
+            payload.Page = page;
+        }
+        else if (payload.Action == "list_page" &&
+                 !string.IsNullOrWhiteSpace(submission.SubmittedValue) &&
+                 int.TryParse(submission.SubmittedValue, out var submittedPage) &&
+                 submittedPage > 0)
+        {
+            payload.Page = submittedPage;
+        }
+
+        if (submission.Arguments.TryGetValue("display_mode", out var displayMode) &&
+            !string.IsNullOrWhiteSpace(displayMode))
+        {
+            payload.DisplayMode = displayMode.Trim();
+        }
+
+        return true;
+    }
+
+    private static bool TryBuildNyxIdApprovalPayload(
+        CardActionSubmission submission,
+        out NyxIdApprovalActionPayload payload)
+    {
+        payload = new NyxIdApprovalActionPayload();
+        if (!TryGetRequiredValue(submission.Arguments, "nyxid_approval_request_id", out var requestId))
+            return false;
+
+        if (!submission.Arguments.TryGetValue("nyxid_approval_approved", out var rawApproved) ||
+            !bool.TryParse(rawApproved, out var approved))
+        {
+            return false;
+        }
+
+        payload.RequestId = requestId;
+        payload.Approved = approved;
         return true;
     }
 

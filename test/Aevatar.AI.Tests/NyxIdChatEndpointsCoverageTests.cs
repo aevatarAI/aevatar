@@ -1088,6 +1088,58 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleStreamMessageAsync_ShouldWriteKeepAliveDuringIdleInteraction()
+    {
+        var previousInterval = NyxIdChatEndpoints.StreamKeepAliveInterval;
+        var bodyStream = new SignalingWriteStream("aevatar.nyxid_chat.keepalive");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            NyxIdChatEndpoints.StreamKeepAliveInterval = TimeSpan.FromMilliseconds(10);
+            var context = new DefaultHttpContext();
+            context.Request.Headers.Authorization = "Bearer valid-token";
+            context.Response.Body = bodyStream;
+
+            var runtime = new StubActorRuntime();
+            runtime.Actors["actor-1"] = new StubActor("actor-1");
+            var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>
+            {
+                BeforeEmitAsync = bodyStream.WaitForSignalAsync,
+                Frames =
+                {
+                    new AGUIEvent { RunFinished = new RunFinishedEvent() },
+                },
+            };
+
+            await InvokeTaskAsync(
+                "HandleStreamMessageAsync",
+                context,
+                "scope-a",
+                "actor-1",
+                new NyxIdChatEndpoints.NyxIdChatStreamRequest("long turn", SessionId: "session-keepalive"),
+                runtime,
+                new StubGAgentActorStore(),
+                interactionService,
+                NullLoggerFactory.Instance,
+                timeout.Token);
+
+            context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+            var body = bodyStream.GetText();
+            body.Should().Contain("RUN_STARTED");
+            body.Should().Contain("aevatar.nyxid_chat.keepalive");
+            body.Should().Contain("RUN_FINISHED");
+            body.IndexOf("RUN_STARTED", StringComparison.Ordinal)
+                .Should().BeLessThan(body.IndexOf("aevatar.nyxid_chat.keepalive", StringComparison.Ordinal));
+            body.IndexOf("aevatar.nyxid_chat.keepalive", StringComparison.Ordinal)
+                .Should().BeLessThan(body.IndexOf("RUN_FINISHED", StringComparison.Ordinal));
+        }
+        finally
+        {
+            NyxIdChatEndpoints.StreamKeepAliveInterval = previousInterval;
+        }
+    }
+
+    [Fact]
     public async Task HandleStreamMessageAsync_ShouldWriteNotFoundRunError_WhenResolverReportsMissingActor()
     {
         var context = new DefaultHttpContext();
@@ -1721,6 +1773,81 @@ public class NyxIdChatEndpointsCoverageTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("ignored");
         response.Body.Should().Contain("empty_text");
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDispatchAttachmentOnlyPayload()
+    {
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-attachment");
+        var payload = """
+            {
+              "message_id":"msg-image-relay",
+              "correlation_id":"corr-image-relay",
+              "platform":"slack",
+              "reply_token":"reply-token-image",
+              "agent":{"api_key_id":"scope-attachment"},
+              "conversation":{"platform_id":"room-image","type":"group"},
+              "sender":{"platform_id":"user-image","display_name":"Image User"},
+              "content":{
+                "type":"image",
+                "text":"   ",
+                "attachments":[
+                  {
+                    "content_type":"image",
+                    "url":"https://files.example.test/image.png",
+                    "filename":"image.png",
+                    "mime_type":"image/png",
+                    "size_bytes":2048
+                  }
+                ]
+              }
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        AttachRelayHeaders(context, relay, payload, "msg-image-relay");
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            relay.Transport,
+            relay.Validator,
+            relay.Options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("accepted");
+        response.Body.Should().Contain("msg-image-relay");
+
+        var expectedActorId = BuildScopedRelayConversationActorId("scope-attachment", "slack:group:room-image");
+        runtime.CreateCalls.Should().ContainSingle(call =>
+            call.Type == typeof(ConversationGAgent) &&
+            call.Id == expectedActorId);
+        var actor = (StubActor)runtime.Actors[expectedActorId];
+        var relayInbound = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<NyxRelayInboundActivity>();
+        relayInbound.ReplyToken.Should().Be("reply-token-image");
+        relayInbound.CorrelationId.Should().Be("corr-image-relay");
+        relayInbound.RelayApiKeyId.Should().Be(relay.RelayApiKeyId);
+        var activity = relayInbound.Activity;
+        activity.Content.Text.Should().BeEmpty();
+        activity.Content.Attachments.Should().ContainSingle();
+        var attachment = activity.Content.Attachments[0];
+        attachment.Kind.Should().Be(AttachmentKind.Image);
+        attachment.Name.Should().Be("image.png");
+        attachment.ContentType.Should().Be("image/png");
+        attachment.SizeBytes.Should().Be(2048);
+        attachment.ExternalUrl.Should().Be("https://files.example.test/image.png");
+        attachment.BlobRef.Should().BeEmpty();
     }
 
     [Fact]
@@ -2665,15 +2792,13 @@ public class NyxIdChatEndpointsCoverageTests
 
         await projector.ProjectAsync(
             context,
-            new EventEnvelope { Payload = Any.Pack(new AiTextMessageContentEvent { Delta = "delta-1" }) },
-            CancellationToken.None);
-        await projector.ProjectAsync(
-            context,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new ChatTokenUsageEvent
+            CommittedNyxIdCompletionEnvelope(
+                context.RootActorId,
+                new RoleChatSessionCompletedEvent
                 {
                     SessionId = "session-1",
+                    Content = "done",
+                    ContentEmitted = false,
                     Usage = new TokenUsagePayload
                     {
                         PromptTokens = 2,
@@ -2682,22 +2807,36 @@ public class NyxIdChatEndpointsCoverageTests
                     },
                     Model = "nyxid-model",
                 }),
-            },
-            CancellationToken.None);
-        await projector.ProjectAsync(
-            context,
-            new EventEnvelope { Payload = Any.Pack(new AiTextMessageEndEvent { Content = "done" }) },
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(4);
-        sessionHub.Published[0].Event.TextMessageContent.Delta.Should().Be("delta-1");
-        sessionHub.Published[1].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.Usage);
-        sessionHub.Published[1].Event.Usage.Available.Should().BeTrue();
-        sessionHub.Published[1].Event.Usage.TotalTokens.Should().Be(6);
-        sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
-        sessionHub.Published[3].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
+        sessionHub.Published.Should().HaveCount(5);
+        sessionHub.Published[0].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageStart);
+        sessionHub.Published[1].Event.TextMessageContent.Delta.Should().Be("done");
+        sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.Usage);
+        sessionHub.Published[2].Event.Usage.Available.Should().BeTrue();
+        sessionHub.Published[2].Event.Usage.TotalTokens.Should().Be(6);
+        sessionHub.Published[3].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
+        sessionHub.Published[4].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
         sessionHub.Published.Should().OnlyContain(x => x.RootActorId == "actor-1" && x.SessionId == "session-1");
     }
+
+    private static EventEnvelope CommittedNyxIdCompletionEnvelope(string actorId, RoleChatSessionCompletedEvent evt) => new()
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Payload = Any.Pack(new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = Guid.NewGuid().ToString("N"),
+                Version = 1,
+                EventData = Any.Pack(evt),
+                Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            StateRoot = Any.Pack(new RoleGAgentState()),
+        }),
+        Route = EnvelopeRouteSemantics.CreateObserverPublication(actorId),
+        Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+    };
 
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
     {
@@ -3543,6 +3682,7 @@ public class NyxIdChatEndpointsCoverageTests
         public List<AGUIEvent> Frames { get; } = [];
         public Exception? Exception { get; init; }
         public NyxIdChatStartError? Failure { get; init; }
+        public Func<CancellationToken, Task>? BeforeEmitAsync { get; init; }
 
         public async Task<CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus>> ExecuteAsync(
             TCommand command,
@@ -3566,6 +3706,9 @@ public class NyxIdChatEndpointsCoverageTests
             var receipt = new NyxIdChatAcceptedReceipt(actorId, sessionId, sessionId, sessionId);
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
+
+            if (BeforeEmitAsync != null)
+                await BeforeEmitAsync(ct);
 
             foreach (var frame in Frames)
                 await emitAsync(frame, ct);
@@ -3595,6 +3738,41 @@ public class NyxIdChatEndpointsCoverageTests
                 NyxIdApprovalCommand approval => (approval.ActorId, approval.SessionId),
                 _ => ("actor", "session"),
             };
+    }
+
+    private sealed class SignalingWriteStream(string signalText) : MemoryStream
+    {
+        private readonly TaskCompletionSource _signal =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await base.WriteAsync(buffer, cancellationToken);
+            Observe(buffer.Span);
+        }
+
+        public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            await base.WriteAsync(buffer, offset, count, cancellationToken);
+            Observe(buffer.AsSpan(offset, count));
+        }
+
+        public Task WaitForSignalAsync(CancellationToken ct) => _signal.Task.WaitAsync(ct);
+
+        public string GetText()
+        {
+            Position = 0;
+            using var reader = new StreamReader(this, Encoding.UTF8, leaveOpen: true);
+            return reader.ReadToEnd();
+        }
+
+        private void Observe(ReadOnlySpan<byte> buffer)
+        {
+            if (Encoding.UTF8.GetString(buffer).Contains(signalText, StringComparison.Ordinal))
+                _signal.TrySetResult();
+        }
     }
 
     private sealed class StubNyxIdRelayScopeResolver : INyxIdRelayScopeResolver

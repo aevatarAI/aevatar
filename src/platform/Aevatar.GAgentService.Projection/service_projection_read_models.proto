@@ -27,6 +27,7 @@ message ServiceCatalogReadModel {
   google.protobuf.Timestamp updated_at_utc_value = 15;
   repeated ServiceCatalogEndpointReadModel endpoint_entries = 16;
   repeated string policy_id_entries = 17;
+  ServiceCatalogExternalExposureReadModel external_exposure = 18;
 }
 
 message ServiceCatalogEndpointReadModel {
@@ -36,6 +37,11 @@ message ServiceCatalogEndpointReadModel {
   string request_type_url = 4;
   string response_type_url = 5;
   string description = 6;
+}
+
+message ServiceCatalogExternalExposureReadModel {
+  string nyxid_slug = 1;
+  google.protobuf.Timestamp registered_at_utc_value = 2;
 }
 
 // --- ServiceDeploymentCatalogReadModel ---

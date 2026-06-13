@@ -13,6 +13,7 @@ public sealed class NyxIdApprovalsToolTests
 {
     [Theory]
     [InlineData("approve", true)]
+    [InlineData("reject", false)]
     [InlineData("deny", false)]
     public async Task ExecuteAsync_ShouldSendNyxIdApprovedBooleanForDecisionActions(
         string action,

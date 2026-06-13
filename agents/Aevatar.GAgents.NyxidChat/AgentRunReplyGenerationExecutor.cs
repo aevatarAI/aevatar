@@ -81,12 +81,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 generationContext.LlmControl,
                 generationContext.ToolContext,
                 replyRequest.PriorHistory.ToArray(),
+                BuildAttachmentInputContext(replyRequest, generationContext.LlmControl),
                 forceDisableTools: false,
                 metadataCts.Token)
                 .ConfigureAwait(false);
             var ownerFallbackControl = ResolveInitialOwnerFallbackControl(
                 generationContext.OwnerFallbackLlmControl,
-                plan.OwnerFallbackLlmControl);
+                plan.OwnerFallbackLlmControl,
+                fallbackToServerDefaultRouting: true);
             var ownerFallbackToolContext = ResolveInitialOwnerFallbackToolContext(
                 generationContext.OwnerFallbackToolContext,
                 plan.OwnerFallbackToolContext,
@@ -194,6 +196,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
         var generator = RequireStepGenerator();
+        var stepMetadata = AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata);
+        var stepControl = AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState);
         var planToolContext = AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState);
         if (workItem.StepState.FinalNoToolsStep)
         {
@@ -201,14 +205,21 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             // slash silently consumed.
             // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
             // non-slash text path unchanged (owner-LLM chat fallback).
-            planToolContext = planToolContext with { SenderBinding = AgentToolSenderBindingContext.Empty };
+            planToolContext = ClearSenderBinding(planToolContext);
+            if (UsesServerDefaultFallbackRouting(stepControl))
+            {
+                stepMetadata = StripServerDefaultFallbackMetadata(stepMetadata);
+                stepControl = UseServerDefaultRouting(stepControl);
+                planToolContext = UseServerDefaultRouting(planToolContext, stepControl);
+            }
         }
         var plan = await generator.BuildStepPlanAsync(
                 request.Activity!,
-                AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
-                AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
+                stepMetadata,
+                stepControl,
                 planToolContext,
                 priorHistory: null,
+                attachmentContext: null,
                 forceDisableTools: workItem.StepState.FinalNoToolsStep,
                 ct: ct)
             .ConfigureAwait(false);
@@ -322,6 +333,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
                 AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
                 priorHistory: null,
+                attachmentContext: null,
                 forceDisableTools: false,
                 ct)
             .ConfigureAwait(false);
@@ -568,6 +580,18 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             ownerFallbackToolContext);
     }
 
+    private static ChatAttachmentInputContext BuildAttachmentInputContext(
+        NeedsLlmReplyEvent request,
+        LLMControlContext control)
+    {
+        var token = NormalizeOptional(control.NyxIdAccessToken)
+                    ?? NormalizeOptional(control.NyxIdOrgToken)
+                    ?? NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        return new ChatAttachmentInputContext(
+            request.RecentAttachmentActivities.Select(entry => entry.Clone()).ToArray(),
+            token);
+    }
+
     private async Task<LLMControlContext> ApplyBotOwnerLlmConfigAsync(
         NeedsLlmReplyEvent request,
         LLMControlContext control,
@@ -661,18 +685,66 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Credentials = context.Credentials with { SenderNyxIdAccessToken = null },
         };
 
+    private static LLMControlContext UseServerDefaultRouting(LLMControlContext control) =>
+        control with
+        {
+            SenderNyxIdAccessToken = null,
+            ModelOverride = null,
+            NyxIdRoutePreference = null,
+            MaxToolRoundsOverride = null,
+        };
+
+    private static bool UsesServerDefaultFallbackRouting(LLMControlContext control) =>
+        string.IsNullOrWhiteSpace(control.ModelOverride) &&
+        string.IsNullOrWhiteSpace(control.NyxIdRoutePreference) &&
+        !control.MaxToolRoundsOverride.HasValue;
+
+    private static AgentToolExecutionContext UseServerDefaultRouting(
+        AgentToolExecutionContext context,
+        LLMControlContext control)
+    {
+        var sanitized = ClearSenderBinding(context) with
+        {
+            Routing = new LLMRequestRoutingContext(
+                ModelOverride: null,
+                NyxIdRoutePreference: null,
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: NormalizeOptional(control.UserMemoryPrompt) ?? NormalizeOptional(context.Routing.UserMemoryPrompt)),
+        };
+        return control.ToToolContext(sanitized);
+    }
+
+    private static Dictionary<string, string> StripServerDefaultFallbackMetadata(
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        var sanitized = new Dictionary<string, string>(metadata, StringComparer.Ordinal);
+        sanitized.Remove(LLMRequestMetadataKeys.SenderBindingId);
+        sanitized.Remove(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        sanitized.Remove(LLMRequestMetadataKeys.ModelOverride);
+        sanitized.Remove(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        sanitized.Remove(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        return sanitized;
+    }
+
     private static LLMControlContext ResolveInitialOwnerFallbackControl(
         LLMControlContext ownerSnapshot,
-        LLMControlContext? planFallback)
+        LLMControlContext? planFallback,
+        bool fallbackToServerDefaultRouting = false)
     {
         var candidate = planFallback ?? LLMControlContext.Empty;
         return new LLMControlContext(
             NormalizeOptional(ownerSnapshot.NyxIdAccessToken),
             NormalizeOptional(ownerSnapshot.NyxIdOrgToken),
             SenderNyxIdAccessToken: null,
-            NormalizeOptional(candidate.ModelOverride) ?? NormalizeOptional(ownerSnapshot.ModelOverride),
-            NormalizeOptional(candidate.NyxIdRoutePreference) ?? NormalizeOptional(ownerSnapshot.NyxIdRoutePreference),
-            candidate.MaxToolRoundsOverride ?? ownerSnapshot.MaxToolRoundsOverride,
+            fallbackToServerDefaultRouting
+                ? null
+                : NormalizeOptional(candidate.ModelOverride) ?? NormalizeOptional(ownerSnapshot.ModelOverride),
+            fallbackToServerDefaultRouting
+                ? null
+                : NormalizeOptional(candidate.NyxIdRoutePreference) ?? NormalizeOptional(ownerSnapshot.NyxIdRoutePreference),
+            fallbackToServerDefaultRouting
+                ? null
+                : candidate.MaxToolRoundsOverride ?? ownerSnapshot.MaxToolRoundsOverride,
             NormalizeOptional(candidate.UserMemoryPrompt) ?? NormalizeOptional(ownerSnapshot.UserMemoryPrompt));
     }
 
@@ -689,6 +761,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 NormalizeOptional(ownerControl.NyxIdAccessToken),
                 NormalizeOptional(ownerControl.NyxIdOrgToken),
                 SenderNyxIdAccessToken: null),
+            Routing = new LLMRequestRoutingContext(
+                NormalizeOptional(ownerControl.ModelOverride),
+                NormalizeOptional(ownerControl.NyxIdRoutePreference),
+                ownerControl.MaxToolRoundsOverride,
+                NormalizeOptional(ownerControl.UserMemoryPrompt)),
         };
         return ownerControl.ToToolContext(source);
     }

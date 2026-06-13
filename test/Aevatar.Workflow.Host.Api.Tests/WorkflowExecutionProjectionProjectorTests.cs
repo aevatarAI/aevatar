@@ -898,6 +898,13 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     Input = "hello",
                     FinalOutput = "done",
                     FinalError = "err",
+                    ExecutionStates =
+                    {
+                        ["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
+                        {
+                            InputFileRefs = { BuildWorkflowFileRef("file-current") },
+                        }),
+                    },
                 },
                 includeEnvelopeTimestamp: false));
 
@@ -910,9 +917,23 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.ScopeId.Should().Be("scope-current");
         document.Status.Should().Be(status);
         document.Compiled.Should().BeTrue();
-        document.ExecutionStateCount.Should().Be(0);
+        document.ExecutionStateCount.Should().Be(1);
         document.Success.Should().Be(expectedSuccess);
         document.UpdatedAt.Should().Be(new DateTimeOffset(2026, 3, 18, 7, 0, 0, TimeSpan.Zero));
+        var fileRef = document.InputFileRefs.Should().ContainSingle().Subject;
+        fileRef.FileId.Should().Be("file-current");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-current");
+        fileRef.SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_1");
+        fileRef.SourceResourceKey.Should().Be("resource-file-current");
+        fileRef.FileName.Should().Be("file-current.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(1234);
+        fileRef.Sha256.Should().Be("sha-file-current");
+        fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        fileRef.OwnerRunId.Should().Be("run-owner");
+        fileRef.OwnerScopeId.Should().Be("scope-owner");
     }
 
     [Fact]
@@ -1241,6 +1262,24 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             }),
         };
     }
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = $"resource-{fileId}",
+            FileName = $"{fileId}.pdf",
+            MediaType = "application/pdf",
+            SizeBytes = 1234,
+            Sha256 = $"sha-{fileId}",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+            OwnerRunId = "run-owner",
+            OwnerScopeId = "scope-owner",
+        };
 
     private sealed class RecordingWriteDispatcher<TReadModel> : IProjectionWriteDispatcher<TReadModel>
         where TReadModel : class, IProjectionReadModel

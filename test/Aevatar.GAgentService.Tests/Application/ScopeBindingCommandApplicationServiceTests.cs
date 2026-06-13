@@ -46,10 +46,12 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            Workflow: new ScopeBindingWorkflowSpec([
-                "name: main\nsteps:\n  - run: echo hello",
-                "name: child\nsteps:\n  - run: echo child",
-            ])));
+            Workflow: new ScopeBindingWorkflowSpec(
+                "workflow-stable-id",
+                [
+                    "name: main_runtime\nsteps:\n  - run: echo hello",
+                    "name: child\nsteps:\n  - run: echo child",
+                ])));
 
         commandPort.Calls.Should().HaveCount(6);
         commandPort.Calls[0].Method.Should().Be("CreateServiceAsync");
@@ -64,8 +66,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         result.AcceptanceStage.Should().Be("accepted");
         result.PropagationStage.Should().Be("readmodel_propagating");
         result.Workflow.Should().NotBeNull();
-        result.Workflow!.WorkflowName.Should().Be("main");
-        result.DisplayName.Should().Be("main");
+        result.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
+        result.Workflow!.WorkflowName.Should().Be("main_runtime");
+        result.DisplayName.Should().Be("main_runtime");
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
         createCommand.Spec.Identity.Should().BeEquivalentTo(new ServiceIdentity
@@ -174,7 +177,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeBindingImplementationKind.Workflow,
             Workflow: new ScopeBindingWorkflowSpec([
                 "name: main\nsteps:\n  - run: echo hello",
-            ])));
+            ]),
+            DisplayName: "Orders App"));
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
         createCommand.Spec.Identity.AppId.Should().Be(ScopeWorkflowCapabilityOptions.FixedServiceAppId);
@@ -671,6 +675,57 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         governanceCommandPort.UpdateEndpointCatalogCommand!.Spec.Endpoints.Should().ContainSingle();
         governanceCommandPort.UpdateEndpointCatalogCommand.Spec.Endpoints[0].ExposureKind.Should().Be(ServiceEndpointExposureKind.Public);
         governanceCommandPort.UpdateEndpointCatalogCommand.Spec.Endpoints[0].PolicyIds.Should().Equal("invoke-policy");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldPreserveExistingExternalExposure_WhenUpdatingServiceDefinition()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            ScopeId,
+            DefaultOptions.ServiceAppId,
+            DefaultOptions.ServiceNamespace,
+            DefaultOptions.DefaultServiceId,
+            "main",
+            "rev-old",
+            "rev-old",
+            "dep-old",
+            "actor-old",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "chat",
+                    ServiceEndpointKind.Chat.ToString(),
+                    "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                    "type.googleapis.com/aevatar.ai.ChatResponseEvent",
+                    "Default chat endpoint."),
+            ],
+            [],
+            DateTimeOffset.UtcNow,
+            new ServiceExternalExposureSnapshot(
+                "aevatar-orders",
+                DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))));
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            DisplayName: "Orders App"));
+
+        commandPort.Calls[0].Method.Should().Be("UpdateServiceAsync");
+        var updateCommand = commandPort.Calls[0].Command.Should().BeOfType<UpdateServiceDefinitionCommand>().Subject;
+        updateCommand.Spec.ExternalExposure.Should().NotBeNull();
+        updateCommand.Spec.ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
+        updateCommand.Spec.ExternalExposure.RegisteredAt.ToDateTimeOffset()
+            .Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
     }
 
     [Fact]

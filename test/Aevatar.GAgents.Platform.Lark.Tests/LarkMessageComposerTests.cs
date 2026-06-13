@@ -182,6 +182,94 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void Compose_WhenActionCarriesLlmPaginationPayload_ProjectsTypedFields()
+    {
+        var intent = new MessageContent { Text = "Routes" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "llp",
+            Label = "Next",
+            LlmSelection = new LlmSelectionActionPayload
+            {
+                Action = "list_page",
+                Page = 2,
+                DisplayMode = "route",
+            },
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var value = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[1]
+            .GetProperty("behaviors")[0]
+            .GetProperty("value");
+
+        value.GetProperty("llm_action").GetString().ShouldBe("list_page");
+        value.GetProperty("page").GetInt32().ShouldBe(2);
+        value.GetProperty("display_mode").GetString().ShouldBe("route");
+    }
+
+    [Fact]
+    public void Compose_WhenActionCarriesNyxIdApprovalPayload_ProjectsTypedFields()
+    {
+        var intent = new MessageContent { Text = "Approval required" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "nyxid-approval-approve",
+            Label = "Approve",
+            NyxIdApproval = new NyxIdApprovalActionPayload
+            {
+                RequestId = "nyx-approval-1",
+                Approved = true,
+            },
+            Arguments =
+            {
+                ["nyxid_approval_request_id"] = "forged-request",
+                ["nyxid_approval_approved"] = "false",
+            },
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var value = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[1]
+            .GetProperty("behaviors")[0]
+            .GetProperty("value");
+
+        value.GetProperty("action_id").GetString().ShouldBe("nyxid-approval-approve");
+        value.GetProperty("nyxid_approval_request_id").GetString().ShouldBe("nyx-approval-1");
+        value.GetProperty("nyxid_approval_approved").GetBoolean().ShouldBeTrue();
+    }
+
+    [Fact]
     public void Compose_WhenSingleCardSuppliesTitle_DoesNotDuplicateInBody()
     {
         // The first card's Title is consumed by the Lark card header (see ResolveHeaderTitle).

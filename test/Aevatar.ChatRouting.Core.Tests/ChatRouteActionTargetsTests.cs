@@ -1,4 +1,5 @@
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
 
 namespace Aevatar.ChatRouting.Core.Tests;
@@ -11,13 +12,20 @@ public sealed class ChatRouteActionTargetsTests
         var action = ChatRouteActionTargets.ForwardToVoiceAttachTarget(
             " voice-agent-1 ",
             " voice_presence_openai ",
-            "workspace.voice");
+            "workspace.voice",
+            new VoiceSessionOverrides
+            {
+                Instructions = "route voice",
+                SampleRateHz = 16000,
+            });
 
         action.ActionCase.Should().Be(ChatRouteAction.ActionOneofCase.ForwardToModel);
         action.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.voice");
         action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Should().BeNull();
         action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.ActorId.Should().Be("voice-agent-1");
         action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.VoiceModuleName.Should().Be("voice_presence_openai");
+        action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.SessionOverrides.Instructions.Should().Be("route voice");
+        action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.SessionOverrides.SampleRateHz.Should().Be(16000);
     }
 
     [Fact]

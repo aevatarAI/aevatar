@@ -13,6 +13,7 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
@@ -46,7 +47,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         IToolApprovalHandler? approvalHandler = null,
-        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -54,9 +56,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             toolMiddlewares,
             llmMiddlewares,
             toolSources,
-            approvalHandler)
+            // RoleGAgent owns the pending-approval continuation (persisted state +
+            // remote escalation + timeout), so yielding is its capability default.
+            // Surfaces without that continuation must NOT wire a yielding handler;
+            // they fall through to MissingApprovalHandler and fail closed.
+            approvalHandler ?? new YieldApprovalHandler())
     {
         RemoteToolApprovalPort = remoteToolApprovalPort;
+        RemoteToolApprovalNotificationPort = remoteToolApprovalNotificationPort;
     }
 
     /// <summary>Role name.</summary>
@@ -68,6 +75,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     public string RoleId { get; private set; } = "";
 
     protected IRemoteToolApprovalPort? RemoteToolApprovalPort { get; }
+
+    protected IRemoteToolApprovalNotificationPort? RemoteToolApprovalNotificationPort { get; }
 
     // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
     //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
@@ -83,6 +92,20 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
 
         runtimeState = new VoicePresenceRuntimeState();
+        return false;
+    }
+
+    public bool TryGetVoiceSessionDefaults(string moduleName, out VoiceSessionDefaults defaults)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+
+        if (State.VoiceSessionDefaults.TryGetValue(moduleName, out var stored))
+        {
+            defaults = stored.Clone();
+            return true;
+        }
+
+        defaults = new VoiceSessionDefaults();
         return false;
     }
 
@@ -108,6 +131,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
     {
         await PersistDomainEventAsync(evt);
+        foreach (var enable in evt.VoicePresenceEnables)
+            await PersistVoicePresenceEnableAsync(enable, CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public Task HandleVoicePresenceEnableRequested(VoicePresenceEnableRequested evt)
+    {
+        return PersistVoicePresenceEnableAsync(evt, CancellationToken.None);
     }
 
     /// <summary>Handles tool approval decisions from the frontend or NyxID remote.</summary>
@@ -231,16 +262,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         try
         {
-            var submission = await RemoteToolApprovalPort.SubmitAsync(
-                new RemoteToolApprovalRequest(
-                    pending.RequestId,
-                    pending.ToolName,
-                    pending.ToolCallId,
-                    pending.ArgumentsJson,
-                    ToolApprovalMode.Auto,
-                    pending.IsDestructive),
-                CancellationToken.None);
-
+            var pendingToolContext = ResolvePendingToolContext(pending);
+            var request = new RemoteToolApprovalRequest(
+                pending.RequestId,
+                pending.ToolName,
+                pending.ToolCallId,
+                pending.ArgumentsJson,
+                ToolApprovalMode.Auto,
+                pending.IsDestructive);
+            var submission = await RemoteToolApprovalPort.SubmitAsync(request, CancellationToken.None);
             var callbackId = BuildRemoteApprovalStatusCallbackId(pending.RequestId, submission.RemoteApprovalId, 1);
             await PersistDomainEventAsync(new RemoteToolApprovalSubmittedEvent
             {
@@ -249,6 +279,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 StatusCheckAttempt = 1,
                 ExpiresAtUnixMs = ResolveRemoteApprovalDeadlineUnixMs(submission.ExpiresAt),
             });
+
+            await TryNotifyRemoteApprovalSubmittedAsync(request, submission, pendingToolContext);
 
             await ScheduleRemoteApprovalStatusCheckAsync(
                 pending.RequestId,
@@ -265,6 +297,32 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 pending,
                 "approval_timeout",
                 $"Remote approval submit failed: {ex.Message}");
+        }
+    }
+
+    private async Task TryNotifyRemoteApprovalSubmittedAsync(
+        RemoteToolApprovalRequest request,
+        RemoteToolApprovalSubmission submission,
+        AgentToolExecutionContext toolContext)
+    {
+        var notificationPort = RemoteToolApprovalNotificationPort;
+        if (notificationPort is null)
+            return;
+
+        try
+        {
+            await notificationPort.NotifyAsync(
+                new RemoteToolApprovalNotification(request, submission, toolContext),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "[{Role}] Remote approval notification failed. request={RequestId}, remote={RemoteApprovalId}",
+                RoleName,
+                request.RequestId,
+                submission.RemoteApprovalId);
         }
     }
 
@@ -613,6 +671,37 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var next = current.Clone();
         next.VoicePresence[evt.ModuleName] = evt.State?.Clone() ?? new VoicePresenceRuntimeState();
         return next;
+    }
+
+    private Task PersistVoicePresenceEnableAsync(VoicePresenceEnableRequested request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var normalized = VoicePresenceEnableRequests.Normalize(request);
+        return PersistDomainEventAsync(new VoicePresenceRuntimeStateChangedEvent
+        {
+            ModuleName = normalized.ModuleName,
+            State = BuildVoicePresenceEnabledState(normalized),
+        }, ct);
+    }
+
+    private static VoicePresenceRuntimeState BuildVoicePresenceEnabledState(
+        VoicePresenceEnableRequested request)
+    {
+        var sessionConfig = VoicePresenceEnableRequests.ToSessionConfig(request);
+        return new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.Idle,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+            NextResponseId = 1,
+            Initialized = true,
+            PcmSampleRateHz = sessionConfig.SampleRateHz > 0
+                ? sessionConfig.SampleRateHz
+                : VoicePresenceEnableRequests.DefaultPcmSampleRateHz,
+            RemoteAudioSupport = request.RemoteAudioSupport,
+            ActiveSessionConfig = sessionConfig,
+        };
     }
 
     /// <summary>Returns agent description.</summary>
@@ -1204,6 +1293,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         next.RoleName = evt.RoleName ?? string.Empty;
         next.EventModules = NormalizeModuleExtensionText(evt.EventModules);
         next.EventRoutes = NormalizeModuleExtensionText(evt.EventRoutes);
+        next.VoiceSessionDefaults.Clear();
+        foreach (var entry in evt.VoiceSessionDefaults)
+        {
+            var moduleName = NormalizeModuleExtensionText(entry.Key);
+            if (string.IsNullOrWhiteSpace(moduleName))
+                continue;
+
+            next.VoiceSessionDefaults[moduleName] = entry.Value?.Clone() ?? new VoiceSessionDefaults();
+        }
+        foreach (var enable in evt.VoicePresenceEnables)
+        {
+            if (enable is null || !VoicePresenceEnableRequests.HasSessionDefaults(enable))
+                continue;
+
+            var normalized = VoicePresenceEnableRequests.Normalize(enable);
+            next.VoiceSessionDefaults[normalized.ModuleName] = normalized.SessionDefaults.Clone();
+        }
         overrides.ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName.Trim();
         overrides.Model = string.IsNullOrWhiteSpace(evt.Model) ? string.Empty : evt.Model.Trim();
         overrides.SystemPrompt = evt.SystemPrompt ?? string.Empty;

@@ -54,4 +54,22 @@ public static class ChannelScheduleCalculator
         var delta = nextRunAtUtc - nowUtc;
         return delta <= TimeSpan.Zero ? TimeSpan.FromSeconds(1) : delta;
     }
+
+    public static bool TryGetOneShotOccurrence(
+        DateTimeOffset runAtUtc,
+        DateTimeOffset fromUtc,
+        out DateTimeOffset nextRunAtUtc,
+        out string? error)
+    {
+        nextRunAtUtc = runAtUtc.ToUniversalTime();
+        error = null;
+
+        if (nextRunAtUtc <= fromUtc)
+        {
+            error = "one-shot run_at_utc must be in the future";
+            return false;
+        }
+
+        return true;
+    }
 }

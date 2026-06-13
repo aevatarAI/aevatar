@@ -55,6 +55,7 @@ roles:
     event_routes: |
       event.type == ChatRequestEvent -> llm_handler
     connectors: [my_api, my_mcp]
+    allowed_tools: [web_search, calendar_lookup]
     extensions:
       event_modules: "fallback_module"
       event_routes: "event.type == X -> fallback_module"
@@ -62,6 +63,7 @@ roles:
 
 - `agent_kind` 是可选的稳定 kind token；配置后由 `WorkflowRunGAgent` 通过 Foundation runtime 创建该 role actor；省略时默认 `workflow.role-agent`。
 - `roles` 配置会透传到 `InitializeRoleAgentEvent`，并在 role actor 运行时生效。
+- `allowed_tools` 是 role 级 agent tool 可见范围上限；省略表示不限制，显式 `[]` 表示该 role 默认不暴露 agent tool。
 - `event_modules/event_routes` 合并优先级：平铺字段 > `extensions.*`。
 - `workflow yaml roles` 与独立 `role yaml` 共享同一归一化语义，避免双套解析规则。
 - step 只能通过 `target_role` / `role` 指向角色；`parameters.agent_type` 与 `parameters.agent_id` 不是 workflow DSL。
@@ -73,8 +75,12 @@ roles:
 
 ### `transform`
 
-- 作用：对输入做确定性变换，既支持纯文本操作（如 `trim`/`uppercase`/`count_words`/`split`），也支持 `json_extract` 这类 JSON 投影。
+- 作用：对输入做确定性变换，既支持纯文本操作（如 `trim`/`uppercase`/`count_words`/`split`），也支持 `json_extract` 这类 JSON 投影，并提供 decimal-only 数值主链。
 - 常用参数：`op`、`n`、`separator`；当 `op=json_extract` 时，还可用 `path`、`field`、`sort_by`、`order`。
+- 金额级确定性操作：`sum`、`subtract`、`multiply`、`divide`、`round`、`min`、`max`、`group_by`。这些操作会被解析为 typed `transform_operation`，同时保留 legacy `parameters` map；识别到的数值/分组操作解析或运行失败时发布失败的 `StepCompletedEvent`，不会包装成成功文本。
+- 标量数值操作默认从输入读取数字列表，也可用 `values`/`numbers` 传入逗号、换行或 JSON array；`round` 可用 `precision`/`digits`/`scale`/`places` 指定小数位。
+- `group_by` v1 只接受 JSON array of objects，支持单个 `key`/`group_by`、单个 `value`/`value_field`/`field`，`aggregate` 仅支持 `sum`、`count`、`avg`。这不是脚本、表达式、SQL 或 LLM 数据处理入口。
+- `rss_extract_items` 是唯一 RSS/Atom 解析 op 名称，不提供 `rss_extract` alias。输入为 RSS 2.0 或 Atom XML，输出 JSON array，每个 item 只包含 `source_id`、`source_url`、`id`、`title`、`link`、`published_at`、`summary`。
 
 ```yaml
 steps:
@@ -95,6 +101,49 @@ steps:
       sort_by: createdAt
       order: desc
       n: "50"
+```
+
+```yaml
+steps:
+  - id: sum_invoice_lines
+    type: transform
+    parameters:
+      op: sum
+      values: "12.10, 0.20, 3.005"
+```
+
+```yaml
+steps:
+  - id: total_by_currency
+    type: transform
+    parameters:
+      op: group_by
+      group_by: currency
+      field: amount
+      aggregate: sum
+      precision: "2"
+```
+
+```yaml
+steps:
+  - id: sum_by_department
+    type: transform
+    parameters:
+      op: group_by
+      key: department
+      value: amount
+      aggregate: sum
+      precision: "2"
+```
+
+```yaml
+steps:
+  - id: extract_feed_items
+    type: transform
+    parameters:
+      op: rss_extract_items
+      source_id: "vendor-feed"
+      source_url: "https://example.com/feed.xml"
 ```
 
 ### `assign`
@@ -310,15 +359,26 @@ steps:
   - id: analyze
     type: llm_call
     target_role: analyst
+    allowed_tools: [web_search]
     parameters:
       prompt_prefix: "Analyze this input:"
 ```
+
+- `allowed_tools` 可写在 `llm_call` step 根部，用于收窄目标 role 的工具范围；省略继承 role 上限，显式 `[]` 表示本次 LLM call 不暴露 agent tool。
+- role 与 step 均配置时取交集；同一结果会同时限制 provider 可见的 `LLMRequest.Tools` 与执行期 tool lookup。
 
 ### `tool_call`
 
 - 作用：调用已注册工具（函数/工具链/MCP 工具）。
 - 常用参数：`tool`。
+<<<<<<< HEAD
 - 对外系统状态查询应优先做成只读 typed tool，再由 workflow 用 `tool_call` 编排；例如 Lark 审批实例状态使用 `lark_approvals_get` 返回 `status`、`status_raw`、`terminal`、`terminal_kind` 等控制流字段，workflow 不需要手拼 `nyxid_proxy` 路径。
+=======
+- 工具输出若是 JSON object 且步骤成功，运行时会把顶层字段镜像为 `steps.<step_id>.json.<field>` 变量，供后续 `switch` / `conditional` / `while` 分支使用。
+- 需要人工审批的 direct `tool_call` 不把 `ApprovalPending` 当作失败完成。`ToolCallModule` 将原始 tool name、arguments、`execution_id`、`tool_call_id`、`approval_request_id` 持久化到 workflow actor state，并发布 `WorkflowSuspendedEvent.tool_approval`。该 suspension 只暴露审批对账键，不暴露工具参数。
+- tool approval resume 使用 `WorkflowResumedEvent.tool_approval` nested payload，仅携带 `execution_id`、`tool_call_id`、`approval_request_id`。客户端不得在 resume payload 中提交 tool name 或 arguments；approved replay 必须从 actor pending state 读取原始工具和参数，并向 tool middleware 传递 typed `ToolApprovalGrant`。
+- resume 对账按 `run_id + step_id + execution_id + tool_call_id + approval_request_id` 精确匹配。approved 后重放原工具；rejected / timed out / non-pending termination fail closed 并清理 pending state；stale 或 mismatched resume event 直接忽略。
+>>>>>>> origin/crnd/integrate-1877
 
 ```yaml
 steps:
@@ -326,6 +386,36 @@ steps:
     type: tool_call
     parameters:
       tool: "web_search"
+```
+
+#### Lark approval status 工具
+
+`lark_approvals_get` 是只读 Lark 审批实例查询工具，输入使用 `instance_code`，可选 `locale` 与 `user_id_type`。工作流不得手工拼接 NyxID proxy path；需要等待审批时，先调用该 typed tool，再基于稳定控制字段分支。
+
+稳定控制字段：
+
+- `success`：工具调用是否得到可解析的实例结果。
+- `status`：归一化状态，常见值为 `running`、`approved`、`rejected`、`withdrawn`、`terminated`。
+- `raw_status`：Lark 原始状态值。
+- `is_terminal` / `terminal_status`：是否进入终态，以及终态名称。
+- `should_continue_waiting`：仍需等待时为 `true`。
+- `approved` / `rejected` / `withdrawn` / `terminated`：便于 workflow 直接分支的布尔字段。
+
+```yaml
+steps:
+  - id: get_instance
+    type: tool_call
+    parameters:
+      tool: lark_approvals_get
+    next: route_status
+
+  - id: route_status
+    type: switch
+    parameters:
+      on: "${steps.get_instance.json.status}"
+      branch.approved: mark_approved
+      branch.rejected: mark_rejected
+      branch._default: wait_or_fail
 ```
 
 ### `evaluate`（别名：`judge`）
@@ -468,11 +558,17 @@ steps:
       lifecycle: "singleton"
 ```
 
+<<<<<<< HEAD
 #### 可复用等待模板
 
 长时间等待外部系统进入终态时，优先把“查询一次状态”建成只读 typed tool，再把“等待/重试/超时”建成普通 catalog workflow，通过 `workflow_call` 复用。模板本身只组合现有原语：`tool_call` 获取状态，`switch` 或 `guard` 判断终态，`delay` 做 durable 等待，下一轮用 `workflow_call` 继续，并在调用侧设置明确的 timeout budget。
 
 仓库内示例：`workflows/lark_approval_instance_wait.yaml`。调用方传入包含 `instance_code` 的 JSON 作为 input；`lark_approvals_get` 输出 `terminal=true` 且 `terminal_kind=approved/rejected/canceled` 时结束，非终态走 durable `delay` 后复用同一 workflow，超时输出 `timed_out=true`。不要为某个外部系统新增专用 polling service、专用 actor 或进程内状态表。
+=======
+#### Lark approval wait 模板
+
+`workflows/lark_approval_wait.yaml` 是可复用审批等待模板，输入为 Lark `instance_code`。它通过 `while + workflow_call + tool_call + switch + delay` 组合调用 `lark_approval_wait_poll`，默认最多轮询 60 次、每轮非终态等待 5000ms。超时预算由 `max_iterations` 与 `duration_ms` 显式表达；需要不同预算时复制模板并调整这两个参数，不新增 Lark 专用 polling runtime。
+>>>>>>> origin/crnd/integrate-1877
 
 ### `dynamic_workflow`
 

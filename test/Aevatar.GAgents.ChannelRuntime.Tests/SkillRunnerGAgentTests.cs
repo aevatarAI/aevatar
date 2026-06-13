@@ -313,6 +313,118 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleInitializeAsync_WhenOneShotReminder_ShouldScheduleFixedRunAt()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        var agent = CreateAgent("skill-runner-one-shot-schedule", provider);
+        await agent.ActivateAsync();
+        var runAt = DateTimeOffset.UtcNow.AddMinutes(30);
+        var command = CreateOneShotInitializeCommand(runAt);
+
+        await agent.HandleInitializeAsync(command);
+
+        scheduler.Timeouts.Should().ContainSingle();
+        scheduler.Timeouts[0].CallbackId.Should().Be(SkillRunnerDefaults.TriggerCallbackId);
+        scheduler.Timeouts[0].TriggerEnvelope.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason
+            .Should().Be(SkillRunnerDefaults.OneShotTriggerReason);
+        agent.State.ScheduleMode.Should().Be(SkillRunnerScheduleMode.OneShot);
+        agent.State.OneShotRunAt.ToDateTimeOffset().Should().Be(runAt);
+        agent.State.NextRunAt.ToDateTimeOffset().Should().Be(runAt);
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_WhenOneShotReminderCompletes_ShouldDeliverAndRetire()
+    {
+        var dispatcher = new RecordingLarkOutboundDispatcher();
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton<ILarkOutboundDispatcher>(dispatcher);
+                services.AddSingleton<IActorRuntimeCallbackScheduler>(new RecordingCallbackScheduler());
+            });
+        var agent = CreateAgent("skill-runner-one-shot-fire", provider);
+        await agent.ActivateAsync();
+        AttachNyxIdApiClient(agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_one_shot"}}"""));
+        await agent.HandleInitializeAsync(CreateOneShotInitializeCommand(DateTimeOffset.UtcNow.AddMinutes(30)));
+
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand
+        {
+            Reason = SkillRunnerDefaults.OneShotTriggerReason,
+        });
+
+        dispatcher.Requests.Should().ContainSingle();
+        dispatcher.Requests[0].ContentJson.Should().Contain("Submit the report");
+        agent.State.Enabled.Should().BeFalse();
+        agent.State.NextRunAt.Should().BeNull();
+        agent.State.RetiredAt.Should().NotBeNull();
+        agent.State.RetirementReason.Should().Be(SkillRunnerDefaults.OneShotRetirementReasonCompleted);
+
+        var persisted = await provider.GetRequiredService<IEventStore>().GetEventsAsync("skill-runner-one-shot-fire");
+        persisted.Should().Contain(e => e.EventData.Is(SkillRunnerOneShotRetiredEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WhenOneShotRetired_ShouldExposeCompletedReadModel()
+    {
+        var state = new SkillRunnerState
+        {
+            SkillName = SkillRunnerDefaults.OneShotSkillName,
+            TemplateName = "Reminder",
+            ScopeId = "scope-1",
+            ScheduleMode = SkillRunnerScheduleMode.OneShot,
+            OneShotRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 11, 10, 30, 0, TimeSpan.Zero)),
+            LastRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 11, 10, 30, 0, TimeSpan.Zero)),
+            RetiredAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 11, 10, 31, 0, TimeSpan.Zero)),
+            RetirementReason = SkillRunnerDefaults.OneShotRetirementReasonCompleted,
+            Enabled = false,
+        };
+        var stateEvent = new StateEvent
+        {
+            Version = 4,
+            EventId = "evt-retired",
+            EventData = Any.Pack(new SkillRunnerOneShotRetiredEvent
+            {
+                RetiredAt = state.RetiredAt,
+                Reason = state.RetirementReason,
+            }),
+        };
+        var writeDispatcher = new RecordingExecutionWriteDispatcher();
+        var projector = new SkillRunnerExecutionProjector(
+            writeDispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 6, 11, 10, 31, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            new UserAgentCatalogMaterializationContext
+            {
+                RootActorId = "skill-runner-one-shot-readmodel",
+                ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
+            },
+            new EventEnvelope
+            {
+                Id = "runner-state-4",
+                Timestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 11, 10, 31, 0, TimeSpan.Zero)),
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("skill-runner-one-shot-readmodel"),
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = stateEvent,
+                    StateRoot = Any.Pack(state),
+                }),
+            },
+            CancellationToken.None);
+
+        var doc = writeDispatcher.Upserts.Should().ContainSingle().Subject;
+        doc.Status.Should().Be(SkillRunnerDefaults.StatusCompleted);
+        doc.ScheduleMode.Should().Be(SkillRunnerScheduleMode.OneShot);
+        doc.RunAtUtc.Should().Be(state.OneShotRunAt);
+        doc.RetiredAtUtc.Should().Be(state.RetiredAt);
+        doc.RetirementReason.Should().Be(SkillRunnerDefaults.OneShotRetirementReasonCompleted);
+    }
+
+    [Fact]
     public async Task HandleTriggerAsync_WhenDisabled_PersistsRunnerOwnedRejectedEvent()
     {
         await _agent.HandleInitializeAsync(CreateInitializeCommand());
@@ -1782,6 +1894,36 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleTriggerAsync_RemoteSkillAccessDenied_ShouldPersistAccessDeniedFailure()
+    {
+        var fetcher = new FailingRemoteSkillFetcher(
+            RemoteSkillFetchException.AccessDenied(
+                "daily-report",
+                "NyxID proxy returned 403 for Ornn skill fetch.",
+                403));
+        var provider = new StubStreamingProviderFactory("should-not-run");
+        var agent = CreateAgent(
+            "skill-runner-skill-access-denied",
+            providerFactory: provider,
+            remoteSkillFetcher: fetcher);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateSkillRefCommand("daily-report"));
+
+        var failed = await TriggerExhaustedAndReadFailureAsync(
+            _store,
+            "skill-runner-skill-access-denied",
+            agent);
+
+        failed.ErrorCode.Should().Be(SkillRunnerExecutionErrorCode.SkillAccessDenied);
+        failed.SkillName.Should().Be("daily-report");
+        failed.Error.Should().Contain("access denied");
+        failed.Error.Should().Contain("missing proxy scope or service authorization");
+        failed.Error.Should().Contain("recreate or rotate the scheduled agent key");
+        fetcher.Requests.Should().ContainSingle().Which.Should().Be(("nyx-api-key", "daily-report"));
+        provider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleTriggerAsync_WorkflowSkillWithoutDispatchService_ShouldPersistDispatchUnavailableFailure()
     {
         var fetcher = new SequencedRemoteSkillFetcher(RemoteWorkflowSkill("workflow-skill", "daily_flow"));
@@ -2417,6 +2559,23 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         }
     }
 
+    private sealed class RecordingLarkOutboundDispatcher : ILarkOutboundDispatcher
+    {
+        public List<LarkSendNewMessageRequest> Requests { get; } = [];
+
+        public Task<LarkSendNewMessageResult> SendNewMessageAsync(
+            LarkSendNewMessageRequest request,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(LarkSendNewMessageResult.Sent(
+                "om_one_shot",
+                request.PrimaryTarget,
+                usedFallback: false));
+        }
+    }
+
     /// <summary>
     /// Returns a different response per request in the order given. Used to simulate the
     /// `bot not in chat` rejection on the primary attempt followed by a successful fallback
@@ -2460,7 +2619,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             ownerLlmConfigSource: ownerLlmConfigSource,
             toolSources: toolSources,
             remoteSkillFetcher: remoteSkillFetcher,
-            workflowDispatchService: workflowDispatchService)
+            workflowDispatchService: workflowDispatchService,
+            larkOutboundDispatcher: resolvedServices.GetService<ILarkOutboundDispatcher>())
         {
             Services = resolvedServices,
             EventSourcingBehaviorFactory =
@@ -2490,6 +2650,27 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         TemplateName = "summary",
         SkillContent = "You are a summary report runner.",
         ExecutionPrompt = "Run the report.",
+        ScheduleCron = string.Empty,
+        ScheduleTimezone = SkillRunnerDefaults.DefaultTimezone,
+        Enabled = true,
+        ScopeId = "scope-1",
+        ProviderName = SkillRunnerDefaults.DefaultProviderName,
+        OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+        },
+    };
+
+    private static InitializeSkillRunnerCommand CreateOneShotInitializeCommand(DateTimeOffset runAtUtc) => new()
+    {
+        SkillName = SkillRunnerDefaults.OneShotSkillName,
+        TemplateName = "Reminder",
+        ExecutionPrompt = "Send the configured one-shot reminder message exactly as written.",
+        ScheduleMode = SkillRunnerScheduleMode.OneShot,
+        OneShotRunAt = Timestamp.FromDateTimeOffset(runAtUtc.ToUniversalTime()),
+        OneShotMessage = "Submit the report",
         ScheduleCron = string.Empty,
         ScheduleTimezone = SkillRunnerDefaults.DefaultTimezone,
         Enabled = true,
@@ -2625,6 +2806,20 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         {
             Requests.Add((accessToken, nameOrId));
             return Task.FromResult(_skills.Count == 0 ? null : _skills.Dequeue());
+        }
+    }
+
+    private sealed class FailingRemoteSkillFetcher(Exception exception) : IRemoteSkillFetcher
+    {
+        public List<(string AccessToken, string NameOrId)> Requests { get; } = [];
+
+        public Task<SkillDefinition?> FetchSkillAsync(
+            string accessToken,
+            string nameOrId,
+            CancellationToken ct = default)
+        {
+            Requests.Add((accessToken, nameOrId));
+            return Task.FromException<SkillDefinition?>(exception);
         }
     }
 

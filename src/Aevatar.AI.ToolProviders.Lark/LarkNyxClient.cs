@@ -124,55 +124,6 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
-    public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct)
-    {
-        var paramsParts = new List<string>
-        {
-            $"page_size={request.PageSize}",
-        };
-        if (!string.IsNullOrWhiteSpace(request.PageToken))
-            paramsParts.Add($"page_token={Uri.EscapeDataString(request.PageToken.Trim())}");
-
-        var body = new Dictionary<string, object?>
-        {
-            ["query"] = request.Query,
-        };
-        var filter = new Dictionary<string, object?>();
-        if (request.ChatIds is { Count: > 0 })
-            filter["chat_ids"] = request.ChatIds;
-        if (request.SenderIds is { Count: > 0 })
-            filter["from_ids"] = request.SenderIds;
-        if (!string.IsNullOrWhiteSpace(request.IncludeAttachmentType))
-            filter["include_attachment_types"] = new[] { request.IncludeAttachmentType.Trim() };
-        if (!string.IsNullOrWhiteSpace(request.ChatType))
-            filter["chat_type"] = request.ChatType.Trim();
-        if (!string.IsNullOrWhiteSpace(request.SenderType))
-            filter["from_types"] = new[] { request.SenderType.Trim() };
-        if (!string.IsNullOrWhiteSpace(request.ExcludeSenderType))
-            filter["exclude_from_types"] = new[] { request.ExcludeSenderType.Trim() };
-        if (request.IsAtMe)
-            filter["is_at_me"] = true;
-
-        var timeRange = new Dictionary<string, object?>();
-        if (!string.IsNullOrWhiteSpace(request.StartTime))
-            timeRange["start_time"] = request.StartTime.Trim();
-        if (!string.IsNullOrWhiteSpace(request.EndTime))
-            timeRange["end_time"] = request.EndTime.Trim();
-        if (timeRange.Count > 0)
-            filter["time_range"] = timeRange;
-        if (filter.Count > 0)
-            body["filter"] = filter;
-
-        return _nyxClient.ProxyRequestAsync(
-            token,
-            _options.ProviderSlug,
-            $"open-apis/im/v1/messages/search?{string.Join("&", paramsParts)}",
-            "POST",
-            JsonSerializer.Serialize(body, JsonOptions),
-            extraHeaders: null,
-            ct);
-    }
-
     public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct)
     {
         var parts = new List<string>
@@ -190,6 +141,35 @@ public sealed class LarkNyxClient : ILarkNyxClient
             body: null,
             extraHeaders: null,
             ct);
+    }
+
+    public async Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+        string token,
+        LarkMessageResourceDownloadRequest request,
+        CancellationToken ct)
+    {
+        ValidateMessageResourceRequest(request);
+        var resourceType = request.Kind switch
+        {
+            LarkMessageResourceKind.Image => "image",
+            LarkMessageResourceKind.File => "file",
+            _ => throw new ArgumentException("Lark message resource kind must be image or file.", nameof(request)),
+        };
+
+        var response = await _nyxClient.ProxyGetBinaryResponseAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/im/v1/messages/{Uri.EscapeDataString(request.MessageId.Trim())}/resources/{Uri.EscapeDataString(request.ResourceKey.Trim())}?type={resourceType}",
+            extraHeaders: null,
+            ct);
+
+        return new LarkMessageResourceDownloadResult(
+            response.Succeeded,
+            response.Content,
+            response.ContentType,
+            response.FileName,
+            response.Detail,
+            response.HttpStatus);
     }
 
     public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct)
@@ -247,15 +227,15 @@ public sealed class LarkNyxClient : ILarkNyxClient
 
     public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct)
     {
+        // GET /approval/v4/tasks/query is the only documented user-task-list endpoint; user_id
+        // and topic are both required. The shorter /approval/v4/tasks path does not exist and
+        // Lark answers it with a misleading 99991663 "Invalid access token".
         var queryParts = new List<string>
         {
+            $"user_id={Uri.EscapeDataString(request.UserId)}",
             $"topic={Uri.EscapeDataString(request.Topic)}",
             $"page_size={request.PageSize}",
         };
-        if (!string.IsNullOrWhiteSpace(request.DefinitionCode))
-            queryParts.Add($"definition_code={Uri.EscapeDataString(request.DefinitionCode.Trim())}");
-        if (!string.IsNullOrWhiteSpace(request.Locale))
-            queryParts.Add($"locale={Uri.EscapeDataString(request.Locale.Trim())}");
         if (!string.IsNullOrWhiteSpace(request.PageToken))
             queryParts.Add($"page_token={Uri.EscapeDataString(request.PageToken.Trim())}");
         if (!string.IsNullOrWhiteSpace(request.UserIdType))
@@ -264,7 +244,26 @@ public sealed class LarkNyxClient : ILarkNyxClient
         return _nyxClient.ProxyRequestAsync(
             token,
             _options.ProviderSlug,
-            $"open-apis/approval/v4/tasks?{string.Join("&", queryParts)}",
+            $"open-apis/approval/v4/tasks/query?{string.Join("&", queryParts)}",
+            "GET",
+            body: null,
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct)
+    {
+        var queryParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(request.Locale))
+            queryParts.Add($"locale={Uri.EscapeDataString(request.Locale.Trim())}");
+        if (!string.IsNullOrWhiteSpace(request.UserIdType))
+            queryParts.Add($"user_id_type={Uri.EscapeDataString(request.UserIdType.Trim())}");
+
+        var query = queryParts.Count == 0 ? string.Empty : $"?{string.Join("&", queryParts)}";
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/approval/v4/instances/{Uri.EscapeDataString(request.InstanceCode)}{query}",
             "GET",
             body: null,
             extraHeaders: null,
@@ -292,16 +291,23 @@ public sealed class LarkNyxClient : ILarkNyxClient
 
     public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct)
     {
-        var path = request.Action switch
+        // The documented action endpoints are tasks/approve, tasks/reject and tasks/transfer
+        // (tasks/pass, tasks/refuse and tasks/forward do not exist on the Lark side). All three
+        // take user_id_type as a query parameter and require approval_code in the body.
+        var endpoint = request.Action switch
         {
-            "approve" => "open-apis/approval/v4/tasks/pass",
-            "reject" => "open-apis/approval/v4/tasks/refuse",
-            "transfer" => BuildTransferPath(request.UserIdType),
+            "approve" => "open-apis/approval/v4/tasks/approve",
+            "reject" => "open-apis/approval/v4/tasks/reject",
+            "transfer" => "open-apis/approval/v4/tasks/transfer",
             _ => throw new InvalidOperationException($"Unsupported approval action: {request.Action}"),
         };
+        var path = string.IsNullOrWhiteSpace(request.UserIdType)
+            ? endpoint
+            : $"{endpoint}?user_id_type={Uri.EscapeDataString(request.UserIdType.Trim())}";
 
         var body = new Dictionary<string, object?>
         {
+            ["approval_code"] = request.ApprovalCode,
             ["instance_code"] = request.InstanceCode,
             ["task_id"] = request.TaskId,
             ["user_id"] = request.UserId,
@@ -398,11 +404,71 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
-    private static string BuildTransferPath(string? userIdType)
+    public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(userIdType))
-            return "open-apis/approval/v4/tasks/forward";
-        return $"open-apis/approval/v4/tasks/forward?user_id_type={Uri.EscapeDataString(userIdType.Trim())}";
+        var formFields = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["file_name"] = request.FileName,
+            ["parent_type"] = request.ParentType,
+            ["parent_node"] = request.ParentNode,
+            ["size"] = request.Size.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+
+        if (!string.IsNullOrWhiteSpace(request.Checksum))
+            formFields["checksum"] = request.Checksum.Trim();
+        if (!string.IsNullOrWhiteSpace(request.Extra))
+            formFields["extra"] = request.Extra.Trim();
+
+        return _nyxClient.ProxyRequestMultipartAsync(
+            token,
+            _options.ProviderSlug,
+            "open-apis/drive/v1/medias/upload_all",
+            "POST",
+            formFields,
+            fileFieldName: "file",
+            fileName: request.FileName,
+            fileContentType: request.ContentType,
+            fileContent: request.Content,
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct)
+    {
+        var formFields = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["name"] = request.FileName,
+            ["type"] = request.FileType,
+        };
+
+        // Approval attachments only upload through the legacy surface
+        // /approval/openapi/v2/file/upload (no open-apis/ prefix; same host serves it);
+        // open-apis/approval/v4/files/upload is not a real endpoint.
+        return _nyxClient.ProxyRequestMultipartAsync(
+            token,
+            _options.ProviderSlug,
+            "approval/openapi/v2/file/upload",
+            "POST",
+            formFields,
+            fileFieldName: "content",
+            fileName: request.FileName,
+            fileContentType: request.ContentType,
+            fileContent: request.Content,
+            extraHeaders: null,
+            ct);
+    }
+
+    private static void ValidateMessageResourceRequest(LarkMessageResourceDownloadRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.MessageId))
+            throw new ArgumentException("Lark message id is required.", nameof(request));
+        if (!request.MessageId.Trim().StartsWith("om_", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Lark message id must start with om_.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.ResourceKey))
+            throw new ArgumentException("Lark message resource key is required.", nameof(request));
+        if (request.Kind is not (LarkMessageResourceKind.Image or LarkMessageResourceKind.File))
+            throw new ArgumentException("Lark message resource kind must be image or file.", nameof(request));
     }
 
     private static IReadOnlyList<Dictionary<string, object?>> BuildTextBlocks(string markdownText)

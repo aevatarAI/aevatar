@@ -67,7 +67,8 @@ public static class ChannelCardActionRouting
             ResolveUserInput(values, approved),
             metadata,
             editedContent,
-            feedback);
+            feedback,
+            ToolApproval: ToToolApprovalResumeCommand(payload.ToolApproval));
         return true;
     }
 
@@ -94,6 +95,21 @@ public static class ChannelCardActionRouting
             values["edited_content"] = payload.EditedContent;
         if (!string.IsNullOrWhiteSpace(payload.Feedback))
             values["feedback"] = payload.Feedback;
+    }
+
+    private static WorkflowToolApprovalResumeCommand? ToToolApprovalResumeCommand(
+        WorkflowToolApprovalResumeActionPayload? payload)
+    {
+        if (payload == null)
+            return null;
+
+        var executionId = NormalizeOptional(payload.ExecutionId);
+        var toolCallId = NormalizeOptional(payload.ToolCallId);
+        var approvalRequestId = NormalizeOptional(payload.ApprovalRequestId);
+        if (executionId == null || toolCallId == null || approvalRequestId == null)
+            return null;
+
+        return new WorkflowToolApprovalResumeCommand(executionId, toolCallId, approvalRequestId);
     }
 
     private static bool TryGetRequiredValue(

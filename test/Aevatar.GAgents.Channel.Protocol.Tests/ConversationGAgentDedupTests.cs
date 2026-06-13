@@ -365,6 +365,53 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_WhenRecentAcceptedActivityHadAttachment_CopiesWindowToRunCommandOnly()
+    {
+        var requestedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                CreateNeedsLlmReply(activity, requestedAtUnixMs: requestedAt++)),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-recent-attachments", dispatcher);
+
+        await agent.HandleInboundActivityAsync(CreateLarkImageActivity(
+            "act-image",
+            "image only",
+            "lark:scope-a:chat-1",
+            "om_image",
+            "img_key",
+            "runtime-token-1"));
+        await agent.HandleInboundActivityAsync(CreateLarkActivity(
+            "act-follow-up",
+            "what is in the image?",
+            "lark:scope-a:chat-1",
+            "om_follow_up",
+            "runtime-token-2"));
+
+        dispatcher.Dispatched.Count.ShouldBe(2);
+        dispatcher.Dispatched[0].RecentAttachmentActivities.ShouldBeEmpty();
+
+        var recent = dispatcher.Dispatched[1].RecentAttachmentActivities.ShouldHaveSingleItem();
+        recent.ActivityId.ShouldBe("act-image");
+        recent.Activity.Content.Attachments.ShouldHaveSingleItem().AttachmentId.ShouldBe("img_key");
+        recent.Activity.TransportExtras.NyxPlatformMessageId.ShouldBe("om_image");
+        recent.Activity.TransportExtras.NyxUserAccessToken.ShouldBeEmpty(
+            "conversation-owned durable attachment snapshots must not persist relay user credentials");
+
+        agent.State.RecentAttachmentActivities.Select(entry => entry.ActivityId)
+            .ShouldContain("act-image");
+
+        var persisted = (await store.GetEventsAsync(agent.Id))
+            .Where(record => record.EventType.Contains(nameof(NeedsLlmReplyEvent), StringComparison.Ordinal))
+            .Select(record => NeedsLlmReplyEvent.Parser.ParseFrom(record.EventData.Value))
+            .Last();
+        persisted.RecentAttachmentActivities.ShouldBeEmpty(
+            "recent attachment snapshots are transient run input and not duplicated into pending LLM request state");
+    }
+
+    [Fact]
     public async Task HandleNyxRelayInboundActivityAsync_WithCallbackJti_PersistsAdmissionBeforeRunner()
     {
         var observedAtMs = DateTimeOffset.UtcNow.AddSeconds(-17).ToUnixTimeMilliseconds();
@@ -2066,6 +2113,41 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task ActivateAsync_WhenConversationEventStreamCompactedWithoutSnapshot_RecoversAndAcceptsNewTurn()
+    {
+        var store = new InMemoryEventStore();
+        const string agentId = "channel-conversation:lark:dm:user-1:scope:owner-1";
+
+        await AppendStateEventAsync(
+            store,
+            agentId,
+            new ConversationTurnCompletedEvent
+            {
+                ProcessedActivityId = "old-activity",
+                CompletedAtUnixMs = 1,
+            },
+            1);
+        (await store.DeleteEventsUpToAsync(agentId, 1)).ShouldBe(1);
+
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ => ConversationTurnResult.Sent(
+                "new-activity",
+                new MessageContent { Text = "pong" },
+                "reply-new-activity"),
+        };
+
+        var (agent, _) = CreateAgent(runner, agentId, store: store);
+
+        agent.EventSourcing!.CurrentVersion.ShouldBe(1);
+        await agent.HandleInboundActivityAsync(CreateActivity("new-activity", "lark:dm:user-1"));
+
+        agent.EventSourcing.CurrentVersion.ShouldBe(2);
+        var events = await store.GetEventsAsync(agentId);
+        events.ShouldHaveSingleItem().Version.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenStreamingDisabled_FallsBackToRunLlmReplyAsync()
     {
         var runner = new RecordingTurnRunner
@@ -2741,6 +2823,53 @@ public sealed class ConversationGAgentDedupTests
         },
         Content = new MessageContent { Text = "hi" },
     };
+
+    private static ChatActivity CreateLarkActivity(
+        string id,
+        string text,
+        string canonicalKey,
+        string platformMessageId,
+        string token) => new()
+        {
+            Id = id,
+            Type = ActivityType.Message,
+            ChannelId = new ChannelId { Value = "lark" },
+            Bot = new BotInstanceId { Value = "ops-bot" },
+            Conversation = new ConversationReference
+            {
+                Channel = new ChannelId { Value = "lark" },
+                Bot = new BotInstanceId { Value = "ops-bot" },
+                Scope = ConversationScope.DirectMessage,
+                CanonicalKey = canonicalKey,
+            },
+            Content = new MessageContent { Text = text },
+            TransportExtras = new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxPlatformMessageId = platformMessageId,
+                NyxUserAccessToken = token,
+            },
+        };
+
+    private static ChatActivity CreateLarkImageActivity(
+        string id,
+        string text,
+        string canonicalKey,
+        string platformMessageId,
+        string imageKey,
+        string token)
+    {
+        var activity = CreateLarkActivity(id, text, canonicalKey, platformMessageId, token);
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = imageKey,
+            Kind = AttachmentKind.Image,
+            ContentType = "image/png",
+            Name = "photo.png",
+            SizeBytes = 512,
+        });
+        return activity;
+    }
 
     private static string ReadRepositoryText(string relativePath) =>
         File.ReadAllText(Path.Combine(GetRepositoryRoot(), relativePath), Encoding.UTF8);

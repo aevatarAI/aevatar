@@ -38,18 +38,16 @@ public sealed class ResponsesCommandFacadeTests
             []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
-        result.Accepted.Should().NotBeNull();
-        result.Completed.Should().BeNull();
-        result.Accepted!.Admission.Accepted.Should().BeTrue();
+        result.Completed.Should().NotBeNull();
+        result.Completed!.CompletionStage.Should().Be(ResponsesCompletionStage.ReadModelObserved);
+        result.Completed.Completion.OutputText.Should().Be("ok");
         sessions.Registered.Should().ContainSingle().Which.ResponseId.Should().StartWith("resp_");
-        sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.Model.Should().Be("gpt-5");
         command.RoutePreference.Should().Be("route-value");
         command.ScopeId.Should().Be("scope-1");
         command.BearerToken.Should().Be("token");
-        result.Accepted.Admission.CommandId.Should().NotBeNullOrWhiteSpace();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
         toolContext.Request.RequestId.Should().Be(command.ResponseId);
         toolContext.Caller.ScopeId.Should().Be("scope-1");
@@ -81,7 +79,7 @@ public sealed class ResponsesCommandFacadeTests
             []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
-        result.Accepted.Should().NotBeNull();
+        result.Completed.Should().NotBeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.Model.Should().Be("gpt-5.4-mini");
         command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
@@ -108,7 +106,7 @@ public sealed class ResponsesCommandFacadeTests
             []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
-        result.Accepted.Should().NotBeNull();
+        result.Completed.Should().NotBeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.Model.Should().Be("gpt-5.4-mini");
         command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
@@ -139,8 +137,7 @@ public sealed class ResponsesCommandFacadeTests
 
         result.Error.Should().BeNull();
         sessions.Registered.Should().ContainSingle();
-        result.Accepted.Should().NotBeNull();
-        sessions.RecordedCompletions.Should().BeEmpty();
+        result.Completed.Should().NotBeNull();
         sessions.UpdatedStatuses.Should().BeEmpty();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_gagent");
@@ -189,7 +186,7 @@ public sealed class ResponsesCommandFacadeTests
             []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
-        result.Accepted.Should().NotBeNull();
+        result.Completed.Should().NotBeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_gagent");
         command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
@@ -301,14 +298,12 @@ public sealed class ResponsesCommandFacadeTests
             403,
             "response_scope_mismatch",
             "response id is not visible to the current caller scope."));
-        result.Accepted.Should().BeNull();
         result.Completed.Should().BeNull();
         result.StreamPlan.Should().BeNull();
         sessions.Registered.Should().BeEmpty();
         sessions.ToolResults.Should().BeEmpty();
         sessions.ResolvedToolResults.Should().BeEmpty();
         sessions.RecordedToolCalls.Should().BeEmpty();
-        sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
         dispatch.Calls.Should().BeEmpty();
     }
@@ -361,7 +356,6 @@ public sealed class ResponsesCommandFacadeTests
             []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
-        result.Accepted.Should().BeNull();
         result.Completed.Should().NotBeNull();
         result.Completed!.CompletionStage.Should().Be(ResponsesCompletionStage.Committed);
         result.Completed.Completion.OutputText.Should().Be("""{"temperature":"31C"}""");
@@ -577,6 +571,121 @@ public sealed class ResponsesCommandFacadeTests
         recovery.CommandName.Should().BeNull();
         recovery.PrimarySkillName.Should().BeNull();
         recovery.OriginalCommand.Should().Be("::");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenObservedRunFails_ShouldReturnFailure_AndMarkSessionFailed()
+    {
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            observationService: StaticLlmSessionRunObservationService.Error(
+                LlmSessionRunObservedTerminalKind.Failed,
+                500,
+                "provider_failed",
+                "provider crashed"));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            500,
+            "provider_failed",
+            "provider crashed"));
+        result.Completed.Should().BeNull();
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenObservedRunIsCancelled_ShouldReturnCancel_AndMarkSessionCancelled()
+    {
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            observationService: StaticLlmSessionRunObservationService.Error(
+                LlmSessionRunObservedTerminalKind.Cancelled,
+                409,
+                "run_cancelled",
+                "LLM run was cancelled."));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            409,
+            "run_cancelled",
+            "LLM run was cancelled."));
+        result.Completed.Should().BeNull();
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenObservationTimesOut_ShouldReturnTimeout_AndMarkSessionFailed()
+    {
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            observationService: StaticLlmSessionRunObservationService.Error(
+                LlmSessionRunObservedTerminalKind.TimedOut,
+                504,
+                "response_timeout",
+                "Timed out waiting 30 seconds for the LLM run to emit a terminal event."));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            504,
+            "response_timeout",
+            "Timed out waiting 30 seconds for the LLM run to emit a terminal event."));
+        result.Completed.Should().BeNull();
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenRequestIsCancelled_ShouldReturnTimeout_AndMarkSessionCancelled()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort(ct => new OperationCanceledException(ct));
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            408,
+            "request_timeout",
+            "Request timed out."));
+        result.Completed.Should().BeNull();
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
     }
 
     [Fact]

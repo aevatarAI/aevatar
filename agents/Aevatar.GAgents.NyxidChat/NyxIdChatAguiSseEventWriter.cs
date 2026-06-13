@@ -10,7 +10,8 @@ internal static class NyxIdChatAguiSseEventWriter
     public static async ValueTask<string?> WriteAsync(
         AGUIEvent aguiEvent,
         string messageId,
-        NyxIdChatSseWriter writer)
+        NyxIdChatSseWriter writer,
+        CancellationToken ct = default)
     {
         // Refactor (issue1533): Old pattern: a runner-named type implied session/runtime ownership for a presentation mapper.
         // New principle: the endpoint keeps command interaction ownership while this adapter only writes typed AGUI events as NyxID SSE frames.
@@ -21,38 +22,38 @@ internal static class NyxIdChatAguiSseEventWriter
                     string.IsNullOrWhiteSpace(aguiEvent.TextMessageStart.MessageId)
                         ? messageId
                         : aguiEvent.TextMessageStart.MessageId,
-                    CancellationToken.None);
+                    ct);
                 return null;
             case AGUIEvent.EventOneofCase.TextMessageContent:
                 if (!string.IsNullOrEmpty(aguiEvent.TextMessageContent.Delta))
-                    await writer.WriteTextDeltaAsync(aguiEvent.TextMessageContent.Delta, CancellationToken.None);
+                    await writer.WriteTextDeltaAsync(aguiEvent.TextMessageContent.Delta, ct);
                 return null;
             case AGUIEvent.EventOneofCase.TextMessageEnd:
                 await writer.WriteTextEndAsync(
                     string.IsNullOrWhiteSpace(aguiEvent.TextMessageEnd.MessageId)
                         ? messageId
                         : aguiEvent.TextMessageEnd.MessageId,
-                    CancellationToken.None);
+                    ct);
                 return null;
             case AGUIEvent.EventOneofCase.ToolCallStart:
                 await writer.WriteToolCallStartAsync(
                     aguiEvent.ToolCallStart.ToolName,
                     aguiEvent.ToolCallStart.ToolCallId,
-                    CancellationToken.None);
+                    ct);
                 return null;
             case AGUIEvent.EventOneofCase.ToolCallEnd:
                 await writer.WriteToolCallEndAsync(
                     aguiEvent.ToolCallEnd.ToolCallId,
                     aguiEvent.ToolCallEnd.Result ?? string.Empty,
-                    CancellationToken.None);
+                    ct);
                 return null;
             case AGUIEvent.EventOneofCase.Custom:
-                await WriteCustomAguiEventAsync(aguiEvent.Custom, writer);
+                await WriteCustomAguiEventAsync(aguiEvent.Custom, writer, ct);
                 return null;
             case AGUIEvent.EventOneofCase.RunError:
                 await writer.WriteRunErrorAsync(
                     ClassifyError(aguiEvent.RunError.Message ?? string.Empty),
-                    CancellationToken.None);
+                    ct);
                 return "RUN_ERROR";
             case AGUIEvent.EventOneofCase.Usage:
                 await writer.WriteUsageAsync(
@@ -61,22 +62,25 @@ internal static class NyxIdChatAguiSseEventWriter
                     aguiEvent.Usage.CompletionTokens,
                     aguiEvent.Usage.TotalTokens,
                     aguiEvent.Usage.Model,
-                    CancellationToken.None);
+                    ct);
                 return null;
             case AGUIEvent.EventOneofCase.RunFinished:
-                await writer.WriteRunFinishedAsync(CancellationToken.None);
+                await writer.WriteRunFinishedAsync(ct);
                 return "RUN_FINISHED";
             default:
                 return null;
         }
     }
 
-    private static async ValueTask WriteCustomAguiEventAsync(CustomEvent customEvent, NyxIdChatSseWriter writer)
+    private static async ValueTask WriteCustomAguiEventAsync(
+        CustomEvent customEvent,
+        NyxIdChatSseWriter writer,
+        CancellationToken ct)
     {
         if (string.Equals(customEvent.Name, "MEDIA_CONTENT", StringComparison.Ordinal) &&
             customEvent.Payload?.Is(MediaContentEvent.Descriptor) == true)
         {
-            await writer.WriteMediaContentAsync(customEvent.Payload.Unpack<MediaContentEvent>(), CancellationToken.None);
+            await writer.WriteMediaContentAsync(customEvent.Payload.Unpack<MediaContentEvent>(), ct);
             return;
         }
 
@@ -91,7 +95,7 @@ internal static class NyxIdChatAguiSseEventWriter
                 GetString(fields, "argumentsJson"),
                 GetBool(fields, "isDestructive"),
                 GetInt32(fields, "timeoutSeconds"),
-                CancellationToken.None);
+                ct);
         }
     }
 

@@ -146,6 +146,33 @@ public sealed class WorkflowRunControlCommandTests
     }
 
     [Fact]
+    public void ResumeEnvelopeFactory_ShouldPackNestedToolApprovalResume()
+    {
+        var factory = new WorkflowResumeCommandEnvelopeFactory();
+        var envelope = factory.CreateEnvelope(
+            new WorkflowResumeCommand(
+                "actor-1",
+                "run-1",
+                "tool-step",
+                "cmd-1",
+                true,
+                null,
+                ToolApproval: new WorkflowToolApprovalResumeCommand(
+                    ExecutionId: "exec-1",
+                    ToolCallId: "tool-call-1",
+                    ApprovalRequestId: "approval-1")),
+            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
+
+        var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
+
+        resumed.ToolApproval.Should().NotBeNull();
+        resumed.ToolApproval.ExecutionId.Should().Be("exec-1");
+        resumed.ToolApproval.ToolCallId.Should().Be("tool-call-1");
+        resumed.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
+        resumed.Metadata.Should().BeEmpty();
+    }
+
+    [Fact]
     public void ResumeEnvelopeFactory_ShouldRejectBlankStepId()
     {
         var factory = new WorkflowResumeCommandEnvelopeFactory();

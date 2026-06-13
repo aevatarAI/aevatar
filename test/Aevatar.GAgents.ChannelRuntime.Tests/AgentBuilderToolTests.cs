@@ -276,8 +276,15 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_RunAgent_FromChannelInbound_AdmitsExternalTrigger()
+    public async Task ExecuteAsync_RunAgent_FromChannelInbound_DispatchesManualTriggerNotAdmission()
     {
+        // Regression (prod 2026-06-11): run_agent used to route channel-context calls through
+        // the external-trigger admission protocol. Admission requires a pre-registered
+        // ExternalTriggerSource on the runner, and scheduled_agent_creator registers none,
+        // so every owner-issued /run-agent ended as a committed-but-silent
+        // SkillRunnerExternalTriggerRejectedEvent(unknown_source) while the tool replied
+        // "accepted". The owner's management-plane trigger is authorized by the caller-scope
+        // check and must dispatch TriggerAsync directly even when channel metadata is present.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
@@ -288,19 +295,7 @@ public sealed class AgentBuilderToolTests
                 ScopeId = "scope-1",
             }));
 
-        var captured = new List<AdmitSkillRunnerExternalTriggerCommand>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        skillRunnerPort.AdmitExternalTriggerAsync(
-                "skill-runner-1",
-                Arg.Do<AdmitSkillRunnerExternalTriggerCommand>(command => captured.Add(command.Clone())),
-                Arg.Any<CancellationToken>())
-            .Returns(call => Task.FromResult(new SkillRunnerExternalTriggerAdmissionReceipt(
-                "skill-runner-1",
-                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.AdmissionId,
-                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.AdmissionId,
-                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.AdmissionId,
-                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.SourceId,
-                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.DeliveryId)));
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
@@ -333,17 +328,14 @@ public sealed class AgentBuilderToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            captured.Should().ContainSingle();
-            var identity = captured[0].Identity;
-            identity.Kind.Should().Be(ExternalTriggerSourceKind.ChannelInbound);
-            identity.SourceId.Should().Be("channel:lark:scope-1");
-            identity.DeliveryId.Should().Be("activity-1");
-            identity.PayloadSummary.Should().Be("channel run_agent");
-            identity.PayloadRef.Should().Be("om_1");
 
-            await skillRunnerPort.DidNotReceive().TriggerAsync(
+            await skillRunnerPort.Received(1).TriggerAsync(
+                "skill-runner-1",
+                "run_agent",
+                Arg.Any<CancellationToken>());
+            await skillRunnerPort.DidNotReceive().AdmitExternalTriggerAsync(
                 Arg.Any<string>(),
-                Arg.Any<string>(),
+                Arg.Any<AdmitSkillRunnerExternalTriggerCommand>(),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -379,6 +371,12 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusError,
                 ErrorCount = 2,
                 LastError = "tool failed",
+                ScheduleMode = SkillRunnerScheduleMode.OneShot,
+                RunAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 6, 11, 10, 30, 0, TimeSpan.Zero)),
+                RetiredAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 6, 11, 10, 31, 0, TimeSpan.Zero)),
+                RetirementReason = SkillRunnerDefaults.OneShotRetirementReasonFailed,
             }));
 
         var services = new ServiceCollection();
@@ -410,6 +408,11 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-join");
             doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusError);
             doc.RootElement.GetProperty("output_format").GetString().Should().Be("feishu_doc");
+            doc.RootElement.GetProperty("schedule_mode").GetString().Should().Be("one_shot");
+            doc.RootElement.GetProperty("run_at_utc").ValueKind.Should().Be(JsonValueKind.Object);
+            doc.RootElement.GetProperty("retired_at_utc").ValueKind.Should().Be(JsonValueKind.Object);
+            doc.RootElement.GetProperty("retirement_reason").GetString()
+                .Should().Be(SkillRunnerDefaults.OneShotRetirementReasonFailed);
             doc.RootElement.GetProperty("error_count").GetInt32().Should().Be(2);
             doc.RootElement.GetProperty("last_error").GetString().Should().Be("tool failed");
 
@@ -457,6 +460,9 @@ public sealed class AgentBuilderToolTests
                         LastEventId = "runner-4",
                         Status = SkillRunnerDefaults.StatusRunning,
                         ErrorCount = 1,
+                        ScheduleMode = SkillRunnerScheduleMode.OneShot,
+                        RunAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                            new DateTimeOffset(2026, 6, 11, 10, 30, 0, TimeSpan.Zero)),
                     },
                 }));
 
@@ -485,6 +491,8 @@ public sealed class AgentBuilderToolTests
             agent.GetProperty("agent_id").GetString().Should().Be("skill-runner-list");
             agent.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
             agent.GetProperty("output_format").GetString().Should().Be("text");
+            agent.GetProperty("schedule_mode").GetString().Should().Be("one_shot");
+            agent.GetProperty("run_at_utc").ValueKind.Should().Be(JsonValueKind.Object);
             agent.GetProperty("error_count").GetInt32().Should().Be(1);
 
             await queryPort.Received(1).QueryByCallerAsync(

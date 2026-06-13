@@ -43,6 +43,19 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             WorkflowInteractionNotificationProjector>());
         services.AddWorkflowApplication();
         services.AddWorkflowScheduleExtensions();
+        services.AddOptions<WorkflowWebhookIngressOptions>()
+            .Bind(configuration.GetSection(WorkflowWebhookIngressOptions.SectionName));
+        services.TryAddSingleton<WorkflowWebhookIngressRequestBuilder>();
+        var webhookReplayRedisConnectionString = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:RedisConnectionString"];
+        if (!string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
+        {
+            services.TryAddSingleton<WorkflowWebhookReplayRedisConnection>();
+            services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayStore, RedisWorkflowWebhookReplayStore>();
+        }
+        else if (configuration.GetValue<bool>($"{WorkflowWebhookIngressOptions.SectionName}:UseInMemoryReplayStore"))
+        {
+            services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayStore, InMemoryWorkflowWebhookReplayStore>();
+        }
         services.AddWorkflowDefinitionFileSource(options =>
         {
             options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));

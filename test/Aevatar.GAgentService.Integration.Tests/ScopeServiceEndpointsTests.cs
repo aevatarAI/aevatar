@@ -312,7 +312,10 @@ public sealed class ScopeServiceEndpointsTests
                         "Run command"),
                 ],
                 [],
-                DateTimeOffset.UtcNow),
+                DateTimeOffset.UtcNow,
+                new ServiceExternalExposureSnapshot(
+                    "aevatar-orders",
+                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))),
             new ServiceCatalogSnapshot(
                 "scope-a:default:default:billing",
                 "scope-a",
@@ -418,6 +421,10 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().NotBeNull();
         body!.Should().HaveCount(4);
         body.Single(x => x.ServiceId == "orders").Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        body.Single(x => x.ServiceId == "orders").ExternalExposure.Should().NotBeNull();
+        body.Single(x => x.ServiceId == "orders").ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
+        body.Single(x => x.ServiceId == "orders").ExternalExposure!.RegisteredAt.Should()
+            .Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
         body.Single(x => x.ServiceId == "orders").InvokeReady.Should().BeTrue();
         body.Single(x => x.ServiceId == "orders").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         body.Single(x => x.ServiceId == "orders").InvokeUnavailableReason.Should().BeNull();
@@ -2587,7 +2594,7 @@ public sealed class ScopeServiceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
-        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a"));
+        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a", "chat"));
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-member-a");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
@@ -2746,6 +2753,12 @@ public sealed class ScopeServiceEndpointsTests
             stepId = "approval-1",
             approved = true,
             userInput = "approved",
+            toolApproval = new
+            {
+                executionId = "exec-default-1",
+                toolCallId = "tool-call-default-1",
+                approvalRequestId = "approval-default-1",
+            },
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
@@ -2754,6 +2767,10 @@ public sealed class ScopeServiceEndpointsTests
         host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-default-1");
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-default-1");
         host.ResumeDispatchService.LastCommand.StepId.Should().Be("approval-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.Should().NotBeNull();
+        host.ResumeDispatchService.LastCommand.ToolApproval!.ExecutionId.Should().Be("exec-default-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ToolCallId.Should().Be("tool-call-default-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ApprovalRequestId.Should().Be("approval-default-1");
     }
 
     [Fact]
@@ -3076,7 +3093,7 @@ public sealed class ScopeServiceEndpointsTests
         var receipt = await response.Content.ReadFromJsonAsync<ServiceInvocationAcceptedReceipt>();
         receipt.Should().NotBeNull();
         receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
-        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a"));
+        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a", "chat"));
         host.InvocationPort.LastRequest.Should().NotBeNull();
         host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
         {
@@ -3393,6 +3410,12 @@ public sealed class ScopeServiceEndpointsTests
             approved = true,
             userInput = "approved",
             metadata = new Dictionary<string, string> { ["source"] = "test" },
+            toolApproval = new
+            {
+                executionId = "exec-1",
+                toolCallId = "tool-call-1",
+                approvalRequestId = "approval-1",
+            },
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
@@ -3402,6 +3425,10 @@ public sealed class ScopeServiceEndpointsTests
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-1");
         host.ResumeDispatchService.LastCommand.StepId.Should().Be("approval-1");
         host.ResumeDispatchService.LastCommand.Approved.Should().BeTrue();
+        host.ResumeDispatchService.LastCommand.ToolApproval.Should().NotBeNull();
+        host.ResumeDispatchService.LastCommand.ToolApproval!.ExecutionId.Should().Be("exec-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ToolCallId.Should().Be("tool-call-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
     }
 
     [Fact]
@@ -3812,6 +3839,12 @@ public sealed class ScopeServiceEndpointsTests
         {
             stepId = "approval-1",
             approved = true,
+            toolApproval = new
+            {
+                executionId = "exec-member-1",
+                toolCallId = "tool-call-member-1",
+                approvalRequestId = "approval-member-1",
+            },
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
@@ -3820,6 +3853,10 @@ public sealed class ScopeServiceEndpointsTests
         host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-resume-1");
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-member-resume-1");
         host.ResumeDispatchService.LastCommand.StepId.Should().Be("approval-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.Should().NotBeNull();
+        host.ResumeDispatchService.LastCommand.ToolApproval!.ExecutionId.Should().Be("exec-member-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ToolCallId.Should().Be("tool-call-member-1");
+        host.ResumeDispatchService.LastCommand.ToolApproval.ApprovalRequestId.Should().Be("approval-member-1");
     }
 
     [Fact]
@@ -5720,7 +5757,7 @@ public sealed class ScopeServiceEndpointsTests
 
     private sealed class FakeTeamEntryMemberResolver : ITeamEntryMemberResolver
     {
-        public List<(string ScopeId, string TeamId)> Calls { get; } = [];
+        public List<(string ScopeId, string TeamId, string EndpointId)> Calls { get; } = [];
 
         public TeamEntryMemberResolution Result { get; set; } =
             new("scope-a", "team-a", "member-a", "member-a");
@@ -5730,9 +5767,10 @@ public sealed class ScopeServiceEndpointsTests
         public Task<TeamEntryMemberResolution> ResolveAsync(
             string scopeId,
             string teamId,
+            string endpointId,
             CancellationToken ct = default)
         {
-            Calls.Add((scopeId, teamId));
+            Calls.Add((scopeId, teamId, endpointId));
             if (Exception != null)
                 throw Exception;
 

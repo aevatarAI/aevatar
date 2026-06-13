@@ -14,6 +14,9 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
+using ApplicationWorkflowFileArtifactOwnershipPort = Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileArtifactOwnershipPort;
+using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Core;
 
@@ -49,13 +52,15 @@ public sealed class WorkflowRunGAgent
     private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
     private readonly ISet<string> _knownModuleStepTypes;
     private readonly SubWorkflowOrchestrator _subWorkflowOrchestrator;
+    private readonly ApplicationWorkflowFileArtifactOwnershipPort? _fileArtifactOwnership;
 
     public WorkflowRunGAgent(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
         IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
         IEnumerable<IWorkflowModulePack> modulePacks,
-        IWorkflowDefinitionResolver? workflowDefinitionResolver = null)
+        IWorkflowDefinitionResolver? workflowDefinitionResolver = null,
+        ApplicationWorkflowFileArtifactOwnershipPort? fileArtifactOwnership = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
@@ -83,6 +88,7 @@ public sealed class WorkflowRunGAgent
             packs
                 .SelectMany(x => x.Modules)
                 .SelectMany(x => x.Names));
+        _fileArtifactOwnership = fileArtifactOwnership;
 
         _subWorkflowOrchestrator = new SubWorkflowOrchestrator(
             _runtime,
@@ -267,12 +273,18 @@ public sealed class WorkflowRunGAgent
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
         _runtimeContext.ApplySenderNyxIdAccessToken(request.LlmControl?.SenderNyxIdAccessToken);
         var llmControlDelta = WorkflowRunExecutionContextStateAccess.BuildLlmControlDelta(request.LlmControl);
+        var inputFileRefs = ExtractInputFileRefs(request.InputParts);
 
         await EnsureAgentTreeAsync();
 
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
+        var scopeId = ResolveScopeId(request.ScopeId, State.ScopeId);
+        inputFileRefs = StampInputFileRefs(inputFileRefs, runId, scopeId);
+        if (!await BindInputFileArtifactsAsync(inputFileRefs, runId, scopeId, request.SessionId))
+            return;
+
         var executionContextDelta = MergeExecutionContextDeltas(
             callerCredentialDelta,
             llmControlDelta,
@@ -284,18 +296,21 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = executionInput,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            ScopeId = ResolveScopeId(request.ScopeId, State.ScopeId),
+            ScopeId = scopeId,
             ExecutionContextDelta = executionContextDelta,
             Attempt = Math.Max(0, request.ForkSeed?.Attempt ?? 0),
+            InputFileRefs = { inputFileRefs.Select(static fileRef => fileRef.Clone()) },
         });
 
-        await PublishAsync(new StartWorkflowEvent
+        var start = new StartWorkflowEvent
         {
             WorkflowName = _compiledWorkflow.Name,
             Input = executionInput,
             RunId = runId,
             ForkSeed = request.ForkSeed,
-        }, TopologyAudience.Self);
+        };
+        start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
+        await PublishAsync(start, TopologyAudience.Self);
     }
 
     [EventHandler]
@@ -366,6 +381,98 @@ public sealed class WorkflowRunGAgent
 
         return request.Prompt ?? string.Empty;
     }
+
+    private static IReadOnlyList<WorkflowFileRef> ExtractInputFileRefs(
+        IEnumerable<WorkflowChatInputPartPayload> inputParts) =>
+        inputParts
+            .Where(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))
+            .Select(static part => part.FileRef.Clone())
+            .ToArray();
+
+    private static bool HasFileRefIdentity(WorkflowFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static IReadOnlyList<WorkflowFileRef> StampInputFileRefs(
+        IReadOnlyList<WorkflowFileRef> fileRefs,
+        string runId,
+        string scopeId) =>
+        fileRefs
+            .Select(fileRef =>
+            {
+                var clone = fileRef.Clone();
+                clone.OwnerRunId = runId;
+                clone.OwnerScopeId = scopeId ?? string.Empty;
+                return clone;
+            })
+            .ToArray();
+
+    private async Task<bool> BindInputFileArtifactsAsync(
+        IReadOnlyList<WorkflowFileRef> fileRefs,
+        string runId,
+        string scopeId,
+        string? sessionId)
+    {
+        if (fileRefs.Count == 0 || _fileArtifactOwnership == null)
+            return true;
+
+        foreach (var fileRef in fileRefs.Where(static x => !string.IsNullOrWhiteSpace(x.ArtifactId)))
+        {
+            try
+            {
+                await _fileArtifactOwnership.BindOwnerAsync(
+                    ToApplicationWorkflowFileRef(fileRef),
+                    runId,
+                    scopeId,
+                    CancellationToken.None);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException)
+            {
+                Logger.LogWarning(ex, "Workflow input file artifact owner binding failed: {RunId}", runId);
+                await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+                {
+                    RunId = runId,
+                    Content = "Workflow input file artifact could not be bound to the current run.",
+                    SessionId = sessionId ?? string.Empty,
+                    Success = false,
+                    Error = "workflow_input_file_binding_failed",
+                }, TopologyAudience.Parent);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static ApplicationWorkflowFileRef ToApplicationWorkflowFileRef(WorkflowFileRef source) =>
+        new()
+        {
+            FileId = source.FileId,
+            ArtifactId = source.ArtifactId,
+            SourceKind = ToApplicationWorkflowFileSourceKind(source.SourceKind),
+            SourceMessageId = source.SourceMessageId,
+            SourceResourceKey = source.SourceResourceKey,
+            FileName = source.FileName,
+            MediaType = source.MediaType,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId,
+            OwnerScopeId = source.OwnerScopeId,
+        };
+
+    private static ApplicationWorkflowFileSourceKind ToApplicationWorkflowFileSourceKind(
+        WorkflowFileSourceKind source) =>
+        source switch
+        {
+            WorkflowFileSourceKind.ChatInput => ApplicationWorkflowFileSourceKind.ChatInput,
+            WorkflowFileSourceKind.FormUpload => ApplicationWorkflowFileSourceKind.FormUpload,
+            WorkflowFileSourceKind.ConnectedServiceResource => ApplicationWorkflowFileSourceKind.ConnectedServiceResource,
+            WorkflowFileSourceKind.ExternalResource => ApplicationWorkflowFileSourceKind.ExternalResource,
+            WorkflowFileSourceKind.Generated => ApplicationWorkflowFileSourceKind.Generated,
+            _ => ApplicationWorkflowFileSourceKind.Unspecified,
+        };
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleSubWorkflowInvokeRequested(SubWorkflowInvokeRequestedEvent request)

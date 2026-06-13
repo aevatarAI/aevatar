@@ -1,4 +1,6 @@
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
@@ -16,7 +18,11 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Foundation.VoicePresence;
+using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -28,6 +34,8 @@ using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
@@ -121,6 +129,14 @@ public sealed class MainnetHostCompositionTests
         toolSources.Should().Contain(source => source is TelegramAgentToolSource);
         toolSources.Should().Contain(source => source is SkillsAgentToolSource);
         toolSources.Should().Contain(source => source is OrnnAgentToolSource);
+        // Yield capability follows the actor, never the container (#2004): a DI-global
+        // yielding handler hands "I will resume you" to surfaces with no pending-approval
+        // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;
+        // every other surface must fall through to MissingApprovalHandler and fail closed.
+        app.Services.GetServices<IToolApprovalHandler>().Should().BeEmpty();
+        app.Services.GetServices<IToolCallMiddleware>()
+            .Should()
+            .NotContain(middleware => middleware is ToolApprovalMiddleware);
 
         await app.StopAsync();
     }
@@ -180,6 +196,8 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is WebAgentToolSource);
         workspace.Sources.Should().Contain(source => source is SkillsAgentToolSource);
         workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
+        app.Services.GetRequiredService<LarkToolOptions>()
+            .EnableWorkflowFileSubmit.Should().BeFalse();
 
         var larkSelfNotify = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.LarkSelfNotify });
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
@@ -199,6 +217,26 @@ public sealed class MainnetHostCompositionTests
         var unknown = registry.Resolve(new ChatRouteToolSetRef { Name = "missing.set" });
         unknown.IsSuccess.Should().BeFalse();
         unknown.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldAllowWorkflowFileSubmitOptInWithoutChangingAgentToolSets()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:Lark:EnableWorkflowFileSubmit"] = "true",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<LarkToolOptions>()
+            .EnableWorkflowFileSubmit.Should().BeTrue();
     }
 
     [Fact]
@@ -302,7 +340,62 @@ public sealed class MainnetHostCompositionTests
         HostedServiceDescriptors<RetiredActorCleanupHostedService>(builder.Services).Should().ContainSingle();
     }
 
-    private static WebApplicationBuilder CreateBuilder()
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldEnableDeviceInboundDirectVoiceAdmissionOnce()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var documentProvider = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Document__Providers__InMemory__Enabled", "true");
+        using var documentElasticsearch = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled", "false");
+        using var graphProvider = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Graph__Providers__InMemory__Enabled", "true");
+        using var graphNeo4j = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled", "false");
+        using var projectionEnvironment = new EnvironmentVariableScope(
+            "Projection__Policies__Environment", "Development");
+        using var denyInMemoryDocument = new EnvironmentVariableScope(
+            "Projection__Policies__DenyInMemoryDocumentReadStore", "false");
+        using var denyInMemoryGraph = new EnvironmentVariableScope(
+            "Projection__Policies__DenyInMemoryGraphFactStore", "false");
+        var builder = CreateBuilder();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Aevatar:VoicePresence:OpenAI:ApiKey"] = "voice-openai-key",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var factory = app.Services.GetServices<IEventModuleFactory<IEventHandlerContext>>()
+            .OfType<VoicePresenceModuleFactory>()
+            .Single();
+        factory.TryCreate("voice_presence", out var module).Should().BeTrue();
+        var voiceModule = module.Should().BeOfType<VoicePresenceModule>().Subject;
+        var deviceInboundEnvelope = new EventEnvelope
+        {
+            Payload = new Any
+            {
+                TypeUrl = "type.googleapis.com/aevatar.gagents.household.DeviceInbound",
+                Value = ByteString.CopyFromUtf8("device-inbound"),
+            },
+            Route = EnvelopeRouteSemantics.CreateDirect("device-events.callback", "voice-agent"),
+        };
+
+        voiceModule.CanHandle(deviceInboundEnvelope).Should().BeTrue();
+        app.Services.GetServices<VoicePresenceModuleRegistration>()
+            .SelectMany(static registration => registration.Names)
+            .Should()
+            .ContainSingle(static name => string.Equals(name, "voice_presence", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static WebApplicationBuilder CreateBuilder(IReadOnlyDictionary<string, string?>? overrides = null)
     {
         var options = new WebApplicationOptions
         {
@@ -310,7 +403,7 @@ public sealed class MainnetHostCompositionTests
         };
 
         var builder = WebApplication.CreateBuilder(options);
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        var values = new Dictionary<string, string?>
         {
             ["ActorRuntime:Provider"] = "InMemory",
             ["GAgentService:Demo:Enabled"] = "false",
@@ -319,7 +412,14 @@ public sealed class MainnetHostCompositionTests
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
             ["Aevatar:NyxId:Authority"] = "https://nyxid.example.test",
-        });
+        };
+        if (overrides != null)
+        {
+            foreach (var (key, value) in overrides)
+                values[key] = value;
+        }
+
+        builder.Configuration.AddInMemoryCollection(values);
         return builder;
     }
 

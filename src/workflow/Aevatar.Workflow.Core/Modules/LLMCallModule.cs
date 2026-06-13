@@ -387,6 +387,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
             StepId = stepId,
         };
+        intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
             ctx,
             ctx.AgentId ?? string.Empty,
@@ -412,6 +413,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             ? callerCredential
             : new WorkflowCallerCredential();
         WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+        CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);
         CopyParametersToChatRequest(request, intent, timeoutMs);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
@@ -499,6 +501,22 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static void CopyAgentToolScope(
+        WorkflowAgentToolScope? source,
+        WorkflowLlmExecutionIntent intent)
+    {
+        if (source == null)
+            return;
+
+        intent.AgentToolScope = new WorkflowAgentToolScope();
+        foreach (var toolName in source.AllowedToolNames)
+        {
+            var normalized = Normalize(toolName);
+            if (normalized is not null)
+                intent.AgentToolScope.AllowedToolNames.Add(normalized);
+        }
+    }
 
     private static bool TryResolvePending(
         LLMCallModuleState state,

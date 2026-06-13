@@ -1,4 +1,6 @@
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -15,19 +17,25 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
     private readonly IWorkflowChatRunInteractionPort? _workflowInteractionPort;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ChannelWorkflowDraftRunInteractionPort> _logger;
+    private readonly ILarkNyxClient? _larkClient;
+    private readonly IWorkflowFileIngressPort? _fileIngressPort;
 
     public ChannelWorkflowDraftRunInteractionPort(
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         ILogger<ChannelWorkflowDraftRunInteractionPort> logger,
         IWorkflowChatRunInteractionPort? workflowInteractionPort = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILarkNyxClient? larkClient = null,
+        IWorkflowFileIngressPort? fileIngressPort = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _workflowInteractionPort = workflowInteractionPort;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _larkClient = larkClient;
+        _fileIngressPort = fileIngressPort;
     }
 
     public async Task DispatchAsync(NeedsWorkflowDraftRunEvent request, CancellationToken ct)
@@ -115,8 +123,34 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
     {
         try
         {
+            WorkflowChatRunRequest command;
+            try
+            {
+                command = await BuildCommandAsync(request, ct).ConfigureAwait(false);
+            }
+            catch (WorkflowAttachmentIngressException ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Workflow draft-run attachment ingress failed: runId={RunId} correlation={CorrelationId} reason={Reason}",
+                    request.RunId,
+                    request.CorrelationId,
+                    ex.Reason);
+                await DispatchToRunActorAsync(
+                        runActorId,
+                        BuildCompletion(
+                            request,
+                            false,
+                            false,
+                            "workflow_attachment_ingress_failed",
+                            "Workflow attachment ingress failed."),
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             var result = await _workflowInteractionPort!.ExecuteAsync(
-                    BuildCommand(request),
+                    command,
                     async (frame, token) =>
                     {
                         var continuationFrame = TryMapFrame(frame);
@@ -190,7 +224,104 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         }
     }
 
-    private static WorkflowChatRunRequest BuildCommand(NeedsWorkflowDraftRunEvent request)
+    private async ValueTask<WorkflowChatRunRequest> BuildCommandAsync(
+        NeedsWorkflowDraftRunEvent request,
+        CancellationToken ct)
+    {
+        var inputParts = await BuildAttachmentInputPartsAsync(request, ct).ConfigureAwait(false);
+        return BuildCommand(request, inputParts);
+    }
+
+    private async ValueTask<IReadOnlyList<WorkflowChatInputPart>?> BuildAttachmentInputPartsAsync(
+        NeedsWorkflowDraftRunEvent request,
+        CancellationToken ct)
+    {
+        var attachments = SelectLarkWorkflowAttachments(request).ToArray();
+        if (attachments.Length == 0)
+            return null;
+
+        if (_larkClient is null)
+            throw new WorkflowAttachmentIngressException("lark_client_unavailable");
+        if (_fileIngressPort is null)
+            throw new WorkflowAttachmentIngressException("file_ingress_port_unavailable");
+
+        var token = NormalizeOptional(request.NyxUserAccessToken) ??
+                    NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        if (token is null)
+            throw new WorkflowAttachmentIngressException("token_missing");
+
+        var messageId = NormalizeOptional(request.Activity?.TransportExtras?.NyxPlatformMessageId);
+        if (messageId is null)
+            throw new WorkflowAttachmentIngressException("platform_message_id_missing");
+
+        var inputParts = new List<WorkflowChatInputPart>(attachments.Length);
+        foreach (var attachment in attachments)
+        {
+            var resourceKey = ResolveLarkResourceKey(attachment);
+            if (resourceKey is null)
+                throw new WorkflowAttachmentIngressException("resource_key_missing");
+
+            LarkMessageResourceDownloadResult download;
+            try
+            {
+                download = await _larkClient.DownloadMessageResourceAsync(
+                        token,
+                        new LarkMessageResourceDownloadRequest(
+                            messageId,
+                            resourceKey,
+                            attachment.Kind == AttachmentKind.Image
+                                ? LarkMessageResourceKind.Image
+                                : LarkMessageResourceKind.File),
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new WorkflowAttachmentIngressException("download_failed", ex);
+            }
+
+            if (!download.Succeeded || download.Content is not { Length: > 0 })
+                throw new WorkflowAttachmentIngressException("download_failed");
+
+            WorkflowFileIngressResult ingress;
+            try
+            {
+                ingress = await _fileIngressPort.IngestAsync(
+                        new WorkflowFileIngressRequest(
+                            download.Content,
+                            WorkflowFileSourceKind.ConnectedServiceResource,
+                            SourceMessageId: messageId,
+                            SourceResourceKey: resourceKey,
+                            FileName: NormalizeOptional(download.FileName) ?? NormalizeOptional(attachment.Name),
+                            MediaType: NormalizeOptional(download.ContentType) ?? NormalizeOptional(attachment.ContentType),
+                            OwnerRunId: NormalizeOptional(request.RunId),
+                            OwnerScopeId: NormalizeOptional(request.WorkflowSource?.ScopeId)),
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new WorkflowAttachmentIngressException("ingress_failed", ex);
+            }
+
+            inputParts.Add(new WorkflowChatInputPart
+            {
+                Kind = attachment.Kind == AttachmentKind.Image
+                    ? WorkflowChatInputPartKind.Image
+                    : WorkflowChatInputPartKind.Text,
+                MediaType = ingress.FileRef.MediaType,
+                Uri = ingress.FileRef.ArtifactId,
+                Name = ingress.FileRef.FileName,
+                FileRef = ingress.FileRef,
+            });
+        }
+
+        return inputParts;
+    }
+
+    private static WorkflowChatRunRequest BuildCommand(
+        NeedsWorkflowDraftRunEvent request,
+        IReadOnlyList<WorkflowChatInputPart>? inputParts)
     {
         var source = request.WorkflowSource ?? new ChannelWorkflowDraftRunSource();
         var headers = request.Headers.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
@@ -198,6 +329,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
             Prompt: request.Prompt ?? string.Empty,
             Source: WorkflowChatSource.DefinitionActor(source.DefinitionActorId, source.WorkflowName),
             SessionId: request.RunId,
+            InputParts: inputParts,
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["channel.registration_id"] = request.RegistrationId ?? string.Empty,
@@ -209,6 +341,74 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
             CommandIdSeed: request.RunId,
             CorrelationIdSeed: request.CorrelationId);
     }
+
+    private static IEnumerable<AttachmentRef> SelectLarkWorkflowAttachments(NeedsWorkflowDraftRunEvent request)
+    {
+        var activity = request.Activity;
+        if (!IsLarkActivity(activity))
+            yield break;
+
+        if (activity?.Content?.Attachments is not { Count: > 0 } attachments)
+            yield break;
+
+        foreach (var attachment in attachments)
+        {
+            if (attachment.Kind is not (AttachmentKind.Image or AttachmentKind.File))
+                continue;
+            var resourceKey = ResolveLarkResourceKey(attachment);
+            if (resourceKey is null || IsHttpUrl(resourceKey))
+                continue;
+            if (!string.IsNullOrWhiteSpace(attachment.ExternalUrl))
+                continue;
+
+            yield return attachment;
+        }
+    }
+
+    private static string? ResolveLarkResourceKey(AttachmentRef attachment)
+    {
+        var blobRef = NormalizeOptional(attachment.BlobRef);
+        if (blobRef is not null)
+        {
+            if (TryReadLarkResourceBlobRef(blobRef, attachment.Kind, out var resourceKey))
+                return resourceKey;
+            if (blobRef.StartsWith("lark:", StringComparison.Ordinal))
+                return null;
+        }
+
+        return NormalizeOptional(attachment.AttachmentId);
+    }
+
+    private static bool TryReadLarkResourceBlobRef(
+        string blobRef,
+        AttachmentKind kind,
+        out string resourceKey)
+    {
+        var prefix = kind == AttachmentKind.Image ? "lark:image_key:" : "lark:file_key:";
+        if (!blobRef.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            resourceKey = string.Empty;
+            return false;
+        }
+
+        resourceKey = NormalizeOptional(blobRef[prefix.Length..]) ?? string.Empty;
+        return resourceKey.Length > 0;
+    }
+
+    private static bool IsLarkActivity(ChatActivity? activity)
+    {
+        var platform = NormalizeOptional(activity?.TransportExtras?.NyxPlatform) ??
+                       NormalizeOptional(activity?.ChannelId?.Value);
+        return string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsHttpUrl(string value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static ChannelWorkflowDraftRunFrame? TryMapFrame(WorkflowRunEventEnvelope frame)
     {
@@ -322,5 +522,22 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                 request.RunId,
                 runActorId);
         }
+    }
+
+    private sealed class WorkflowAttachmentIngressException : Exception
+    {
+        public WorkflowAttachmentIngressException(string reason)
+            : base($"Workflow attachment ingress failed: {reason}")
+        {
+            Reason = reason;
+        }
+
+        public WorkflowAttachmentIngressException(string reason, Exception innerException)
+            : base($"Workflow attachment ingress failed: {reason}", innerException)
+        {
+            Reason = reason;
+        }
+
+        public string Reason { get; }
     }
 }

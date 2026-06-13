@@ -122,6 +122,7 @@ public sealed class WorkflowParser
             MaxHistoryMessages = role.MaxHistoryMessages,
             EventModules = eventModules,
             EventRoutes = eventRoutes,
+            AgentToolScope = MapAgentToolScope(role.AllowedTools),
             Connectors = role.Connectors?.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Distinct(StringComparer.Ordinal).ToList() ?? [],
         };
     }
@@ -147,11 +148,13 @@ public sealed class WorkflowParser
         var rawParameters = s.Parameters is null
             ? null
             : new Dictionary<string, object?>(s.Parameters, StringComparer.Ordinal);
+        var agentToolScope = MapAgentToolScope(ResolveStepAllowedTools(s, rawParameters));
         var presentation = MapPresentation(canonicalType, s, rawParameters);
         var parameters = NormalizeParameters(rawParameters);
 
         ApplyErgonomicDefaults(normalizedRawType, parameters);
         LiftRootPrimitiveParameters(canonicalType, s, parameters);
+        LiftTransformOperationParameters(canonicalType, s, parameters);
 
         return new StepDefinition
         {
@@ -159,7 +162,9 @@ public sealed class WorkflowParser
             Type = canonicalType,
             TargetRole = s.TargetRole ?? s.Role,
             Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(parameters),
+            TransformOperation = MapTransformOperation(canonicalType, parameters),
             Presentation = presentation,
+            AgentToolScope = agentToolScope,
             Next = s.Next,
             Children = s.Children?.Select(MapStep).ToList(),
             Branches = NormalizeBranches(s.Branches),
@@ -219,6 +224,101 @@ public sealed class WorkflowParser
         }
 
         return null;
+    }
+
+    private static object? ResolveStepAllowedTools(
+        RawStep step,
+        IDictionary<string, object?>? rawParameters)
+    {
+        object? parameterSource = null;
+        if (rawParameters is not null)
+        {
+            foreach (var key in new[] { "allowed_tools", "allowedTools" })
+            {
+                if (!rawParameters.TryGetValue(key, out var source))
+                    continue;
+
+                rawParameters.Remove(key);
+                parameterSource ??= source;
+            }
+        }
+
+        if (step.AllowedTools is not null)
+            return step.AllowedTools;
+
+        return parameterSource;
+    }
+
+    private static WorkflowAgentToolScopeDefinition? MapAgentToolScope(object? source)
+    {
+        if (source is null)
+            return null;
+
+        return new WorkflowAgentToolScopeDefinition
+        {
+            AllowedToolNames = NormalizeToolNames(source).ToList(),
+        };
+    }
+
+    private static IEnumerable<string> NormalizeToolNames(object? source)
+    {
+        switch (source)
+        {
+            case null:
+                yield break;
+            case string text:
+            {
+                if (string.IsNullOrWhiteSpace(text))
+                    yield break;
+
+                var trimmed = text.Trim();
+                if (trimmed.StartsWith("[", StringComparison.Ordinal) ||
+                    trimmed.StartsWith("{", StringComparison.Ordinal))
+                {
+                    using var document = JsonDocument.Parse(trimmed);
+                    foreach (var item in NormalizeToolNames(document.RootElement.Clone()))
+                        yield return item;
+                    yield break;
+                }
+
+                foreach (var item in trimmed.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                    yield return item;
+                yield break;
+            }
+            case JsonElement element:
+            {
+                if (element.ValueKind != JsonValueKind.Array)
+                    yield break;
+
+                foreach (var item in element.EnumerateArray())
+                {
+                    var toolName = ConvertValueToString(item).Trim();
+                    if (!string.IsNullOrWhiteSpace(toolName))
+                        yield return toolName;
+                }
+
+                yield break;
+            }
+            case IEnumerable sequence:
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var item in sequence)
+                {
+                    var toolName = ConvertValueToString(item).Trim();
+                    if (!string.IsNullOrWhiteSpace(toolName) && seen.Add(toolName))
+                        yield return toolName;
+                }
+
+                yield break;
+            }
+            default:
+            {
+                var toolName = ConvertValueToString(source).Trim();
+                if (!string.IsNullOrWhiteSpace(toolName))
+                    yield return toolName;
+                yield break;
+            }
+        }
     }
 
     private static object? ResolveInteractionTemplateSpecSource(
@@ -816,6 +916,100 @@ public sealed class WorkflowParser
     private static bool ShouldLiftTimeoutMsToParameter(string canonicalType) =>
         canonicalType is "wait_signal" or "connector_call" or "secure_connector_call" or "llm_call" or "human_input" or "secure_input" or "human_approval";
 
+    private static void LiftTransformOperationParameters(
+        string canonicalType,
+        RawStep s,
+        IDictionary<string, string> parameters)
+    {
+        if (!string.Equals(canonicalType, "transform", StringComparison.Ordinal))
+            return;
+
+        AddIfMissing(parameters, "op", s.Op);
+        AddIfMissing(parameters, "precision", s.Precision);
+        AddIfMissing(parameters, "digits", s.Digits);
+        AddIfMissing(parameters, "places", s.Places);
+        AddIfMissing(parameters, "group_by", s.GroupBy);
+        AddIfMissing(parameters, "value", s.Value);
+        AddIfMissing(parameters, "value_field", s.ValueField);
+        AddIfMissing(parameters, "field", s.Field);
+        AddIfMissing(parameters, "aggregate", s.Aggregate);
+    }
+
+    private static TransformOperationSpec? MapTransformOperation(
+        string canonicalType,
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        if (!string.Equals(canonicalType, "transform", StringComparison.Ordinal))
+            return null;
+
+        var op = GetParameter(parameters, "op", "operation").Trim();
+        var kind = ParseTransformOperationKind(op);
+        if (kind == TransformOperationKind.Unspecified)
+            return null;
+
+        var spec = new TransformOperationSpec { Kind = kind };
+        if (TryGetParameter(parameters, out var precision, "precision", "scale", "digits", "places") &&
+            !string.IsNullOrWhiteSpace(precision) &&
+            !int.TryParse(precision.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+        {
+            return null;
+        }
+
+        if (TryGetParameter(parameters, out precision, "precision", "scale", "digits", "places") &&
+            int.TryParse(precision.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPrecision))
+        {
+            spec.Precision = parsedPrecision;
+        }
+
+        spec.Key = GetParameter(parameters, "key", "group_key", "group_by").Trim();
+        spec.Value = GetParameter(parameters, "value", "value_field", "field").Trim();
+        spec.Aggregate = ParseTransformAggregateKind(GetParameter(parameters, "aggregate", "agg").Trim());
+        return spec;
+    }
+
+    private static TransformOperationKind ParseTransformOperationKind(string? value) =>
+        NormalizeEnumToken(value) switch
+        {
+            "sum" => TransformOperationKind.Sum,
+            "subtract" => TransformOperationKind.Subtract,
+            "multiply" => TransformOperationKind.Multiply,
+            "divide" => TransformOperationKind.Divide,
+            "round" => TransformOperationKind.Round,
+            "min" => TransformOperationKind.Min,
+            "max" => TransformOperationKind.Max,
+            "groupby" => TransformOperationKind.GroupBy,
+            _ => TransformOperationKind.Unspecified,
+        };
+
+    private static TransformAggregateKind ParseTransformAggregateKind(string? value) =>
+        NormalizeEnumToken(value) switch
+        {
+            "sum" => TransformAggregateKind.Sum,
+            "count" => TransformAggregateKind.Count,
+            "avg" => TransformAggregateKind.Avg,
+            _ => TransformAggregateKind.Unspecified,
+        };
+
+    private static bool TryGetParameter(
+        IReadOnlyDictionary<string, string> parameters,
+        out string value,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (parameters.TryGetValue(key, out value!))
+                return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static string GetParameter(
+        IReadOnlyDictionary<string, string> parameters,
+        params string[] keys) =>
+        TryGetParameter(parameters, out var value, keys) ? value : string.Empty;
+
     private static void AddIfMissing(
         IDictionary<string, string> parameters,
         string key,
@@ -1003,6 +1197,7 @@ public sealed class WorkflowParser
         public int? MaxHistoryMessages { get; set; }
         public string? EventModules { get; set; }
         public string? EventRoutes { get; set; }
+        public object? AllowedTools { get; set; }
         public RawRoleExtensions? Extensions { get; set; }
         public List<string>? Connectors { get; set; }
     }
@@ -1062,6 +1257,16 @@ public sealed class WorkflowParser
         public string? HolderToken { get; set; }
         public object? Generation { get; set; }
         public string? HolderTokenVariable { get; set; }
+        public string? Op { get; set; }
+        public object? Precision { get; set; }
+        public object? Digits { get; set; }
+        public object? Places { get; set; }
+        public string? GroupBy { get; set; }
+        public string? Value { get; set; }
+        public string? ValueField { get; set; }
+        public string? Field { get; set; }
+        public string? Aggregate { get; set; }
+        public object? AllowedTools { get; set; }
         public object? InteractionSpec { get; set; }
         public object? InteractionTemplateSpec { get; set; }
         public string? DeliveryTargetId { get; set; }

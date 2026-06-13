@@ -103,6 +103,10 @@ llm-anthropic/claude-haiku-4-5
 - `max_output_tokens`、`temperature`
 - response session 注册、查询可见性校验、24 小时 TTL
 
+默认非 streaming create 是 completed-only：Aevatar 会先把 run command dispatch 到 response session actor，再通过 observation/projection 链等待 terminal event。成功时 HTTP 200 只返回 `status:"completed"` 的 response JSON，`output` 包含 completed message 和已完成的 function-call output item，`usage` 来自 terminal observation。
+
+非 streaming create 不返回 `status:"in_progress"` accepted 空壳。观察超时返回 HTTP 504 error envelope，`code:"response_timeout"`；terminal failure 返回非 2xx error envelope，默认 HTTP 500 或 terminal failure 指定状态；terminal cancellation 返回 HTTP 409，`code:"run_cancelled"`；请求取消或客户端中断沿用 HTTP 408，`code:"request_timeout"`。这些失败不会返回 failed response JSON。真正的 `background:true` 和 `GET /v1/responses/{id}` retrieve 属于后续独立协议与 readmodel，不属于当前入口。
+
 `previous_response_id` 的约束是诚实的：只能继续同一 caller scope 可见、未过期、未失败、未取消的 session。带 `function_call_output` 且显式带 `previous_response_id` 时，Aevatar 会按上一轮记录的 forwarded tool call 对账。
 
 为了兼容 Anthropic 到 OpenAI 的转换器，如果请求里有 `function_call_output`，但没有 `previous_response_id`，Aevatar 不会直接报错，而是把这些 tool result 折进 prompt，形如：
@@ -220,11 +224,20 @@ NyxID slug proxy 路由是 REST proxy plane：
 /api/v1/proxy/s/{slug}/{path}
 ```
 
+## 10. Aevatar Service 外部暴露记录
+
+Aevatar service catalog 的 `externalExposure` 是 service definition 拥有的 typed fact，用来记录该 service 已经作为外部 NyxID downstream service 暴露时的稳定信息：
+
+- `nyxidSlug`：NyxID 侧用于 `/api/v1/proxy/s/{slug}/...` 的 slug。
+- `registeredAt`：该外部暴露记录写入 Aevatar service definition 的时间。
+
+这个事实不属于 service binding。Binding 只表达本 service 依赖的下游资源；`externalExposure` 表达本 service 自身对外暴露后的可发现信息。Aevatar 不会因为该字段自动向 NyxID 注册服务，也不会把该字段接入 dispatcher 路由。写入仍走 service definition 的窄 external exposure 更新入口，读取走 service catalog readmodel 与现有 service/scope service API 响应。
+
 因此 API key 至少需要 `proxy` scope，或更宽的 proxy scope。生产上可以用 `--allowed-services` 收紧到 Aevatar 与目标 LLM 服务；调试时可以先用 `--allow-all-services` 验证链路。
 
 `--allowed-services` 必须填 `nyxid service list --output json` 里的 UserService id，不是 catalog id。填错时常见错误是 `api_key_scope_forbidden_legacy`。
 
-## 10. 代码锚点
+## 11. 代码锚点
 
 主机端入口：
 

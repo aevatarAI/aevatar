@@ -9,6 +9,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -103,6 +104,46 @@ public class RoleGAgentReplayContractTests
         await agent2.ActivateAsync();
         agent2.State.RoleName.Should().Be("assistant");
         agent2.RoleName.Should().Be("assistant");
+    }
+
+    [Fact]
+    public async Task VoicePresenceEnableRequested_ShouldPersistAndReplayCapabilityState()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+
+        var agent1 = CreateAgent(services, "role-voice-enable-replay");
+        await agent1.ActivateAsync();
+        await agent1.HandleVoicePresenceEnableRequested(new VoicePresenceEnableRequested
+        {
+            ModuleName = "voice_presence",
+            PcmSampleRateHz = 24000,
+            RemoteAudioSupport = VoiceRemoteAudioSupport.Supported,
+            SessionDefaults = new VoiceSessionDefaults
+            {
+                Voice = "verse",
+                Instructions = "stay concise",
+                SampleRateHz = 16000,
+                TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+            },
+        });
+        await agent1.DeactivateAsync();
+
+        var persisted = await store.GetEventsAsync("role-voice-enable-replay");
+        persisted.Should().ContainSingle(x =>
+            x.EventType.Contains(nameof(VoicePresenceRuntimeStateChangedEvent), StringComparison.Ordinal));
+
+        var agent2 = CreateAgent(services, "role-voice-enable-replay");
+        await agent2.ActivateAsync();
+
+        agent2.State.VoicePresence.Should().ContainKey("voice_presence");
+        var state = agent2.State.VoicePresence["voice_presence"];
+        state.Initialized.Should().BeTrue();
+        state.Status.Should().Be(VoicePresenceRuntimeStatus.Idle);
+        state.PcmSampleRateHz.Should().Be(16000);
+        state.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.Supported);
+        state.ActiveSessionConfig.Voice.Should().Be("verse");
+        state.ActiveSessionConfig.Instructions.Should().Be("stay concise");
     }
 
     [Fact]

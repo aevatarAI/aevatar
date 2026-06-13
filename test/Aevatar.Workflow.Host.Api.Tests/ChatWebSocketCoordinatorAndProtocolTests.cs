@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
+using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -164,6 +165,101 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     }
 
     [Fact]
+    public async Task ChatCommand_ShouldEmitInvalidFileInput_WhenInlineFileSizeBytesMismatchesDecodedBytes()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var service = new FakeCommandInteractionService();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "sizeBytes": 6
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope(
+                "req-file",
+                input,
+                WebSocketMessageType.Text),
+            service,
+            ApiRequestScope.BeginHttp(),
+            CancellationToken.None);
+
+        socket.SentTexts.Should().ContainSingle();
+        socket.SentTexts[0].Should().Contain("\"type\":\"command.error\"");
+        socket.SentTexts[0].Should().Contain("INVALID_FILE_INPUT");
+        service.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ChatCommand_ShouldDispatch_WhenInlineFileSizeBytesMatchesDecodedBytes()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var service = new FakeCommandInteractionService
+        {
+            Handler = async (_, _, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "name": "hello.png",
+                    "sizeBytes": 5
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope(
+                "req-file",
+                input,
+                WebSocketMessageType.Text),
+            service,
+            ApiRequestScope.BeginHttp(),
+            CancellationToken.None,
+            fileIngressPort: ingressPort);
+
+        socket.SentTexts.Should().ContainSingle();
+        socket.SentTexts[0].Should().Contain("\"type\":\"command.ack\"");
+        ingressPort.Requests.Should().ContainSingle();
+        ingressPort.Requests[0].Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("hello"));
+        service.LastRequest.Should().NotBeNull();
+        var part = service.LastRequest!.InputParts.Should().ContainSingle().Which;
+        part.DataBase64.Should().BeNull();
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.ArtifactId.Should().Be("workflow-file://file-1");
+        part.FileRef.SizeBytes.Should().Be(5);
+    }
+
+    [Fact]
     public async Task ReceiveAsync_ShouldAssembleTextChunks()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
@@ -263,6 +359,31 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         {
             LastRequest = request;
             return Handler(request, emitAsync, onAcceptedAsync, ct);
+        }
+    }
+
+    private sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    {
+        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+
+        public ValueTask<WorkflowFileIngressResult> IngestAsync(
+            WorkflowFileIngressRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return ValueTask.FromResult(new WorkflowFileIngressResult(new ApplicationWorkflowFileRef
+            {
+                FileId = "file-1",
+                ArtifactId = "workflow-file://file-1",
+                SourceKind = request.SourceKind,
+                FileName = request.FileName,
+                MediaType = request.MediaType,
+                SizeBytes = request.Content.Length,
+                Sha256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+                CreatedAtUnixMs = 1710000000000,
+                ExpiresAtUnixMs = 1710003600000,
+            }));
         }
     }
 

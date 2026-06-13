@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
@@ -15,6 +16,21 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ConversationReplyGeneratorTests
 {
+    private static readonly LLMProviderCapabilities MultimodalCapabilities = new()
+    {
+        SupportedInputModalities = new HashSet<ContentPartKind>
+        {
+            ContentPartKind.Text,
+            ContentPartKind.Image,
+        },
+        SupportedOutputModalities = new HashSet<ContentPartKind>
+        {
+            ContentPartKind.Text,
+        },
+        SupportsStreaming = true,
+        SupportsToolCalls = true,
+    };
+
     private static LLMControlContext Control(
         string? model = null,
         string? route = null,
@@ -37,6 +53,46 @@ public sealed class ConversationReplyGeneratorTests
             {
                 SenderBinding = new AgentToolSenderBindingContext(senderBindingId),
             };
+
+    private static ChatActivity CreateLarkImageActivity(
+        string id,
+        string text,
+        string platformMessageId,
+        string imageKey,
+        string? token) =>
+        AddImageAttachment(CreateLarkActivity(id, text, platformMessageId, token), imageKey);
+
+    private static ChatActivity AddImageAttachment(ChatActivity activity, string imageKey)
+    {
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = imageKey,
+            Kind = AttachmentKind.Image,
+            ContentType = "image/png",
+            Name = "photo.png",
+            SizeBytes = 512,
+        });
+        return activity;
+    }
+
+    private static ChatActivity CreateLarkActivity(
+        string id,
+        string text,
+        string platformMessageId,
+        string? token) =>
+        new()
+        {
+            Id = id,
+            ChannelId = ChannelId.From("lark"),
+            Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
+            Content = new MessageContent { Text = text },
+            TransportExtras = new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxPlatformMessageId = platformMessageId,
+                NyxUserAccessToken = token ?? string.Empty,
+            },
+        };
 
     [Fact]
     public async Task GenerateReplyAsync_WithPriorConversationHistory_BuildsSecondTurnRequestWithPreviousUserAndAssistant()
@@ -111,6 +167,307 @@ public sealed class ConversationReplyGeneratorTests
         providerFactory.Requests[2].Messages
             .Should()
             .NotContain(message => message.Content == "first user" || message.Content == "first assistant");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithReasoningBearingPriorHistory_StripsReasoningFromLlmInput()
+    {
+        // Regression for the 2026-06-12 prod incident: prior turns' persisted
+        // reasoning_content was rehydrated verbatim into the next turn's LLM request.
+        // Replayed reasoning violates the reasoning-model contract (DeepSeek rejects it
+        // by spec; through the NyxID proxy it silently derails generation until every
+        // turn in the conversation completes empty). The rehydration boundary must strip
+        // reasoning while preserving the visible content.
+        var providerFactory = new SequentialResponseProviderFactory("next assistant");
+        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+
+        var priorHistory = new List<ConversationHistoryEntry>
+        {
+            new()
+            {
+                Role = "user",
+                Content = "first user",
+            },
+            new()
+            {
+                Role = "assistant",
+                Content = "first assistant",
+                ReasoningContent = "prior-turn chain of thought that must never be replayed",
+            },
+        };
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-msg-reasoning",
+                ChannelId = new ChannelId { Value = "lark" },
+                Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-reasoning" },
+                Content = new MessageContent { Text = "second user" },
+            },
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: priorHistory,
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        var rehydratedAssistant = request.Messages.Should()
+            .ContainSingle(message => message.Role == "assistant" && message.Content == "first assistant")
+            .Subject;
+        rehydratedAssistant.ReasoningContent.Should().BeNull(
+            "prior-turn reasoning_content must never be replayed into provider input");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithCurrentLarkImageAttachment_BuildsImageContentPart()
+    {
+        var imageBytes = new byte[] { 1, 2, 3, 4 };
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/png", "photo.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+
+        await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-current",
+                "describe it",
+                "om_current",
+                "img_current",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "describe it");
+        var imagePart = userMessage.ContentParts!.Single(part => part.Kind == ContentPartKind.Image);
+        imagePart.DataBase64.Should().Be(Convert.ToBase64String(imageBytes));
+        imagePart.MediaType.Should().Be("image/png");
+        imagePart.Name.Should().Be("photo.png");
+        userMessage.ContentParts!.Should().NotContain(part =>
+            part.Text != null &&
+            part.Text.Contains("Attachment visibility warning", StringComparison.Ordinal));
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            "om_current",
+            "img_current",
+            LarkMessageResourceKind.Image));
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_WithRecentLarkImageAttachment_BuildsImageContentPart()
+    {
+        var imageBytes = new byte[] { 9, 8, 7 };
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/jpeg", "recent.jpg"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark);
+        var recentActivity = CreateLarkImageActivity(
+            "msg-image-recent",
+            "earlier image",
+            "om_recent",
+            "img_recent",
+            token: null);
+        var currentActivity = new ChatActivity
+        {
+            Id = "msg-follow-up",
+            ChannelId = ChannelId.From("lark"),
+            Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
+            Content = new MessageContent { Text = "what was in the image?" },
+        };
+        var attachmentContext = new ChatAttachmentInputContext(
+            [
+                new RecentConversationAttachmentActivity
+                {
+                    ActivityId = recentActivity.Id,
+                    AcceptedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Activity = recentActivity.Clone(),
+                },
+            ],
+            "recent-token");
+
+        var plan = await generator.BuildStepPlanAsync(
+            currentActivity,
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: null,
+            attachmentContext,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        var userMessage = plan.InitialMessages.Last(message => message.Role == "user");
+        var imagePart = userMessage.ContentParts.Should().NotBeNull().And.Subject
+            .Single(part => part.Kind == ContentPartKind.Image);
+        imagePart.DataBase64.Should().Be(Convert.ToBase64String(imageBytes));
+        imagePart.MediaType.Should().Be("image/jpeg");
+        imagePart.Name.Should().Be("recent.jpg");
+        userMessage.ContentParts!.Should().NotContain(part =>
+            part.Text != null &&
+            part.Text.Contains("Attachment visibility warning", StringComparison.Ordinal));
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "recent-token",
+            "om_recent",
+            "img_recent",
+            LarkMessageResourceKind.Image));
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithTextOnlyProviderAndImageAttachment_AddsHonestVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1], "image/png", "photo.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = LLMProviderCapabilities.TextOnly,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+
+        await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-text-only",
+                "describe it",
+                "om_text_only",
+                "img_text_only",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().NotContain(part => part.Kind == ContentPartKind.Image);
+        userMessage.ContentParts!.Should().ContainSingle(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "describe it");
+        var systemMessage = providerFactory.Requests[0].Messages.First(message => message.Role == "system");
+        systemMessage.Content.Should().Contain("Attachment visibility warning");
+        systemMessage.Content.Should().Contain("selected LLM route does not support image input");
+        systemMessage.Content.Should().Contain("do not describe, infer, or pretend to have seen");
+        lark.Downloads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithNonImageAttachment_AddsHonestVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1], "image/png", "photo.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+        var activity = CreateLarkActivity(
+            "msg-file",
+            "read this",
+            "om_file",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_key",
+            Kind = AttachmentKind.File,
+            ContentType = "application/pdf",
+            Name = "report.pdf",
+            SizeBytes = 512,
+        });
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().NotContain(part => part.Kind == ContentPartKind.Image);
+        userMessage.ContentParts!.Should().ContainSingle(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "read this");
+        var systemMessage = providerFactory.Requests[0].Messages.First(message => message.Role == "system");
+        systemMessage.Content.Should().Contain("Attachment visibility warning");
+        systemMessage.Content.Should().Contain("could not be converted to LLM image input");
+        lark.Downloads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WhenLarkImageDownloadFails_AddsHonestVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(false, [], "image/png", "photo.png", "not found", 404));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+
+        await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-download-failure",
+                "describe it",
+                "om_download_fail",
+                "img_download_fail",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().NotContain(part => part.Kind == ContentPartKind.Image);
+        userMessage.ContentParts!.Should().ContainSingle(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "describe it");
+        var systemMessage = providerFactory.Requests[0].Messages.First(message => message.Role == "system");
+        systemMessage.Content.Should().Contain("Attachment visibility warning");
+        systemMessage.Content.Should().Contain("could not be converted to LLM image input");
+        lark.Downloads.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithoutAttachments_DoesNotAddVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1], "image/png", "photo.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = LLMProviderCapabilities.TextOnly,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+
+        await generator.GenerateReplyAsync(
+            CreateLarkActivity(
+                "msg-no-attachment",
+                "hello",
+                "om_no_attachment",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().ContainSingle(part => part.Kind == ContentPartKind.Text && part.Text == "hello");
+        userMessage.ContentParts!.Should().NotContain(part =>
+            part.Text != null &&
+            part.Text.Contains("Attachment visibility warning", StringComparison.Ordinal));
+        lark.Downloads.Should().BeEmpty();
     }
 
     [Fact]
@@ -392,7 +749,9 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        reply.Text.Should().Contain("No tool approval handler is registered.");
+        reply.Text.Should().Contain("approval-gated tools cannot run here");
+        reply.Text.Should().NotContain("An approval request has been sent.");
+        reply.Text.Should().NotContain("\"approval_required\":true");
         tool.ExecuteCount.Should().Be(0);
     }
 
@@ -1328,6 +1687,8 @@ public sealed class ConversationReplyGeneratorTests
 
         public List<LLMRequest> Requests { get; } = [];
 
+        public LLMProviderCapabilities Capabilities { get; init; } = LLMProviderCapabilities.TextOnly;
+
         public int FailuresBeforeSuccess { get; init; }
 
         public Exception? FailureBeforeSuccess { get; init; }
@@ -1358,6 +1719,68 @@ public sealed class ConversationReplyGeneratorTests
                 IsLast = true,
             };
         }
+    }
+
+    private sealed class RecordingLarkNyxClient(LarkMessageResourceDownloadResult downloadResult) : ILarkNyxClient
+    {
+        public List<(string Token, string MessageId, string ResourceKey, LarkMessageResourceKind Kind)> Downloads { get; } = [];
+
+        public Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+            string token,
+            LarkMessageResourceDownloadRequest request,
+            CancellationToken ct)
+        {
+            Downloads.Add((token, request.MessageId, request.ResourceKey, request.Kind));
+            return Task.FromResult(downloadResult);
+        }
+
+        public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> ReplyToMessageAsync(string token, LarkReplyMessageRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> ListMessageReactionsAsync(string token, LarkMessageReactionListRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> DeleteMessageReactionAsync(string token, LarkMessageReactionDeleteRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     private sealed class SequentialResponseProviderFactory(params string[] responses) : ILLMProviderFactory, ILLMProvider
