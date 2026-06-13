@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
-namespace Aevatar.Studio.Application.Studio.Services;
+namespace Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 
 public static class NyxIdLlmServiceCatalogParser
 {
