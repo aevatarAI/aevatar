@@ -117,6 +117,7 @@
   </Folder>
   <Folder Name="/src/studio/">
     <Project Path="src/Aevatar.Studio.Domain/Aevatar.Studio.Domain.csproj" />
+    <Project Path="src/Aevatar.Studio.Application.Abstractions/Aevatar.Studio.Application.Abstractions.csproj" />
     <Project Path="src/Aevatar.Studio.Application/Aevatar.Studio.Application.csproj" />
     <Project Path="src/Aevatar.Studio.Infrastructure/Aevatar.Studio.Infrastructure.csproj" />
     <Project Path="src/Aevatar.Studio.Hosting/Aevatar.Studio.Hosting.csproj" />
