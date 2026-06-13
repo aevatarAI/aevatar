@@ -40,7 +40,7 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleInboundActivityAsync_WhenDuplicateActivityId_CollapsesToSingleCommit()
     {
         var runner = new RecordingTurnRunner();
-        var (agent, store) = CreateAgent(runner, "conv-1");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-1");
 
         var activity = CreateActivity("act-1", "conv:slack:C1");
         await agent.HandleInboundActivityAsync(activity);
@@ -56,7 +56,7 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleInboundActivityAsync_SequentialDistinctActivities_CommitAtomicallyInOrder()
     {
         var runner = new RecordingTurnRunner();
-        var (agent, store) = CreateAgent(runner, "conv-2");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-2");
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-1", "conv:slack:C1"));
         await agent.HandleInboundActivityAsync(CreateActivity("act-2", "conv:slack:C1"));
@@ -76,7 +76,7 @@ public sealed class ConversationGAgentDedupTests
         // because redelivery arrived during a concurrent commit window. The grain's post-commit
         // state must still reject the duplicate without invoking the turn runner a second time.
         var runner = new RecordingTurnRunner();
-        var (agent, _) = CreateAgent(runner, "conv-3");
+        var (agent, _) = await CreateAgentAsync(runner, "conv-3");
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-redeliver", "conv:slack:C1"));
         runner.InboundCount.ShouldBe(1);
@@ -90,7 +90,7 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleContinueCommandAsync_WhenDuplicateCommandId_EmitsDuplicateCommandRejection()
     {
         var runner = new RecordingTurnRunner();
-        var (agent, store) = CreateAgent(runner, "conv-4");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-4");
 
         var cmd = CreateContinueCommand("cmd-1");
         await agent.HandleContinueCommandAsync(cmd);
@@ -112,7 +112,7 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleInboundActivityAsync_WhenCapExceeded_RemovesOldestDedupEntry()
     {
         var runner = new RecordingTurnRunner();
-        var (agent, _) = CreateAgent(runner, "conv-5");
+        var (agent, _) = await CreateAgentAsync(runner, "conv-5");
 
         // Seed the state with cap - 1 entries, then add two more so the sliding window triggers.
         for (var i = 0; i < ConversationGAgent.ProcessedIdsCap; i++)
@@ -139,7 +139,7 @@ public sealed class ConversationGAgentDedupTests
         {
             InboundResultFactory = _ => ConversationTurnResult.TransientFailure("rate_limited", "retry later", TimeSpan.FromMilliseconds(250)),
         };
-        var (agent, store) = CreateAgent(runner, "conv-6");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-6");
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-fail", "conv:slack:C1"));
 
@@ -179,7 +179,7 @@ public sealed class ConversationGAgentDedupTests
                     "bot");
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-retry-success");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-retry-success");
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-retry-success", "conv:slack:C1"));
         agent.State.PendingInboundTurns.ShouldContain(entry => entry.ActivityId == "act-retry-success");
@@ -210,7 +210,7 @@ public sealed class ConversationGAgentDedupTests
         {
             InboundResultFactory = _ => ConversationTurnResult.TransientFailure("stuck", "persistent transient error"),
         };
-        var (agent, store) = CreateAgent(runner, "conv-retry-exhaust");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-retry-exhaust");
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-exhaust", "conv:slack:C1"));
         agent.State.PendingInboundTurns.Single(e => e.ActivityId == "act-exhaust").RetryCount.ShouldBe(1);
@@ -265,7 +265,7 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationTurnResult.LlmReplyRequested(CreateNeedsLlmReply(activity, requestedAtUnixMs: 7));
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-llm-supersedes-retry");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-llm-supersedes-retry");
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-llm-supersedes", "conv:slack:C1"));
         agent.State.PendingInboundTurns.ShouldContain(entry => entry.ActivityId == "act-llm-supersedes");
@@ -304,7 +304,7 @@ public sealed class ConversationGAgentDedupTests
         {
             InboundResultFactory = _ => ConversationTurnResult.PermanentFailure("bad_input", "rejected"),
         };
-        var (agent, store) = CreateAgent(runner, "conv-permanent-inbound");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-permanent-inbound");
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-permanent", "conv:slack:C1"));
 
@@ -332,7 +332,7 @@ public sealed class ConversationGAgentDedupTests
                     CorrelationId = "corr-relay-1",
                 }),
         };
-        var (agent, store) = CreateAgent(runner, "conv-relay");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-relay");
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-relay", "conv:slack:C1"));
 
@@ -350,7 +350,7 @@ public sealed class ConversationGAgentDedupTests
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
                 CreateNeedsLlmReply(activity, requestedAtUnixMs: 42)),
         };
-        var (agent, store) = CreateAgent(runner, "conv-llm-request");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-llm-request");
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-llm", "conv:slack:C1"));
 
@@ -374,7 +374,7 @@ public sealed class ConversationGAgentDedupTests
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
                 CreateNeedsLlmReply(activity, requestedAtUnixMs: requestedAt++)),
         };
-        var (agent, store) = CreateAgent(runner, "conv-recent-attachments", dispatcher);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-recent-attachments", dispatcher);
 
         await agent.HandleInboundActivityAsync(CreateLarkImageActivity(
             "act-image",
@@ -418,7 +418,7 @@ public sealed class ConversationGAgentDedupTests
         const string sentinelUserAccessToken = "sentinel-user-access-token-must-not-persist";
         var publisher = new RecordingEventPublisher();
         var runner = new RecordingTurnRunner();
-        var (agent, store) = CreateAgent(runner, "conv-relay-admit-first", eventPublisher: publisher);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-relay-admit-first", eventPublisher: publisher);
 
         var relay = CreateRelayInbound(
             "act-admit",
@@ -512,7 +512,7 @@ public sealed class ConversationGAgentDedupTests
     {
         const string sentinelUserAccessToken = "sentinel-user-access-token-runtime-only";
         var runner = new RecordingTurnRunner();
-        var (agent, store) = CreateAgent(runner, "conv-relay-runtime-token");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-relay-runtime-token");
         var relay = CreateRelayInbound(
             "act-runtime-token",
             "conv:lark:C1",
@@ -550,7 +550,7 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleNyxRelayInboundActivityAsync_DuplicateCallbackJti_NoopsBeforeProcessedMessageIds()
     {
         var runner = new RecordingTurnRunner();
-        var (agent, store) = CreateAgent(runner, "conv-relay-duplicate-admission");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-relay-duplicate-admission");
         var relay = CreateRelayInbound("act-dup", "conv:slack:C1", "api-key-1", "jti-dup");
 
         await agent.HandleNyxRelayInboundActivityAsync(relay);
@@ -586,7 +586,7 @@ public sealed class ConversationGAgentDedupTests
             version: 1);
 
         var publisher = new RecordingEventPublisher();
-        var (agent, _) = CreateAgent(
+        var (agent, _) = await CreateAgentAsync(
             new RecordingTurnRunner(),
             "conv-relay-expired-claim",
             store: store,
@@ -622,7 +622,7 @@ public sealed class ConversationGAgentDedupTests
         {
             InboundResultFactory = _ => ConversationTurnResult.TransientFailure("rate_limited", "retry later"),
         };
-        var (agent, store) = CreateAgent(runner, "conv-relay-transient-replay");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-relay-transient-replay");
         var relay = CreateRelayInbound("act-transient-replay", "conv:slack:C1", "api-key-1", "jti-transient");
 
         await agent.HandleNyxRelayInboundActivityAsync(relay);
@@ -650,7 +650,7 @@ public sealed class ConversationGAgentDedupTests
         {
             InboundResultFactory = _ => ConversationTurnResult.PermanentFailure("bad_payload", "rejected"),
         };
-        var (agent, store) = CreateAgent(runner, "conv-relay-terminal-replay");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-relay-terminal-replay");
         var relay = CreateRelayInbound("act-terminal-replay", "conv:slack:C1", "api-key-1", "jti-terminal");
 
         await agent.HandleNyxRelayInboundActivityAsync(relay);
@@ -673,7 +673,7 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleNyxRelayCallbackTurnRequestedAsync_SuccessAndLlmHandoff_ReapPendingAdmission()
     {
         var runner = new RecordingTurnRunner();
-        var (successAgent, _) = CreateAgent(runner, "conv-relay-success-reap");
+        var (successAgent, _) = await CreateAgentAsync(runner, "conv-relay-success-reap");
         var successRelay = CreateRelayInbound("act-success-reap", "conv:slack:C1", "api-key-1", "jti-success");
         await successAgent.HandleNyxRelayInboundActivityAsync(successRelay);
         await successAgent.HandleNyxRelayCallbackTurnRequestedAsync(new NyxRelayCallbackTurnRequestedEvent
@@ -689,7 +689,7 @@ public sealed class ConversationGAgentDedupTests
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(CreateNeedsLlmReply(activity)),
         };
-        var (llmAgent, _) = CreateAgent(llmRunner, "conv-relay-llm-reap");
+        var (llmAgent, _) = await CreateAgentAsync(llmRunner, "conv-relay-llm-reap");
         var llmRelay = CreateRelayInbound("act-llm-reap", "conv:slack:C1", "api-key-1", "jti-llm");
         await llmAgent.HandleNyxRelayInboundActivityAsync(llmRelay);
         await llmAgent.HandleNyxRelayCallbackTurnRequestedAsync(new NyxRelayCallbackTurnRequestedEvent
@@ -708,7 +708,7 @@ public sealed class ConversationGAgentDedupTests
     {
         var store = new InMemoryEventStore();
         var firstPublisher = new RecordingEventPublisher();
-        var (firstAgent, _) = CreateAgent(
+        var (firstAgent, _) = await CreateAgentAsync(
             new RecordingTurnRunner(),
             "conv-relay-rehydrate",
             store: store,
@@ -718,7 +718,7 @@ public sealed class ConversationGAgentDedupTests
             CreateRelayInbound("act-rehydrate", "conv:slack:C1", "api-key-1", "jti-rehydrate"));
 
         var secondPublisher = new RecordingEventPublisher();
-        var (rehydrated, _) = CreateAgent(
+        var (rehydrated, _) = await CreateAgentAsync(
             new RecordingTurnRunner(),
             "conv-relay-rehydrate",
             store: store,
@@ -743,7 +743,7 @@ public sealed class ConversationGAgentDedupTests
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(CreateNeedsLlmReply(activity)),
         };
-        var (agent, store) = CreateAgent(runner, "conv-accepted-not-committed", dispatcher);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-accepted-not-committed", dispatcher);
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-accepted-only", "conv:slack:C1"));
 
@@ -775,7 +775,7 @@ public sealed class ConversationGAgentDedupTests
                     RequestedAtUnixMs = 42,
                 }),
         };
-        var (agent, _) = CreateAgent(runner, "conv-lark-history", dispatcher);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-lark-history", dispatcher);
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-history-1", "lark:scope-a:chat-1"));
         var firstReady = new LlmReplyReadyEvent
@@ -823,7 +823,7 @@ public sealed class ConversationGAgentDedupTests
                     RequestedAtUnixMs = 42,
                 }),
         };
-        var (agent, _) = CreateAgent(runner, "conv-lark-history-cap", dispatcher);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-lark-history-cap", dispatcher);
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-history-cap-1", "lark:scope-a:chat-cap"));
         var ready = new LlmReplyReadyEvent
@@ -893,7 +893,7 @@ public sealed class ConversationGAgentDedupTests
                     RequestedAtUnixMs = 42,
                 }),
         };
-        var (agent, _) = CreateAgent(runner, "conv-lark-history-tool-pair", dispatcher);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-lark-history-tool-pair", dispatcher);
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-history-tool-pair-1", "lark:scope-a:chat-tool-pair"));
         var ready = new LlmReplyReadyEvent
@@ -963,8 +963,8 @@ public sealed class ConversationGAgentDedupTests
                     RequestedAtUnixMs = 42,
                 }),
         };
-        var (firstAgent, _) = CreateAgent(runner, "conv-lark-history-a", firstDispatcher);
-        var (secondAgent, _) = CreateAgent(runner, "conv-lark-history-b", secondDispatcher);
+        var (firstAgent, _) = await CreateAgentAsync(runner, "conv-lark-history-a", firstDispatcher);
+        var (secondAgent, _) = await CreateAgentAsync(runner, "conv-lark-history-b", secondDispatcher);
 
         await firstAgent.HandleInboundActivityAsync(CreateActivity("act-history-a1", "lark:scope-a:chat-1"));
         var firstReady = new LlmReplyReadyEvent
@@ -993,7 +993,7 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleLlmReplyReadyAsync_WhenDuplicateCorrelationId_CollapsesToSingleOutboundCommit()
     {
         var runner = new RecordingTurnRunner();
-        var (agent, store) = CreateAgent(runner, "conv-llm-ready");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-llm-ready");
         await agent.HandleInboundActivityAsync(CreateActivity("act-llm-ready", "conv:slack:C1"));
 
         var ready = new LlmReplyReadyEvent
@@ -1039,7 +1039,7 @@ public sealed class ConversationGAgentDedupTests
                     CorrelationId = reply.CorrelationId,
                 }),
         };
-        var (agent, store) = CreateAgent(runner, "conv-llm-delivered");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-llm-delivered");
 
         await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
         {
@@ -1069,7 +1069,7 @@ public sealed class ConversationGAgentDedupTests
         {
             LlmReplyResultFactory = _ => ConversationTurnResult.PermanentFailure("lark_send_failed", "lark rejected send"),
         };
-        var (agent, store) = CreateAgent(runner, "conv-llm-delivery-failed");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-llm-delivery-failed");
 
         await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
         {
@@ -1103,7 +1103,7 @@ public sealed class ConversationGAgentDedupTests
         {
             ContinueResultFactory = _ => ConversationTurnResult.TransientFailure("rate_limited", "retry later", TimeSpan.FromMilliseconds(250)),
         };
-        var (agent, store) = CreateAgent(runner, "conv-7");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-7");
 
         await agent.HandleContinueCommandAsync(CreateContinueCommand("cmd-retry"));
 
@@ -1129,7 +1129,7 @@ public sealed class ConversationGAgentDedupTests
         {
             ContinueResultFactory = _ => ConversationTurnResult.TransientFailure("rate_limited", "retry later"),
         };
-        var (agent, store) = CreateAgent(runner, "conv-9");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-9");
 
         await agent.HandleContinueCommandAsync(CreateContinueCommand("cmd-transient"));
 
@@ -1155,7 +1155,7 @@ public sealed class ConversationGAgentDedupTests
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
                 CreateNeedsLlmReply(activity, requestedAtUnixMs: 42)),
         };
-        var (agent, _) = CreateAgent(runner, "conv-direct-dispatch", dispatcher);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-direct-dispatch", dispatcher);
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-direct", "conv:slack:C1"));
 
@@ -1191,7 +1191,7 @@ public sealed class ConversationGAgentDedupTests
                 },
             ]));
         var resolver = new ChatRouteResolver(new StaticChatRouteFallbackProvider("fallback-model"));
-        var (agent, store) = CreateAgent(
+        var (agent, store) = await CreateAgentAsync(
             runner,
             "channel-conversation:conv:lark:C1:scope:owner",
             dispatcher,
@@ -1258,7 +1258,7 @@ public sealed class ConversationGAgentDedupTests
                     CorrelationId = reply.CorrelationId,
                 }),
         };
-        var (agent, store) = CreateAgent(runner, "conv-relay-token-leak");
+        var (agent, store) = await CreateAgentAsync(runner, "conv-relay-token-leak");
 
         var inboundActivity = CreateActivity("act-relay-leak", "conv:slack:C1");
         inboundActivity.OutboundDelivery = new OutboundDeliveryContext
@@ -1329,7 +1329,7 @@ public sealed class ConversationGAgentDedupTests
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
                 CreateNeedsLlmReply(activity, targetActorId: "stale-unscoped-actor")),
         };
-        var (agent, store) = CreateAgent(runner, "channel-conversation:conv:slack:C1:scope:owner", dispatcher);
+        var (agent, store) = await CreateAgentAsync(runner, "channel-conversation:conv:slack:C1:scope:owner", dispatcher);
 
         var inboundActivity = CreateActivity("nyx-msg-1", "conv:slack:C1");
         inboundActivity.OutboundDelivery = new OutboundDeliveryContext
@@ -1376,7 +1376,7 @@ public sealed class ConversationGAgentDedupTests
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
                 CreateNeedsLlmReply(activity, targetActorId: "stale-unscoped-actor")),
         };
-        var (agent, _) = CreateAgent(runner, "channel-conversation:conv:slack:C1:scope:owner");
+        var (agent, _) = await CreateAgentAsync(runner, "channel-conversation:conv:slack:C1:scope:owner");
 
         var inboundActivity = CreateActivity("nyx-msg-cleanup", "conv:slack:C1");
         inboundActivity.OutboundDelivery = new OutboundDeliveryContext
@@ -1427,7 +1427,7 @@ public sealed class ConversationGAgentDedupTests
                     replyToken: sentinelReplyToken,
                     replyTokenExpiresAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds())),
         };
-        var (agent, store) = CreateAgent(runner, "conv-strip-token", dispatcher);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-strip-token", dispatcher);
 
         var inboundActivity = CreateActivity("act-strip", "conv:slack:C1");
         inboundActivity.OutboundDelivery = new OutboundDeliveryContext
@@ -1477,7 +1477,7 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationTurnResult.LlmReplyRequested(request);
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-strip-credential-meta", dispatcher);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-strip-credential-meta", dispatcher);
 
         var inboundActivity = CreateActivity("act-strip-cred", "conv:slack:C1");
         inboundActivity.OutboundDelivery = new OutboundDeliveryContext
@@ -1549,7 +1549,7 @@ public sealed class ConversationGAgentDedupTests
                     }).ToPayload(),
                 }),
         };
-        var (agent, store) = CreateAgent(runner, "conv-persist-tool-context", dispatcher);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-persist-tool-context", dispatcher);
 
         await agent.HandleInboundActivityAsync(CreateActivity("act-tool-context", "conv:slack:C1"));
 
@@ -1595,7 +1595,7 @@ public sealed class ConversationGAgentDedupTests
                     replyToken: sentinelReplyToken,
                     replyTokenExpiresAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds())),
         };
-        var (agent, store) = CreateAgent(runner, "conv-retry-enrich", dispatcher);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-retry-enrich", dispatcher);
 
         var inboundActivity = CreateActivity("act-retry", "conv:slack:C1");
         inboundActivity.OutboundDelivery = new OutboundDeliveryContext
@@ -1651,7 +1651,7 @@ public sealed class ConversationGAgentDedupTests
                 }),
         };
         runner.LlmReplyContextObserver = ctx => observedContext = ctx;
-        var (agent, _) = CreateAgent(runner, "conv-run-echo");
+        var (agent, _) = await CreateAgentAsync(runner, "conv-run-echo");
 
         var activity = CreateActivity("act-run-echo", "conv:slack:C1");
         activity.OutboundDelivery = new OutboundDeliveryContext
@@ -1699,7 +1699,7 @@ public sealed class ConversationGAgentDedupTests
                     replyToken: "drop-test-token",
                     replyTokenExpiresAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds())),
         };
-        var (agent, store) = CreateAgent(runner, "conv-drop-clears", dispatcher);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-drop-clears", dispatcher);
 
         var inboundActivity = CreateActivity("act-drop", "conv:slack:C1");
         inboundActivity.OutboundDelivery = new OutboundDeliveryContext
@@ -1729,7 +1729,7 @@ public sealed class ConversationGAgentDedupTests
     [Fact]
     public async Task HandleDeferredLlmReplyDroppedAsync_IgnoresUnknownCorrelationId()
     {
-        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-drop-unknown");
+        var (agent, store) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-drop-unknown");
         var initialEvents = (await store.GetEventsAsync(agent.Id)).Count;
 
         await agent.HandleDeferredLlmReplyDroppedAsync(new DeferredLlmReplyDroppedEvent
@@ -1752,7 +1752,7 @@ public sealed class ConversationGAgentDedupTests
         {
             ContinueResultFactory = _ => ConversationTurnResult.PermanentFailure("permanent_error", "bad input"),
         };
-        var (agent, _) = CreateAgent(runner, "conv-8");
+        var (agent, _) = await CreateAgentAsync(runner, "conv-8");
 
         await agent.HandleContinueCommandAsync(CreateContinueCommand("cmd-permanent"));
 
@@ -1773,7 +1773,7 @@ public sealed class ConversationGAgentDedupTests
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_first"),
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, _) = CreateAgent(runner, "conv-stream-first", dispatchPort: dispatch);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-stream-first", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream", "relay-msg-1", "hello"));
@@ -1792,7 +1792,7 @@ public sealed class ConversationGAgentDedupTests
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_first"),
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, _) = CreateAgent(runner, "conv-stream-2", dispatchPort: dispatch);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-stream-2", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-2", "relay-msg-1", "first chunk"));
@@ -1814,7 +1814,7 @@ public sealed class ConversationGAgentDedupTests
                 ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "nope", editUnsupported: true),
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, _) = CreateAgent(runner, "conv-stream-fail", dispatchPort: dispatch);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-stream-fail", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-fail", "relay-msg-1", "first"));
@@ -1831,7 +1831,7 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleLlmReplyStreamChunkAsync_WithoutReplyToken_DisablesStreamingForTurn()
     {
         var runner = new RecordingTurnRunner();
-        var (agent, _) = CreateAgent(runner, "conv-stream-no-token");
+        var (agent, _) = await CreateAgentAsync(runner, "conv-stream-no-token");
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunkWithoutReplyToken("act-stream-no-token", "relay-msg-1", "hello"));
@@ -1848,7 +1848,7 @@ public sealed class ConversationGAgentDedupTests
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_stream"),
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, store) = CreateAgent(runner, "conv-stream-short-circuit", dispatchPort: dispatch);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-stream-short-circuit", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-sc", "relay-msg-1", "final text"));
@@ -1892,7 +1892,7 @@ public sealed class ConversationGAgentDedupTests
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_nyx_emit"),
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, store) = CreateAgent(runner, "conv-nyx-emit", dispatchPort: dispatch);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-nyx-emit", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-nyx-emit", "relay-msg-1", "hello"));
@@ -1981,7 +1981,7 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_reactivated"),
         };
-        var (firstAgent, _) = CreateAgent(firstRunner, "conv-stream-reactivate", store: store);
+        var (firstAgent, _) = await CreateAgentAsync(firstRunner, "conv-stream-reactivate", store: store);
 
         await firstAgent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-reactivate", "relay-msg-1", "first partial"));
@@ -2008,7 +2008,7 @@ public sealed class ConversationGAgentDedupTests
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_reactivated"),
         };
         var secondDispatch = new RecordingActorDispatchPort();
-        var (secondAgent, _) = CreateAgent(secondRunner, "conv-stream-reactivate", store: store, dispatchPort: secondDispatch);
+        var (secondAgent, _) = await CreateAgentAsync(secondRunner, "conv-stream-reactivate", store: store, dispatchPort: secondDispatch);
 
         await secondAgent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
         {
@@ -2093,7 +2093,7 @@ public sealed class ConversationGAgentDedupTests
             },
             3);
 
-        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-nyx-fact-replay", store: store);
+        var (agent, _) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-nyx-fact-replay", store: store);
 
         var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
         lifecycle.CorrelationId.ShouldBe("corr-nyx-fact");
@@ -2137,7 +2137,7 @@ public sealed class ConversationGAgentDedupTests
                 "reply-new-activity"),
         };
 
-        var (agent, _) = CreateAgent(runner, agentId, store: store);
+        var (agent, _) = await CreateAgentAsync(runner, agentId, store: store);
 
         agent.EventSourcing!.CurrentVersion.ShouldBe(1);
         await agent.HandleInboundActivityAsync(CreateActivity("new-activity", "lark:dm:user-1"));
@@ -2156,7 +2156,7 @@ public sealed class ConversationGAgentDedupTests
                 ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "nope", editUnsupported: true),
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, store) = CreateAgent(runner, "conv-stream-fallback", dispatchPort: dispatch);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-stream-fallback", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-fb", "relay-msg-1", "partial"));
@@ -2207,7 +2207,7 @@ public sealed class ConversationGAgentDedupTests
             },
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, _) = CreateAgent(runner, "conv-stream-suppress", dispatchPort: dispatch);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-stream-suppress", dispatchPort: dispatch);
 
         // First chunk consumes the reply token.
         await agent.HandleLlmReplyStreamChunkAsync(
@@ -2245,7 +2245,7 @@ public sealed class ConversationGAgentDedupTests
             },
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, _) = CreateAgent(runner, "conv-stream-interim-retry", dispatchPort: dispatch);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-stream-interim-retry", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-interim-retry", "relay-msg-1", "hello"));
@@ -2288,7 +2288,7 @@ public sealed class ConversationGAgentDedupTests
             },
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, store) = CreateAgent(runner, "conv-stream-interim-retry-exhaust", dispatchPort: dispatch);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-stream-interim-retry-exhaust", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-interim-retry-exhaust", "relay-msg-1", "hello"));
@@ -2347,7 +2347,7 @@ public sealed class ConversationGAgentDedupTests
             },
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, _) = CreateAgent(runner, "conv-stream-permanent-no-retry", dispatchPort: dispatch);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-stream-permanent-no-retry", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-permanent-no-retry", "relay-msg-1", "hello"));
@@ -2382,7 +2382,7 @@ public sealed class ConversationGAgentDedupTests
             },
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, _) = CreateAgent(runner, "conv-stream-retry-after-no-retry", dispatchPort: dispatch);
+        var (agent, _) = await CreateAgentAsync(runner, "conv-stream-retry-after-no-retry", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-retry-after-no-retry", "relay-msg-1", "hello"));
@@ -2418,7 +2418,7 @@ public sealed class ConversationGAgentDedupTests
             },
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, store) = CreateAgent(runner, "conv-stream-final-retry", dispatchPort: dispatch);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-stream-final-retry", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-final-retry", "relay-msg-1", "hello"));
@@ -2471,7 +2471,7 @@ public sealed class ConversationGAgentDedupTests
             },
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, store) = CreateAgent(runner, "conv-stream-final-degraded", dispatchPort: dispatch);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-stream-final-degraded", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-final-degraded", "relay-msg-1", "hello partial"));
@@ -2531,7 +2531,7 @@ public sealed class ConversationGAgentDedupTests
             },
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit", dispatchPort: dispatch);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-stream-failed-edit", dispatchPort: dispatch);
 
         // First chunk lands the placeholder + consumes the reply token.
         await agent.HandleLlmReplyStreamChunkAsync(
@@ -2591,7 +2591,7 @@ public sealed class ConversationGAgentDedupTests
             },
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit-deny", dispatchPort: dispatch);
+        var (agent, store) = await CreateAgentAsync(runner, "conv-stream-failed-edit-deny", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-failed-deny", "relay-msg-1", "first partial"));
@@ -2736,7 +2736,7 @@ public sealed class ConversationGAgentDedupTests
         evt.ChangedAtUnixMs.ShouldBeGreaterThan(0);
     }
 
-    private static (ConversationGAgent agent, IEventStore store) CreateAgent(
+    private static async Task<(ConversationGAgent agent, IEventStore store)> CreateAgentAsync(
         RecordingTurnRunner runner,
         string agentId,
         IChannelLlmReplyRunDispatcher? dispatcher = null,
@@ -2776,7 +2776,7 @@ public sealed class ConversationGAgentDedupTests
         SetId(agent, agentId);
         if (publisher is RecordingEventPublisher recordingPublisher)
             recordingPublisher.SelfTarget = agent;
-        agent.ActivateAsync().GetAwaiter().GetResult();
+        await agent.ActivateAsync();
         return (agent, store);
     }
 
@@ -3185,7 +3185,7 @@ public sealed class ConversationGAgentDedupTests
     [Fact]
     public async Task HandleLarkCardOperationCompletedAsync_TypedSignalFlow_MaterializesStreamingState()
     {
-        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-flow");
+        var (agent, _) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-card-flow");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-flow", "relay-msg-1", "hello"));
@@ -3216,7 +3216,7 @@ public sealed class ConversationGAgentDedupTests
     [Fact]
     public async Task LarkCardStreaming_EmitsTransitionFactsForCreateStreamFinalize()
     {
-        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-emit");
+        var (agent, store) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-card-emit");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-emit", "relay-msg-1", "hello"));
@@ -3425,7 +3425,7 @@ public sealed class ConversationGAgentDedupTests
             },
             4);
 
-        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-fact-replay", store: store);
+        var (agent, _) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-card-fact-replay", store: store);
 
         var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
         lifecycle.CorrelationId.ShouldBe("corr-card-fact");
@@ -3456,7 +3456,7 @@ public sealed class ConversationGAgentDedupTests
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_text_first"),
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, _) = CreateAgent(text, "conv-card-timeout", dispatchPort: dispatch);
+        var (agent, _) = await CreateAgentAsync(text, "conv-card-timeout", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-timeout", "relay-msg-1", "hello"));
@@ -3481,7 +3481,7 @@ public sealed class ConversationGAgentDedupTests
     [Fact]
     public async Task HandleLarkCardOperationCompletedAsync_StaleKey_DoesNotMutateLifecycle()
     {
-        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-stale");
+        var (agent, _) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-card-stale");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-stale", "relay-msg-1", "first"));
@@ -3515,7 +3515,7 @@ public sealed class ConversationGAgentDedupTests
     [Fact]
     public async Task HandleLarkCardOperationCompletedAsync_SerialCoalescing_UsesLatestPendingText()
     {
-        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-coalesce");
+        var (agent, _) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-card-coalesce");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "first"));
@@ -3574,7 +3574,7 @@ public sealed class ConversationGAgentDedupTests
         // duplicate reply on top of the empty card). It transitions to Terminated, persists
         // a partial-card terminal record, and the text-edit runner is never invoked.
         var text = new RecordingTurnRunner();
-        var (agent, store) = CreateAgent(text, "conv-card-postsend");
+        var (agent, store) = await CreateAgentAsync(text, "conv-card-postsend");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello"));
@@ -3606,7 +3606,7 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleLlmReplyReadyAsync_CardModeStreamingCompleted_PersistsLarkCardStreamPrefix()
     {
         var card = new RecordingCardTurnRunner();
-        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-finalize", cardRunner: card);
+        var (agent, store) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-card-finalize", cardRunner: card);
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-finalize", "relay-msg-1", "complete answer"));
@@ -3671,7 +3671,7 @@ public sealed class ConversationGAgentDedupTests
                 ConversationCardFinalizeResult.Failed("card_close_streaming_failed", "close rejected"),
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, store) = CreateAgent(
+        var (agent, store) = await CreateAgentAsync(
             new RecordingTurnRunner(),
             "conv-card-finalize-failed",
             cardRunner: card,
@@ -3727,7 +3727,7 @@ public sealed class ConversationGAgentDedupTests
     [Fact]
     public async Task HandleLarkCardOperationTimeoutFiredAsync_CardFinalizeTimeout_PersistsDeliveryFailedBeforeTurnCompleted()
     {
-        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-finalize-timeout");
+        var (agent, store) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-card-finalize-timeout");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-finalize-timeout", "relay-msg-1", "partial answer"));
@@ -3789,7 +3789,7 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleLlmReplyReadyAsync_CardLifecycleSurvivesReactivationWithMonotonicSequence()
     {
         var store = new InMemoryEventStore();
-        var (firstAgent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-reactivate", store: store);
+        var (firstAgent, _) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-card-reactivate", store: store);
 
         await firstAgent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "first"));
@@ -3820,7 +3820,7 @@ public sealed class ConversationGAgentDedupTests
         lifecycle.Sequence.ShouldBe(2);
         lifecycle.LastFlushedText.ShouldBe("second");
 
-        var (secondAgent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-reactivate", store: store);
+        var (secondAgent, _) = await CreateAgentAsync(new RecordingTurnRunner(), "conv-card-reactivate", store: store);
 
         await secondAgent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
         {
@@ -3870,7 +3870,7 @@ public sealed class ConversationGAgentDedupTests
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_text_first"),
         };
         var dispatch = new RecordingActorDispatchPort();
-        var (agent, store) = CreateAgent(text, "conv-card-fb-final", dispatchPort: dispatch);
+        var (agent, store) = await CreateAgentAsync(text, "conv-card-fb-final", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-fb-final", "relay-msg-1", "complete answer"));

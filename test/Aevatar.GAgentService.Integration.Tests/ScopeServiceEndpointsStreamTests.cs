@@ -1553,22 +1553,24 @@ public sealed class ScopeServiceEndpointsStreamTests
     {
         public List<EventEnvelope> Messages { get; } = [];
 
-        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
+        public async Task<IAsyncDisposable> SubscribeAsync<TMessage>(
             string actorId,
             Func<TMessage, Task> handler,
             CancellationToken ct = default)
             where TMessage : class, IMessage, new()
         {
             _ = actorId;
-            _ = ct;
 
             if (typeof(TMessage) == typeof(EventEnvelope))
             {
                 foreach (var message in Messages)
-                    handler((TMessage)(object)message).GetAwaiter().GetResult();
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await handler((TMessage)(object)message);
+                }
             }
 
-            return Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
+            return new NoopAsyncDisposable();
         }
     }
 

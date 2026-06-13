@@ -29,7 +29,7 @@ public sealed class LarkCardOperationSignalTests
                 "stream rejected",
                 isRateLimited: true),
         };
-        var agent = CreateAgent("conv-lark-card-signal-only", runner, dispatch, new InMemoryEventStore());
+        var agent = await CreateAgentAsync("conv-lark-card-signal-only", runner, dispatch, new InMemoryEventStore());
 
         await agent.HandleEventAsync(Envelope("conv-lark-card-signal-only",
             CreateCardStreamChunk("corr-signal-only", "relay-msg-1", "hello")));
@@ -54,7 +54,7 @@ public sealed class LarkCardOperationSignalTests
     {
         var dispatch = new RecordingActorDispatchPort();
         var store = new InMemoryEventStore();
-        var agent = CreateAgent(
+        var agent = await CreateAgentAsync(
             "conv-lark-card-self-dispatch",
             new RecordingCardRunner(),
             dispatch,
@@ -87,7 +87,7 @@ public sealed class LarkCardOperationSignalTests
     public async Task LarkCardOperationCompleted_ActorReconstructsRichContinuation()
     {
         var store = new InMemoryEventStore();
-        var agent = CreateAgent(
+        var agent = await CreateAgentAsync(
             "conv-lark-card-reconstruct",
             new RecordingCardRunner(),
             new RecordingActorDispatchPort(),
@@ -143,7 +143,7 @@ public sealed class LarkCardOperationSignalTests
     public async Task HandleLlmReplyCardStreamChunkAsync_ScheduledTimeoutPayload_StripsRuntimeRelayCredentials()
     {
         await using var callbackHarness = await RuntimeCallbackSchedulerGrainTestHarness.StartAsync();
-        var agent = CreateAgent(
+        var agent = await CreateAgentAsync(
             "conv-lark-card-timeout-sanitize",
             new RecordingCardRunner(),
             new RecordingActorDispatchPort(),
@@ -169,7 +169,7 @@ public sealed class LarkCardOperationSignalTests
     public async Task HandleLlmReplyReadyAsync_FinalizeTimeoutPayload_StripsActivityRuntimeRelayCredentials()
     {
         var scheduler = new RecordingCallbackScheduler();
-        var agent = CreateAgent(
+        var agent = await CreateAgentAsync(
             "conv-lark-card-finalize-timeout-sanitize",
             new RecordingCardRunner(),
             new RecordingActorDispatchPort(),
@@ -244,7 +244,7 @@ public sealed class LarkCardOperationSignalTests
     {
         var scheduler = new RecordingCallbackScheduler();
         var runner = new RecordingCardRunner();
-        var agent = CreateAgent(
+        var agent = await CreateAgentAsync(
             "conv-lark-card-create-inflight-failure-finalize",
             runner,
             new RecordingActorDispatchPort(),
@@ -330,7 +330,7 @@ public sealed class LarkCardOperationSignalTests
         var runner = new RecordingCardRunner();
         var store = new InMemoryEventStore();
         var eventPublisher = new SelfHandlingEventPublisher(autoHandleSelfEvents: false);
-        var agent = CreateAgent(
+        var agent = await CreateAgentAsync(
             "conv-lark-card-finalize-ready-token",
             runner,
             new RecordingActorDispatchPort(),
@@ -400,7 +400,7 @@ public sealed class LarkCardOperationSignalTests
         Encoding.UTF8.GetString(persistedBytes).Should().NotContain("runtime-ready-user-access-token");
     }
 
-    private static ConversationGAgent CreateAgent(
+    private static async Task<ConversationGAgent> CreateAgentAsync(
         string id,
         IConversationCardTurnRunner cardRunner,
         IActorDispatchPort dispatch,
@@ -427,7 +427,7 @@ public sealed class LarkCardOperationSignalTests
         eventPublisher ??= new SelfHandlingEventPublisher();
         eventPublisher.SelfTarget = agent;
         agent.EventPublisher = eventPublisher;
-        agent.ActivateAsync().GetAwaiter().GetResult();
+        await agent.ActivateAsync();
         return agent;
     }
 
