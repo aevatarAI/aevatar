@@ -3,7 +3,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Configuration;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.HumanInteraction;

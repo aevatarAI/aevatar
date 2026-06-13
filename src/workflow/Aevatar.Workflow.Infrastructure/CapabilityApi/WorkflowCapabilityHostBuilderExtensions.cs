@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Projection.ReadModels;

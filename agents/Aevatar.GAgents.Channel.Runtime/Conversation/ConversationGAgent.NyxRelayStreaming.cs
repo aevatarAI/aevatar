@@ -343,13 +343,6 @@ public sealed partial class ConversationGAgent
         long generation) =>
         $"conversation-nyx-relay-text:{correlationId}:{operation}:{generation}";
 
-    private static string BuildNyxRelayTextOperationId(
-        string correlationId,
-        NyxRelayTextOperationKind operation,
-        long sequence,
-        long generation) =>
-        $"{correlationId}:{operation}:{sequence}:{generation}";
-
     private static bool MatchesNyxRelayTextInFlight(
         NyxRelayStreamingState state,
         NyxRelayTextOperationKind operation,

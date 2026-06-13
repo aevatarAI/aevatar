@@ -1,5 +1,5 @@
 using Aevatar.Configuration;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
