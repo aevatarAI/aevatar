@@ -28,7 +28,7 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
         var outcome = await executor.ProbeAsync(CoreLoopDescriptor(), CancellationToken.None);
 
         outcome.Status.Should().Be(HealthOutcomeStatus.Ok);
-        outcome.Detail.Should().Be("core_loop_tools_4");
+        outcome.Detail.Should().Be("core_loop_tools_5");
     }
 
     [Fact]
@@ -94,6 +94,7 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
         services.AddSingleton(Substitute.For<IServiceRunQueryPort>());
         services.AddSingleton(Substitute.For<IGAgentRunTerminalQueryPort>());
         services.AddSingleton(Substitute.For<IWorkflowExecutionQueryApplicationService>());
+        services.AddSingleton(Substitute.For<IWorkflowRunBindingReader>());
         services.AddSingleton<AevatarInvocationDispatcher>();
         services.AddSingleton<InvokeGAgentToolSource>();
         if (includeInvokeTeamSource)
@@ -103,6 +104,7 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
 
         services.AddSingleton<StartWorkflowToolSource>();
         services.AddSingleton<ObserveRunToolSource>();
+        services.AddSingleton<ReadWorkflowRunArtifactToolSource>();
         services.AddToolSetRegistry(options =>
         {
             var sources = new List<Func<IServiceProvider, IAgentToolSource>>
@@ -117,6 +119,7 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
             if (!observeRunReadOnly)
                 sources.Add(_ => new FixedToolSource(new FixedInvocationTool("aevatar_observe_run", false)));
             sources.Add(sp => sp.GetRequiredService<ObserveRunToolSource>());
+            sources.Add(sp => sp.GetRequiredService<ReadWorkflowRunArtifactToolSource>());
             options.AddToolSet(ToolSetNames.WorkspaceDefault, sources);
         });
 

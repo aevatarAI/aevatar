@@ -24,7 +24,7 @@ namespace Aevatar.AI.ToolProviders.AevatarInvocation.Tests;
 public sealed class AevatarInvocationToolSourceTests
 {
     [Fact]
-    public async Task AddAevatarInvocationTools_ShouldRegisterFourTaggedToolSources()
+    public async Task AddAevatarInvocationTools_ShouldRegisterFiveTaggedToolSources()
     {
         var services = new ServiceCollection();
         var harness = new Harness();
@@ -40,6 +40,7 @@ public sealed class AevatarInvocationToolSourceTests
         sources.OfType<InvokeTeamToolSource>().Should().ContainSingle();
         sources.OfType<StartWorkflowToolSource>().Should().ContainSingle();
         sources.OfType<ObserveRunToolSource>().Should().ContainSingle();
+        sources.OfType<ReadWorkflowRunArtifactToolSource>().Should().ContainSingle();
 
         var tools = new List<IAgentTool>();
         foreach (var source in sources)
@@ -49,7 +50,8 @@ public sealed class AevatarInvocationToolSourceTests
             "aevatar_invoke_gagent",
             "aevatar_invoke_team",
             "aevatar_start_workflow",
-            "aevatar_observe_run");
+            "aevatar_observe_run",
+            "aevatar_read_workflow_run_artifact");
         tools.All(static tool => tool is IAevatarInvocationTool invocationTool &&
                                  invocationTool.ToolSetTag == AevatarInvocationToolTags.ToolSet)
             .Should()
@@ -104,11 +106,28 @@ public sealed class AevatarInvocationToolSourceTests
         doc.RootElement.TryGetProperty("allOf", out _).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task ReadWorkflowRunArtifactTool_ShouldExposeStrictReadOnlySchema()
+    {
+        var harness = new Harness();
+        var tool = await DiscoverSingleAsync(new ReadWorkflowRunArtifactToolSource(harness.WorkflowQuery, harness.RunBindingReader));
+        using var doc = JsonDocument.Parse(tool.ParametersSchema);
+
+        tool.Name.Should().Be("aevatar_read_workflow_run_artifact");
+        tool.IsReadOnly.Should().BeTrue();
+        tool.Description.Should().Contain("aevatar_start_workflow");
+        doc.RootElement.GetProperty("type").GetString().Should().Be("object");
+        doc.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
+        doc.RootElement.GetProperty("required")[0].GetString().Should().Be("workflow_run_id");
+        doc.RootElement.GetProperty("properties").TryGetProperty("workflow_run_id", out _).Should().BeTrue();
+    }
+
     [Theory]
     [InlineData("aevatar_invoke_gagent", "{}")]
     [InlineData("aevatar_invoke_team", """{"team_id":"team"}""")]
     [InlineData("aevatar_start_workflow", """{"workflow_id":"wf"}""")]
     [InlineData("aevatar_observe_run", "{}")]
+    [InlineData("aevatar_read_workflow_run_artifact", "{}")]
     public async Task Tools_ShouldReturnStructuredValidationError(string toolName, string argumentsJson)
     {
         var harness = new Harness();
@@ -1479,6 +1498,229 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
     }
 
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_ShouldReadReportArtifactWithoutCurrentStateQuery()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Report = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            WorkflowName = "demo-dinner-workflow",
+            CommandId = "run-1",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 17,
+            Success = true,
+            StartedAt = new DateTimeOffset(2026, 6, 13, 3, 36, 47, TimeSpan.Zero),
+            EndedAt = new DateTimeOffset(2026, 6, 13, 3, 36, 58, TimeSpan.Zero),
+            UpdatedAt = new DateTimeOffset(2026, 6, 13, 3, 36, 58, TimeSpan.Zero),
+            FinalOutput = "Dinner is ready.",
+            Summary = new WorkflowRunStatistics
+            {
+                TotalSteps = 2,
+                RequestedSteps = 2,
+                CompletedSteps = 2,
+                RoleReplyCount = 1,
+            },
+            Steps =
+            [
+                new WorkflowRunStepTrace
+                {
+                    StepId = "plan",
+                    StepType = "llm",
+                    TargetRole = "dinner_assistant",
+                    Success = true,
+                    OutputPreview = "Plan dinner.",
+                },
+            ],
+            RoleReplies =
+            [
+                new WorkflowRunRoleReply
+                {
+                    Timestamp = new DateTimeOffset(2026, 6, 13, 3, 36, 58, TimeSpan.Zero),
+                    RoleId = "dinner_assistant",
+                    Content = "Dinner is ready.",
+                    ContentLength = 16,
+                },
+            ],
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1"}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowQuery.LastReportWorkflowRunId.Should().Be("run-1");
+        harness.RunBindingReader.LastRunId.Should().Be("run-1");
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+        var result = Read(output);
+        result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact").GetString().Should().Be("report");
+        result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.Completed));
+        result.GetProperty("final_output").GetString().Should().Be("Dinner is ready.");
+        result.GetProperty("summary").GetProperty("completed_steps").GetInt32().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_ShouldResolveShortRunIdThroughBindingProjection()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.ReportsByWorkflowRunId["workflow-run-actor"] = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            CommandId = "run-1",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            Success = true,
+        };
+        harness.RunBindingReader.BindingsByRunId["run-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "workflow-run-actor",
+                "workflow-definition-actor",
+                "run-1",
+                "demo-dinner-workflow",
+                string.Empty,
+                new Dictionary<string, string>(StringComparer.Ordinal)),
+        ];
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1"}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowQuery.ReportCalls.Should().Equal("run-1", "workflow-run-actor");
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+        var result = Read(output);
+        result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("workflow-run-actor");
+        result.GetProperty("root_actor_id").GetString().Should().Be("workflow-run-actor");
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_Timeline_ShouldReadTimelineExport()
+    {
+        var harness = new Harness();
+        harness.RunBindingReader.BindingsByRunId["run-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "workflow-run-actor",
+                "workflow-definition-actor",
+                "run-1",
+                "demo-dinner-workflow",
+                string.Empty,
+                new Dictionary<string, string>(StringComparer.Ordinal)),
+        ];
+        harness.WorkflowQuery.Timeline =
+        [
+            new WorkflowRunTimelineExportItem
+            {
+                Timestamp = new DateTimeOffset(2026, 6, 13, 3, 36, 58, TimeSpan.Zero),
+                Stage = "completed",
+                Message = "Workflow completed",
+                StepId = "final",
+                EventType = "type.googleapis.com/aevatar.workflow.WorkflowCompletedEvent",
+            },
+        ];
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1","view":"timeline","take":25}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowQuery.LastTimelineWorkflowRunId.Should().Be("workflow-run-actor");
+        harness.WorkflowQuery.LastTimelineTake.Should().Be(25);
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+        var result = Read(output);
+        result.GetProperty("artifact").GetString().Should().Be("timeline");
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("workflow-run-actor");
+        result.GetProperty("events")[0].GetProperty("step_id").GetString().Should().Be("final");
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_GraphEdges_ShouldReadGraphExport()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.GraphEdges =
+        [
+            new WorkflowRunGraphExportEdge
+            {
+                EdgeId = "edge-1",
+                FromNodeId = "run-1",
+                ToNodeId = "role-1",
+                EdgeType = "OWNS",
+                UpdatedAt = new DateTimeOffset(2026, 6, 13, 3, 36, 58, TimeSpan.Zero),
+            },
+        ];
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_run_id": "workflow-run-actor",
+              "view": "graph_edges",
+              "take": 7,
+              "edge_types": ["OWNS"]
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowQuery.LastGraphEdgesWorkflowRunId.Should().Be("workflow-run-actor");
+        harness.WorkflowQuery.LastGraphEdgesTake.Should().Be(7);
+        harness.WorkflowQuery.LastGraphEdgesOptions!.EdgeTypes.Should().Equal("OWNS");
+        var result = Read(output);
+        result.GetProperty("artifact").GetString().Should().Be("graph_edges");
+        result.GetProperty("count").GetInt32().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_GraphSubgraph_ShouldReadGraphExport()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.GraphSubgraph = new WorkflowRunGraphExportSubgraph
+        {
+            RootNodeId = "run-1",
+            Nodes =
+            {
+                new WorkflowRunGraphExportNode
+                {
+                    NodeId = "run-1",
+                    NodeType = "workflow-run",
+                    UpdatedAt = new DateTimeOffset(2026, 6, 13, 3, 36, 58, TimeSpan.Zero),
+                },
+            },
+            Edges =
+            {
+                new WorkflowRunGraphExportEdge
+                {
+                    EdgeId = "edge-1",
+                    FromNodeId = "run-1",
+                    ToNodeId = "role-1",
+                    EdgeType = "OWNS",
+                    UpdatedAt = new DateTimeOffset(2026, 6, 13, 3, 36, 58, TimeSpan.Zero),
+                },
+            },
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_run_id": "run-1",
+              "view": "graph_subgraph",
+              "graph_depth": 3,
+              "take": 11,
+              "edge_types": ["OWNS"]
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowQuery.LastGraphSubgraphWorkflowRunId.Should().Be("run-1");
+        harness.WorkflowQuery.LastGraphSubgraphDepth.Should().Be(3);
+        harness.WorkflowQuery.LastGraphSubgraphTake.Should().Be(11);
+        harness.WorkflowQuery.LastGraphSubgraphOptions!.EdgeTypes.Should().Equal("OWNS");
+        var result = Read(output);
+        result.GetProperty("artifact").GetString().Should().Be("graph_subgraph");
+        result.GetProperty("node_count").GetInt32().Should().Be(1);
+        result.GetProperty("edge_count").GetInt32().Should().Be(1);
+    }
+
     private static bool HasStrictObjectSchema(string schema)
     {
         using var doc = JsonDocument.Parse(schema);
@@ -1657,6 +1899,7 @@ public sealed class AevatarInvocationToolSourceTests
         public RecordingServiceRunQueryPort ServiceRunQuery { get; } = new();
         public RecordingTerminalQueryPort TerminalQuery { get; } = new();
         public StubWorkflowExecutionQueryService WorkflowQuery { get; } = new();
+        public RecordingWorkflowRunBindingReader RunBindingReader { get; } = new();
 
         public AevatarInvocationDispatcher CreateDispatcher() =>
             new(
@@ -1679,6 +1922,7 @@ public sealed class AevatarInvocationToolSourceTests
             services.AddSingleton<IServiceRunQueryPort>(ServiceRunQuery);
             services.AddSingleton<IGAgentRunTerminalQueryPort>(TerminalQuery);
             services.AddSingleton<IWorkflowExecutionQueryApplicationService>(WorkflowQuery);
+            services.AddSingleton<IWorkflowRunBindingReader>(RunBindingReader);
         }
 
         public async Task<IAgentTool> DiscoverToolAsync(string toolName)
@@ -1689,6 +1933,7 @@ public sealed class AevatarInvocationToolSourceTests
                 "aevatar_invoke_team" => new InvokeTeamToolSource(CreateDispatcher()),
                 "aevatar_start_workflow" => new StartWorkflowToolSource(CreateDispatcher()),
                 "aevatar_observe_run" => new ObserveRunToolSource(CreateDispatcher()),
+                "aevatar_read_workflow_run_artifact" => new ReadWorkflowRunArtifactToolSource(WorkflowQuery, RunBindingReader),
                 _ => throw new ArgumentOutOfRangeException(nameof(toolName), toolName, null),
             };
             var tools = await source.DiscoverToolsAsync();
@@ -1893,12 +2138,56 @@ public sealed class AevatarInvocationToolSourceTests
         }
     }
 
+    private sealed class RecordingWorkflowRunBindingReader : IWorkflowRunBindingReader
+    {
+        public Dictionary<string, IReadOnlyList<WorkflowActorBinding>> BindingsByRunId { get; } =
+            new(StringComparer.Ordinal);
+
+        public string? LastRunId { get; private set; }
+        public int? LastTake { get; private set; }
+        public WorkflowRunBindingQuery? LastQuery { get; private set; }
+
+        public Task<IReadOnlyList<WorkflowActorBinding>> ListByRunIdAsync(
+            string runId,
+            int take = 20,
+            CancellationToken ct = default)
+        {
+            LastRunId = runId;
+            LastTake = take;
+            BindingsByRunId.TryGetValue(runId, out var bindings);
+            return Task.FromResult(bindings ?? []);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorBinding>> QueryAsync(
+            WorkflowRunBindingQuery query,
+            CancellationToken ct = default)
+        {
+            LastQuery = query;
+            return Task.FromResult<IReadOnlyList<WorkflowActorBinding>>([]);
+        }
+    }
+
     private sealed class StubWorkflowExecutionQueryService : IWorkflowExecutionQueryApplicationService
     {
         public bool WorkflowActorCurrentStateQueryEnabled => true;
         public WorkflowActorSnapshot? Snapshot { get; set; }
+        public WorkflowRunReport? Report { get; set; }
+        public Dictionary<string, WorkflowRunReport> ReportsByWorkflowRunId { get; } = new(StringComparer.Ordinal);
+        public List<string> ReportCalls { get; } = [];
         public IReadOnlyList<WorkflowRunTimelineExportItem> Timeline { get; set; } = [];
+        public IReadOnlyList<WorkflowRunGraphExportEdge> GraphEdges { get; set; } = [];
+        public WorkflowRunGraphExportSubgraph GraphSubgraph { get; set; } = new();
         public string? LastCurrentStateActorId { get; private set; }
+        public string? LastReportWorkflowRunId { get; private set; }
+        public string? LastTimelineWorkflowRunId { get; private set; }
+        public int? LastTimelineTake { get; private set; }
+        public string? LastGraphEdgesWorkflowRunId { get; private set; }
+        public int? LastGraphEdgesTake { get; private set; }
+        public WorkflowRunGraphExportQueryOptions? LastGraphEdgesOptions { get; private set; }
+        public string? LastGraphSubgraphWorkflowRunId { get; private set; }
+        public int? LastGraphSubgraphDepth { get; private set; }
+        public int? LastGraphSubgraphTake { get; private set; }
+        public WorkflowRunGraphExportQueryOptions? LastGraphSubgraphOptions { get; private set; }
 
         public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<WorkflowAgentSummary>>([]);
@@ -1920,28 +2209,50 @@ public sealed class AevatarInvocationToolSourceTests
             return Task.FromResult(Snapshot);
         }
 
-        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult<WorkflowRunReport?>(null);
+        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default)
+        {
+            LastReportWorkflowRunId = actorId;
+            ReportCalls.Add(actorId);
+            if (ReportsByWorkflowRunId.TryGetValue(actorId, out var report))
+                return Task.FromResult<WorkflowRunReport?>(report);
+
+            return Task.FromResult(Report);
+        }
 
         public Task<IReadOnlyList<WorkflowRunTimelineExportItem>> ListWorkflowRunTimelineExportAsync(
             string actorId,
             int take = 200,
-            CancellationToken ct = default) =>
-            Task.FromResult(Timeline);
+            CancellationToken ct = default)
+        {
+            LastTimelineWorkflowRunId = actorId;
+            LastTimelineTake = take;
+            return Task.FromResult(Timeline);
+        }
 
         public Task<IReadOnlyList<WorkflowRunGraphExportEdge>> ListWorkflowRunGraphExportEdgesAsync(
             string actorId,
             int take = 200,
             WorkflowRunGraphExportQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowRunGraphExportEdge>>([]);
+            CancellationToken ct = default)
+        {
+            LastGraphEdgesWorkflowRunId = actorId;
+            LastGraphEdgesTake = take;
+            LastGraphEdgesOptions = options;
+            return Task.FromResult(GraphEdges);
+        }
 
         public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(
             string actorId,
             int depth = 2,
             int take = 200,
             WorkflowRunGraphExportQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowRunGraphExportSubgraph());
+            CancellationToken ct = default)
+        {
+            LastGraphSubgraphWorkflowRunId = actorId;
+            LastGraphSubgraphDepth = depth;
+            LastGraphSubgraphTake = take;
+            LastGraphSubgraphOptions = options;
+            return Task.FromResult(GraphSubgraph);
+        }
     }
 }
