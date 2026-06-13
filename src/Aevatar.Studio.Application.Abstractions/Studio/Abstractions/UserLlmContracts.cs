@@ -168,3 +168,19 @@ public interface IUserLlmPreferenceService
 {
     Task<UserLlmSettingsView> GetSettingsAsync(string? bearerToken, CancellationToken ct);
 }
+
+public interface IChannelUserLlmPreferencePort
+{
+    Task<UserConfigSaveReceipt> SaveAsync(
+        string scopeId,
+        string? bearerToken,
+        SaveUserLlmPreferenceCommand command,
+        CancellationToken ct);
+
+    Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
+        string scopeId,
+        UserLlmOption option,
+        string? model,
+        bool preserveCurrentModelWhenMissing,
+        CancellationToken ct);
+}

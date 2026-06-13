@@ -123,16 +123,16 @@ public static class ServiceCollectionExtensions
 
         // ─── /model slash command (issue #513 phase 5) ───
         // Registered here (not in Channel.Identity) because the handler depends
-        // on Studio.Application UserConfig ports; Channel.Identity intentionally
-        // does not pull Studio dependencies.
+        // on channel-scoped Studio application abstractions; Channel.Identity
+        // intentionally does not pull those contracts.
         // Catalog client uses IMemoryCache for the proxy-services TTL cache. AddMemoryCache
         // is idempotent: hosts that already registered MemoryCacheOptions keep control of
         // cache size/compaction behavior; hosts that did not register one get the default.
         services.AddMemoryCache();
         services.TryAddSingleton<INyxIdLlmServiceCatalogClient, NyxIdLlmServiceCatalogClient>();
         // These are consumed by singleton turn-runner/slash handlers. They create
-        // short scopes internally for UserConfig ports instead of capturing
-        // potentially scoped query/command services at construction time.
+        // short scopes internally for the channel preference port instead of
+        // capturing potentially scoped implementations at construction time.
         services.TryAddSingleton<IUserLlmOptionsService, DefaultUserLlmOptionsService>();
         services.TryAddSingleton<IUserLlmSelectionService, DefaultUserLlmSelectionService>();
         services.TryAddSingleton<IUserLlmOptionsRenderer<MessageContent>, TextUserLlmOptionsRenderer>();

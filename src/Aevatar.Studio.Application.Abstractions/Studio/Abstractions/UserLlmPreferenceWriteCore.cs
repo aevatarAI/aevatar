@@ -1,6 +1,4 @@
-using Aevatar.Studio.Application.Studio.Abstractions;
-
-namespace Aevatar.Studio.Application.Studio.Services;
+namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public static class UserLlmPreferenceWriteCore
 {
