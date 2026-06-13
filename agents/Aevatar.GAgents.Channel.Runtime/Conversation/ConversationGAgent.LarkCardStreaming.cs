@@ -1600,7 +1600,7 @@ public sealed partial class ConversationGAgent
             };
             await PersistDomainEventAsync(delivered);
             if (eventActivity is not null)
-                _ = ResolveRunner().OnReplyDeliveredAsync(eventActivity, CancellationToken.None);
+                _ = ObserveReplyDeliveredAsync(ResolveRunner(), eventActivity);
         }
         else
         {

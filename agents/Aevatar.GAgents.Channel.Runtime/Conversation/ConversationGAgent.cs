@@ -2147,7 +2147,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         };
         await PersistDomainEventAsync(delivered);
         if (referenceActivity is not null)
-            _ = ResolveRunner().OnReplyDeliveredAsync(referenceActivity, CancellationToken.None);
+            _ = ObserveReplyDeliveredAsync(ResolveRunner(), referenceActivity);
         await ClearReplyLifecyclesAsync(evt.CorrelationId, referenceActivity, "streamed_completion");
         await PersistDomainEventAsync(completed);
         Logger.LogInformation(
@@ -2453,6 +2453,23 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private IConversationTurnRunner ResolveRunner() =>
         Services.GetService<IConversationTurnRunner>() ?? new NullConversationTurnRunner();
+
+    // The post-delivery hook (e.g. clearing the Lark typing reaction) makes a best-effort
+    // external call, so it deliberately runs off the turn-completion path. Route it through
+    // here so a failure is observed and logged instead of vanishing into a discarded Task.
+    // The runner is resolved on the turn by the caller and passed in; only the external
+    // call runs detached, and nothing here touches grain state off-turn.
+    private async Task ObserveReplyDeliveredAsync(IConversationTurnRunner runner, ChatActivity activity)
+    {
+        try
+        {
+            await runner.OnReplyDeliveredAsync(activity, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Post-delivery hook OnReplyDeliveredAsync failed.");
+        }
+    }
 
     private ConversationTurnRuntimeContext BuildNyxRelayRuntimeContext(
         string? correlationId,
