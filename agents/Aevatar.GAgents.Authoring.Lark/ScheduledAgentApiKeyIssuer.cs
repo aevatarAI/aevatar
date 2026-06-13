@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Microsoft.Extensions.Logging;
 
@@ -11,15 +12,18 @@ internal sealed class ScheduledAgentApiKeyIssuer
 
     private readonly INyxIdApiClientFactory _nyxClientFactory;
     private readonly ScheduledAgentCreatorOptions _options;
+    private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private readonly ILogger<ScheduledAgentApiKeyIssuer>? _logger;
 
     public ScheduledAgentApiKeyIssuer(
         INyxIdApiClientFactory nyxClientFactory,
         ScheduledAgentCreatorOptions options,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         ILogger<ScheduledAgentApiKeyIssuer>? logger = null)
     {
         _nyxClientFactory = nyxClientFactory ?? throw new ArgumentNullException(nameof(nyxClientFactory));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _ownerLlmConfigSource = ownerLlmConfigSource;
         _logger = logger;
     }
 
@@ -28,13 +32,15 @@ internal sealed class ScheduledAgentApiKeyIssuer
         ScheduledAgentServiceSlugs serviceSlugs,
         string agentId,
         string skillName,
+        string? scopeId,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         ArgumentNullException.ThrowIfNull(serviceSlugs);
 
-        var slugs = RequiredSlugs(serviceSlugs).Distinct(StringComparer.Ordinal).ToArray();
+        var ownerLlmRouteSlug = await ResolveOwnerLlmRouteServiceSlugAsync(scopeId, ct);
+        var slugs = RequiredSlugs(serviceSlugs, ownerLlmRouteSlug).Distinct(StringComparer.Ordinal).ToArray();
         if (slugs.Length == 0)
             return ScheduledAgentApiKeyIssueResult.Failed("missing_required_service_slugs");
 
@@ -101,7 +107,7 @@ internal sealed class ScheduledAgentApiKeyIssuer
         }
     }
 
-    private IEnumerable<string> RequiredSlugs(ScheduledAgentServiceSlugs serviceSlugs)
+    private IEnumerable<string> RequiredSlugs(ScheduledAgentServiceSlugs serviceSlugs, string? ownerLlmRouteSlug)
     {
         var ornnSlug = GetOrnnServiceSlug();
         if (serviceSlugs.RequiresOrnnService)
@@ -119,6 +125,94 @@ internal sealed class ScheduledAgentApiKeyIssuer
             if (!string.IsNullOrWhiteSpace(slug))
                 yield return slug;
         }
+
+        // The scheduled run pins the bot owner's pre-configured NyxID LLM route
+        // (OwnerLlmConfigApplier, mirrored by SkillRunnerGAgent/WorkflowAgentGAgent). When that
+        // route is a custom proxy service (e.g. `/api/v1/proxy/s/chrono-llm`) rather than the
+        // shared gateway, the scoped key must be authorized for that UserService — otherwise
+        // NyxID's proxy scope check rejects every run with HTTP 403 api_key_scope_forbidden
+        // (error_code 9000) even though the schedule itself fired correctly.
+        if (!string.IsNullOrWhiteSpace(ownerLlmRouteSlug))
+            yield return ownerLlmRouteSlug;
+    }
+
+    private async Task<string?> ResolveOwnerLlmRouteServiceSlugAsync(string? scopeId, CancellationToken ct)
+    {
+        if (_ownerLlmConfigSource is null || string.IsNullOrWhiteSpace(scopeId))
+            return null;
+
+        OwnerLlmConfig config;
+        try
+        {
+            config = await _ownerLlmConfigSource.GetForScopeAsync(scopeId.Trim(), ct) ?? OwnerLlmConfig.Empty;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Mirror OwnerLlmConfigApplier's swallow-and-log policy: a flaky user-config
+            // projection must not fail agent creation. The key is minted without the LLM-route
+            // grant (identical to pre-fix behavior) so the misconfiguration, if any, surfaces at
+            // run time rather than blocking creation on a transient lookup error.
+            _logger?.LogWarning(
+                ex,
+                "Scheduled agent key issuance could not load owner LLM config for scope {ScopeId}; minting key without an LLM-route grant",
+                scopeId);
+            return null;
+        }
+
+        return ExtractProxyServiceSlug(config.PreferredLlmRoute);
+    }
+
+    /// <summary>
+    /// Maps a saved owner LLM route preference to the NyxID proxy <c>service</c> slug that the
+    /// scoped key must be authorized for, or <c>null</c> when no per-service grant is needed.
+    /// Returns a slug only for proxy-service routes (<c>/api/v1/proxy/s/{slug}</c>) or a bare
+    /// slug; the shared gateway route and absolute non-proxy paths use the bearer token directly
+    /// and resolve to <c>null</c>. Mirrors <c>NyxIdLlmServiceCatalogParser.NormalizeProxyRouteValue</c>.
+    /// </summary>
+    internal static string? ExtractProxyServiceSlug(string? preferredLlmRoute)
+    {
+        var normalized = preferredLlmRoute?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return null;
+
+        // A full URL / scheme-relative value cannot be mapped to a UserService id here; the
+        // provider treats such values as "use the gateway" anyway, which needs no per-service grant.
+        if (normalized.Contains("://", StringComparison.Ordinal) ||
+            normalized.StartsWith("//", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        const string proxyPrefix = "/api/v1/proxy/s/";
+        var prefixIndex = normalized.IndexOf(proxyPrefix, StringComparison.OrdinalIgnoreCase);
+        if (prefixIndex >= 0)
+            return FirstPathSegment(normalized[(prefixIndex + proxyPrefix.Length)..]);
+
+        // Any other absolute path (e.g. the `/api/v1/llm/gateway/v1` gateway route) is not a
+        // per-service proxy route, so there is nothing to authorize.
+        if (normalized.StartsWith("/", StringComparison.Ordinal))
+            return null;
+
+        // Bare slug form.
+        return FirstPathSegment(normalized);
+    }
+
+    private static string? FirstPathSegment(string value)
+    {
+        var segment = value.Trim().Trim('/');
+        if (string.IsNullOrWhiteSpace(segment))
+            return null;
+
+        var end = segment.IndexOfAny(['/', '?', '#']);
+        if (end >= 0)
+            segment = segment[..end];
+
+        segment = segment.Trim();
+        return string.IsNullOrWhiteSpace(segment) ? null : Uri.UnescapeDataString(segment);
     }
 
     private async Task<ScheduledAgentSkillPreflightResult> PreflightSkillFetchAsync(
