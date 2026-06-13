@@ -1,8 +1,6 @@
-using Aevatar.Studio.Application.Studio.Abstractions;
+namespace Aevatar.Studio.Application.Studio.Abstractions;
 
-namespace Aevatar.Studio.Application.Studio.Services;
-
-internal readonly record struct UserLlmCatalogStatusValue(string Value)
+public readonly record struct UserLlmCatalogStatusValue(string Value)
 {
     public static readonly UserLlmCatalogStatusValue Ready = new(UserLlmCatalogStatus.Ready);
     public static readonly UserLlmCatalogStatusValue Empty = new(UserLlmCatalogStatus.Empty);
@@ -11,7 +9,7 @@ internal readonly record struct UserLlmCatalogStatusValue(string Value)
     public string ToWireValue() => Value;
 }
 
-internal readonly record struct UserLlmFallbackReasonValue(string Value)
+public readonly record struct UserLlmFallbackReasonValue(string Value)
 {
     public static readonly UserLlmFallbackReasonValue CatalogUnavailable = new(UserLlmFallbackReason.CatalogUnavailable);
     public static readonly UserLlmFallbackReasonValue SavedRouteUnavailable = new(UserLlmFallbackReason.SavedRouteUnavailable);

@@ -2,8 +2,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Application.Studio.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
