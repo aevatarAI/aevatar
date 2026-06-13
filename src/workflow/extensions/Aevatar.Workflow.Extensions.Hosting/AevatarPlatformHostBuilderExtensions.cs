@@ -1,7 +1,7 @@
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Workflow.Extensions.Maker;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;

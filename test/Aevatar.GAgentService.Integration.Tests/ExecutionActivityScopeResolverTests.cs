@@ -1,7 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.Hosting.ExecutionActivity;
+using Aevatar.Capabilities.ExecutionActivity;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
