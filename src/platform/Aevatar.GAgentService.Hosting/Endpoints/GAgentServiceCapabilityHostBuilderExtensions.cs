@@ -1,6 +1,6 @@
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 

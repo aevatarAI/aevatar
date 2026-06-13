@@ -1,6 +1,6 @@
 using System.Text;
 using System.Text.Json;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -112,7 +112,7 @@ public sealed class ChatQueryEndpointsTests
         var component = readiness.Components.Should()
             .ContainSingle(x => x.Name == "workflow-bundle")
             .Subject;
-        component.Status.Should().Be(Aevatar.Hosting.AevatarHealthStatuses.Unhealthy);
+        component.Status.Should().Be(Aevatar.Capabilities.AevatarHealthStatuses.Unhealthy);
         component.Message.Should().Contain("schema drift");
         component.Details["provider"].Should().Be("Elasticsearch");
         component.Details["indexAlias"].Should().Be("aevatar-mainnet-workflow-execution-current-states");
@@ -467,11 +467,11 @@ public sealed class ChatQueryEndpointsTests
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Services.AddLogging();
         builder.Services.AddOptions();
-        builder.Services.AddSingleton(new Aevatar.Hosting.AevatarHostMetadata
+        builder.Services.AddSingleton(new Aevatar.Capabilities.AevatarHostMetadata
         {
             ServiceName = "workflow-test",
         });
-        builder.Services.AddSingleton<Aevatar.Hosting.AevatarHostHealthService>();
+        builder.Services.AddSingleton<Aevatar.Capabilities.AevatarHostHealthService>();
         builder.AddWorkflowCapabilityBundle();
         builder.Services.Replace(ServiceDescriptor.Singleton(service));
         if (indexProbe != null)

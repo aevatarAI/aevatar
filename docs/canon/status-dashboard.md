@@ -335,14 +335,14 @@ internal sealed class MyReadmodelFreshnessSource : IReadmodelFreshnessSource
 | `test/Aevatar.GAgents.StatusDashboard.Tests/HttpStatusProbeExecutorTests.cs` | HTTP executor status/body/header/timeout 行为 |
 | `test/Aevatar.GAgents.StatusDashboard.Tests/ReadmodelFreshnessProbeExecutorTests.cs` | freshness executor 分类逻辑 |
 | `test/Aevatar.GAgents.StatusDashboard.Tests/HealthProbeTargetProjectorTests.cs` | actor state 到 readmodel 的物化 |
-| `test/Aevatar.Hosting.Tests/MainnetStatusEndpointsTests.cs` | mainnet `/status` 与 `/api/status` endpoint |
-| `test/Aevatar.Hosting.Tests/MainnetHostCompositionTests.cs` | Mainnet host 注册与 `aevatar_core_loop` executor 可用性 |
+| `test/Aevatar.Capabilities.Tests/MainnetStatusEndpointsTests.cs` | mainnet `/status` 与 `/api/status` endpoint |
+| `test/Aevatar.Capabilities.Tests/MainnetHostCompositionTests.cs` | Mainnet host 注册与 `aevatar_core_loop` executor 可用性 |
 
 常用验证命令：
 
 ```bash
 dotnet test test/Aevatar.GAgents.StatusDashboard.Tests/Aevatar.GAgents.StatusDashboard.Tests.csproj --nologo
-dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --filter MainnetStatusEndpointsTests --nologo
+dotnet test test/Aevatar.Capabilities.Tests/Aevatar.Capabilities.Tests.csproj --filter MainnetStatusEndpointsTests --nologo
 ```
 
 若修改测试或新增测试，还必须执行：

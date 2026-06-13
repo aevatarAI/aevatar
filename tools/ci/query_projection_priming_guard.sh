@@ -52,7 +52,7 @@ identity_oauth_hits="$(
     agents/Aevatar.GAgents.Channel.Identity \
     agents/Aevatar.GAgents.Channel.Identity.Abstractions \
     test/Aevatar.GAgents.ChannelRuntime.Tests/Identity \
-    test/Aevatar.Hosting.Tests/MainnetHostCompositionTests.cs \
+    test/Aevatar.Capabilities.Tests/MainnetHostCompositionTests.cs \
     | rg -v "Refactor \\(iter27/cluster-028-identity-oauth-endpoint\\)|Old pattern:|New principle:" \
     || true
 )"

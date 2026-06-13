@@ -7,7 +7,7 @@
     <RootNamespace>Aevatar.Mainnet.Host.Api</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="Aevatar.Hosting.Tests" />
+    <InternalsVisibleTo Include="Aevatar.Capabilities.Tests" />
     <InternalsVisibleTo Include="Aevatar.ChatRouting.Voice.Integration.Tests" />
   </ItemGroup>
   <ItemGroup>
