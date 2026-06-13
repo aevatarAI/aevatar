@@ -15,12 +15,7 @@ public interface ILarkNyxClient
     Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct);
     Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct);
     Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct);
-<<<<<<< HEAD
-    Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct) =>
-        throw new NotSupportedException("Lark approval instance lookup is not implemented by this client.");
-=======
     Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct);
->>>>>>> origin/crnd/integrate-1877
     Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct);
     Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct);
     Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct);
@@ -111,8 +106,6 @@ public sealed record LarkApprovalInstanceGetRequest(
     string? Locale,
     string? UserIdType);
 
-<<<<<<< HEAD
-=======
 /// <summary>
 /// Action against Lark <c>POST /open-apis/approval/v4/tasks/approve|reject|transfer</c>.
 /// All three endpoints require <paramref name="ApprovalCode"/> (the approval definition code)
@@ -120,7 +113,6 @@ public sealed record LarkApprovalInstanceGetRequest(
 /// <paramref name="UserIdType"/> rides as a query parameter and must match the id type of
 /// <paramref name="UserId"/> (and <paramref name="TransferUserId"/> for transfer).
 /// </summary>
->>>>>>> origin/crnd/integrate-1877
 public sealed record LarkApprovalTaskActionRequest(
     string Action,
     string ApprovalCode,

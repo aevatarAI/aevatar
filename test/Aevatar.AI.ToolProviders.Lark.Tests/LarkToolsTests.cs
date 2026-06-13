@@ -1163,7 +1163,10 @@ public class LarkToolsTests
         root.GetProperty("instance_code").GetString().Should().Be("inst_1");
         root.GetProperty("approval_code").GetString().Should().Be("def_1");
         root.GetProperty("status").GetString().Should().Be("approved");
+        root.GetProperty("status_raw").GetString().Should().Be("2");
         root.GetProperty("raw_status").GetString().Should().Be("2");
+        root.GetProperty("terminal").GetBoolean().Should().BeTrue();
+        root.GetProperty("terminal_kind").GetString().Should().Be("approved");
         root.GetProperty("is_terminal").GetBoolean().Should().BeTrue();
         root.GetProperty("terminal_status").GetString().Should().Be("approved");
         root.GetProperty("should_continue_waiting").GetBoolean().Should().BeFalse();
@@ -1249,103 +1252,6 @@ public class LarkToolsTests
             var result = await errorTool.ExecuteAsync("""{"instance_code":"inst_3"}""");
             result.Should().Contain("nyx_proxy_error status=504");
             result.Should().Contain("\"instance_code\":\"inst_3\"");
-        }
-    }
-
-    [Fact]
-    public async Task LarkApprovalsGetTool_ReturnsStableControlFlowFields()
-    {
-        var client = new StubLarkNyxClient
-        {
-            ApprovalGetResponse =
-                """
-                {
-                  "code": 0,
-                  "data": {
-                    "instance": {
-                      "instance_code": "inst_1",
-                      "status": "2",
-                      "definition_code": "def_1",
-                      "definition_name": "Expense",
-                      "title": "Expense Approval",
-                      "initiator": "ou_init",
-                      "initiator_name": "Alice",
-                      "link": "https://example.feishu.cn/approval/inst_1",
-                      "form": [
-                        { "id": "amount", "name": "Amount", "type": "number", "value": "100" }
-                      ],
-                      "nodes": [
-                        { "id": "node_1", "name": "Manager", "status": "2" }
-                      ],
-                      "tasks": [
-                        { "task_id": "task_1", "status": "2", "user_id": "ou_manager", "user_name": "Bob" }
-                      ]
-                    }
-                  }
-                }
-                """,
-        };
-        var tool = new LarkApprovalsGetTool(client);
-
-        using var _ = new AgentToolRequestMetadataScope("token-123");
-        var result = await tool.ExecuteAsync("""{"instance_code":"inst_1","locale":"zh-CN","user_id_type":"open_id"}""");
-
-        using var document = JsonDocument.Parse(result);
-        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
-        document.RootElement.GetProperty("instance_code").GetString().Should().Be("inst_1");
-        document.RootElement.GetProperty("status").GetString().Should().Be("approved");
-        document.RootElement.GetProperty("status_raw").GetString().Should().Be("2");
-        document.RootElement.GetProperty("terminal").GetBoolean().Should().BeTrue();
-        document.RootElement.GetProperty("terminal_kind").GetString().Should().Be("approved");
-        document.RootElement.GetProperty("form")[0].GetProperty("name").GetString().Should().Be("Amount");
-        document.RootElement.GetProperty("nodes")[0].GetProperty("status").GetString().Should().Be("approved");
-        document.RootElement.GetProperty("tasks")[0].GetProperty("status").GetString().Should().Be("done");
-        client.LastApprovalGetRequest.Should().Be(new LarkApprovalInstanceGetRequest("inst_1", "zh-CN", "open_id"));
-    }
-
-    [Fact]
-    public async Task LarkApprovalsGetTool_ShouldValidateInputs_AndSurfaceProxyErrors()
-    {
-        var tool = new LarkApprovalsGetTool(new StubLarkNyxClient());
-
-        using (new AgentToolRequestMetadataScope())
-        {
-            (await tool.ExecuteAsync("""{"instance_code":"inst_1"}"""))
-                .Should().Contain("No NyxID access token available");
-        }
-
-        using (new AgentToolRequestMetadataScope("token-123"))
-        {
-            (await tool.ExecuteAsync("""{}"""))
-                .Should().Contain("instance_code is required");
-            (await tool.ExecuteAsync("""{"instance_code":"inst_1","locale":"fr-FR"}"""))
-                .Should().Contain("locale must be one of");
-            (await tool.ExecuteAsync("""{"instance_code":"inst_1","user_id_type":"email"}"""))
-                .Should().Contain("user_id_type must be one of");
-        }
-
-        var errorTool = new LarkApprovalsGetTool(new StubLarkNyxClient
-        {
-            ApprovalGetResponse = """{"error":true,"status":503,"message":"approval unavailable"}""",
-        });
-        using (new AgentToolRequestMetadataScope("token-123"))
-        {
-            var result = await errorTool.ExecuteAsync("""{"instance_code":"inst_1"}""");
-            result.Should().Contain("nyx_proxy_error status=503");
-            result.Should().Contain("\"instance_code\":\"inst_1\"");
-        }
-
-        var runningTool = new LarkApprovalsGetTool(new StubLarkNyxClient
-        {
-            ApprovalGetResponse = """{"code":0,"data":{"instance_code":"inst_2","instance_status":"1"}}""",
-        });
-        using (new AgentToolRequestMetadataScope("token-123"))
-        {
-            var result = await runningTool.ExecuteAsync("""{"instance_code":"inst_2"}""");
-            using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("status").GetString().Should().Be("running");
-            document.RootElement.GetProperty("terminal").GetBoolean().Should().BeFalse();
-            document.RootElement.TryGetProperty("terminal_kind", out _).Should().BeFalse();
         }
     }
 
@@ -1958,7 +1864,7 @@ public class LarkToolsTests
     }
 
     [Fact]
-    public async Task LarkNyxClient_GetApprovalInstance_ShapesProxyRequest()
+    public async Task LarkNyxClient_GetApprovalInstance_ShapesProxyRequest_WithDifferentQueryValues()
     {
         var handler = new RecordingHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.OK)
@@ -2618,11 +2524,7 @@ public class LarkToolsTests
             "application/octet-stream");
         public string SearchResponse { get; set; } = """{"code":0,"data":{"items":[],"total":0}}""";
         public string AppendSheetResponse { get; set; } = """{"code":0,"data":{"updates":{}}}""";
-<<<<<<< HEAD
-        public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
-=======
         public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":{"total":0,"has_more":false}}}""";
->>>>>>> origin/crnd/integrate-1877
         public string ApprovalGetResponse { get; set; } = """{"code":0,"data":{"instance_code":"inst_default","status":"1"}}""";
         public string ApprovalActionResponse { get; set; } = """{"code":0,"data":{}}""";
         public string DocxCreateResponse { get; set; } = """{"code":0,"data":{"document":{"document_id":"doccn_default","url":"https://example.feishu.cn/docx/doccn_default"}}}""";

@@ -1,14 +1,10 @@
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Application.Workflows;
-<<<<<<< HEAD
-using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Validation;
-=======
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
->>>>>>> origin/crnd/integrate-1877
+using Aevatar.Workflow.Core.Validation;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
 using Google.Protobuf;
@@ -236,7 +232,6 @@ public class WorkflowDefinitionCatalogTests
         autoYaml.Should().NotContain("condition: \"```y\"");
     }
 
-<<<<<<< HEAD
     private static string FindRepoRoot()
     {
         var directory = new DirectoryInfo(Directory.GetCurrentDirectory());
@@ -252,7 +247,8 @@ public class WorkflowDefinitionCatalogTests
         }
 
         throw new InvalidOperationException("Could not locate repository root for workflow catalog tests.");
-=======
+    }
+
     [Fact]
     public void FileLoader_ShouldLoadLarkApprovalWaitTemplates()
     {
@@ -354,18 +350,7 @@ public class WorkflowDefinitionCatalogTests
         state.Variables["steps.get_instance.json.task_count"].Should().Be("1");
     }
 
-    private static string FindRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
-                return directory.FullName;
-            directory = directory.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root.");
-    }
+    private static string FindRepositoryRoot() => FindRepoRoot();
 
     private static EventEnvelope Wrap(IMessage evt) => new()
     {
@@ -475,6 +460,5 @@ public class WorkflowDefinitionCatalogTests
     private sealed class NullServiceProvider : IServiceProvider
     {
         public object? GetService(System.Type serviceType) => null;
->>>>>>> origin/crnd/integrate-1877
     }
 }

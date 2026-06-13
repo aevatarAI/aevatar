@@ -270,25 +270,6 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
-    public Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct)
-    {
-        var queryParts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(request.Locale))
-            queryParts.Add($"locale={Uri.EscapeDataString(request.Locale.Trim())}");
-        if (!string.IsNullOrWhiteSpace(request.UserIdType))
-            queryParts.Add($"user_id_type={Uri.EscapeDataString(request.UserIdType.Trim())}");
-
-        var query = queryParts.Count == 0 ? string.Empty : $"?{string.Join("&", queryParts)}";
-        return _nyxClient.ProxyRequestAsync(
-            token,
-            _options.ProviderSlug,
-            $"open-apis/approval/v4/instances/{Uri.EscapeDataString(request.InstanceCode)}{query}",
-            "GET",
-            body: null,
-            extraHeaders: null,
-            ct);
-    }
-
     public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct)
     {
         // The documented action endpoints are tasks/approve, tasks/reject and tasks/transfer

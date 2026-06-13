@@ -259,11 +259,7 @@ internal static class LarkProxyResponseParser
             PageToken: TryReadString(data, "page_token"));
     }
 
-<<<<<<< HEAD
     public static LarkApprovalInstanceGetResult ParseApprovalInstanceGetSuccess(string response)
-=======
-    public static LarkApprovalInstanceResult ParseApprovalInstanceSuccess(string response)
->>>>>>> origin/crnd/integrate-1877
     {
         using var document = JsonDocument.Parse(response);
         var data = ResolveDataRoot(document.RootElement);
@@ -272,7 +268,6 @@ internal static class LarkProxyResponseParser
             ? instanceProp
             : data;
 
-<<<<<<< HEAD
         return new LarkApprovalInstanceGetResult(
             InstanceCode: TryReadString(instance, "instance_code") ??
                           TryReadString(data, "instance_code"),
@@ -280,6 +275,8 @@ internal static class LarkProxyResponseParser
                        TryReadString(instance, "instance_status") ??
                        TryReadString(data, "status") ??
                        TryReadString(data, "instance_status"),
+            ApprovalCode: TryReadString(instance, "approval_code"),
+            ApprovalName: TryReadString(instance, "approval_name"),
             DefinitionCode: TryReadString(instance, "definition_code"),
             DefinitionName: TryReadString(instance, "definition_name"),
             Title: TryReadString(instance, "title") ??
@@ -291,35 +288,6 @@ internal static class LarkProxyResponseParser
             InitiatorName: TryReadString(instance, "initiator_name") ??
                            TryReadString(instance, "user_name") ??
                            TryReadString(instance, "initiator_user_name"),
-            Link: TryReadString(instance, "link") ??
-                  TryReadString(instance, "url") ??
-                  TryReadString(instance, "share_url"),
-            Form: ParseApprovalFormFields(instance),
-            Nodes: ParseApprovalNodes(instance),
-            Tasks: ParseApprovalInstanceTasks(instance));
-=======
-        var tasks = new List<LarkApprovalInstanceTask>();
-        if (instance.TryGetProperty("task_list", out var taskListProp) && taskListProp.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var task in taskListProp.EnumerateArray())
-            {
-                tasks.Add(new LarkApprovalInstanceTask(
-                    TaskId: TryReadString(task, "task_id"),
-                    UserId: TryReadString(task, "user_id"),
-                    UserName: TryReadString(task, "user_name"),
-                    Status: TryReadString(task, "status"),
-                    StartTime: TryReadString(task, "start_time"),
-                    EndTime: TryReadString(task, "end_time")));
-            }
-        }
-
-        var formFields = ParseApprovalInstanceFormFields(instance);
-
-        return new LarkApprovalInstanceResult(
-            InstanceCode: TryReadString(instance, "instance_code"),
-            ApprovalCode: TryReadString(instance, "approval_code"),
-            ApprovalName: TryReadString(instance, "approval_name"),
-            Status: TryReadString(instance, "status"),
             StartTime: TryReadString(instance, "start_time"),
             EndTime: TryReadString(instance, "end_time"),
             SerialNumber: TryReadString(instance, "serial_number"),
@@ -328,55 +296,12 @@ internal static class LarkProxyResponseParser
             DepartmentId: TryReadString(instance, "department_id"),
             DepartmentName: TryReadString(instance, "department_name"),
             Uuid: TryReadString(instance, "uuid"),
-            TaskList: tasks,
-            Form: formFields);
-    }
-
-    private static IReadOnlyList<LarkApprovalInstanceFormField> ParseApprovalInstanceFormFields(JsonElement instance)
-    {
-        var formFields = new List<LarkApprovalInstanceFormField>();
-        if (!instance.TryGetProperty("form", out var formProp))
-            return formFields;
-
-        if (formProp.ValueKind == JsonValueKind.String)
-        {
-            var formJson = formProp.GetString();
-            if (string.IsNullOrWhiteSpace(formJson))
-                return formFields;
-
-            try
-            {
-                using var document = JsonDocument.Parse(formJson);
-                AddApprovalInstanceFormFields(document.RootElement, formFields);
-                return formFields;
-            }
-            catch (JsonException)
-            {
-                return formFields;
-            }
-        }
-
-        AddApprovalInstanceFormFields(formProp, formFields);
-        return formFields;
-    }
-
-    private static void AddApprovalInstanceFormFields(
-        JsonElement form,
-        ICollection<LarkApprovalInstanceFormField> formFields)
-    {
-        if (form.ValueKind != JsonValueKind.Array)
-            return;
-
-        foreach (var field in form.EnumerateArray())
-        {
-            formFields.Add(new LarkApprovalInstanceFormField(
-                Id: TryReadString(field, "id"),
-                Name: TryReadString(field, "name"),
-                Type: TryReadString(field, "type"),
-                Value: TryReadString(field, "value"),
-                Ext: TryReadString(field, "ext")));
-        }
->>>>>>> origin/crnd/integrate-1877
+            Link: TryReadString(instance, "link") ??
+                  TryReadString(instance, "url") ??
+                  TryReadString(instance, "share_url"),
+            Form: ParseApprovalFormFields(instance),
+            Nodes: ParseApprovalNodes(instance),
+            Tasks: ParseApprovalInstanceTasks(instance));
     }
 
     public static LarkDocxCreateResult ParseDocxCreateSuccess(string response)
@@ -468,10 +393,40 @@ internal static class LarkProxyResponseParser
     private static IReadOnlyList<LarkApprovalInstanceFormField> ParseApprovalFormFields(JsonElement instance)
     {
         var fields = new List<LarkApprovalInstanceFormField>();
-        if (!TryGetFirstArray(instance, out var formProp, "form", "forms", "form_fields", "form_values"))
+        if (!TryGetFirstProperty(instance, out var formProp, "form", "forms", "form_fields", "form_values"))
             return fields;
 
-        foreach (var field in formProp.EnumerateArray())
+        AddApprovalFormFields(formProp, fields);
+        return fields;
+    }
+
+    private static void AddApprovalFormFields(
+        JsonElement form,
+        ICollection<LarkApprovalInstanceFormField> fields)
+    {
+        if (form.ValueKind == JsonValueKind.String)
+        {
+            var formJson = form.GetString();
+            if (string.IsNullOrWhiteSpace(formJson))
+                return;
+
+            try
+            {
+                using var document = JsonDocument.Parse(formJson);
+                AddApprovalFormFields(document.RootElement, fields);
+            }
+            catch (JsonException)
+            {
+                return;
+            }
+
+            return;
+        }
+
+        if (form.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (var field in form.EnumerateArray())
         {
             fields.Add(new LarkApprovalInstanceFormField(
                 Id: TryReadString(field, "id") ??
@@ -483,10 +438,9 @@ internal static class LarkProxyResponseParser
                 Type: TryReadString(field, "type"),
                 Value: TryReadString(field, "value") ??
                        TryReadString(field, "value_text") ??
-                       TryReadString(field, "display_value")));
+                       TryReadString(field, "display_value"),
+                Ext: TryReadString(field, "ext")));
         }
-
-        return fields;
     }
 
     private static IReadOnlyList<LarkApprovalInstanceNode> ParseApprovalNodes(JsonElement instance)
@@ -526,10 +480,27 @@ internal static class LarkProxyResponseParser
                 UserId: TryReadString(task, "user_id") ??
                         TryReadString(task, "open_id"),
                 UserName: TryReadString(task, "user_name") ??
-                          TryReadString(task, "name")));
+                          TryReadString(task, "name"),
+                StartTime: TryReadString(task, "start_time"),
+                EndTime: TryReadString(task, "end_time")));
         }
 
         return tasks;
+    }
+
+    private static bool TryGetFirstProperty(JsonElement element, out JsonElement value, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (element.ValueKind == JsonValueKind.Object &&
+                element.TryGetProperty(propertyName, out value))
+            {
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     private static bool TryGetFirstArray(JsonElement element, out JsonElement value, params string[] propertyNames)
@@ -689,23 +660,12 @@ internal sealed record LarkApprovalTaskQueryResult(
     bool HasMore,
     string? PageToken);
 
-<<<<<<< HEAD
-=======
-internal sealed record LarkApprovalInstanceTask(
-    string? TaskId,
-    string? UserId,
-    string? UserName,
-    string? Status,
-    string? StartTime,
-    string? EndTime);
-
->>>>>>> origin/crnd/integrate-1877
 internal sealed record LarkApprovalInstanceFormField(
     string? Id,
     string? Name,
     string? Type,
-<<<<<<< HEAD
-    string? Value);
+    string? Value,
+    string? Ext);
 
 internal sealed record LarkApprovalInstanceNode(
     string? Id,
@@ -716,29 +676,20 @@ internal sealed record LarkApprovalInstanceTask(
     string? TaskId,
     string? StatusRaw,
     string? UserId,
-    string? UserName);
+    string? UserName,
+    string? StartTime,
+    string? EndTime);
 
 internal sealed record LarkApprovalInstanceGetResult(
     string? InstanceCode,
     string? StatusRaw,
+    string? ApprovalCode,
+    string? ApprovalName,
     string? DefinitionCode,
     string? DefinitionName,
     string? Title,
     string? Initiator,
     string? InitiatorName,
-    string? Link,
-    IReadOnlyList<LarkApprovalInstanceFormField> Form,
-    IReadOnlyList<LarkApprovalInstanceNode> Nodes,
-    IReadOnlyList<LarkApprovalInstanceTask> Tasks);
-=======
-    string? Value,
-    string? Ext);
-
-internal sealed record LarkApprovalInstanceResult(
-    string? InstanceCode,
-    string? ApprovalCode,
-    string? ApprovalName,
-    string? Status,
     string? StartTime,
     string? EndTime,
     string? SerialNumber,
@@ -747,9 +698,10 @@ internal sealed record LarkApprovalInstanceResult(
     string? DepartmentId,
     string? DepartmentName,
     string? Uuid,
-    IReadOnlyList<LarkApprovalInstanceTask> TaskList,
-    IReadOnlyList<LarkApprovalInstanceFormField> Form);
->>>>>>> origin/crnd/integrate-1877
+    string? Link,
+    IReadOnlyList<LarkApprovalInstanceFormField> Form,
+    IReadOnlyList<LarkApprovalInstanceNode> Nodes,
+    IReadOnlyList<LarkApprovalInstanceTask> Tasks);
 
 internal sealed record LarkDocxCreateResult(
     string? DocumentToken,

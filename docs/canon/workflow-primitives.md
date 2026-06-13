@@ -371,14 +371,11 @@ steps:
 
 - 作用：调用已注册工具（函数/工具链/MCP 工具）。
 - 常用参数：`tool`。
-<<<<<<< HEAD
 - 对外系统状态查询应优先做成只读 typed tool，再由 workflow 用 `tool_call` 编排；例如 Lark 审批实例状态使用 `lark_approvals_get` 返回 `status`、`status_raw`、`terminal`、`terminal_kind` 等控制流字段，workflow 不需要手拼 `nyxid_proxy` 路径。
-=======
 - 工具输出若是 JSON object 且步骤成功，运行时会把顶层字段镜像为 `steps.<step_id>.json.<field>` 变量，供后续 `switch` / `conditional` / `while` 分支使用。
 - 需要人工审批的 direct `tool_call` 不把 `ApprovalPending` 当作失败完成。`ToolCallModule` 将原始 tool name、arguments、`execution_id`、`tool_call_id`、`approval_request_id` 持久化到 workflow actor state，并发布 `WorkflowSuspendedEvent.tool_approval`。该 suspension 只暴露审批对账键，不暴露工具参数。
 - tool approval resume 使用 `WorkflowResumedEvent.tool_approval` nested payload，仅携带 `execution_id`、`tool_call_id`、`approval_request_id`。客户端不得在 resume payload 中提交 tool name 或 arguments；approved replay 必须从 actor pending state 读取原始工具和参数，并向 tool middleware 传递 typed `ToolApprovalGrant`。
 - resume 对账按 `run_id + step_id + execution_id + tool_call_id + approval_request_id` 精确匹配。approved 后重放原工具；rejected / timed out / non-pending termination fail closed 并清理 pending state；stale 或 mismatched resume event 直接忽略。
->>>>>>> origin/crnd/integrate-1877
 
 ```yaml
 steps:
@@ -558,17 +555,13 @@ steps:
       lifecycle: "singleton"
 ```
 
-<<<<<<< HEAD
 #### 可复用等待模板
 
 长时间等待外部系统进入终态时，优先把“查询一次状态”建成只读 typed tool，再把“等待/重试/超时”建成普通 catalog workflow，通过 `workflow_call` 复用。模板本身只组合现有原语：`tool_call` 获取状态，`switch` 或 `guard` 判断终态，`delay` 做 durable 等待，下一轮用 `workflow_call` 继续，并在调用侧设置明确的 timeout budget。
 
 仓库内示例：`workflows/lark_approval_instance_wait.yaml`。调用方传入包含 `instance_code` 的 JSON 作为 input；`lark_approvals_get` 输出 `terminal=true` 且 `terminal_kind=approved/rejected/canceled` 时结束，非终态走 durable `delay` 后复用同一 workflow，超时输出 `timed_out=true`。不要为某个外部系统新增专用 polling service、专用 actor 或进程内状态表。
-=======
-#### Lark approval wait 模板
 
 `workflows/lark_approval_wait.yaml` 是可复用审批等待模板，输入为 Lark `instance_code`。它通过 `while + workflow_call + tool_call + switch + delay` 组合调用 `lark_approval_wait_poll`，默认最多轮询 60 次、每轮非终态等待 5000ms。超时预算由 `max_iterations` 与 `duration_ms` 显式表达；需要不同预算时复制模板并调整这两个参数，不新增 Lark 专用 polling runtime。
->>>>>>> origin/crnd/integrate-1877
 
 ### `dynamic_workflow`
 

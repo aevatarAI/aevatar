@@ -64,11 +64,7 @@ public sealed class LarkCoverageTests
 
         var approvalsGetTool = new LarkApprovalsGetTool(client);
         approvalsGetTool.Name.Should().Be("lark_approvals_get");
-<<<<<<< HEAD
-        approvalsGetTool.Description.Should().Contain("Get one Lark approval instance");
-=======
         approvalsGetTool.Description.Should().Contain("Read one Lark approval instance");
->>>>>>> origin/crnd/integrate-1877
         approvalsGetTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
         approvalsGetTool.IsReadOnly.Should().BeTrue();
 
