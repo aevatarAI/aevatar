@@ -29,6 +29,26 @@ public sealed class SkillRunnerExternalTriggerEndpointsTests
     }
 
     [Fact]
+    public async Task PostDelivery_WithUnvalidatedBearer_ShouldReturnUnauthorizedAndNotDispatch()
+    {
+        // A non-empty bearer is no longer sufficient — the value must resolve to a real
+        // NyxID user. The stub resolver returns null for any token other than the known one.
+        var port = new RecordingSkillRunnerCommandPort();
+        await using var app = await CreateAppAsync(port);
+        using var request = new HttpRequestMessage(HttpMethod.Post, DeliveryPath("runner-1", "webhook-main"))
+        {
+            Content = JsonContent("""{"payloadSummary":"ignored"}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "not-a-real-token");
+        request.Headers.Add("X-Aevatar-Event-Id", "event-1");
+
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        port.Admissions.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task PostDelivery_WithoutStableEventId_ShouldReturnBadRequestAndNotDispatch()
     {
         var port = new RecordingSkillRunnerCommandPort();
@@ -141,6 +161,7 @@ public sealed class SkillRunnerExternalTriggerEndpointsTests
         });
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton<ISkillRunnerCommandPort>(port);
+        builder.Services.AddSingleton<INyxIdCurrentUserResolver>(new StubCurrentUserResolver());
 
         var app = builder.Build();
         app.MapSkillRunnerExternalTriggerEndpoints();
@@ -182,6 +203,15 @@ public sealed class SkillRunnerExternalTriggerEndpointsTests
         }
 
         throw new FileNotFoundException("Could not locate SkillRunnerExternalTriggerEndpoints.cs.");
+    }
+
+    private sealed class StubCurrentUserResolver : INyxIdCurrentUserResolver
+    {
+        public Task<string?> ResolveCurrentUserIdAsync(string nyxIdAccessToken, CancellationToken ct = default) =>
+            Task.FromResult<string?>(
+                string.Equals(nyxIdAccessToken, "delivery-token", StringComparison.Ordinal)
+                    ? "caller-user-1"
+                    : null);
     }
 
     private sealed class RecordingSkillRunnerCommandPort : ISkillRunnerCommandPort
