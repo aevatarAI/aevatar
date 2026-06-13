@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;

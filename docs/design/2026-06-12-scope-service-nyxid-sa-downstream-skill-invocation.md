@@ -188,7 +188,7 @@ base_url 钉死后，经 `/api/v1/proxy/s/aevatar-scope-services/<rest>` 可达�
 | base_url 校验仅 scheme/host/元数据黑名单（允许带 path） | NyxID `backend/src/services/url_validation.rs:187-211` |
 | SSE 按响应 content-type 自动流式透传 | NyxID `backend/src/handlers/proxy.rs:1934, 2268` |
 | caller 伪造 x-nyxid-* 头剥除 + 身份头注入 | NyxID `backend/src/handlers/proxy.rs:1568-1660` |
-| scope guard：单 claim + Ordinal 匹配 | aevatar `src/Aevatar.Hosting/AevatarScopeAccessGuard.cs:83-107` |
+| scope guard：单 claim + Ordinal 匹配 | aevatar `src/Aevatar.Capabilities/AevatarScopeAccessGuard.cs:83-107` |
 | claims waterfall scope_id→uid→sub | aevatar `src/Aevatar.Authentication.Providers.NyxId/NyxIdClaimsTransformer.cs:19-25` |
 | payloadJson/payloadBase64 互斥、服务端 pack | aevatar `src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeServiceEndpoints.cs:1990-2028` |
 | contract / invoke / runs 端点注册 | aevatar `src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeServiceEndpoints.cs:51-97` |

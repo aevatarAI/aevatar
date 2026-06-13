@@ -94,7 +94,7 @@
     <Project Path="src\Aevatar.Foundation.VoicePresence\Aevatar.Foundation.VoicePresence.csproj" />
     <Project Path="src\Aevatar.Foundation.VoicePresence.MiniCPM\Aevatar.Foundation.VoicePresence.MiniCPM.csproj" />
     <Project Path="src\Aevatar.Foundation.VoicePresence.OpenAI\Aevatar.Foundation.VoicePresence.OpenAI.csproj" />
-    <Project Path="src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
+    <Project Path="src\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
     <Project Path="src\Aevatar.Mainnet.Host.Api\Aevatar.Mainnet.Host.Api.csproj" />
 	    <Project Path="src\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
 	    <Project Path="src\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
@@ -175,7 +175,7 @@
     <Project Path="test\Aevatar.Foundation.VoicePresence.Tests\Aevatar.Foundation.VoicePresence.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.VoicePresence.MiniCPM.Tests\Aevatar.Foundation.VoicePresence.MiniCPM.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.VoicePresence.OpenAI.Tests\Aevatar.Foundation.VoicePresence.OpenAI.Tests.csproj" />
-    <Project Path="test\Aevatar.Hosting.Tests\Aevatar.Hosting.Tests.csproj" />
+    <Project Path="test\Aevatar.Capabilities.Tests\Aevatar.Capabilities.Tests.csproj" />
 	    <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
 	    <Project Path="test\Aevatar.Scripting.Core.Tests\Aevatar.Scripting.Core.Tests.csproj" />
     <Project Path="test\Aevatar.GAgentService.Tests\Aevatar.GAgentService.Tests.csproj" />
