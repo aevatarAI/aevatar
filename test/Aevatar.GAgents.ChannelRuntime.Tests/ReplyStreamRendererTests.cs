@@ -125,6 +125,34 @@ public sealed class ReplyStreamRendererTests
     }
 
     [Fact]
+    public void LarkCardRenderer_CreatesStreamStepWithTypedPayload()
+    {
+        var renderer = new LarkCardReplyStreamRenderer(
+            new RecordingCardTurnRunner(),
+            NullLogger<LarkCardReplyStreamRenderer>.Instance);
+        var chunk = CreateCardChunk();
+
+        var step = renderer.CreateStreamStep(new LarkCardStreamOperationStepInput(
+            chunk,
+            "corr-card",
+            "card-1",
+            "streaming_main",
+            Sequence: 5,
+            Generation: 6));
+
+        step.OperationId.Should().Be("corr-card:Stream:5:6");
+        step.OperationName.Should().Be("lark-card-stream");
+        step.CorrelationId.Should().Be("corr-card");
+        step.LeaseEpoch.Should().Be(6);
+        step.PayloadCase.Should().Be(ReplyOperationStepEvent.PayloadOneofCase.LarkCard);
+        step.LarkCard.Operation.Should().Be(LarkCardOperationPhase.Stream);
+        step.LarkCard.CardId.Should().Be("card-1");
+        step.LarkCard.StreamingElementId.Should().Be("streaming_main");
+        step.LarkCard.Chunk.Should().NotBeSameAs(chunk);
+        step.LarkCard.Chunk.AccumulatedText.Should().Be("card hello");
+    }
+
+    [Fact]
     public async Task LarkCardRenderer_ExecutesFinalizeAndSanitizesActivityInCompletion()
     {
         var runner = new RecordingCardTurnRunner();
@@ -156,6 +184,52 @@ public sealed class ReplyStreamRendererTests
         completed.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task LarkCardRenderer_ExecutesStreamAndDispatchesMappedCompletion()
+    {
+        var runner = new RecordingCardTurnRunner
+        {
+            StreamResult = ConversationCardStreamResult.Failed(
+                "rate_limit",
+                "stream rejected",
+                isRateLimited: true),
+        };
+        var renderer = new LarkCardReplyStreamRenderer(
+            runner,
+            NullLogger<LarkCardReplyStreamRenderer>.Instance);
+        var context = new RecordingReplyOperationContext(matchesNyx: false, matchesLark: true);
+        var step = renderer.CreateStreamStep(new LarkCardStreamOperationStepInput(
+            CreateCardChunk(),
+            "corr-card",
+            "card-1",
+            "streaming_main",
+            Sequence: 5,
+            Generation: 6));
+
+        await renderer.ExecuteAsync(context, step, CancellationToken.None);
+
+        runner.Streams.Should().ContainSingle();
+        var call = runner.Streams[0];
+        call.CardId.Should().Be("card-1");
+        call.ElementId.Should().Be("streaming_main");
+        call.Sequence.Should().Be(5);
+        call.Chunk.AccumulatedText.Should().Be("card hello");
+
+        context.Dispatched.Should().ContainSingle();
+        var dispatched = context.Dispatched[0];
+        dispatched.CorrelationId.Should().Be("corr-card");
+        dispatched.OperationName.Should().Be("Lark card");
+        var completed = dispatched.Event.Should().BeOfType<LarkCardOperationCompletedEvent>().Subject;
+        completed.Operation.Should().Be(LarkCardOperationPhase.Stream);
+        completed.OperationId.Should().Be("corr-card:Stream:5:6");
+        completed.CardId.Should().Be("card-1");
+        completed.StreamingElementId.Should().Be("streaming_main");
+        completed.State.Should().Be(LarkCardOperationResultState.Failed);
+        completed.RawResult.IsRateLimited.Should().BeTrue();
+        completed.RawResult.RawErrorCode.Should().Be("rate_limit");
+        completed.RawResult.RawErrorSummary.Should().Be("stream rejected");
+    }
+
     private static LlmReplyStreamChunkEvent CreateTextChunk() =>
         new()
         {
@@ -166,6 +240,18 @@ public sealed class ReplyStreamRendererTests
             ChunkAtUnixMs = 10,
             ReplyToken = "reply-token",
             ReplyTokenExpiresAtUnixMs = 20,
+        };
+
+    private static LlmReplyCardStreamChunkEvent CreateCardChunk() =>
+        new()
+        {
+            CorrelationId = "corr-card",
+            RegistrationId = "reg-card",
+            Activity = CreateActivity(),
+            AccumulatedText = "card hello",
+            ChunkAtUnixMs = 30,
+            ReplyToken = "card-reply-token",
+            ReplyTokenExpiresAtUnixMs = 40,
         };
 
     private static ChatActivity CreateActivity() =>
@@ -221,6 +307,11 @@ public sealed class ReplyStreamRendererTests
     {
         public List<ChatActivity> Finalizes { get; } = [];
 
+        public List<StreamCall> Streams { get; } = [];
+
+        public ConversationCardStreamResult StreamResult { get; init; } =
+            ConversationCardStreamResult.Succeeded();
+
         public Task<ConversationCardCreateResult> RunCardCreateAsync(
             LlmReplyCardStreamChunkEvent chunk,
             string streamingElementId,
@@ -234,8 +325,11 @@ public sealed class ReplyStreamRendererTests
             string elementId,
             long sequence,
             ConversationTurnRuntimeContext runtimeContext,
-            CancellationToken ct) =>
-            Task.FromResult(ConversationCardStreamResult.Succeeded());
+            CancellationToken ct)
+        {
+            Streams.Add(new StreamCall(chunk.Clone(), cardId, elementId, sequence));
+            return Task.FromResult(StreamResult);
+        }
 
         public Task<ConversationCardFinalizeResult> RunCardFinalizeAsync(
             ChatActivity referenceActivity,
@@ -251,6 +345,12 @@ public sealed class ReplyStreamRendererTests
             return Task.FromResult(ConversationCardFinalizeResult.Succeeded());
         }
     }
+
+    private sealed record StreamCall(
+        LlmReplyCardStreamChunkEvent Chunk,
+        string CardId,
+        string ElementId,
+        long Sequence);
 
     private sealed class RecordingReplyOperationContext(
         bool matchesNyx,
