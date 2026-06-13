@@ -109,6 +109,7 @@ public static class ServiceCollectionExtensions
                 sp.GetService<NyxIdRelayOptions>(),
                 sp.GetService<INyxIdUserLlmPreferencesStore>(),
                 sp.GetService<IUserMemoryStore>(),
+                larkClient: sp.GetService<ILarkNyxClient>(),
                 approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>()));
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
