@@ -235,15 +235,9 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
     private const int MaxGraphTake = 500;
     private const int DefaultGraphDepth = 2;
     private const int MaxGraphDepth = 5;
-    // The report artifact only materializes once the run reaches a terminal state, so this wait
-    // is effectively "how long to watch for the workflow to finish" before handing a pending
-    // result back to the model. The old 8s/20s caps were shorter than a typical multi-step
-    // workflow, so the model saw a pending result on its first read and (per the 22:36 Lark
-    // incident) finalized "started but not projected" instead of waiting. Give a single read
-    // enough room to span an ordinary run, bounded so a stuck run can't pin the chat turn forever.
-    private const int DefaultReportWaitMs = 90000;
-    private const int MaxReportWaitMs = 300000;
-    private static readonly TimeSpan ReportPollInterval = TimeSpan.FromMilliseconds(1000);
+    private const int DefaultReportWaitMs = 8000;
+    private const int MaxReportWaitMs = 20000;
+    private static readonly TimeSpan ReportPollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly IWorkflowExecutionQueryApplicationService _queryService;
     private readonly IWorkflowRunBindingReader _runBindingReader;
@@ -264,7 +258,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
     public string Description =>
         "Read a workflow run's projected artifact/export by workflow_run_id. " +
         "Use this after aevatar_start_workflow returns a run_id; long workflow actor IDs are also accepted. " +
-        "For report reads, the tool blocks until the workflow run finishes and its report materializes (up to wait_ms), then returns the completed report; if the run is still executing when wait_ms elapses it returns a pending result that you MUST keep polling by calling this tool again with the same workflow_run_id — never infer or finalize the workflow output from a pending result. " +
+        "For report reads, the tool waits briefly for projection materialization and returns pending if the artifact is not visible yet; do not infer the final workflow output from a pending result. " +
         "This tool reads workflow-run report/timeline/graph artifacts only and does not inspect live actor state.";
 
     public string ParametersSchema => """
@@ -291,7 +285,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
             },
             "wait_ms": {
               "type": "integer",
-              "description": "For report reads, block up to this many milliseconds waiting for the run to finish and its report to materialize. Default 90000, max 300000. The report only appears once the run reaches a terminal state, so this is effectively how long to wait for completion before returning a pending result."
+              "description": "For report reads, wait up to this many milliseconds for projection materialization. Default 8000, max 20000"
             },
             "edge_types": {
               "type": "array",
@@ -356,7 +350,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
                 pending = true,
                 waited_ms = waitMs,
                 retry_after_ms = 1000,
-                message = "Workflow run is still executing, so its report has not materialized yet — the run is not finished. Call aevatar_read_workflow_run_artifact again with the same workflow_run_id (optionally a larger wait_ms) to keep watching, and only reply once you receive a terminal report. Do not finalize your answer or infer the final output from this pending result.",
+                message = "Workflow run report artifact is not materialized yet. Retry this tool instead of inferring the final workflow output.",
             });
         }
 
