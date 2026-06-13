@@ -32,7 +32,7 @@ using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.ReadModels;
-using Aevatar.Hosting.ExecutionActivity;
+using Aevatar.Capabilities.ExecutionActivity;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Foundation.Abstractions.EventSourcing;

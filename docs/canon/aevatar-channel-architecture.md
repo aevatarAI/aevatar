@@ -1560,7 +1560,7 @@ test/
 
 ### 9.1.1 Build slice 归属
 
-aevatar 仓库按 slnf 分片构建（`aevatar.foundation.slnf` / `aevatar.ai.slnf` / `aevatar.cqrs.slnf` / `aevatar.workflow.slnf` / `aevatar.hosting.slnf` / `aevatar.distributed.slnf`），受 `solution_split_guards.sh` 守护。本 RFC 新增包的 slice 归属：
+aevatar 仓库按 slnf 分片构建（`aevatar.foundation.slnf` / `aevatar.ai.slnf` / `aevatar.cqrs.slnf` / `aevatar.workflow.slnf` / `aevatar.capabilities.slnf` / `aevatar.distributed.slnf`），受 `solution_split_guards.sh` 守护。本 RFC 新增包的 slice 归属：
 
 | 新包 | 归属 slnf | 理由 |
 |---|---|---|

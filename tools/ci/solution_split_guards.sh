@@ -13,7 +13,7 @@ filters=(
   "aevatar.ai.slnf"
   "aevatar.cqrs.slnf"
   "aevatar.workflow.slnf"
-  "aevatar.hosting.slnf"
+  "aevatar.capabilities.slnf"
   "aevatar.distributed.slnf"
 )
 
