@@ -1668,6 +1668,31 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task ReadWorkflowRunArtifact_WhenReportPending_ShouldInstructModelToKeepPollingNotFinalize()
+    {
+        // Regression for the 22:36 Lark incident: the bot read the report once, saw pending, and
+        // finalized "workflow started but output not projected" instead of waiting for the run to
+        // finish. A pending result must tell the model the run is unfinished and to call the tool
+        // again, never to infer/finalize the output from the pending result.
+        var harness = new Harness();
+        var tool = new ReadWorkflowRunArtifactTool(
+            harness.WorkflowQuery,
+            harness.RunBindingReader,
+            (_, _) => throw new InvalidOperationException("wait_ms=0 should not delay"));
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1","wait_ms":0}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        var result = Read(output);
+        result.GetProperty("status").GetString().Should().Be("pending");
+        result.GetProperty("pending").GetBoolean().Should().BeTrue();
+        var message = result.GetProperty("message").GetString();
+        message.Should().Contain("aevatar_read_workflow_run_artifact again");
+        message.Should().Contain("not finished");
+        message.Should().Contain("Do not finalize");
+    }
+
+    [Fact]
     public async Task ReadWorkflowRunArtifact_Timeline_ShouldReadTimelineExport()
     {
         var harness = new Harness();
