@@ -235,16 +235,22 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
     private const int MaxGraphTake = 500;
     private const int DefaultGraphDepth = 2;
     private const int MaxGraphDepth = 5;
+    private const int DefaultReportWaitMs = 8000;
+    private const int MaxReportWaitMs = 20000;
+    private static readonly TimeSpan ReportPollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly IWorkflowExecutionQueryApplicationService _queryService;
     private readonly IWorkflowRunBindingReader _runBindingReader;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
 
     public ReadWorkflowRunArtifactTool(
         IWorkflowExecutionQueryApplicationService queryService,
-        IWorkflowRunBindingReader runBindingReader)
+        IWorkflowRunBindingReader runBindingReader,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
         _queryService = queryService ?? throw new ArgumentNullException(nameof(queryService));
         _runBindingReader = runBindingReader ?? throw new ArgumentNullException(nameof(runBindingReader));
+        _delayAsync = delayAsync ?? Task.Delay;
     }
 
     public string Name => "aevatar_read_workflow_run_artifact";
@@ -252,6 +258,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
     public string Description =>
         "Read a workflow run's projected artifact/export by workflow_run_id. " +
         "Use this after aevatar_start_workflow returns a run_id; long workflow actor IDs are also accepted. " +
+        "For report reads, the tool waits briefly for projection materialization and returns pending if the artifact is not visible yet; do not infer the final workflow output from a pending result. " +
         "This tool reads workflow-run report/timeline/graph artifacts only and does not inspect live actor state.";
 
     public string ParametersSchema => """
@@ -275,6 +282,10 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
             "graph_depth": {
               "type": "integer",
               "description": "Graph traversal depth for graph_subgraph, max 5"
+            },
+            "wait_ms": {
+              "type": "integer",
+              "description": "For report reads, wait up to this many milliseconds for projection materialization. Default 8000, max 20000"
             },
             "edge_types": {
               "type": "array",
@@ -310,29 +321,37 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
                 "workflow_run_id"));
         }
 
-        var artifactTarget = await ResolveArtifactTargetAsync(args.WorkflowRunId, ct);
-
         return args.View switch
         {
-            "timeline" => await ReadTimelineAsync(args, artifactTarget, ct),
-            "graph_edges" => await ReadGraphEdgesAsync(args, artifactTarget, ct),
-            "graph_subgraph" => await ReadGraphSubgraphAsync(args, artifactTarget, ct),
-            _ => await ReadReportAsync(args, artifactTarget, ct),
+            "timeline" => await ReadTimelineAsync(args, await ResolveArtifactTargetAsync(args.WorkflowRunId, ct), ct),
+            "graph_edges" => await ReadGraphEdgesAsync(args, await ResolveArtifactTargetAsync(args.WorkflowRunId, ct), ct),
+            "graph_subgraph" => await ReadGraphSubgraphAsync(args, await ResolveArtifactTargetAsync(args.WorkflowRunId, ct), ct),
+            _ => await ReadReportAsync(args, ct),
         };
     }
 
     private async Task<string> ReadReportAsync(
         WorkflowRunArtifactArguments args,
-        WorkflowRunArtifactTarget artifactTarget,
         CancellationToken ct)
     {
-        var report = await ReadReportForTargetAsync(artifactTarget, ct);
+        var waitMs = Math.Clamp(args.WaitMs ?? DefaultReportWaitMs, 0, MaxReportWaitMs);
+        var (report, artifactTarget) = await ReadReportForRunAsync(
+            args.WorkflowRunId,
+            TimeSpan.FromMilliseconds(waitMs),
+            ct);
         if (report == null)
         {
-            return AevatarInvocationJson.Error(Error(
-                "workflow_run_artifact_not_found",
-                $"No workflow run report artifact matched workflow_run_id '{args.WorkflowRunId}' or its projected actor binding.",
-                "workflow_run_id"));
+            return AevatarInvocationJson.ToJson(new
+            {
+                workflow_run_id = args.WorkflowRunId,
+                artifact_actor_id = EmptyToNull(artifactTarget.ArtifactWorkflowRunId),
+                artifact = "report",
+                status = "pending",
+                pending = true,
+                waited_ms = waitMs,
+                retry_after_ms = 1000,
+                message = "Workflow run report artifact is not materialized yet. Retry this tool instead of inferring the final workflow output.",
+            });
         }
 
         return AevatarInvocationJson.ToJson(new
@@ -482,7 +501,30 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
         });
     }
 
-    private async Task<WorkflowRunReport?> ReadReportForTargetAsync(
+    private async Task<(WorkflowRunReport? Report, WorkflowRunArtifactTarget Target)> ReadReportForRunAsync(
+        string workflowRunId,
+        TimeSpan wait,
+        CancellationToken ct)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(wait);
+        WorkflowRunArtifactTarget artifactTarget;
+
+        while (true)
+        {
+            artifactTarget = await ResolveArtifactTargetAsync(workflowRunId, ct);
+            var report = await TryReadReportForTargetOnceAsync(artifactTarget, ct);
+            if (report != null || wait <= TimeSpan.Zero)
+                return (report, artifactTarget);
+
+            var remaining = deadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+                return (null, artifactTarget);
+
+            await _delayAsync(Min(ReportPollInterval, remaining), ct);
+        }
+    }
+
+    private async Task<WorkflowRunReport?> TryReadReportForTargetOnceAsync(
         WorkflowRunArtifactTarget artifactTarget,
         CancellationToken ct)
     {
@@ -548,6 +590,9 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
     private static string? ToIso(DateTimeOffset value) =>
         value == default ? null : value.UtcDateTime.ToString("O");
 
+    private static TimeSpan Min(TimeSpan left, TimeSpan right) =>
+        left <= right ? left : right;
+
     private static Dictionary<string, string> TruncateData(IDictionary<string, string> data) =>
         data.ToDictionary(
             static pair => pair.Key,
@@ -563,12 +608,13 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
         string View,
         int? Take,
         int? GraphDepth,
+        int? WaitMs,
         IReadOnlyList<string> EdgeTypes)
     {
         public static WorkflowRunArtifactArguments Parse(string? argumentsJson)
         {
             if (string.IsNullOrWhiteSpace(argumentsJson))
-                return new WorkflowRunArtifactArguments(string.Empty, "report", null, null, []);
+                return new WorkflowRunArtifactArguments(string.Empty, "report", null, null, null, []);
 
             using var document = JsonDocument.Parse(argumentsJson);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
@@ -585,6 +631,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
                 NormalizeView(view),
                 ReadInt(root, "take"),
                 ReadInt(root, "graph_depth"),
+                ReadInt(root, "wait_ms"),
                 ReadStringArray(root, "edge_types"));
         }
 

@@ -116,10 +116,12 @@ public sealed class AevatarInvocationToolSourceTests
         tool.Name.Should().Be("aevatar_read_workflow_run_artifact");
         tool.IsReadOnly.Should().BeTrue();
         tool.Description.Should().Contain("aevatar_start_workflow");
+        tool.Description.Should().Contain("pending");
         doc.RootElement.GetProperty("type").GetString().Should().Be("object");
         doc.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
         doc.RootElement.GetProperty("required")[0].GetString().Should().Be("workflow_run_id");
         doc.RootElement.GetProperty("properties").TryGetProperty("workflow_run_id", out _).Should().BeTrue();
+        doc.RootElement.GetProperty("properties").TryGetProperty("wait_ms", out _).Should().BeTrue();
     }
 
     [Theory]
@@ -1596,6 +1598,76 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task ReadWorkflowRunArtifact_ShouldWaitForReportMaterializationAndReResolveBinding()
+    {
+        var harness = new Harness();
+        var delayCalls = new List<TimeSpan>();
+        var binding = new WorkflowActorBinding(
+            WorkflowActorKind.Run,
+            "workflow-run-actor",
+            "workflow-definition-actor",
+            "run-1",
+            "demo-dinner-workflow",
+            string.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal));
+        harness.WorkflowQuery.ReportsByWorkflowRunId["workflow-run-actor"] = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            CommandId = "run-1",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 7,
+            Success = true,
+            FinalOutput = "Dinner is ready.",
+        };
+        var tool = new ReadWorkflowRunArtifactTool(
+            harness.WorkflowQuery,
+            harness.RunBindingReader,
+            (delay, _) =>
+            {
+                delayCalls.Add(delay);
+                harness.RunBindingReader.BindingsByRunId["run-1"] = [binding];
+                return Task.CompletedTask;
+            });
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1","wait_ms":1000}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        delayCalls.Should().ContainSingle();
+        harness.RunBindingReader.ListByRunIdCalls.Should().Equal("run-1", "run-1");
+        harness.WorkflowQuery.ReportCalls.Should().Equal("run-1", "run-1", "workflow-run-actor");
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+        var result = Read(output);
+        result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("workflow-run-actor");
+        result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.Completed));
+        result.GetProperty("final_output").GetString().Should().Be("Dinner is ready.");
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_WhenReportStillMissing_ShouldReturnPendingWithoutError()
+    {
+        var harness = new Harness();
+        var tool = new ReadWorkflowRunArtifactTool(
+            harness.WorkflowQuery,
+            harness.RunBindingReader,
+            (_, _) => throw new InvalidOperationException("wait_ms=0 should not delay"));
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1","wait_ms":0}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowQuery.ReportCalls.Should().Equal("run-1");
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
+        var result = Read(output);
+        result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact").GetString().Should().Be("report");
+        result.GetProperty("status").GetString().Should().Be("pending");
+        result.GetProperty("pending").GetBoolean().Should().BeTrue();
+        result.GetProperty("waited_ms").GetInt32().Should().Be(0);
+        result.GetProperty("retry_after_ms").GetInt32().Should().Be(1000);
+    }
+
+    [Fact]
     public async Task ReadWorkflowRunArtifact_Timeline_ShouldReadTimelineExport()
     {
         var harness = new Harness();
@@ -2146,6 +2218,7 @@ public sealed class AevatarInvocationToolSourceTests
         public string? LastRunId { get; private set; }
         public int? LastTake { get; private set; }
         public WorkflowRunBindingQuery? LastQuery { get; private set; }
+        public List<string> ListByRunIdCalls { get; } = [];
 
         public Task<IReadOnlyList<WorkflowActorBinding>> ListByRunIdAsync(
             string runId,
@@ -2154,6 +2227,7 @@ public sealed class AevatarInvocationToolSourceTests
         {
             LastRunId = runId;
             LastTake = take;
+            ListByRunIdCalls.Add(runId);
             BindingsByRunId.TryGetValue(runId, out var bindings);
             return Task.FromResult(bindings ?? []);
         }
