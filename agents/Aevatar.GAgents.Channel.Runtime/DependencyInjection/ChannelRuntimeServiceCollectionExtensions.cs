@@ -55,6 +55,10 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<TracingMiddleware>();
         services.TryAddSingleton<IConversationTurnRunner, NullConversationTurnRunner>();
         services.TryAddSingleton<IConversationCardTurnRunner, NullConversationCardTurnRunner>();
+        services.TryAddSingleton<INyxRelayTextReplyStreamRenderer, NyxRelayTextReplyStreamRenderer>();
+        services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IReplyOperationStepRenderer, NyxRelayTextReplyStreamRenderer>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IReplyOperationStepRenderer, LarkCardReplyStreamRenderer>());
 
         // ─── Tombstone compaction options + materialized watermark ───
         services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
