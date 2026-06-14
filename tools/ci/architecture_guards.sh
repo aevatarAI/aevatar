@@ -1392,7 +1392,7 @@ if [ -n "${reducer_test_coverage_violations}" ]; then
 fi
 
 stateful_replay_contract_requirements=(
-  "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
+  "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentReplayContractTests.cs"
   "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"
 )
 
