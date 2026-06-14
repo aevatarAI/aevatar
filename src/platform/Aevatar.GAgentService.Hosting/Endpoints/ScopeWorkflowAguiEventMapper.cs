@@ -4,15 +4,13 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
-using AiMessagesReflection = Aevatar.AI.Abstractions.AiMessagesReflection;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 internal static class ScopeWorkflowAguiEventMapper
 {
     public static readonly TypeRegistry TypeRegistry = WorkflowJsonTypeRegistry.Create(
-        AGUIEvent.Descriptor.File,
-        AiMessagesReflection.Descriptor);
+        AGUIEvent.Descriptor.File);
 
     public static AGUIEvent BuildRunContextEvent(WorkflowChatRunAcceptedReceipt receipt)
     {
@@ -37,14 +35,15 @@ internal static class ScopeWorkflowAguiEventMapper
     public static AGUIEvent BuildRunErrorEvent(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
+        var (code, message) = WorkflowCapabilityEndpoints.WorkflowExecutionErrorMapper.ToError(exception);
 
         return new AGUIEvent
         {
             Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             RunError = new RunErrorEvent
             {
-                Message = exception.Message,
-                Code = "EXECUTION_FAILED",
+                Message = message,
+                Code = code,
             },
         };
     }

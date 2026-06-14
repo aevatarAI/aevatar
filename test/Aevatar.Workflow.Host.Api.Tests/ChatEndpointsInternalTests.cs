@@ -847,6 +847,36 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChat_ShouldWriteCompatibilityError_WhenTypeRegistryDescriptorIsMissing()
+    {
+        var http = CreateHttpContext();
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                throw new InvalidOperationException(
+                    "Type registry has no descriptor for type name 'aevatar.ai.InitializeRoleAgentEvent'");
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("WORKFLOW_REVISION_INCOMPATIBLE");
+        body.Should().Contain("Re-publish or migrate the workflow/service revision");
+        body.Should().NotContain("EXECUTION_FAILED");
+    }
+
+    [Fact]
     public async Task HandleResume_ShouldRejectMissingFields()
     {
         var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>();
