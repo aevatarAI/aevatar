@@ -1,7 +1,9 @@
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
@@ -57,13 +59,56 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
 
         using var provider = services.BuildServiceProvider();
         AssertProviderStore<ChannelBotRegistrationDocument, ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
+        AssertProviderStore<ProjectionScopeStatusDocument, ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
+        AssertProviderStore<ExternalIdentityBindingDocument, ElasticsearchProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
         AssertProviderStore<AevatarOAuthClientDocument, ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(provider);
+        AssertProviderStore<ChatRoutePolicyCurrentStateDocument, ElasticsearchProjectionDocumentStore<ChatRoutePolicyCurrentStateDocument, string>>(provider);
+        AssertProviderStore<DeviceRegistrationDocument, ElasticsearchProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
+        AssertProviderStore<UserAgentCatalogDocument, ElasticsearchProjectionDocumentStore<UserAgentCatalogDocument, string>>(provider);
+        AssertProviderStore<SkillRunnerExecutionDocument, ElasticsearchProjectionDocumentStore<SkillRunnerExecutionDocument, string>>(provider);
+        AssertProviderStore<UserAgentCatalogNyxCredentialDocument, ElasticsearchProjectionDocumentStore<UserAgentCatalogNyxCredentialDocument, string>>(provider);
+        AssertProviderStore<HealthProbeTargetDocument, ElasticsearchProjectionDocumentStore<HealthProbeTargetDocument, string>>(provider);
+        AssertProviderStore<StreamingProxyChatSessionTerminalSnapshot, ElasticsearchProjectionDocumentStore<StreamingProxyChatSessionTerminalSnapshot, string>>(provider);
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, ElasticsearchProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
         Assert.IsType<ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(
             provider.GetRequiredService<IProjectionIndexConsistencyProbe<AevatarOAuthClientDocument>>());
         Assert.Single(services, descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
+    }
+
+    [Fact]
+    public void AddMainnetAgentProjectionDocumentStores_WithSameProviderPartialRegistration_FillsMissingReaders()
+    {
+        var services = BuildAgentServices();
+        services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
+            keySelector: static document => document.Id,
+            keyFormatter: static key => key);
+
+        services.AddMainnetAgentProjectionDocumentStores(BuildInMemoryConfiguration());
+
+        using var provider = services.BuildServiceProvider();
+        AssertProviderStore<ChannelBotRegistrationDocument, InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
+        AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
+        AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, InMemoryProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
+        Assert.Single(
+            services,
+            descriptor => descriptor.ServiceType == typeof(IProjectionDocumentReader<ChannelBotRegistrationDocument, string>));
+    }
+
+    [Fact]
+    public void AddMainnetAgentProjectionDocumentStores_WithDifferentProviderPartialRegistration_ShouldReject()
+    {
+        var services = BuildAgentServices();
+        services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
+            keySelector: static document => document.Id,
+            keyFormatter: static key => key);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration()));
+
+        Assert.Contains(nameof(ChannelBotRegistrationDocument), exception.Message, StringComparison.Ordinal);
+        Assert.Contains("different provider", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
