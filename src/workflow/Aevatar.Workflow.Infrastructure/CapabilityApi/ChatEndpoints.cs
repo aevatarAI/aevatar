@@ -661,9 +661,25 @@ public static class WorkflowCapabilityEndpoints
                 },
                 ct);
         }
-        catch (Exception writeEx)
+        catch (IOException writeEx)
         {
             logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
+        }
+        catch (ObjectDisposedException writeEx)
+        {
+            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
+        }
+        catch (InvalidOperationException writeEx)
+        {
+            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
+        }
+        catch (OperationCanceledException writeEx)
+        {
+            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
+        }
+        catch (Exception writeEx)
+        {
+            logger?.LogWarning(writeEx, "Unexpected failure while writing SSE error frame.");
         }
     }
 
@@ -773,7 +789,7 @@ public static class WorkflowCapabilityEndpoints
         }
         catch (Exception ex)
         {
-            logger?.LogDebug(ex, "Failed to resolve workflow runtime default metadata from configuration.");
+            logger?.LogWarning(ex, "Failed to resolve workflow runtime default metadata from configuration.");
             return new Dictionary<string, string>(StringComparer.Ordinal);
         }
     }
