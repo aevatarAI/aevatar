@@ -797,7 +797,7 @@ public sealed class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var interactionService = new FakeCommandInteractionService
         {
-            ResultFactory = (_, _, _, _) => throw new InvalidOperationException("boom"),
+            ResultFactory = (_, _, _, _) => throw new InvalidOperationException("provider secret token leaked"),
         };
 
         await WorkflowCapabilityEndpoints.HandleChat(
@@ -809,6 +809,8 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
         body.Should().Contain("EXECUTION_FAILED");
+        body.Should().Contain("Workflow execution failed.");
+        body.Should().NotContain("provider secret token leaked");
     }
 
     [Fact]
@@ -843,7 +845,8 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"delta\": \"hello\"");
-        body.Should().Contain("Workflow execution failed: line1  line2");
+        body.Should().Contain("Workflow execution failed.");
+        body.Should().NotContain("line1");
     }
 
     [Fact]

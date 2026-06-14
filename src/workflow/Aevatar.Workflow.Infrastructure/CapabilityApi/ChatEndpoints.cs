@@ -685,17 +685,6 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
-    private static string SanitizeErrorMessage(string? message)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-            return "unknown error";
-
-        return message
-            .Replace("\r", " ", StringComparison.Ordinal)
-            .Replace("\n", " ", StringComparison.Ordinal)
-            .Trim();
-    }
-
     public static class WorkflowExecutionErrorMapper
     {
         public const string CompatibilityErrorCode = "WORKFLOW_REVISION_INCOMPATIBLE";
@@ -711,7 +700,7 @@ public static class WorkflowCapabilityEndpoints
                     "Workflow revision is incompatible with this backend. Re-publish or migrate the workflow/service revision.")
                 : (
                     "EXECUTION_FAILED",
-                    $"Workflow execution failed: {SanitizeErrorMessage(ex.Message)}");
+                    "Workflow execution failed.");
         }
 
         public static bool IsCompatibilityFailure(Exception ex)
