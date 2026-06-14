@@ -570,6 +570,7 @@ streaming_proxy_consumer_report="$(
     | awk -F: '
 BEGIN {
   allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs"] = 1;
+  allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs"] = 1;
   allowed["tools/ci/architecture_guards.sh"] = 1;
   allowed["tools/ci/README.md"] = 1;
 }
@@ -1745,6 +1746,21 @@ if [ -n "${projection_provider_business_using_hits}" ]; then
   exit 1
 fi
 
+agent_projection_provider_hits="$(
+  rg -n "Aevatar\.CQRS\.Projection\.Providers\.(Elasticsearch|InMemory|Neo4j)|Projection\.Providers\.(Elasticsearch|InMemory|Neo4j)" \
+    agents \
+    -g '*.cs' \
+    -g '*.csproj' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' || true
+)"
+
+if [ -n "${agent_projection_provider_hits}" ]; then
+  echo "${agent_projection_provider_hits}"
+  echo "Agent projects must not reference concrete projection providers. Wire provider-specific document stores in the host composition root."
+  exit 1
+fi
+
 projection_provider_store_files=(
   "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs"
   "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs"
@@ -1774,7 +1790,9 @@ command_side_readmodel_violations="$(
     src/workflow/Aevatar.Workflow.Application \
     src/workflow/Aevatar.Workflow.Host.Api \
     src/Aevatar.Mainnet.Host.Api \
-    -g '*.cs' || true
+    -g '*.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs' || true
 )"
 
 if [ -n "${command_side_readmodel_violations}" ]; then

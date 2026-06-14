@@ -1,6 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgents.StatusDashboard.DependencyInjection;
@@ -29,37 +28,15 @@ public sealed class StatusDashboardServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddStatusDashboard_RegistersHealthProbeDocumentStore()
+    public void AddStatusDashboard_RegistersProviderNeutralHealthProbeServices()
     {
-        using var provider = new ServiceCollection()
-            .AddStatusDashboard(new ConfigurationBuilder().Build())
-            .BuildServiceProvider();
+        var services = new ServiceCollection()
+            .AddStatusDashboard(new ConfigurationBuilder().Build());
 
-        provider.GetService<IProjectionDocumentReader<HealthProbeTargetDocument, string>>()
-            .Should().NotBeNull("the status dashboard query port reads the materialized current-state document");
-        provider.GetService<IProjectionDocumentWriter<HealthProbeTargetDocument>>()
-            .Should().NotBeNull("the health probe projector must be able to upsert current-state documents");
-    }
-
-    [Fact]
-    public void AddStatusDashboard_RegistersElasticsearchDocumentStoreWhenConfigured()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
-                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
-                ["Projection:Document:Providers:Elasticsearch:IndexPrefix"] = "status-tests",
-            })
-            .Build();
-
-        using var provider = new ServiceCollection()
-            .AddStatusDashboard(configuration)
-            .BuildServiceProvider();
-
-        provider.GetRequiredService<IProjectionDocumentReader<HealthProbeTargetDocument, string>>()
-            .Should().BeOfType<ElasticsearchProjectionDocumentStore<HealthProbeTargetDocument, string>>();
-        provider.GetRequiredService<IProjectionDocumentWriter<HealthProbeTargetDocument>>()
-            .Should().BeOfType<ElasticsearchProjectionDocumentStore<HealthProbeTargetDocument, string>>();
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<HealthProbeTargetDocument>));
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IHealthStatusQueryPort) &&
+            descriptor.ImplementationType == typeof(HealthStatusQueryPort));
     }
 }

@@ -1077,13 +1077,14 @@ public class StreamingProxyCoverageTests
     [Fact]
     public async Task TerminalProjector_ShouldMaterializeCommittedTerminalSnapshot()
     {
+        var writer = new RecordingProjectionWriteDispatcher<StreamingProxyChatSessionTerminalSnapshot>();
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddStreamingProxy();
+        services.AddSingleton<IProjectionWriteDispatcher<StreamingProxyChatSessionTerminalSnapshot>>(writer);
         await using var provider = services.BuildServiceProvider();
 
         var projector = provider.GetRequiredService<StreamingProxyChatSessionTerminalProjector>();
-        var queryPort = provider.GetRequiredService<IStreamingProxyChatSessionTerminalQueryPort>();
 
         await projector.ProjectAsync(
             new StreamingProxyCurrentStateProjectionContext
@@ -1114,10 +1115,10 @@ public class StreamingProxyCoverageTests
             version: 12),
             CancellationToken.None);
 
-        var snapshot = await queryPort.GetAsync("room-a", "session-1", CancellationToken.None);
-
+        writer.Upserts.Should().ContainSingle();
+        var snapshot = writer.Upserts[0];
         snapshot.Should().NotBeNull();
-        snapshot!.ActorId.Should().Be("room-a");
+        snapshot.ActorId.Should().Be("room-a");
         snapshot.RootActorId.Should().Be("room-a");
         snapshot.SessionId.Should().Be("session-1");
         snapshot.StateVersion.Should().Be(12);
@@ -1127,13 +1128,14 @@ public class StreamingProxyCoverageTests
     [Fact]
     public async Task TerminalProjector_ShouldIgnoreNonTerminalCommittedEvents()
     {
+        var writer = new RecordingProjectionWriteDispatcher<StreamingProxyChatSessionTerminalSnapshot>();
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddStreamingProxy();
+        services.AddSingleton<IProjectionWriteDispatcher<StreamingProxyChatSessionTerminalSnapshot>>(writer);
         await using var provider = services.BuildServiceProvider();
 
         var projector = provider.GetRequiredService<StreamingProxyChatSessionTerminalProjector>();
-        var queryPort = provider.GetRequiredService<IStreamingProxyChatSessionTerminalQueryPort>();
 
         await projector.ProjectAsync(
             new StreamingProxyCurrentStateProjectionContext
@@ -1156,8 +1158,7 @@ public class StreamingProxyCoverageTests
             version: 13),
             CancellationToken.None);
 
-        var snapshot = await queryPort.GetAsync("room-a", "session-1", CancellationToken.None);
-        snapshot.Should().BeNull();
+        writer.Upserts.Should().BeEmpty();
     }
 
     [Fact]
