@@ -77,7 +77,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         LLMRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var messages = ConvertMessages(request.Messages);
+        var messages = ConvertMessages(request.Messages, _logger);
         var options = BuildOptions(request);
 
         _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} messages", messages.Count);
@@ -267,7 +267,8 @@ public sealed class MEAILLMProvider : ILLMProvider
     // ─── Conversion: Aevatar -> MEAI ───
 
     private static List<Microsoft.Extensions.AI.ChatMessage> ConvertMessages(
-        IEnumerable<Aevatar.AI.Abstractions.LLMProviders.ChatMessage> messages)
+        IEnumerable<Aevatar.AI.Abstractions.LLMProviders.ChatMessage> messages,
+        ILogger logger)
     {
         var result = new List<Microsoft.Extensions.AI.ChatMessage>();
 
@@ -322,14 +323,20 @@ public sealed class MEAILLMProvider : ILLMProvider
                         {
                             args = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(tc.ArgumentsJson);
                         }
-                        catch { /* If parsing fails, do not pass arguments */ }
+                        catch (JsonException ex)
+                        {
+                            logger.LogWarning(
+                                ex,
+                                "Failed to parse MEAI tool call arguments for tool {ToolName}; arguments will be omitted.",
+                                tc.Name);
+                        }
                     }
 
                     meaiMsg.Contents.Add(new FunctionCallContent(tc.Id, tc.Name, args));
                 }
             }
 
-            AttachOpenAIRawRepresentationForReasoning(meaiMsg, msg);
+            AttachOpenAIRawRepresentationForReasoning(meaiMsg, msg, logger);
             result.Add(meaiMsg);
         }
 
@@ -338,7 +345,8 @@ public sealed class MEAILLMProvider : ILLMProvider
 
     private static void AttachOpenAIRawRepresentationForReasoning(
         Microsoft.Extensions.AI.ChatMessage meaiMessage,
-        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage,
+        ILogger logger)
     {
         if (sourceMessage.Role != "assistant" || string.IsNullOrEmpty(sourceMessage.ReasoningContent))
             return;
@@ -377,12 +385,11 @@ public sealed class MEAILLMProvider : ILLMProvider
 #pragma warning restore SCME0001
             meaiMessage.RawRepresentation = rawMessage;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Reasoning continuity is best-effort; on a SDK contract break we
-            // proceed without it rather than throwing. The source message's
-            // ReasoningContent stays in our own state and can be re-rendered
-            // through other paths if needed.
+            logger.LogWarning(
+                ex,
+                "Failed to attach OpenAI reasoning raw representation; reasoning replay will continue without SDK patch data.");
         }
     }
 
