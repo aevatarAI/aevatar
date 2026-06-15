@@ -1948,6 +1948,14 @@ export const studioApi = {
     );
   },
 
+  async getWorkflowDraftFile(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<StudioWorkflowFile> {
+    const draft = await this.getWorkflowDraft(workflowId, scopeId);
+    return toWorkflowFile(draft, true);
+  },
+
   saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowFile> {
     const normalizedWorkflowId = trimOptional(input.workflowId);
     const shouldUpdate =

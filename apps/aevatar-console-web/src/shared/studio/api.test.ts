@@ -406,6 +406,39 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('loads a workflow draft file without falling back to a published scope workflow', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: async () => JSON.stringify({ title: 'Not Found', status: 404 }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.getWorkflowDraftFile('workflow-1', 'scope-1'),
+    ).rejects.toMatchObject({
+      message: 'Not Found',
+      status: 404,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      '/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1',
+    );
+  });
+
   it('merges scoped published workflows with draft workflows when listing workflows', async () => {
     persistAuthSession({
       tokens: {

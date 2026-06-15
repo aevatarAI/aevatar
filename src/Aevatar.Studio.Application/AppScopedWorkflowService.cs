@@ -115,13 +115,6 @@ public sealed class AppScopedWorkflowService
 
         var existingDraft = workspace.Drafts.FirstOrDefault(draft =>
             string.Equals(draft.WorkflowId, normalizedWorkflowId, StringComparison.Ordinal));
-        if (!string.IsNullOrWhiteSpace(workflowId))
-        {
-            if (existingDraft == null)
-            {
-                throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
-            }
-        }
 
         var scopeDirectory = CreateScopeDirectory(normalizedScopeId);
         var fileName = EnsureYamlExtension(string.IsNullOrWhiteSpace(request.FileName)
@@ -156,8 +149,8 @@ public sealed class AppScopedWorkflowService
         await workspaceCommandPort.SaveDraftAsync(
             normalizedScopeId,
             stored,
-            workspace.StateVersion,
-            ct);
+            expectedVersion: null,
+            ct: ct);
 
         return ToDraftWorkflowResponse(
             normalizedScopeId,

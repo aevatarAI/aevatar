@@ -160,11 +160,6 @@ public sealed class WorkspaceService
             : existingFiles.FirstOrDefault(file =>
                 string.Equals(file.WorkflowId, workflowId, StringComparison.Ordinal));
 
-        if (!string.IsNullOrWhiteSpace(workflowId) && existingDraft is null)
-        {
-            throw new WorkflowDraftNotFoundException(workflowId);
-        }
-
         var stableWorkflowId = string.IsNullOrWhiteSpace(workflowId)
             ? CreateWorkflowDraftId()
             : workflowId;
@@ -191,7 +186,7 @@ public sealed class WorkspaceService
             UpdatedAtUtc: updatedAtUtc,
             CreatedAtUtc: existingDraft?.CreatedAtUtc ?? updatedAtUtc,
             Version: existingDraft?.Version ?? 0);
-        await _commandPort.SaveDraftAsync(stored, workspace.StateVersion, cancellationToken);
+        await _commandPort.SaveDraftAsync(stored, expectedVersion: null, cancellationToken);
 
         return ToWorkflowDraftResponse(stored);
     }

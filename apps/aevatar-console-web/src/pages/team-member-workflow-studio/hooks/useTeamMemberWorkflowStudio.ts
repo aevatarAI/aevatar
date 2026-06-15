@@ -208,6 +208,16 @@ const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
 const MEMBER_BINDING_RUN_POLL_DELAY_MS = 900;
 const CREATED_MEMBER_MATERIALIZATION_ATTEMPTS = 8;
 const CREATED_MEMBER_MATERIALIZATION_DELAY_MS = 450;
+const DRAFT_RECOVERY_STORAGE_PREFIX =
+  "aevatar:team-member-workflow-studio:draft-recovery:v1:";
+const DRAFT_RECOVERY_TTL_MS = 24 * 60 * 60 * 1000;
+
+type WorkflowDraftRecoverySeed = {
+  readonly savedAtUtc: string;
+  readonly scopeId: string;
+  readonly workflow: StudioWorkflowFile;
+  readonly workflowId: string;
+};
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -358,6 +368,125 @@ function buildSavedWorkflowCacheValue(
     layout: saved.layout,
     name: saved.title,
   };
+}
+
+function readDraftRecoveryStorage(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function buildDraftRecoveryStorageKey(scopeId: string, workflowId: string): string {
+  return `${DRAFT_RECOVERY_STORAGE_PREFIX}${encodeURIComponent(scopeId)}:${encodeURIComponent(workflowId)}`;
+}
+
+function clearDraftRecoverySeed(scopeId: string, workflowId: string): void {
+  const normalizedScopeId = trimOptional(scopeId);
+  const normalizedWorkflowId = trimOptional(workflowId);
+  const storage = readDraftRecoveryStorage();
+  if (!storage || !normalizedScopeId || !normalizedWorkflowId) {
+    return;
+  }
+
+  try {
+    storage.removeItem(
+      buildDraftRecoveryStorageKey(normalizedScopeId, normalizedWorkflowId),
+    );
+  } catch {
+    // Best-effort recovery cache cleanup only.
+  }
+}
+
+function persistDraftRecoverySeed(input: {
+  readonly scopeId: string;
+  readonly workflow: StudioWorkflowFile;
+  readonly workflowId: string;
+}): void {
+  const normalizedScopeId = trimOptional(input.scopeId);
+  const normalizedWorkflowId = trimOptional(input.workflowId);
+  const storage = readDraftRecoveryStorage();
+  if (!storage || !normalizedScopeId || !normalizedWorkflowId) {
+    return;
+  }
+
+  const seed: WorkflowDraftRecoverySeed = {
+    savedAtUtc: new Date().toISOString(),
+    scopeId: normalizedScopeId,
+    workflow: {
+      ...input.workflow,
+      workflowId: normalizedWorkflowId,
+    },
+    workflowId: normalizedWorkflowId,
+  };
+  try {
+    storage.setItem(
+      buildDraftRecoveryStorageKey(normalizedScopeId, normalizedWorkflowId),
+      JSON.stringify(seed),
+    );
+  } catch {
+    // If storage is unavailable or full, the in-memory query cache still covers
+    // the current save turn; refresh recovery simply becomes unavailable.
+  }
+}
+
+function readDraftRecoverySeed(
+  scopeId: string,
+  workflowId: string,
+): StudioWorkflowFile | null {
+  const normalizedScopeId = trimOptional(scopeId);
+  const normalizedWorkflowId = trimOptional(workflowId);
+  const storage = readDraftRecoveryStorage();
+  if (!storage || !normalizedScopeId || !normalizedWorkflowId) {
+    return null;
+  }
+
+  const key = buildDraftRecoveryStorageKey(
+    normalizedScopeId,
+    normalizedWorkflowId,
+  );
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<WorkflowDraftRecoverySeed>;
+    const savedAtMs = Date.parse(trimOptional(parsed.savedAtUtc));
+    const workflow = parsed.workflow;
+    if (
+      parsed.scopeId !== normalizedScopeId ||
+      parsed.workflowId !== normalizedWorkflowId ||
+      !Number.isFinite(savedAtMs) ||
+      Date.now() - savedAtMs > DRAFT_RECOVERY_TTL_MS ||
+      !workflow ||
+      typeof workflow !== "object" ||
+      trimOptional(workflow.workflowId) !== normalizedWorkflowId ||
+      typeof workflow.yaml !== "string"
+    ) {
+      storage.removeItem(key);
+      return null;
+    }
+
+    return {
+      ...workflow,
+      draftExists: true,
+      findings: workflow.findings ?? [],
+      workflowId: normalizedWorkflowId,
+    };
+  } catch {
+    try {
+      storage.removeItem(key);
+    } catch {
+      // Ignore cleanup failures for corrupted recovery data.
+    }
+    return null;
+  }
 }
 
 function readStepIdFromGraphNodeId(nodeId: string): string {
@@ -923,6 +1052,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     isWorkflowDraftRouteId(trimOptional(route.workflowId))
       ? trimOptional(route.workflowId)
       : "";
+  const draftRecoveryWorkflow = React.useMemo(
+    () =>
+      route.scopeId && routeDraftWorkflowId
+        ? readDraftRecoverySeed(route.scopeId, routeDraftWorkflowId)
+        : null,
+    [route.scopeId, routeDraftWorkflowId],
+  );
   const workflowQueryKey = getTeamMemberWorkflowStudioWorkflowQueryKey(
     route.scopeId,
     routeDraftWorkflowId,
@@ -931,10 +1067,33 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     enabled: Boolean(
       route.scopeId &&
         routeDraftWorkflowId &&
-        !memberQuery.isLoading,
+        !memberQuery.isLoading &&
+        !draftRecoveryWorkflow,
     ),
+    initialData: draftRecoveryWorkflow ?? undefined,
     queryKey: workflowQueryKey,
-    queryFn: () => studioApi.getWorkflow(routeDraftWorkflowId, route.scopeId),
+    queryFn: async () => {
+      try {
+        const workflow = await studioApi.getWorkflowDraftFile(
+          routeDraftWorkflowId,
+          route.scopeId,
+        );
+        clearDraftRecoverySeed(route.scopeId, routeDraftWorkflowId);
+        return workflow;
+      } catch (error) {
+        if (isStudioApiStatus(error, 404)) {
+          const recovered = readDraftRecoverySeed(
+            route.scopeId,
+            routeDraftWorkflowId,
+          );
+          if (recovered) {
+            return recovered;
+          }
+        }
+
+        throw error;
+      }
+    },
     retry: false,
   });
   const activeDraftWorkflowId =
@@ -993,7 +1152,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const linkedWorkflowMissing =
     route.mode === "existing" &&
     !memberQuery.isLoading &&
-    (!routeDraftWorkflowId || workflowQuery.isError) &&
+    (!routeDraftWorkflowId || (workflowQuery.isError && !workflowQuery.data)) &&
     Boolean(memberQuery.data);
   const sourceDocument =
     route.mode === "new"
@@ -1079,13 +1238,40 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setWorkflowTitleState(saved.title);
     setDirty(false);
   }, []);
+  const cacheSavedDraftForRoute = React.useCallback(
+    (saved: SavedWorkflowDraft, workflowId: string) => {
+      const normalizedWorkflowId = trimOptional(workflowId);
+      if (!route.scopeId || !normalizedWorkflowId) {
+        return;
+      }
+
+      const savedWorkflow = {
+        ...buildSavedWorkflowCacheValue(saved),
+        workflowId: normalizedWorkflowId,
+      };
+      const savedSignature = readWorkflowSourceSignature(savedWorkflow);
+      if (savedSignature) {
+        suppressedSourceSignatureRef.current = savedSignature;
+      }
+      queryClient.setQueryData(
+        getTeamMemberWorkflowStudioWorkflowQueryKey(
+          route.scopeId,
+          normalizedWorkflowId,
+        ),
+        savedWorkflow,
+      );
+      persistDraftRecoverySeed({
+        scopeId: route.scopeId,
+        workflow: savedWorkflow,
+        workflowId: normalizedWorkflowId,
+      });
+    },
+    [queryClient, route.scopeId],
+  );
   const markSavedDraft = React.useCallback(
     (saved: SavedWorkflowDraft) => {
-      const savedWorkflow = buildSavedWorkflowCacheValue(saved);
-      const savedSignature = readWorkflowSourceSignature(savedWorkflow);
-      if (savedSignature && route.scopeId && routeDraftWorkflowId) {
-        suppressedSourceSignatureRef.current = savedSignature;
-        queryClient.setQueryData(workflowQueryKey, savedWorkflow);
+      if (routeDraftWorkflowId) {
+        cacheSavedDraftForRoute(saved, routeDraftWorkflowId);
       }
 
       setEditableDocument((currentDocument) =>
@@ -1102,10 +1288,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setDirty(false);
     },
     [
-      queryClient,
+      cacheSavedDraftForRoute,
       routeDraftWorkflowId,
-      route.scopeId,
-      workflowQueryKey,
     ],
   );
   const renameExistingMemberFromTitle = React.useCallback(
@@ -1275,6 +1459,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     onSuccess: ({ memberId, savedDraft, workflowId }) => {
       setPendingCreatedWorkflowMemberLink(null);
+      cacheSavedDraftForRoute(savedDraft, workflowId);
       applySavedDraft(savedDraft);
       void refreshTeamMemberSurfaces(route.scopeId, route.teamId);
       void message.success("Workflow member created.");
@@ -1367,6 +1552,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       );
     },
     onSuccess: ({ savedDraft, workflowId }) => {
+      cacheSavedDraftForRoute(savedDraft, workflowId);
       applySavedDraft(savedDraft);
       void memberQuery.refetch();
       void refreshTeamMemberSurfaces(route.scopeId, route.teamId);

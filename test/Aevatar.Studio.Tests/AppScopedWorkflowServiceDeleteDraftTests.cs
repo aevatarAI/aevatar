@@ -80,7 +80,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
 
         var savedDraft = workspacePort.SavedDrafts.Should().ContainSingle().Subject;
         savedDraft.ScopeId.Should().Be("scope-1");
-        savedDraft.ExpectedVersion.Should().Be(11);
+        savedDraft.ExpectedVersion.Should().BeNull();
         savedDraft.WorkflowId.Should().Be(saved.WorkflowId);
         Guid.TryParse(saved.WorkflowId, out _).Should().BeTrue();
         saved.WorkflowId.Should().NotBe("workflow-1");
@@ -163,7 +163,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task UpdateDraftAsync_ShouldOnlyUpdateExistingDraft()
+    public async Task UpdateDraftAsync_ShouldSaveExistingDraftWithSameWorkflowId()
     {
         using var environment = new ScopedWorkflowEnvironment();
         var workspacePort = new RecordingStudioWorkspacePorts(new[]
@@ -189,6 +189,34 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                 FileName: null,
                 Yaml: "name: workflow-renamed\nsteps: []\n"));
 
+        workspacePort.SavedDrafts.Should().ContainSingle()
+            .Which.ExpectedVersion.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpdateDraftAsync_WhenCreatedDraftIsNotMaterializedYet_ShouldSaveSameWorkflowId()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspacePort = new RecordingStudioWorkspacePorts();
+        var service = environment.CreateService(
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: workspacePort);
+
+        var saved = await service.UpdateDraftAsync(
+            "scope-1",
+            "workflow-accepted-but-not-materialized",
+            new SaveWorkflowDraftRequest(
+                DirectoryId: "scope:scope-1",
+                WorkflowName: "workflow-renamed",
+                FileName: null,
+                Yaml: "name: workflow-renamed\nsteps: []\n"));
+
+        saved.WorkflowId.Should().Be("workflow-accepted-but-not-materialized");
+        saved.Name.Should().Be("workflow-renamed");
+        var savedDraft = workspacePort.SavedDrafts.Should().ContainSingle().Subject;
+        savedDraft.ScopeId.Should().Be("scope-1");
+        savedDraft.WorkflowId.Should().Be("workflow-accepted-but-not-materialized");
+        savedDraft.ExpectedVersion.Should().BeNull();
     }
 
     [Fact]
@@ -545,4 +573,3 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             1);
 
 }
-
