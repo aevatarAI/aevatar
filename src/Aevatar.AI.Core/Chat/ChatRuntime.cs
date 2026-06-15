@@ -7,6 +7,8 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -47,6 +49,7 @@ public sealed class ChatRuntime
     private readonly string? _agentName;
     private readonly ContextCompressionConfig _compressionConfig;
     private readonly bool _suppressToolCallRoundText;
+    private readonly ILogger _logger;
 
     public ChatRuntime(
         Func<ILLMProvider> providerFactory,
@@ -59,7 +62,8 @@ public sealed class ChatRuntime
         string? agentId = null,
         string? agentName = null,
         ContextCompressionConfig? compressionConfig = null,
-        bool suppressToolCallRoundText = false)
+        bool suppressToolCallRoundText = false,
+        ILogger? logger = null)
     {
         _providerFactory = providerFactory;
         _history = history;
@@ -72,6 +76,7 @@ public sealed class ChatRuntime
         _agentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName;
         _compressionConfig = compressionConfig ?? new ContextCompressionConfig();
         _suppressToolCallRoundText = suppressToolCallRoundText;
+        _logger = logger ?? NullLogger.Instance;
     }
 
     public ChatRuntimeStepExecutor CreateStepExecutor() =>
@@ -672,8 +677,7 @@ public sealed class ChatRuntime
         }
 
         runContext.Result = finalContent;
-        foreach (var msg in pendingHistoryMessages)
-            _history.Add(msg);
+        _history.AddRange(pendingHistoryMessages);
 
         await RunStopHookAsync(runContext.Result, pendingHistoryMessages, runToken);
 
@@ -704,7 +708,13 @@ public sealed class ChatRuntime
         stopCtx.Items["total_rounds"] = pendingHistoryMessages
             .Count(m => m.Role == "assistant" && m.ToolCalls is { Count: > 0 });
         try { await _hooks.RunStopAsync(stopCtx, ct); }
-        catch { /* best-effort */ }
+        catch (Exception hookException)
+        {
+            _logger.LogWarning(
+                hookException,
+                "Stop hook failed for agent {AgentId}; continuing because hooks are best-effort.",
+                _agentId);
+        }
     }
 
     private async Task RunStopFailureHookAsync(Exception ex)
@@ -717,7 +727,13 @@ public sealed class ChatRuntime
         failCtx.Items["error_message"] = ex.Message;
         failCtx.Items["error_phase"] = "streaming_llm_or_tool_execution";
         try { await _hooks.RunStopFailureAsync(failCtx, CancellationToken.None); }
-        catch { /* best-effort */ }
+        catch (Exception hookException)
+        {
+            _logger.LogWarning(
+                hookException,
+                "Stop-failure hook failed for agent {AgentId}; continuing because hooks are best-effort.",
+                _agentId);
+        }
     }
 
     private async IAsyncEnumerable<LLMStreamChunk> StreamLlmRoundAsync(
@@ -927,7 +943,7 @@ public sealed class ChatRuntime
         var messages = new List<ChatMessage>();
         if (!string.IsNullOrEmpty(systemPrompt))
             messages.Add(ChatMessage.System(systemPrompt));
-        messages.AddRange(_history.Messages);
+        messages.AddRange(ChatMessageToolCallTranscript.WithoutInvalidToolCallPairs(_history.Messages));
         messages.Add(pendingUserMessage);
         return messages;
     }

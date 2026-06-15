@@ -1562,12 +1562,53 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ExecuteSkillAsync_StreamingFinalizesBeforeCompletion()
+    public async Task ExecuteSkillAsync_AutoOutput_ShouldUseCardKitWithoutTextEdit()
+    {
+        var provider = new StubStreamingProviderFactory("a", "b", "c");
+        var agent = CreateAgent("skill-runner-cardkit-auto", providerFactory: provider);
+        await agent.ActivateAsync();
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        await agent.HandleInitializeAsync(initialize);
+        var handler = new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"card_id":"card_auto"}}""",
+            """{"code":0,"msg":"success","data":{"message_id":"om_card"}}""",
+            """{"code":0,"msg":"success","data":{}}""",
+            """{"code":0,"msg":"success","data":{}}""");
+        AttachNyxIdApiClient(agent, handler);
+
+        var output = await InvokeExecuteSkillAsync(agent);
+
+        output.Should().Be("abc");
+        handler.Requests.Should().HaveCount(4);
+        handler.Requests[0].Method.Method.Should().Be("POST");
+        handler.Requests[0].RequestUri!.AbsolutePath.Should().EndWith("/open-apis/cardkit/v1/cards");
+        ExtractCardKitCreateType(handler.Bodies[0]!).Should().Be("card_json");
+        handler.Requests[1].Method.Method.Should().Be("POST");
+        handler.Requests[1].RequestUri!.ToString()
+            .Should().Contain("/open-apis/im/v1/messages?receive_id_type=chat_id");
+        ExtractLarkMessageType(handler.Bodies[1]!).Should().Be("interactive");
+        ExtractInteractiveCardId(handler.Bodies[1]!).Should().Be("card_auto");
+        handler.Requests[2].Method.Method.Should().Be("PUT");
+        handler.Requests[2].RequestUri!.AbsolutePath.Should()
+            .EndWith("/open-apis/cardkit/v1/cards/card_auto/elements/streaming_main/content");
+        ExtractCardKitStreamContent(handler.Bodies[2]!).Should().Be("abc");
+        handler.Requests[3].Method.Method.Should().Be("PATCH");
+        handler.Requests[3].RequestUri!.AbsolutePath.Should()
+            .EndWith("/open-apis/cardkit/v1/cards/card_auto/settings");
+        ExtractCardKitSettings(handler.Bodies[3]!).Should().Contain("streaming_mode");
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_TextOutputFormat_ShouldUseLegacyStreamingTextEdit()
     {
         var provider = new StubStreamingProviderFactory("a", "b", "c");
         var agent = CreateAgent("skill-runner-stream-coalesce", providerFactory: provider);
         await agent.ActivateAsync();
         var initialize = CreateInitializeCommand();
+        initialize.OutputFormat = SkillRunnerOutputFormat.Text;
+        initialize.OutboundConfig.OutputFormat = SkillRunnerOutputFormat.Text;
         initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
         initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
         await agent.HandleInitializeAsync(initialize);
@@ -1584,6 +1625,46 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         handler.Requests[1].Method.Method.Should().Be("PUT");
         ExtractLarkText(handler.Bodies[0]!).Should().Be("a");
         ExtractLarkText(handler.Bodies[1]!).Should().Be("abc");
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_WhenCardKitFailsAfterVisibleCard_ShouldPersistFailureWithoutRetry()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        using var serviceProvider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        var provider = new StubStreamingProviderFactory("visible but stream failed");
+        var agent = CreateAgent(
+            "skill-runner-cardkit-visible-failure",
+            serviceProvider,
+            providerFactory: provider);
+        await agent.ActivateAsync();
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        await agent.HandleInitializeAsync(initialize);
+        var handler = new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"card_id":"card_partial"}}""",
+            """{"code":0,"msg":"success","data":{"message_id":"om_card"}}""",
+            """{"code":230099,"msg":"card is unavailable"}""",
+            """{"code":0,"msg":"success","data":{}}""",
+            """{"code":0,"msg":"success","data":{"message_id":"om_failure"}}""");
+        AttachNyxIdApiClient(agent, handler);
+
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand { Reason = "manual" });
+
+        var failed = await ReadSingleFailedEventAsync(
+            serviceProvider.GetRequiredService<IEventStore>() as InMemoryEventStore
+            ?? throw new InvalidOperationException("test store missing"),
+            "skill-runner-cardkit-visible-failure");
+        failed.Error.Should().Contain("230099");
+        scheduler.Timeouts.Should().BeEmpty("a retry would create another visible card");
+        handler.Requests.Should().HaveCount(5);
+        handler.Requests[2].RequestUri!.AbsolutePath.Should()
+            .EndWith("/open-apis/cardkit/v1/cards/card_partial/elements/streaming_main/content");
+        handler.Requests[4].RequestUri!.AbsolutePath.Should().EndWith("/open-apis/im/v1/messages");
+        ExtractLarkText(handler.Bodies[4]!).Should().Contain("Skill runner failed");
     }
 
     [Fact]
@@ -1607,6 +1688,47 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         request.ToolContext.Credentials.NyxIdAccessToken.Should().Be("nyx-api-key");
         request.ToolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.ConversationId);
         request.ToolContext.ExternalMetadata.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_WhenInteractiveLarkToolAlreadyDelivered_ShouldSkipOuterReply()
+    {
+        var provider = new StubStreamingProviderFactory(
+            new StubStreamingTurn(
+                [],
+                [
+                    new ToolCall
+                    {
+                        Id = "call-card",
+                        Name = "lark_messages_send",
+                        ArgumentsJson = """
+                            {
+                              "target_type": "chat_id",
+                              "target_id": "oc_chat_1",
+                              "message_type": "interactive_card",
+                              "card_json": "{\"schema\":\"2.0\"}"
+                            }
+                            """,
+                    },
+                ]),
+            new StubStreamingTurn(["card already sent"]));
+        var tool = new FixedResultTool(
+            "lark_messages_send",
+            """{"success":true,"message_id":"om_card","chat_id":"oc_chat_1"}""");
+        var handler = new SequencedHandler("""{"error":true,"message":"outer reply should not be sent"}""");
+        var agent = CreateAgent(
+            "skill-runner-interactive-tool-suppression",
+            providerFactory: provider,
+            toolSources: [new SingleToolSource(tool)]);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+        AttachNyxIdApiClient(agent, handler);
+
+        var output = await InvokeExecuteSkillAsync(agent);
+
+        output.Should().Be("card already sent");
+        tool.LastArgumentsJson.Should().NotBeNull();
+        handler.Requests.Should().BeEmpty("the tool already delivered an interactive Lark card");
     }
 
     [Fact]
@@ -2020,7 +2142,11 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                     },
                 ]),
             new StubStreamingTurn(["Full output moved to https://example.feishu.cn/docx/doccn_123"]));
-        var handler = new SequencedHandler("""{"code":0,"msg":"success","data":{"message_id":"om_doc_link"}}""");
+        var handler = new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"card_id":"card_doc_link"}}""",
+            """{"code":0,"msg":"success","data":{"message_id":"om_doc_link"}}""",
+            """{"code":0,"msg":"success","data":{}}""",
+            """{"code":0,"msg":"success","data":{}}""");
         var docxTool = new FixedResultTool(
             "lark_docx_create",
             """{"success":true,"document_token":"doccn_123","document_url":"https://example.feishu.cn/docx/doccn_123","visibility_applied":true}""");
@@ -2051,8 +2177,10 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             message.Content is not null &&
             message.Content.Contains("https://example.feishu.cn/docx/doccn_123", StringComparison.Ordinal))
             .Should().BeTrue();
-        handler.Requests.Should().ContainSingle();
-        ExtractLarkText(handler.Bodies[0]!).Should().Be("Full output moved to https://example.feishu.cn/docx/doccn_123");
+        handler.Requests.Should().HaveCount(4);
+        ExtractLarkMessageType(handler.Bodies[1]!).Should().Be("interactive");
+        ExtractInteractiveCardId(handler.Bodies[1]!).Should().Be("card_doc_link");
+        ExtractCardKitStreamContent(handler.Bodies[2]!).Should().Be("Full output moved to https://example.feishu.cn/docx/doccn_123");
     }
 
     [Fact]
@@ -2139,7 +2267,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ExecuteSkillAsync_OverLimitOutput_ShouldFallBackToChunks_WhenDocDecisionHasNoLink()
+    public async Task ExecuteSkillAsync_AutoOverLimitOutput_ShouldFallBackToChunks_WhenDocDecisionHasNoLink()
     {
         var output = string.Join("\n\n", Enumerable.Repeat(
             new string('x', SkillRunnerStreamingReplySink.MaxLarkTextLength - 1_000),
@@ -2169,7 +2297,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ExecuteSkillAsync_OverLimitOutput_ShouldFallBackToChunks_WhenDocDecisionThrows()
+    public async Task ExecuteSkillAsync_TextOutputFormat_ShouldChunkLongOutput_WhenDocDecisionWouldThrow()
     {
         var output = string.Join("\n\n", Enumerable.Repeat(
             new string('x', SkillRunnerStreamingReplySink.MaxLarkTextLength - 1_000),
@@ -2183,13 +2311,16 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             """{"code":0,"msg":"success","data":{"message_id":"om_part_2"}}""");
         var agent = CreateAgent("skill-runner-docx-exception-fallback", providerFactory: provider);
         await agent.ActivateAsync();
-        await agent.HandleInitializeAsync(CreateInitializeCommand());
+        var initialize = CreateInitializeCommand();
+        initialize.OutputFormat = SkillRunnerOutputFormat.Text;
+        initialize.OutboundConfig.OutputFormat = SkillRunnerOutputFormat.Text;
+        await agent.HandleInitializeAsync(initialize);
         AttachNyxIdApiClient(agent, handler);
 
         var result = await InvokeExecuteSkillAsync(agent);
 
         result.Should().Be(output);
-        provider.Requests.Should().HaveCount(2);
+        provider.Requests.Should().ContainSingle("text mode must skip the doc decision and deliver chunks directly");
         handler.Requests.Should().HaveCount(expectedChunks.Count);
         ExtractLarkText(handler.Bodies[0]!).Should().Be(expectedChunks[0]);
         ExtractLarkText(handler.Bodies[1]!).Should().Be(expectedChunks[1]);
@@ -2199,7 +2330,11 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     public async Task ExecuteSkillAsync_BelowLimitOutput_ShouldNotInvokeDocDecision()
     {
         var provider = new StubStreamingProviderFactory("short output");
-        var handler = new SequencedHandler("""{"code":0,"msg":"success","data":{"message_id":"om_short"}}""");
+        var handler = new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"card_id":"card_short"}}""",
+            """{"code":0,"msg":"success","data":{"message_id":"om_short"}}""",
+            """{"code":0,"msg":"success","data":{}}""",
+            """{"code":0,"msg":"success","data":{}}""");
         var agent = CreateAgent("skill-runner-docx-not-needed", providerFactory: provider);
         await agent.ActivateAsync();
         await agent.HandleInitializeAsync(CreateInitializeCommand());
@@ -2209,8 +2344,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
         result.Should().Be("short output");
         provider.Requests.Should().ContainSingle();
-        handler.Requests.Should().ContainSingle();
-        ExtractLarkText(handler.Bodies[0]!).Should().Be("short output");
+        handler.Requests.Should().HaveCount(4);
+        ExtractLarkMessageType(handler.Bodies[1]!).Should().Be("interactive");
+        ExtractCardKitStreamContent(handler.Bodies[2]!).Should().Be("short output");
     }
 
     [Fact]
@@ -2411,6 +2547,42 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         content.Should().NotBeNull();
         using var contentDocument = JsonDocument.Parse(content!);
         return contentDocument.RootElement.GetProperty("text").GetString()!;
+    }
+
+    private static string ExtractLarkMessageType(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("msg_type").GetString()!;
+    }
+
+    private static string ExtractInteractiveCardId(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        var content = document.RootElement.GetProperty("content").GetString();
+        content.Should().NotBeNull();
+        using var contentDocument = JsonDocument.Parse(content!);
+        return contentDocument.RootElement
+            .GetProperty("data")
+            .GetProperty("card_id")
+            .GetString()!;
+    }
+
+    private static string ExtractCardKitCreateType(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("type").GetString()!;
+    }
+
+    private static string ExtractCardKitStreamContent(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("content").GetString()!;
+    }
+
+    private static string ExtractCardKitSettings(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("settings").GetString()!;
     }
 
     internal sealed class StubOwnerLlmConfigSource(OwnerLlmConfig config) : IOwnerLlmConfigSource

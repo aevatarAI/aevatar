@@ -233,9 +233,12 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
                 _logger.LogInformation("[code_execute] Probed known sandbox slug: {Slug}", candidate);
                 return candidate;
             }
-            catch
+            catch (Exception ex)
             {
-                // Network/timeout error — try next candidate
+                _logger.LogWarning(
+                    ex,
+                    "[code_execute] Failed to probe known sandbox slug: {Slug}",
+                    candidate);
             }
         }
 

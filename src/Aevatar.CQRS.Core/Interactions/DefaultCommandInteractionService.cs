@@ -3,6 +3,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Threading.Channels;
 
 namespace Aevatar.CQRS.Core.Interactions;
 
@@ -81,8 +82,6 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                 return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(observation.Error);
             }
 
-            _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct);
-
             var receipt = _receiptFactory == null
                 ? execution.Receipt
                 : _receiptFactory.Create(target, execution.Context);
@@ -90,33 +89,64 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
             var observedCompletion = _completionPolicy.IncompleteCompletion;
             var durableCompletion = CommandDurableCompletionObservation<TCompletion>.Incomplete;
             var durableCompletionAttempted = false;
-            CommandInteractionResult<TReceipt, TError, TCompletion>? interactionResult = null;
             Exception? executionException = null;
+            using var pumpCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var bufferedFrames = Channel.CreateUnbounded<TFrame>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = true,
+            });
+
+            async ValueTask BufferFrameAsync(TFrame frame, CancellationToken frameCt)
+            {
+                await bufferedFrames.Writer.WriteAsync(frame, frameCt).ConfigureAwait(false);
+            }
+
+            var liveEvents = ObserveCompletionBeforeEmissionAsync(
+                target.RequireLiveSink().ReadAllAsync(pumpCancellation.Token),
+                evt =>
+                {
+                    if (!_completionPolicy.TryResolve(evt, out var completion))
+                        return false;
+
+                    observedCompleted = true;
+                    observedCompletion = completion;
+                    return true;
+                },
+                pumpCancellation.Token);
+            var pumpTask = _outputStream.PumpAsync(
+                liveEvents,
+                BufferFrameAsync,
+                shouldStop: null,
+                pumpCancellation.Token);
+
+            try
+            {
+                _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                await CancelAndObservePumpAsync(pumpTask, pumpCancellation).ConfigureAwait(false);
+                throw;
+            }
 
             try
             {
                 accepted = true;
                 if (onAcceptedAsync != null)
-                    await onAcceptedAsync(receipt, ct);
+                    await onAcceptedAsync(receipt, ct).ConfigureAwait(false);
 
-                await _outputStream.PumpAsync(
-                    target.RequireLiveSink().ReadAllAsync(ct),
+                await PumpAndFlushAcceptedFramesAsync(
+                    pumpTask,
+                    pumpCancellation,
+                    bufferedFrames,
                     emitAsync,
-                    evt =>
-                    {
-                        if (!_completionPolicy.TryResolve(evt, out var completion))
-                            return false;
-
-                        observedCompleted = true;
-                        observedCompletion = completion;
-                        return true;
-                    },
-                    ct);
+                    ct).ConfigureAwait(false);
 
                 if (!observedCompleted)
                 {
                     durableCompletionAttempted = true;
-                    durableCompletion = await _durableCompletionResolver.ResolveAsync(receipt, ct);
+                    durableCompletion = await _durableCompletionResolver.ResolveAsync(receipt, ct).ConfigureAwait(false);
                     if (durableCompletion.HasTerminalCompletion)
                     {
                         observedCompleted = true;
@@ -129,16 +159,17 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                     observedCompletion,
                     observedCompleted,
                     emitAsync,
-                    ct);
+                    ct).ConfigureAwait(false);
 
-                interactionResult = CommandInteractionResult<TReceipt, TError, TCompletion>.Success(
+                return CommandInteractionResult<TReceipt, TError, TCompletion>.Success(
                     receipt,
                     new CommandInteractionFinalizeResult<TCompletion>(observedCompletion, observedCompleted));
-                return interactionResult;
             }
             catch (Exception ex)
             {
                 executionException = ex;
+                bufferedFrames.Writer.TryComplete(ex);
+                await CancelAndObservePumpAsync(pumpTask, pumpCancellation).ConfigureAwait(false);
                 throw;
             }
             finally
@@ -149,7 +180,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                     {
                         durableCompletion = await _durableCompletionResolver.ResolveAsync(
                             receipt,
-                            CancellationToken.None);
+                            CancellationToken.None).ConfigureAwait(false);
                     }
 
                     await target.ReleaseAfterInteractionAsync(
@@ -158,7 +189,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                             observedCompleted,
                             observedCompletion,
                             durableCompletion),
-                        CancellationToken.None);
+                        CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception cleanupException)
                 {
@@ -183,6 +214,90 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                 await ReleasePreparedObservationScopeAsync(preparedObservationScope).ConfigureAwait(false);
 
             throw;
+        }
+    }
+
+    private static async IAsyncEnumerable<TEvent> ObserveCompletionBeforeEmissionAsync(
+        IAsyncEnumerable<TEvent> events,
+        Func<TEvent, bool> shouldStop,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var evt in events.WithCancellation(ct).ConfigureAwait(false))
+        {
+            var stop = shouldStop(evt);
+            yield return evt;
+
+            if (stop)
+                yield break;
+        }
+    }
+
+    private async Task PumpAndFlushAcceptedFramesAsync(
+        Task pumpTask,
+        CancellationTokenSource pumpCancellation,
+        Channel<TFrame> frames,
+        Func<TFrame, CancellationToken, ValueTask> emitAsync,
+        CancellationToken ct)
+    {
+        var flushTask = FlushBufferedFramesAsync(frames.Reader, emitAsync, ct);
+
+        try
+        {
+            await pumpTask.ConfigureAwait(false);
+            frames.Writer.TryComplete();
+            await flushTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            frames.Writer.TryComplete(ex);
+            await CancelAndObservePumpAsync(pumpTask, pumpCancellation).ConfigureAwait(false);
+            await ObserveFlushFailureAsync(flushTask).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task FlushBufferedFramesAsync(
+        ChannelReader<TFrame> frames,
+        Func<TFrame, CancellationToken, ValueTask> emitAsync,
+        CancellationToken ct)
+    {
+        await foreach (var frame in frames.ReadAllAsync(ct).ConfigureAwait(false))
+            await emitAsync(frame, ct).ConfigureAwait(false);
+    }
+
+    private async Task ObserveFlushFailureAsync(Task flushTask)
+    {
+        try
+        {
+            await flushTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Observed buffered-frame flush failure after command interaction pump failure. command={CommandType}, target={TargetType}",
+                typeof(TCommand).FullName,
+                typeof(TTarget).FullName);
+        }
+    }
+
+    private async Task CancelAndObservePumpAsync(
+        Task pumpTask,
+        CancellationTokenSource pumpCancellation)
+    {
+        await pumpCancellation.CancelAsync().ConfigureAwait(false);
+
+        try
+        {
+            await pumpTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Observed command interaction pump completion after cancellation. command={CommandType}, target={TargetType}",
+                typeof(TCommand).FullName,
+                typeof(TTarget).FullName);
         }
     }
 
