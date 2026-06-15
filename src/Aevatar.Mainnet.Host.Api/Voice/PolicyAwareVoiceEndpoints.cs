@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -165,7 +166,15 @@ public static class PolicyAwareVoiceEndpoints
                 throw;
             }
 
-            await mediaStreamPort.AttachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
+            // Refactor (cluster-voice-nyxid-ephemeral-broker): the realtime provider connect runs
+            // in-process inside AttachAsync, so the caller's NyxID bearer (already validated by the
+            // JWT handler) flows via AsyncLocal to the NyxID credential resolver, which mints the
+            // provider ephemeral on the caller's identity. The token is never persisted.
+            using (AgentToolContextScope.Push(BuildVoiceCallerToolContext(http)))
+            {
+                await mediaStreamPort.AttachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
+            }
+
             attached = true;
             await WaitUntilClosedAsync(transport, http.RequestAborted);
         }
@@ -185,6 +194,35 @@ public static class PolicyAwareVoiceEndpoints
             if (attached)
                 await mediaStreamPort.DetachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
         }
+    }
+
+    // Caller credential for realtime provider brokering: the NyxID resolver reads
+    // AgentToolRequestContext.NyxIdAccessToken to mint the provider ephemeral on the caller's
+    // identity. Sourced from the same places the JWT bearer handler accepts for /ws/voice.
+    private static AgentToolExecutionContext BuildVoiceCallerToolContext(HttpContext http)
+    {
+        var bearer = ExtractCallerBearer(http);
+        return string.IsNullOrWhiteSpace(bearer)
+            ? AgentToolExecutionContext.Empty
+            : AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials(bearer, null, null),
+            };
+    }
+
+    private static string? ExtractCallerBearer(HttpContext http)
+    {
+        var header = http.Request.Headers.Authorization.ToString();
+        const string bearerPrefix = "Bearer ";
+        if (header.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var token = header[bearerPrefix.Length..].Trim();
+            if (!string.IsNullOrWhiteSpace(token))
+                return token;
+        }
+
+        var queryToken = http.Request.Query["access_token"].ToString();
+        return string.IsNullOrWhiteSpace(queryToken) ? null : queryToken.Trim();
     }
 
     private static async Task<VoiceRealtimeSessionAccepted?> WriteNonAcceptedResolutionAsync(
