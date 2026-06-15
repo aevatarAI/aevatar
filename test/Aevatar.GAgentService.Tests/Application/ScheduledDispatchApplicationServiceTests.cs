@@ -619,6 +619,12 @@ public sealed class ScheduledDispatchApplicationServiceTests
             {
                 new ProjectionDocumentFilter
                 {
+                    FieldPath = nameof(ScheduledDispatchDocument.Deleted),
+                    Operator = ProjectionDocumentFilterOperator.EqOrMissing,
+                    Value = ProjectionDocumentValue.FromBool(false),
+                },
+                new ProjectionDocumentFilter
+                {
                     FieldPath = nameof(ScheduledDispatchDocument.TargetKind),
                     Operator = ProjectionDocumentFilterOperator.Eq,
                     Value = ProjectionDocumentValue.FromString(ScheduledDispatchTargetKind.ServiceInvocation.ToString()),
