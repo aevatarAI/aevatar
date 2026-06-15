@@ -202,19 +202,6 @@ public sealed class NyxIdRelayOutboundPort
                 $"Relay outbound composer for platform '{normalizedPlatform}' cannot express the requested message content.");
         }
 
-        if (ShouldUseLarkTextOnlyFallback(normalizedPlatform, content))
-        {
-            replyText = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(content);
-            if (string.IsNullOrWhiteSpace(replyText))
-            {
-                return EmitResult.Failed(
-                    "empty_reply",
-                    "Relay outbound could not render a non-empty reply payload.");
-            }
-
-            return null;
-        }
-
         if (composer.Compose(content, composeContext) is not IPlainTextComposedMessage plainTextPayload)
         {
             return EmitResult.Failed(
@@ -237,8 +224,4 @@ public sealed class NyxIdRelayOutboundPort
         string.IsNullOrWhiteSpace(value)
             ? string.Empty
             : value.Trim().ToLowerInvariant();
-
-    private static bool ShouldUseLarkTextOnlyFallback(string normalizedPlatform, MessageContent content) =>
-        string.Equals(normalizedPlatform, "lark", StringComparison.OrdinalIgnoreCase) &&
-        (content.Actions.Count > 0 || content.Cards.Count > 0);
 }

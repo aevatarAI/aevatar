@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
@@ -10,6 +11,7 @@ public static class WorkflowJsonTypeRegistry
 {
     private static readonly FileDescriptor[] BaseFiles =
     [
+        AiMessagesReflection.Descriptor,
         WorkflowRunEventEnvelope.Descriptor.File,
         WorkflowRunExecutionStartedEvent.Descriptor.File,
         WorkflowRunState.Descriptor.File,

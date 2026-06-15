@@ -256,9 +256,69 @@ public static class DeviceEventEndpoints
                     Text = GetOptionalString(inner, "text"),
                 };
                 break;
+            case "doorbell_pressed":
+            case "smoke_detected":
+            case "water_leak_detected":
+            case "carbon_monoxide_detected":
+            case "glass_break_detected":
+            case "lock_tampered":
+            case "alarm_triggered":
+                inbound.HomeAlert = new HomeAlertDeviceInboundPayload
+                {
+                    Severity = ResolveHomeAlertSeverity(inbound.EventType, inner),
+                    Area = GetOptionalString(inner, "area"),
+                    EntityId = GetOptionalString(inner, "entity_id"),
+                    CorrelationKey = FirstNonEmpty(
+                        GetOptionalString(inner, "correlation_key"),
+                        GetOptionalString(inner, "event_id"),
+                        inbound.EventId),
+                    Summary = FirstNonEmpty(
+                        GetOptionalString(inner, "summary"),
+                        GetOptionalString(inner, "description"),
+                        inbound.EventType),
+                };
+                break;
             default:
                 throw new JsonException($"Unsupported device event_type '{inbound.EventType}'");
         }
+    }
+
+    private static DeviceEventSeverity ResolveHomeAlertSeverity(string eventType, JsonElement inner)
+    {
+        var configuredSeverity = GetOptionalString(inner, "severity");
+        if (!string.IsNullOrWhiteSpace(configuredSeverity))
+        {
+            return configuredSeverity.Trim().ToLowerInvariant() switch
+            {
+                "critical" or "emergency" or "alarm" => DeviceEventSeverity.Critical,
+                "warning" or "warn" => DeviceEventSeverity.Warning,
+                "info" or "information" => DeviceEventSeverity.Info,
+                _ => DeviceEventSeverity.Unspecified,
+            };
+        }
+
+        return eventType switch
+        {
+            "smoke_detected" or
+            "water_leak_detected" or
+            "carbon_monoxide_detected" or
+            "glass_break_detected" or
+            "lock_tampered" or
+            "alarm_triggered" => DeviceEventSeverity.Critical,
+            "doorbell_pressed" => DeviceEventSeverity.Info,
+            _ => DeviceEventSeverity.Unspecified,
+        };
+    }
+
+    private static string FirstNonEmpty(params string[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+
+        return string.Empty;
     }
 
     private static string GetOptionalString(JsonElement root, string propertyName)

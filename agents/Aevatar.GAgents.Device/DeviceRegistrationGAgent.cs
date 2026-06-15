@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -15,6 +16,7 @@ namespace Aevatar.GAgents.Device;
 /// Actor ID convention: a single well-known instance "device-registration-store".
 /// CLAUDE.md: "长期 actor 限定事实拥有者：definition/catalog/manager/index"
 /// </summary>
+[GAgent("device.registration")]
 public sealed class DeviceRegistrationGAgent : GAgentBase<DeviceRegistrationState>
 {
     public const string WellKnownId = "device-registration-store";

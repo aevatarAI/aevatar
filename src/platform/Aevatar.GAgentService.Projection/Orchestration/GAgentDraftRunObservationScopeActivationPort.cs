@@ -4,15 +4,15 @@ using Aevatar.GAgentService.Projection.Contexts;
 
 namespace Aevatar.GAgentService.Projection.Orchestration;
 
-public sealed class GAgentDraftRunObservationScopeActivationPort
-    : IGAgentDraftRunObservationScopeActivationPort
+public sealed class GAgentDraftRunObservationScopeLeasePreparationPort
+    : IGAgentDraftRunObservationScopeLeasePreparationPort
 {
     private readonly IProjectionScopeActivationService<GAgentDraftRunRuntimeLease> _sessionActivationService;
     private readonly IProjectionScopeReleaseService<GAgentDraftRunRuntimeLease> _sessionReleaseService;
     private readonly IProjectionScopeActivationService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> _terminalActivationService;
     private readonly IProjectionScopeReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> _terminalReleaseService;
 
-    public GAgentDraftRunObservationScopeActivationPort(
+    public GAgentDraftRunObservationScopeLeasePreparationPort(
         IProjectionScopeActivationService<GAgentDraftRunRuntimeLease> sessionActivationService,
         IProjectionScopeReleaseService<GAgentDraftRunRuntimeLease> sessionReleaseService,
         IProjectionScopeActivationService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> terminalActivationService,
@@ -24,7 +24,7 @@ public sealed class GAgentDraftRunObservationScopeActivationPort
         _terminalReleaseService = terminalReleaseService ?? throw new ArgumentNullException(nameof(terminalReleaseService));
     }
 
-    public async Task<GAgentDraftRunObservationScopeActivation?> ActivateAsync(
+    public async Task<GAgentDraftRunObservationScopeLeasePreparation?> PrepareAsync(
         string actorId,
         string commandId,
         string correlationId,
@@ -63,7 +63,7 @@ public sealed class GAgentDraftRunObservationScopeActivationPort
                 },
                 ct).ConfigureAwait(false);
 
-            return new GAgentDraftRunObservationScopeActivation(
+            return new GAgentDraftRunObservationScopeLeasePreparation(
                 normalizedActorId,
                 normalizedCommandId,
                 normalizedCorrelationId);
@@ -81,25 +81,25 @@ public sealed class GAgentDraftRunObservationScopeActivationPort
     }
 
     public async Task ReleaseAsync(
-        GAgentDraftRunObservationScopeActivation activation,
+        GAgentDraftRunObservationScopeLeasePreparation preparation,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(activation);
+        ArgumentNullException.ThrowIfNull(preparation);
         ct.ThrowIfCancellationRequested();
 
         var sessionLease = new GAgentDraftRunRuntimeLease(new GAgentDraftRunProjectionContext
         {
-            RootActorId = activation.ActorId,
+            RootActorId = preparation.ActorId,
             ProjectionKind = ServiceProjectionKinds.DraftRunSession,
-            SessionId = activation.CommandId,
+            SessionId = preparation.CommandId,
         });
         var terminalLease = new ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>(
-            activation.ActorId,
+            preparation.ActorId,
             new GAgentRunTerminalProjectionContext
             {
-                RootActorId = activation.ActorId,
+                RootActorId = preparation.ActorId,
                 ProjectionKind = ServiceProjectionKinds.GAgentRunTerminalDraftRun,
-                CorrelationId = activation.CorrelationId,
+                CorrelationId = preparation.CorrelationId,
                 InteractionKind = GAgentRunTerminalInteractionKind.DraftRun,
             });
 

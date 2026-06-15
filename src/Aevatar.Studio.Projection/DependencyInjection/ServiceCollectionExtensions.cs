@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.CommandServices;
 using Aevatar.Studio.Projection.Metadata;
@@ -40,6 +41,11 @@ public static class ServiceCollectionExtensions
             optionsBuilder.Bind(configuration.GetSection(StudioMemberPlatformBindingOptions.SectionName));
 
         services.AddCqrsCore();
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(
+            typeof(Aevatar.GAgents.UserConfig.UserConfigGAgent).Assembly,
+            typeof(Aevatar.GAgents.StudioMember.StudioMemberGAgent).Assembly,
+            typeof(Aevatar.GAgents.StudioTeam.StudioTeamGAgent).Assembly,
+            typeof(Aevatar.Studio.Workspace.StudioWorkspaceGAgent).Assembly));
         services.AddStudioProjectionActorCommandDispatch();
 
         // Projection read-model runtime (write dispatcher + sink bindings)

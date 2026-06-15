@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.CQRS.Core.DependencyInjection;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -25,6 +26,11 @@ public static class ServiceCollectionExtensions
     {
         services.AddChatHistoryGAgents();
         services.AddCqrsCore();
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(
+            typeof(Aevatar.GAgents.ConnectorCatalog.ConnectorCatalogGAgent).Assembly,
+            typeof(Aevatar.GAgents.Registry.GAgentRegistryGAgent).Assembly,
+            typeof(Aevatar.GAgents.RoleCatalog.RoleCatalogGAgent).Assembly,
+            typeof(Aevatar.GAgents.UserMemory.UserMemoryGAgent).Assembly));
         services.AddStudioActorCommandDispatch();
         services.Configure<StudioStorageOptions>(configuration.GetSection("Studio:Storage"));
         services.Configure<ConnectorCatalogStorageOptions>(configuration.GetSection(ConnectorCatalogStorageOptions.SectionName));

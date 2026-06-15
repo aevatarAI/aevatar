@@ -5,7 +5,7 @@ namespace Aevatar.GAgentService.Application.Schedules;
 
 public sealed class ScheduledDispatchApplicationService : IScheduledDispatchApplicationService
 {
-    private const string ScheduleIdAllowedCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-";
+    private const string ScheduleIdAllowedCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-";
     private readonly IScheduledDispatchActorPort _actorPort;
     private readonly IScheduledDispatchQueryPort _queryPort;
     private readonly IScheduledDispatchTargetPreparationService _targetPreparationService;
@@ -26,6 +26,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     {
         var normalized = NormalizeConfiguration(configuration, requireScheduleId: false);
         ValidateSchedule(normalized);
+        await EnsureCreatableAsync(normalized.ScheduleId, ct);
 
         var dispatch = await _targetPreparationService.PrepareAsync(
             normalized,
@@ -34,6 +35,23 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             ct);
         var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
         var admission = await _actorPort.DispatchCreateAsync(actorId, normalized, dispatch, ct);
+        return CreateMutationReceipt(normalized.ScheduleId, actorId, admission);
+    }
+
+    public async Task<ScheduledDispatchMutationReceipt> EnsureAsync(
+        ScheduledDispatchConfiguration configuration,
+        CancellationToken ct = default)
+    {
+        var normalized = NormalizeConfiguration(configuration, requireScheduleId: true);
+        ValidateSchedule(normalized);
+
+        var dispatch = await _targetPreparationService.PrepareAsync(
+            normalized,
+            BuildScheduleCommandId(normalized.ScheduleId),
+            BuildScheduleCorrelationId(normalized.ScheduleId),
+            ct);
+        var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
+        var admission = await _actorPort.DispatchEnsureAsync(actorId, normalized, dispatch, ct);
         return CreateMutationReceipt(normalized.ScheduleId, actorId, admission);
     }
 
@@ -47,6 +65,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             configuration with { ScheduleId = normalizedScheduleId },
             requireScheduleId: true);
         ValidateSchedule(normalized);
+        await EnsureMutableAsync(normalized.ScheduleId, ct);
 
         var dispatch = await _targetPreparationService.PrepareAsync(
             normalized,
@@ -64,6 +83,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        await EnsureMutableAsync(normalizedScheduleId, ct);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var admission = await _actorPort.DispatchEnableAsync(actorId, NormalizeOptional(reason), ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
@@ -75,17 +95,31 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        await EnsureMutableAsync(normalizedScheduleId, ct);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var admission = await _actorPort.DispatchDisableAsync(actorId, NormalizeOptional(reason), ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
 
-    public Task<ScheduledDispatchDetail?> GetAsync(
+    public async Task<ScheduledDispatchMutationReceipt> DeleteAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        await EnsureMutableAsync(normalizedScheduleId, ct);
+        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        var admission = await _actorPort.DispatchDeleteAsync(actorId, NormalizeOptional(reason), ct);
+        return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
+    }
+
+    public async Task<ScheduledDispatchDetail?> GetAsync(
         string scheduleId,
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        return _queryPort.GetAsync(normalizedScheduleId, ct);
+        var schedule = await _queryPort.GetAsync(normalizedScheduleId, ct);
+        return schedule?.Schedule.Deleted == false ? schedule : null;
     }
 
     public Task<ScheduledDispatchListResult> ListAsync(
@@ -129,6 +163,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        await EnsureMutableAsync(normalizedScheduleId, ct);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var scheduledFireAt = DateTimeOffset.UtcNow;
         var admission = await _actorPort.DispatchRunNowAsync(actorId, scheduledFireAt, ct);
@@ -142,6 +177,20 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             admission.CorrelationId,
             admission.AckedAt,
             "accepted");
+    }
+
+    private async Task EnsureCreatableAsync(string scheduleId, CancellationToken ct)
+    {
+        var existing = await _queryPort.GetAsync(scheduleId, ct);
+        if (existing != null)
+            throw new ScheduledDispatchConflictException(scheduleId, $"Scheduled dispatch '{scheduleId}' already exists.");
+    }
+
+    private async Task EnsureMutableAsync(string scheduleId, CancellationToken ct)
+    {
+        var existing = await _queryPort.GetAsync(scheduleId, ct);
+        if (existing?.Schedule.Deleted == true)
+            throw new ScheduledDispatchNotFoundException(scheduleId);
     }
 
     private static ScheduledDispatchMutationReceipt CreateMutationReceipt(
@@ -290,7 +339,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalized = scheduleId.Trim();
         if (normalized.Any(static ch => ScheduleIdAllowedCharacters.IndexOf(ch) < 0))
             throw new ArgumentException(
-                "Schedule id may only contain letters, digits, '.', '_', ':', and '-'.",
+                "Schedule id may only contain letters, digits, '.', '_', and '-'.",
                 nameof(scheduleId));
 
         return normalized;

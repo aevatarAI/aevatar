@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.SkillInvocations;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
@@ -26,8 +27,11 @@ public sealed class MessagesCommandFacade(
     IActorDispatchPort dispatchPort,
     IResponsesToolClassificationService toolClassificationService,
     IResponsesDirectToolPlanService directToolPlanService,
+    ILlmSessionRunObservationService observationService,
     ILogger<MessagesCommandFacade> logger) : IMessagesCommandFacade
 {
+    private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
+
     public async Task<MessagesCreateCommandResult> CreateAsync(
         MessagesCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -53,7 +57,8 @@ public sealed class MessagesCommandFacade(
                 "authentication_error",
                 callerScopeResult.Error.Message);
 
-        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, ct);
+        var trigger = ParseSkillInvocationTrigger(BuildRouteContentHint(normalized));
+        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, trigger, ct);
         if (routedModelResult.Error is not null)
             return MessagesCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -72,6 +77,7 @@ public sealed class MessagesCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
+            trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
             ct);
@@ -97,8 +103,39 @@ public sealed class MessagesCommandFacade(
 
         try
         {
-            var admission = await DispatchRunAsync(plan, ct);
-            return ResponsesStreamCommandResult.FromAccepted(new ResponsesStreamAcceptedCommandResult(admission));
+            var observed = await observationService.ObserveAsync(
+                new LlmSessionRunObservationRequest(
+                    plan.Session.ActorId,
+                    plan.Session.ResponseId,
+                    $"{plan.Session.ResponseId}:llm-run",
+                    token => DispatchRunAsync(plan, token),
+                    DefaultObservationTimeout),
+                async (delta, token) =>
+                {
+                    if (!string.IsNullOrEmpty(delta.TextDelta))
+                        await onTextDelta(delta.TextDelta, token).ConfigureAwait(false);
+                },
+                ct).ConfigureAwait(false);
+            if (observed.Error is not null)
+            {
+                await TryUpdateSessionStatusAsync(
+                    plan.Session,
+                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
+                        ? LlmSessionStatus.Cancelled
+                        : LlmSessionStatus.Failed,
+                    CancellationToken.None);
+                return ResponsesStreamCommandResult.FromError(
+                    observed.Error.StatusCode,
+                    observed.Error.Code,
+                    observed.Error.Message);
+            }
+
+            return observed.Completion is not null
+                ? ResponsesStreamCommandResult.FromCompleted(observed.Completion)
+                : ResponsesStreamCommandResult.FromError(
+                    503,
+                    "observation_unavailable",
+                    "LLM run observation ended without a terminal event.");
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -141,6 +178,7 @@ public sealed class MessagesCommandFacade(
     private async Task<RouteTargetResult> ResolveRouteTargetAsync(
         NormalizedMessagesRequest normalized,
         ResponsesCallerScope callerScope,
+        SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
         var routeDecision = await ResolveResponsesChatRouteAsync(
@@ -148,6 +186,7 @@ public sealed class MessagesCommandFacade(
             normalized.Model,
             ResolveToolMode(normalized.DeclaredTools.Count, inlineToolResultCount: 0),
             BuildRouteContentHint(normalized),
+            trigger?.Name ?? string.Empty,
             ct);
 
         if (routeDecision.Action.Reject is not null)
@@ -217,6 +256,7 @@ public sealed class MessagesCommandFacade(
         ResponsesCallerScope callerScope,
         string routedModel,
         ChatRouteAction routeAction,
+        SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult session,
         CancellationToken ct)
@@ -238,6 +278,7 @@ public sealed class MessagesCommandFacade(
             {
                 NyxIdRoutePreference = resolvedRouteValue,
             },
+            SkillRecovery = AgentSkillRecoveryContextBuilder.FromTrigger(trigger),
         };
         var llmRequest = BuildLlmRequest(
             normalized,
@@ -407,8 +448,26 @@ public sealed class MessagesCommandFacade(
         string model,
         ToolMode toolMode,
         string contentHint,
+        string commandName,
         CancellationToken ct)
-        => chatRouteDecisionPort.ResolveAsync(callerScope, model, toolMode, contentHint, ct);
+        => chatRouteDecisionPort.ResolveAsync(
+            new ResponsesChatRouteDecisionRequest(
+                callerScope,
+                model,
+                toolMode,
+                contentHint,
+                NormalizeRouteCommandName(commandName)),
+            ct);
+
+    private static SkillInvocationTrigger? ParseSkillInvocationTrigger(string? text) =>
+        SkillInvocationTriggerParser.TryParse(text, platform: "cli", out var trigger)
+            ? trigger
+            : null;
+
+    private static string NormalizeRouteCommandName(string? commandName) =>
+        string.IsNullOrWhiteSpace(commandName)
+            ? string.Empty
+            : commandName.Trim().TrimStart('/').ToLowerInvariant();
 
     private static ToolMode ResolveToolMode(int declaredToolCount, int inlineToolResultCount)
     {
@@ -473,7 +532,7 @@ public sealed class MessagesCommandFacade(
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
             command,
-            command.RunId);
+            plan.Session.ResponseId);
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
     }
 

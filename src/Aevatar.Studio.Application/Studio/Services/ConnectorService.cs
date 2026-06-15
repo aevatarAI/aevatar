@@ -172,6 +172,7 @@ public sealed class ConnectorService
             }
 
             EnsureAuthConfig(connector.Name, "http.auth", connector.Http?.Auth);
+            EnsureSecretRefHeaderConfig(connector.Name, connector.Http?.Auth, connector.Http?.DefaultHeaders);
 
             return;
         }
@@ -348,6 +349,12 @@ public sealed class ConnectorService
         if (string.IsNullOrWhiteSpace(authType))
             return;
 
+        if (string.Equals(authType, "secret_ref_header", StringComparison.OrdinalIgnoreCase))
+        {
+            EnsureSecretRefHeaderAuth(connectorName, fieldName, auth);
+            return;
+        }
+
         if (!string.Equals(authType, "client_credentials", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Connector '{connectorName}' has unsupported {fieldName}.type '{authType}'.");
@@ -369,13 +376,66 @@ public sealed class ConnectorService
         }
     }
 
+    private static void EnsureSecretRefHeaderAuth(
+        string connectorName,
+        string fieldName,
+        ConnectorAuthDefinitionDto? auth)
+    {
+        if (!string.Equals(fieldName, "http.auth", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Connector '{connectorName}' has unsupported {fieldName}.type 'secret_ref_header'.");
+        }
+
+        var secretRef = auth?.SecretRef?.Trim() ?? string.Empty;
+        var headerName = auth?.HeaderName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(secretRef) ||
+            string.IsNullOrWhiteSpace(headerName))
+        {
+            throw new InvalidOperationException($"Connector '{connectorName}' requires complete {fieldName} secret_ref_header settings.");
+        }
+    }
+
+    private static void EnsureSecretRefHeaderConfig(
+        string connectorName,
+        ConnectorAuthDefinitionDto? auth,
+        IReadOnlyDictionary<string, string>? defaultHeaders)
+    {
+        var authType = auth?.Type?.Trim() ?? string.Empty;
+        if (!string.Equals(authType, "secret_ref_header", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var headerName = auth?.HeaderName?.Trim() ?? string.Empty;
+        if (!IsValidHeaderName(headerName))
+        {
+            throw new InvalidOperationException($"Connector '{connectorName}' has an invalid http.auth.headerName.");
+        }
+
+        if (defaultHeaders?.ContainsKey(headerName) == true)
+        {
+            throw new InvalidOperationException($"Connector '{connectorName}' http.auth.headerName duplicates http.defaultHeaders.");
+        }
+    }
+
+    private static bool IsValidHeaderName(string headerName) =>
+        !string.IsNullOrWhiteSpace(headerName) &&
+        headerName.All(IsHeaderTokenChar);
+
+    private static bool IsHeaderTokenChar(char ch) =>
+        ch is >= '0' and <= '9' ||
+        ch is >= 'A' and <= 'Z' ||
+        ch is >= 'a' and <= 'z' ||
+        ch is '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-' or '.' or '^' or '_' or '`' or '|' or '~';
+
     private static StoredConnectorAuthConfig ToStoredAuth(ConnectorAuthDefinitionDto? auth) =>
         new(
             auth?.Type?.Trim() ?? string.Empty,
             auth?.TokenUrl?.Trim() ?? string.Empty,
             auth?.ClientId?.Trim() ?? string.Empty,
             auth?.ClientSecret?.Trim() ?? string.Empty,
-            auth?.Scope?.Trim() ?? string.Empty);
+            auth?.Scope?.Trim() ?? string.Empty,
+            auth?.SecretRef?.Trim() ?? string.Empty,
+            auth?.HeaderName?.Trim() ?? string.Empty,
+            auth?.HeaderValuePrefix?.Trim() ?? string.Empty);
 
     private static ConnectorAuthDefinitionDto ToDto(StoredConnectorAuthConfig auth) =>
         new(
@@ -383,7 +443,10 @@ public sealed class ConnectorService
             auth.TokenUrl,
             auth.ClientId,
             auth.ClientSecret,
-            auth.Scope);
+            auth.Scope,
+            auth.SecretRef,
+            auth.HeaderName,
+            auth.HeaderValuePrefix);
 
     private static IReadOnlyList<string> NormalizeList(IEnumerable<string> values) =>
         values

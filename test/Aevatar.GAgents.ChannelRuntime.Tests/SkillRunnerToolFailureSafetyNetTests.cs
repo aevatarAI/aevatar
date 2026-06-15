@@ -49,6 +49,32 @@ public class SkillRunnerToolFailureSafetyNetTests
         counter.Reset();
         counter.FailureCount.Should().Be(0);
         counter.SuccessCount.Should().Be(0);
+        counter.FirstFailure.Should().BeNull();
+        counter.LatestFailure.Should().BeNull();
+    }
+
+    [Fact]
+    public void Counter_RecordsFailureSamples()
+    {
+        var counter = new SkillRunnerToolFailureCounter();
+        var first = new SkillRunnerToolFailureSample(
+            "api-github",
+            "GET",
+            "/repos/org/repo/milestones",
+            404,
+            "Not Found");
+        var latest = new SkillRunnerToolFailureSample(
+            "api-github",
+            "GET",
+            "/repos/org/repo/issues",
+            404,
+            "Not Found");
+
+        counter.RecordFailure(first);
+        counter.RecordFailure(latest);
+
+        counter.FirstFailure.Should().BeSameAs(first);
+        counter.LatestFailure.Should().BeSameAs(latest);
     }
 
     // ─── Classification ───
@@ -170,12 +196,18 @@ public class SkillRunnerToolFailureSafetyNetTests
     {
         var counter = new SkillRunnerToolFailureCounter();
         var middleware = new NyxIdProxyToolFailureCountingMiddleware(counter);
-        var ctx = BuildContext("nyxid_proxy", result: """{"error":true,"status":401}""");
+        var ctx = BuildContext(
+            "nyxid_proxy",
+            result: """{"error":true,"status":401,"body":"{\"message\":\"Bad credentials\"}"}""",
+            argumentsJson: """{"slug":"api-github","method":"GET","path":"/repos/org/repo/issues"}""");
 
         await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
 
         counter.FailureCount.Should().Be(1);
         counter.SuccessCount.Should().Be(0);
+        counter.LatestFailure.Should().NotBeNull();
+        counter.LatestFailure!.ToDiagnosticString()
+            .Should().Be("api-github GET /repos/org/repo/issues -> HTTP 401: Bad credentials");
     }
 
     [Fact]
@@ -240,6 +272,17 @@ public class SkillRunnerToolFailureSafetyNetTests
         counter.FailureCount.Should().Be(1);
     }
 
+    [Fact]
+    public void Middleware_ExtractsFailureSampleFromArgumentsAndResult()
+    {
+        var sample = NyxIdProxyToolFailureCountingMiddleware.ExtractFailureSample(
+            """{"slug":"api-github","method":"GET","path":"/repos/ChronoAI/ChronoAIProject/issues?state=open&per_page=100&api_key=secret"}""",
+            """{"error":true,"status":404,"body":"{\"message\":\"Not Found\"}"}""");
+
+        sample.ToDiagnosticString()
+            .Should().Be("api-github GET /repos/ChronoAI/ChronoAIProject/issues?state=open&per_page=100&api_key=<redacted> -> HTTP 404: Not Found");
+    }
+
     // ─── Policy ───
 
     [Fact]
@@ -253,7 +296,28 @@ public class SkillRunnerToolFailureSafetyNetTests
             failureCount: 3, successCount: 0, requiresNyxidProxySuccess: false);
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*All 3 nyxid_proxy tool call(s)*failed*");
+            .WithMessage("*数据源请求全部失败*nyxid_proxy 3 次*");
+    }
+
+    [Fact]
+    public void Policy_AllFailures_IncludesLatestFailureDiagnostic()
+    {
+        var sample = new SkillRunnerToolFailureSample(
+            "api-github",
+            "GET",
+            "/repos/ChronoAI/ChronoAIProject/issues?state=open&per_page=100",
+            404,
+            "Not Found");
+
+        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(
+            failureCount: 2,
+            successCount: 0,
+            requiresNyxidProxySuccess: false,
+            latestFailure: sample);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*最近失败：api-github GET /repos/ChronoAI/ChronoAIProject/issues?state=open&per_page=100 -> HTTP 404: Not Found*")
+            .WithMessage("*Ornn skill*目标服务、仓库、组织或 API 路径写错*");
     }
 
     [Fact]
@@ -305,7 +369,7 @@ public class SkillRunnerToolFailureSafetyNetTests
             failureCount: 0, successCount: 0, requiresNyxidProxySuccess: true);
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*requires at least one successful nyxid_proxy tool call*");
+            .WithMessage("*要求至少成功读取一次数据源*没有任何成功的 nyxid_proxy 调用*");
     }
 
     [Fact]
@@ -359,7 +423,7 @@ public class SkillRunnerToolFailureSafetyNetTests
             failureCount: 3, successCount: 0, requiresNyxidProxySuccess: true);
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*All 3 nyxid_proxy tool call(s)*failed*");
+            .WithMessage("*数据源请求全部失败*nyxid_proxy 3 次*");
     }
 
     // ─── End-to-end wiring ───
@@ -409,12 +473,15 @@ public class SkillRunnerToolFailureSafetyNetTests
         registered.Should().ContainSingle(m => m is NyxIdProxyToolFailureCountingMiddleware);
     }
 
-    private static ToolCallContext BuildContext(string toolName, string? result) => new()
+    private static ToolCallContext BuildContext(
+        string toolName,
+        string? result,
+        string argumentsJson = "{}") => new()
     {
         Tool = new StubAgentTool(toolName),
         ToolName = toolName,
         ToolCallId = "call-1",
-        ArgumentsJson = "{}",
+        ArgumentsJson = argumentsJson,
         Result = result,
     };
 

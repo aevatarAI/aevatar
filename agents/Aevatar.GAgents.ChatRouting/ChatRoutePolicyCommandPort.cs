@@ -38,6 +38,15 @@ internal sealed class ChatRoutePolicyCommandPort : IChatRoutePolicyCommandPort
         return DispatchAsync(scopeId, command, ct);
     }
 
+    public Task<ChatRoutePolicyCommandAcceptedReceipt> UpsertRuleAsync(
+        string scopeId,
+        UpsertChatRouteRuleRequested command,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return DispatchAsync(scopeId, command, ct);
+    }
+
     public Task<ChatRoutePolicyCommandAcceptedReceipt> RemoveRuleAsync(
         string scopeId,
         RemoveChatRouteRuleRequested command,

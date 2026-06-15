@@ -24,15 +24,16 @@ public static class ChannelCardActionRouting
 
         var payload = inbound.CardAction?.WorkflowResume;
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (payload is not null && HasWorkflowResumeIdentity(payload))
+        if (payload is not null &&
+            inbound.CardAction?.ActionKind == ActionElementKind.FormSubmit &&
+            HasWorkflowResumeIdentity(payload))
         {
             CopyWorkflowResumePayload(payload, values);
             foreach (var pair in inbound.CardAction!.FormFields)
-                values[pair.Key] = pair.Value;
-        }
-        else if (TryBuildDeprecatedWorkflowResumeValues(inbound.Extra, values))
-        {
-            // Deprecated inbound compatibility only. New producers must use WorkflowResumeActionPayload.
+            {
+                if (IsWorkflowFormField(pair.Key))
+                    values[pair.Key] = pair.Value;
+            }
         }
         else
         {
@@ -66,7 +67,8 @@ public static class ChannelCardActionRouting
             ResolveUserInput(values, approved),
             metadata,
             editedContent,
-            feedback);
+            feedback,
+            ToolApproval: ToToolApprovalResumeCommand(payload.ToolApproval));
         return true;
     }
 
@@ -74,6 +76,9 @@ public static class ChannelCardActionRouting
         !string.IsNullOrWhiteSpace(payload.ActorId) &&
         !string.IsNullOrWhiteSpace(payload.RunId) &&
         !string.IsNullOrWhiteSpace(payload.StepId);
+
+    private static bool IsWorkflowFormField(string key) =>
+        key is "user_input" or "edited_content" or "feedback" or "comment" or "input";
 
     private static void CopyWorkflowResumePayload(
         WorkflowResumeActionPayload payload,
@@ -92,20 +97,19 @@ public static class ChannelCardActionRouting
             values["feedback"] = payload.Feedback;
     }
 
-    private static bool TryBuildDeprecatedWorkflowResumeValues(
-        IReadOnlyDictionary<string, string> extra,
-        IDictionary<string, string> values)
+    private static WorkflowToolApprovalResumeCommand? ToToolApprovalResumeCommand(
+        WorkflowToolApprovalResumeActionPayload? payload)
     {
-        if (!TryGetRequiredValue(extra, "actor_id", out _) ||
-            !TryGetRequiredValue(extra, "run_id", out _) ||
-            !TryGetRequiredValue(extra, "step_id", out _))
-        {
-            return false;
-        }
+        if (payload == null)
+            return null;
 
-        foreach (var pair in extra)
-            values[pair.Key] = pair.Value;
-        return true;
+        var executionId = NormalizeOptional(payload.ExecutionId);
+        var toolCallId = NormalizeOptional(payload.ToolCallId);
+        var approvalRequestId = NormalizeOptional(payload.ApprovalRequestId);
+        if (executionId == null || toolCallId == null || approvalRequestId == null)
+            return null;
+
+        return new WorkflowToolApprovalResumeCommand(executionId, toolCallId, approvalRequestId);
     }
 
     private static bool TryGetRequiredValue(
@@ -179,6 +183,9 @@ public static class ChannelCardActionRouting
     {
         if (approved)
         {
+            if (values.TryGetValue("feedback", out var approvedFeedback))
+                return NormalizeOptional(approvedFeedback);
+
             if (values.TryGetValue("user_input", out var approvedRaw))
                 return NormalizeOptional(approvedRaw);
 

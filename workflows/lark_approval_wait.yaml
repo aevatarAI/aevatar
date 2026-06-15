@@ -1,0 +1,66 @@
+name: lark_approval_wait
+description: Wait for a Lark approval instance to reach a terminal status using the typed read-only Lark approval tool.
+steps:
+  - id: poll_until_terminal
+    type: while
+    parameters:
+      step: workflow_call
+      max_iterations: "60"
+      condition: "${and(not(eq(output, 'approved')), and(not(eq(output, 'rejected')), and(not(eq(output, 'withdrawn')), and(not(eq(output, 'terminated')), not(eq(output, 'failed'))))))}"
+      sub_param_workflow: lark_approval_wait_poll
+      sub_param_lifecycle: transient
+    next: route_wait_result
+
+  - id: route_wait_result
+    type: switch
+    parameters:
+      on: "${input}"
+      branch.approved: mark_approved
+      branch.rejected: mark_rejected
+      branch.withdrawn: mark_withdrawn
+      branch.terminated: mark_terminated
+      branch.failed: mark_failed
+      branch._default: mark_timeout
+    branches:
+      approved: mark_approved
+      rejected: mark_rejected
+      withdrawn: mark_withdrawn
+      terminated: mark_terminated
+      failed: mark_failed
+      _default: mark_timeout
+
+  - id: mark_approved
+    type: assign
+    parameters:
+      target: lark_approval_status
+      value: approved
+
+  - id: mark_rejected
+    type: assign
+    parameters:
+      target: lark_approval_status
+      value: rejected
+
+  - id: mark_withdrawn
+    type: assign
+    parameters:
+      target: lark_approval_status
+      value: withdrawn
+
+  - id: mark_terminated
+    type: assign
+    parameters:
+      target: lark_approval_status
+      value: terminated
+
+  - id: mark_failed
+    type: assign
+    parameters:
+      target: lark_approval_status
+      value: failed
+
+  - id: mark_timeout
+    type: assign
+    parameters:
+      target: lark_approval_status
+      value: timeout

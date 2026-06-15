@@ -7,6 +7,7 @@
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.Core.Tools;
 
 namespace Aevatar.AI.Core.Middleware;
 
@@ -33,6 +34,20 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
     public async Task InvokeAsync(ToolCallContext context, Func<Task> next)
     {
         var mode = context.Tool.ApprovalMode;
+        if (TryConsumeMatchingGrant(context))
+        {
+            await next();
+            return;
+        }
+
+        if (context.ApprovalGrant != null)
+        {
+            context.Terminate = true;
+            context.TerminationKind = ToolCallTerminationKind.ApprovalDenied;
+            context.TerminationReason = "Tool approval grant does not match the requested tool call.";
+            context.Result = $"Tool '{context.ToolName}' approval grant does not match the requested tool call.";
+            return;
+        }
 
         // NeverRequire → 直接执行
         if (mode == ToolApprovalMode.NeverRequire)
@@ -73,9 +88,11 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
         var denialCount = GetRequestScopedDenialCount(context);
         if (denialCount >= MaxConsecutiveDenials)
         {
+            var reason = $"Tool '{context.ToolName}' has been denied {denialCount} times consecutively.";
             context.Terminate = true;
-            context.Result = $"Tool '{context.ToolName}' has been denied {denialCount} times consecutively. " +
-                             "Automatic block applied. Consider using a different approach.";
+            context.TerminationKind = ToolCallTerminationKind.ApprovalDenied;
+            context.TerminationReason = reason;
+            context.Result = $"{reason} Automatic block applied. Consider using a different approach.";
             return;
         }
 
@@ -119,21 +136,42 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
             case ToolApprovalDecision.Denied:
                 context.Items[DenialCountItemKey] = denialCount + 1;
                 context.Terminate = true;
+                context.TerminationKind = ToolCallTerminationKind.ApprovalDenied;
+                context.TerminationReason = result.Reason;
                 context.Result = !string.IsNullOrWhiteSpace(result.Reason)
                     ? $"Tool '{context.ToolName}' execution denied: {result.Reason}"
                     : $"Tool '{context.ToolName}' execution denied by approval handler.";
+                context.Receipt = AgentToolReceiptFactory.CreateDenied(
+                    context.Tool,
+                    context.ToolCallId,
+                    context.ToolName,
+                    context.Result,
+                    request.RequestId,
+                    result.Reason ?? "Tool approval denied.");
                 return;
 
             case ToolApprovalDecision.Timeout:
                 context.Terminate = true;
+                context.TerminationKind = ToolCallTerminationKind.ApprovalTimedOut;
+                context.TerminationReason = result.Reason;
                 context.Result = $"Tool '{context.ToolName}' approval timed out. " +
                                  "The tool was not executed. Please try again or approve when prompted.";
+                context.Receipt = AgentToolReceiptFactory.CreateApprovalError(
+                    context.Tool,
+                    context.ToolCallId,
+                    context.ToolName,
+                    context.Result,
+                    request.RequestId,
+                    "approval_timeout",
+                    "Tool approval timed out.");
                 return;
 
             case ToolApprovalDecision.Yield:
                 // 非阻塞 yield：返回 pending result，不增加 denial counter。
                 // Actor 层检测此 result 后持久化 pending state 并走事件化续传。
                 context.Terminate = true;
+                context.TerminationKind = ToolCallTerminationKind.ApprovalPending;
+                context.TerminationReason = result.Reason;
                 context.PendingApproval = new ToolApprovalPendingContext(
                     request.RequestId,
                     request.ToolName,
@@ -143,6 +181,12 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                     request.IsReadOnly,
                     request.IsDestructive);
                 context.Result = BuildApprovalPendingResult(request);
+                context.Receipt = AgentToolReceiptFactory.CreateApprovalRequired(
+                    context.Tool,
+                    context.ToolCallId,
+                    context.ToolName,
+                    context.Result,
+                    request.RequestId);
                 return;
         }
     }
@@ -152,6 +196,22 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
 
     /// <summary>Request-scoped consecutive denial count carried by the caller.</summary>
     public const string DenialCountItemKey = "approval_denial_count";
+
+    private static bool TryConsumeMatchingGrant(ToolCallContext context)
+    {
+        var grant = context.ApprovalGrant;
+        if (grant == null)
+            return false;
+
+        var approvalRequestId = Normalize(grant.ApprovalRequestId);
+        var toolName = Normalize(grant.ToolName);
+        var toolCallId = Normalize(grant.ToolCallId);
+        if (approvalRequestId.Length == 0 || toolName.Length == 0 || toolCallId.Length == 0)
+            return false;
+
+        return string.Equals(toolName, Normalize(context.ToolName), StringComparison.Ordinal) &&
+               string.Equals(toolCallId, Normalize(context.ToolCallId), StringComparison.Ordinal);
+    }
 
     private static int GetRequestScopedDenialCount(ToolCallContext context)
     {
@@ -167,6 +227,9 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
         };
     }
 
+    private static string Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
     private static string BuildApprovalPendingResult(ToolApprovalRequest request) =>
         System.Text.Json.JsonSerializer.Serialize(new
         {
@@ -174,7 +237,8 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
             request_id = request.RequestId,
             tool_name = request.ToolName,
             tool_call_id = request.ToolCallId,
-            arguments = request.ArgumentsJson,
-            message = "This tool requires user approval before execution. An approval request has been sent.",
+            message = "This tool requires user approval before execution. Execution is paused; " +
+                      "the approval request will be submitted for review and the run resumes only " +
+                      "after it is approved. Do not claim the tool has executed.",
         });
 }

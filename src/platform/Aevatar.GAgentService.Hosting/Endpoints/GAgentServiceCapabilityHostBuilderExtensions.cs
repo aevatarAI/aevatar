@@ -1,6 +1,6 @@
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -22,6 +22,8 @@ public static class GAgentServiceCapabilityHostBuilderExtensions
                 "/api/scopes/{scopeId}/binding",
                 "/api/scopes/{scopeId}/workflows",
                 "/api/scopes/{scopeId}/scripts",
+                "/api/schedules",
+                "/api/schedules/{scheduleId}",
             ],
             ProbeAsync = static async (serviceProvider, cancellationToken) =>
             {

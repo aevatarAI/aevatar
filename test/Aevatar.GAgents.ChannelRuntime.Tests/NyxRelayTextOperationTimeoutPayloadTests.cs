@@ -19,7 +19,7 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
     public async Task HandleLlmReplyStreamChunkAsync_ScheduledTimeoutPayload_StripsRuntimeRelayCredentials()
     {
         await using var callbackHarness = await RuntimeCallbackSchedulerGrainTestHarness.StartAsync();
-        var agent = CreateAgent("conv-nyx-timeout-sanitize", callbackHarness.Scheduler);
+        var agent = await CreateAgentAsync("conv-nyx-timeout-sanitize", callbackHarness.Scheduler);
 
         await agent.HandleLlmReplyStreamChunkAsync(CreateStreamChunk());
 
@@ -44,7 +44,7 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
     {
         await using var callbackHarness = await RuntimeCallbackSchedulerGrainTestHarness.StartAsync();
         var store = new InMemoryEventStore();
-        var agent = CreateAgent("conv-nyx-final-timeout-run-id", callbackHarness.Scheduler, store);
+        var agent = await CreateAgentAsync("conv-nyx-final-timeout-run-id", callbackHarness.Scheduler, store);
         var chunk = CreateStreamChunk();
 
         agent.State.PendingLlmReplyRequests.Add(new NeedsLlmReplyEvent
@@ -96,7 +96,7 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
         agent.State.LastReplyDelivery.RunId.Should().Be("run-stream-final-timeout");
     }
 
-    private static ConversationGAgent CreateAgent(
+    private static async Task<ConversationGAgent> CreateAgentAsync(
         string id,
         IActorRuntimeCallbackScheduler scheduler,
         IEventStore? store = null)
@@ -119,7 +119,7 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
                 services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
         SetId(agent, id);
-        agent.ActivateAsync().GetAwaiter().GetResult();
+        await agent.ActivateAsync();
         return agent;
     }
 

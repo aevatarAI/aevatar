@@ -760,6 +760,11 @@ function decodeStudioScopeBindingRevision(
         "staticActorTypeName",
         "StaticActorTypeName",
       ]) || "",
+    staticAgentKind:
+      readOptionalString(record, [
+        "staticAgentKind",
+        "StaticAgentKind",
+      ]) || "",
   };
 }
 
@@ -890,9 +895,9 @@ function decodeStudioScopeBindingResult(
       : targetKind === "script"
         ? readOptionalString(scriptRecord ?? {}, ["scriptId", "ScriptId"])
         : targetKind === "gagent"
-          ? readOptionalString(gAgentRecord ?? {}, [
-              "actorTypeName",
-              "ActorTypeName",
+        ? readOptionalString(gAgentRecord ?? {}, [
+              "diagnosticClrTypeName",
+              "DiagnosticClrTypeName",
             ])
           : undefined) ||
     displayName ||
@@ -950,10 +955,10 @@ function decodeStudioScopeBindingResult(
       : null,
     gAgent: gAgentRecord
       ? {
-          actorTypeName:
+          diagnosticClrTypeName:
             readOptionalString(gAgentRecord, [
-              "actorTypeName",
-              "ActorTypeName",
+              "diagnosticClrTypeName",
+              "DiagnosticClrTypeName",
             ]) || "",
         }
       : null,
@@ -1263,11 +1268,17 @@ function decodeStudioMemberImplementationRef(
         ["scriptRevision", "ScriptRevision"],
         "StudioMemberImplementationRef.scriptRevision"
       ) ?? null,
-    actorTypeName:
+    agentKind:
       readNullableString(
         record,
-        ["actorTypeName", "ActorTypeName"],
-        "StudioMemberImplementationRef.actorTypeName"
+        ["agentKind", "AgentKind"],
+        "StudioMemberImplementationRef.agentKind"
+      ) ?? null,
+    diagnosticActorTypeName:
+      readNullableString(
+        record,
+        ["diagnosticActorTypeName", "DiagnosticActorTypeName"],
+        "StudioMemberImplementationRef.diagnosticActorTypeName"
       ) ?? null,
   };
 }
@@ -2100,7 +2111,7 @@ export const studioApi = {
             serviceId: trimOptional(input.serviceId),
             displayName: trimOptional(input.displayName),
             gagent: compactObject({
-              actorTypeName: input.actorTypeName.trim(),
+              agentKind: input.agentKind.trim(),
               endpoints: input.endpoints.map((endpoint) =>
                 compactObject({
                   endpointId: endpoint.endpointId.trim(),
@@ -2190,7 +2201,7 @@ export const studioApi = {
     scopeId: string;
     memberId: string;
     displayName?: string | null;
-    actorTypeName: string;
+    agentKind: string;
     endpoints: StudioScopeGAgentBindingInput["endpoints"];
     revisionId?: string | null;
   }): Promise<StudioMemberBindingAcceptedResponse> {
@@ -2205,7 +2216,7 @@ export const studioApi = {
             implementationKind: "gagent",
             displayName: trimOptional(input.displayName),
             gagent: compactObject({
-              actorTypeName: input.actorTypeName.trim(),
+              agentKind: input.agentKind.trim(),
               endpoints: input.endpoints.map((endpoint) =>
                 compactObject({
                   endpointId: endpoint.endpointId.trim(),

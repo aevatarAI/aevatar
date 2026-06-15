@@ -46,10 +46,151 @@ public sealed class ChannelCardConversationTurnRunnerTests
         result.ErrorCode.Should().BeEmpty();
         cardKit.CreateCalls.Should().ContainSingle();
         cardKit.CreateCalls[0].Token.Should().Be("runtime-card-token-1");
-        lark.SendCalls.Should().ContainSingle();
-        lark.SendCalls[0].Token.Should().Be("runtime-card-token-1");
+        lark.ReplyCalls.Should().ContainSingle();
+        lark.ReplyCalls[0].Token.Should().Be("runtime-card-token-1");
         cardKit.StreamCalls.Should().ContainSingle();
         cardKit.StreamCalls[0].Token.Should().Be("runtime-card-token-1");
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldReplyInThread_ForGroupActivityWithInboundPlatformMessageId()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+
+        var result = await runner.RunCardCreateAsync(
+            BuildChunk("corr-card-reply-1"),
+            "streaming_main",
+            RuntimeContext("runtime-card-token-reply"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.CardMessageId.Should().Be("om_card_reply_1");
+        lark.ReplyCalls.Should().ContainSingle();
+        lark.SendCalls.Should().BeEmpty();
+
+        var reply = lark.ReplyCalls[0];
+        reply.Token.Should().Be("runtime-card-token-reply");
+        reply.Request.MessageId.Should().Be("om_inbound_1");
+        reply.Request.MessageType.Should().Be("interactive");
+        reply.Request.ReplyInThread.Should().BeTrue();
+        reply.Request.IdempotencyKey.Should().Be("corr-card-reply-1");
+        reply.Request.ContentJson.Should().Contain("card-runtime-1");
+        cardKit.StreamCalls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldReturnCardSendFailed_WhenThreadedReplyFails()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient
+        {
+            ReplyResponse = """{"code":230001,"msg":"reply rejected"}""",
+        };
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+
+        var result = await runner.RunCardCreateAsync(
+            BuildChunk("corr-card-reply-fail-1"),
+            "streaming_main",
+            RuntimeContext("runtime-card-token-reply-fail"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("card_send_failed");
+        result.ErrorSummary.Should().Contain("lark_code=230001");
+        lark.ReplyCalls.Should().ContainSingle();
+        lark.SendCalls.Should().BeEmpty();
+        cardKit.StreamCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldSendToChatId_WhenGroupActivityHasNoInboundPlatformMessageId()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+
+        var result = await runner.RunCardCreateAsync(
+            BuildChunk(
+                "corr-card-group-send-1",
+                BuildSanitizedActivity(platformMessageId: string.Empty)),
+            "streaming_main",
+            RuntimeContext("runtime-card-token-group-send"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        lark.ReplyCalls.Should().BeEmpty();
+        lark.SendCalls.Should().ContainSingle();
+        lark.SendCalls[0].Request.TargetType.Should().Be("chat_id");
+        lark.SendCalls[0].Request.TargetId.Should().Be("oc_group_chat_1");
+        lark.SendCalls[0].Request.MessageType.Should().Be("interactive");
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldSendToChatId_WhenGroupActivityPlatformMessageIdIsNotLarkMessageId()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+
+        var result = await runner.RunCardCreateAsync(
+            BuildChunk(
+                "corr-card-group-route-id-1",
+                BuildSanitizedActivity(platformMessageId: "route-uuid")),
+            "streaming_main",
+            RuntimeContext("runtime-card-token-group-route-id"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        lark.ReplyCalls.Should().BeEmpty();
+        lark.SendCalls.Should().ContainSingle();
+        lark.SendCalls[0].Request.TargetType.Should().Be("chat_id");
+        lark.SendCalls[0].Request.TargetId.Should().Be("oc_group_chat_1");
+        lark.SendCalls[0].Request.MessageType.Should().Be("interactive");
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldSendToUnionId_ForDirectMessageActivity()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+
+        var result = await runner.RunCardCreateAsync(
+            BuildChunk(
+                "corr-card-dm-send-1",
+                BuildSanitizedActivity(
+                    scope: ConversationScope.DirectMessage,
+                    partition: "route-dm-1",
+                    scopeSegment: "dm",
+                    conversationIdentity: "ou_user_1",
+                    platformMessageId: "om_dm_1")),
+            "streaming_main",
+            RuntimeContext("runtime-card-token-dm-send"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        lark.ReplyCalls.Should().BeEmpty();
+        lark.SendCalls.Should().ContainSingle();
+        lark.SendCalls[0].Request.TargetType.Should().Be("union_id");
+        lark.SendCalls[0].Request.TargetId.Should().Be("on_union_1");
+        lark.SendCalls[0].Request.MessageType.Should().Be("interactive");
     }
 
     [Fact]
@@ -110,17 +251,22 @@ public sealed class ChannelCardConversationTurnRunnerTests
         throw new InvalidOperationException("Could not locate repository root.");
     }
 
-    private static LlmReplyCardStreamChunkEvent BuildChunk(string correlationId) =>
+    private static LlmReplyCardStreamChunkEvent BuildChunk(string correlationId, ChatActivity? activity = null) =>
         new()
         {
             CorrelationId = correlationId,
             RegistrationId = "reg-1",
-            Activity = BuildSanitizedActivity(),
+            Activity = activity ?? BuildSanitizedActivity(),
             AccumulatedText = "hello card",
             ChunkAtUnixMs = 42,
         };
 
-    private static ChatActivity BuildSanitizedActivity() =>
+    private static ChatActivity BuildSanitizedActivity(
+        ConversationScope scope = ConversationScope.Group,
+        string partition = "oc_group_chat_1",
+        string scopeSegment = "group",
+        string conversationIdentity = "oc_group_chat_1",
+        string platformMessageId = "om_inbound_1") =>
         new()
         {
             Id = "msg-card-runtime-token-1",
@@ -130,10 +276,10 @@ public sealed class ChannelCardConversationTurnRunnerTests
             Conversation = ConversationReference.Create(
                 ChannelId.From("lark"),
                 BotInstanceId.From("reg-1"),
-                ConversationScope.Group,
-                "oc_group_chat_1",
-                "group",
-                "oc_group_chat_1"),
+                scope,
+                partition,
+                scopeSegment,
+                conversationIdentity),
             From = new ParticipantRef
             {
                 CanonicalId = "ou_user_1",
@@ -144,6 +290,7 @@ public sealed class ChannelCardConversationTurnRunnerTests
             {
                 NyxPlatform = "lark",
                 NyxUserAccessToken = string.Empty,
+                NyxPlatformMessageId = platformMessageId,
                 NyxLarkChatId = "oc_group_chat_1",
                 NyxLarkUnionId = "on_union_1",
             },
@@ -183,15 +330,22 @@ public sealed class ChannelCardConversationTurnRunnerTests
     private sealed class RecordingLarkNyxClient : ILarkNyxClient
     {
         public List<(string Token, LarkSendMessageRequest Request)> SendCalls { get; } = [];
+        public List<(string Token, LarkReplyMessageRequest Request)> ReplyCalls { get; } = [];
+
+        public string SendResponse { get; set; } = """{"code":0,"data":{"message_id":"om_card_runtime_1"}}""";
+        public string ReplyResponse { get; set; } = """{"code":0,"data":{"message_id":"om_card_reply_1"}}""";
 
         public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct)
         {
             SendCalls.Add((token, request));
-            return Task.FromResult("""{"code":0,"data":{"message_id":"om_card_runtime_1"}}""");
+            return Task.FromResult(SendResponse);
         }
 
-        public Task<string> ReplyToMessageAsync(string token, LarkReplyMessageRequest request, CancellationToken ct) =>
-            throw new NotSupportedException();
+        public Task<string> ReplyToMessageAsync(string token, LarkReplyMessageRequest request, CancellationToken ct)
+        {
+            ReplyCalls.Add((token, request));
+            return Task.FromResult(ReplyResponse);
+        }
 
         public Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
@@ -202,10 +356,13 @@ public sealed class ChannelCardConversationTurnRunnerTests
         public Task<string> DeleteMessageReactionAsync(string token, LarkMessageReactionDeleteRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
-        public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct) =>
+        public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
-        public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct) =>
+        public Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+            string token,
+            LarkMessageResourceDownloadRequest request,
+            CancellationToken ct) =>
             throw new NotSupportedException();
 
         public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct) =>
@@ -217,7 +374,25 @@ public sealed class ChannelCardConversationTurnRunnerTests
         public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
+        public Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
     }
 }

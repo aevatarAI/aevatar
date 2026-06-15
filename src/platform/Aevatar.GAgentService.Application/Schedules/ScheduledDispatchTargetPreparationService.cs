@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Google.Protobuf.WellKnownTypes;
@@ -37,6 +38,7 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
         if (envelope.Payload == null)
             throw new ArgumentException("Envelope scheduled dispatch target requires a payload.", nameof(configuration));
 
+        envelope.Payload = StripCredentialBearingLlmControl(envelope.Payload);
         envelope.Id = string.IsNullOrWhiteSpace(envelope.Id) ? commandId : envelope.Id.Trim();
         envelope.Timestamp ??= Timestamp.FromDateTime(DateTime.UtcNow);
         var targetActorId = ResolveTargetActorId(target.ActorId, envelope);
@@ -47,11 +49,16 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
         if (string.IsNullOrWhiteSpace(propagation.CorrelationId))
             propagation.CorrelationId = correlationId;
 
+        var safeDescriptor = configuration.Target with
+        {
+            Envelope = envelope.Clone(),
+        };
+
         return new PreparedScheduledDispatchTarget(
             targetActorId,
             envelope,
             envelope.Payload.TypeUrl,
-            configuration.Target);
+            safeDescriptor);
     }
 
     private static PreparedScheduledDispatchTarget PrepareServiceInvocationTarget(
@@ -61,11 +68,12 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
     {
         var target = configuration.Target.ServiceInvocation
             ?? throw new ArgumentException("Service invocation scheduled dispatch target is required.", nameof(configuration));
+        var safePayload = StripCredentialBearingLlmControl(target.Payload);
         var invocation = new ServiceInvocationRequest
         {
             Identity = target.Identity.Clone(),
             EndpointId = target.EndpointId,
-            Payload = target.Payload.Clone(),
+            Payload = safePayload.Clone(),
             CommandId = commandId,
             CorrelationId = correlationId,
             RevisionId = target.RevisionId ?? string.Empty,
@@ -78,12 +86,16 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
             correlationId,
             ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
             Any.Pack(invocation));
+        var safeDescriptor = configuration.Target with
+        {
+            ServiceInvocation = target with { Payload = safePayload },
+        };
 
         return new PreparedScheduledDispatchTarget(
             ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
             envelope,
             envelope.Payload.TypeUrl,
-            configuration.Target);
+            safeDescriptor);
     }
 
     private static EventEnvelope CreateAdapterEnvelope(
@@ -102,6 +114,29 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
                 CorrelationId = correlationId,
             },
         };
+
+    private static Any StripCredentialBearingLlmControl(Any payload)
+    {
+        if (!payload.Is(ChatRequestEvent.Descriptor))
+            return payload.Clone();
+
+        var chatRequest = payload.Unpack<ChatRequestEvent>();
+        if (chatRequest.LlmControl != null)
+        {
+            chatRequest.LlmControl.NyxIdAccessToken = string.Empty;
+            chatRequest.LlmControl.NyxIdOrgToken = string.Empty;
+            chatRequest.LlmControl.SenderNyxIdAccessToken = string.Empty;
+        }
+
+        if (chatRequest.ToolContext?.Credentials != null)
+        {
+            chatRequest.ToolContext.Credentials.NyxIdAccessToken = string.Empty;
+            chatRequest.ToolContext.Credentials.NyxIdOrgToken = string.Empty;
+            chatRequest.ToolContext.Credentials.SenderNyxIdAccessToken = string.Empty;
+        }
+
+        return Any.Pack(chatRequest);
+    }
 
     private static string ResolveTargetActorId(string? configuredActorId, EventEnvelope envelope)
     {

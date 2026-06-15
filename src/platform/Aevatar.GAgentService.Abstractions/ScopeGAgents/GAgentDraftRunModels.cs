@@ -27,7 +27,7 @@ public sealed record GAgentDraftRunInputPart
 // New principle: commands carry typed ToolContext and LlmControl as the authoritative internal control fields.
 public sealed record GAgentDraftRunCommand(
     string ScopeId,
-    string ActorTypeName,
+    string AgentKind,
     string Prompt,
     string? PreferredActorId = null,
     string? SessionId = null,
@@ -37,7 +37,6 @@ public sealed record GAgentDraftRunCommand(
     IReadOnlyDictionary<string, string>? Headers = null,
     IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
     bool UseCorrelationIdAsFallbackSessionId = true,
-    string? AgentKind = null,
     AgentToolExecutionContext? ToolContext = null,
     LLMControlContext? LlmControl = null,
     string? CommandIdSeed = null,
@@ -51,8 +50,8 @@ public sealed record GAgentDraftRunCommand(
 public enum GAgentDraftRunStartError
 {
     None = 0,
-    UnknownActorType = 1,
-    ActorTypeMismatch = 2,
+    UnknownAgentKind = 1,
+    ActorKindMismatch = 2,
     ProjectionUnavailable = 3,
 }
 
@@ -66,7 +65,7 @@ public enum GAgentDraftRunCompletionStatus
 
 public sealed record GAgentDraftRunAcceptedReceipt(
     string ActorId,
-    string ActorTypeName,
+    string DiagnosticClrTypeName,
     string CommandId,
     string CorrelationId,
     string SessionId = "");

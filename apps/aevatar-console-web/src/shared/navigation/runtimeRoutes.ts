@@ -129,12 +129,12 @@ export function buildRuntimeExplorerHref(options?: {
 
 export function buildRuntimeGAgentsHref(options?: {
   scopeId?: string;
-  actorTypeName?: string;
+  agentKind?: string;
   actorId?: string;
 }): string {
   return buildHref(runtimePaths.gagents, {
     scopeId: options?.scopeId,
-    type: options?.actorTypeName,
+    type: options?.agentKind,
     actorId: options?.actorId,
   });
 }

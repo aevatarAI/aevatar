@@ -84,6 +84,16 @@ public static partial class NyxIdChatEndpoints
 
             if (parsed.Ignored)
             {
+                // This branch produces no user-visible reply; without a log line a dropped
+                // turn (e.g. an unrecognized content type) is completely silent and
+                // undiagnosable. Record the reason so future drops surface in logs.
+                logger.LogInformation(
+                    "Relay payload ignored: reason={Reason}, detail={Detail}, message={MessageId}, platform={Platform}, contentType={ContentType}",
+                    parsed.ErrorCode,
+                    parsed.ErrorSummary,
+                    payload.MessageId,
+                    payload.Platform,
+                    payload.Content?.ContentType ?? payload.Content?.Type);
                 return Results.Accepted(value: new
                 {
                     status = "ignored",

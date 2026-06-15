@@ -56,7 +56,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             if (leading is not null)
                 formElements.Add(leading);
 
-            var actionElements = intent.Actions.SelectMany(BuildFormChildElements).ToArray();
+            var actionElements = EnumerateActions(intent).SelectMany(BuildFormChildElements).ToArray();
             formElements.Add(new
             {
                 tag = "form",
@@ -127,10 +127,10 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             });
         }
 
-        if (intent.Actions.Count > 0)
+        if (EnumerateActions(intent).Any())
         {
-            elements.AddRange(intent.Actions
-                .Where(action => action.Kind != ActionElementKind.TextInput)
+            elements.AddRange(EnumerateActions(intent)
+                .Where(action => action.Kind is not ActionElementKind.TextInput and not ActionElementKind.Select)
                 .Select(BuildAction));
         }
 
@@ -177,7 +177,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         if (intent.Attachments.Count > 0 && !(context.Capabilities?.SupportsFiles ?? DefaultCapabilities.SupportsFiles))
             return ComposeCapability.Unsupported;
 
-        if (intent.Actions.Count > 0 && !(context.Capabilities?.SupportsActionButtons ?? DefaultCapabilities.SupportsActionButtons))
+        if (EnumerateActions(intent).Any() && !(context.Capabilities?.SupportsActionButtons ?? DefaultCapabilities.SupportsActionButtons))
             return ComposeCapability.Degraded;
 
         return ComposeCapability.Exact;
@@ -186,7 +186,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
     private const string DefaultFormName = "card_form";
 
     private static bool RequiresFormWrapping(MessageContent intent) =>
-        intent.Actions.Any(a => a.Kind == ActionElementKind.TextInput);
+        EnumerateActions(intent).Any(a => a.Kind is ActionElementKind.TextInput or ActionElementKind.Select or ActionElementKind.FormSubmit);
 
     private static string ResolveHeaderTitle(MessageContent intent, string effectiveText)
     {
@@ -201,7 +201,18 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
     }
 
     private static string ResolveHeaderTemplate(MessageContent intent) =>
-        intent.Actions.Any(a => a.IsDanger) ? "orange" : "blue";
+        EnumerateActions(intent).Any(a => a.IsDanger) ? "orange" : "blue";
+
+    private static IEnumerable<ActionElement> EnumerateActions(MessageContent intent)
+    {
+        foreach (var action in intent.Actions)
+            yield return action;
+        foreach (var card in intent.Cards)
+        {
+            foreach (var action in card.Actions)
+                yield return action;
+        }
+    }
 
     private static object? BuildLeadingMarkdown(string effectiveText, MessageContent intent)
     {
@@ -232,23 +243,25 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
 
     private static IEnumerable<object> BuildFormChildElements(ActionElement action)
     {
-        if (action.Kind != ActionElementKind.TextInput)
+        if (action.Kind is ActionElementKind.TextInput or ActionElementKind.Select)
         {
-            yield return BuildFormButton(action);
-            yield break;
-        }
-
-        var label = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label;
-        if (!string.IsNullOrWhiteSpace(label))
-        {
-            yield return new
+            var label = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label;
+            if (!string.IsNullOrWhiteSpace(label))
             {
-                tag = "markdown",
-                content = $"**{label}**",
-            };
+                yield return new
+                {
+                    tag = "markdown",
+                    content = $"**{label}**",
+                };
+            }
         }
 
-        yield return BuildFormInput(action);
+        yield return action.Kind switch
+        {
+            ActionElementKind.TextInput => BuildFormInput(action),
+            ActionElementKind.Select => BuildFormSelect(action),
+            _ => BuildFormButton(action),
+        };
     }
 
     private static object BuildFormInput(ActionElement action)
@@ -273,19 +286,59 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         return input;
     }
 
-    private static object BuildFormButton(ActionElement action) => new
+    private static object BuildFormSelect(ActionElement action)
     {
-        tag = "button",
-        type = ResolveButtonType(action),
-        name = action.ActionId,
-        form_action_type = "submit",
-        text = new
+        var select = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            tag = "plain_text",
-            content = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label,
-        },
-        behaviors = BuildButtonBehaviors(action),
-    };
+            ["tag"] = "select_static",
+            ["name"] = action.ActionId,
+            ["type"] = "default",
+            ["width"] = "default",
+            ["placeholder"] = new
+            {
+                tag = "plain_text",
+                content = ResolvePlaceholder(action),
+            },
+            ["options"] = action.Options.Select(static option => new
+            {
+                text = new
+                {
+                    tag = "plain_text",
+                    content = string.IsNullOrWhiteSpace(option.Label) ? option.Value : option.Label,
+                },
+                value = option.Value,
+            }).ToArray(),
+            ["value"] = BuildActionValueObject(action),
+        };
+        if (!string.IsNullOrWhiteSpace(action.Value))
+            select["initial_option"] = action.Value;
+        if (action.IsDisabled)
+            select["disabled"] = true;
+        return select;
+    }
+
+    private static object BuildFormButton(ActionElement action)
+    {
+        var button = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["tag"] = "button",
+            ["type"] = ResolveButtonType(action),
+            ["text"] = new
+            {
+                tag = "plain_text",
+                content = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label,
+            },
+            ["behaviors"] = BuildButtonBehaviors(action),
+        };
+        if (action.Kind != ActionElementKind.Link)
+        {
+            button["name"] = action.ActionId;
+            button["form_action_type"] = "submit";
+        }
+        if (action.IsDisabled)
+            button["disabled"] = true;
+        return button;
+    }
 
     private static object BuildAction(ActionElement action) => new
     {
@@ -298,6 +351,15 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         type = ResolveButtonType(action),
         behaviors = BuildButtonBehaviors(action),
     };
+
+    private static string ResolvePlaceholder(ActionElement action)
+    {
+        if (!string.IsNullOrWhiteSpace(action.Placeholder))
+            return action.Placeholder;
+        if (!string.IsNullOrWhiteSpace(action.Label))
+            return action.Label;
+        return action.ActionId;
+    }
 
     private static string ResolveButtonType(ActionElement action)
     {
@@ -336,14 +398,18 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         {
             ["action_id"] = action.ActionId,
             ["value"] = action.Value,
+            ["action_kind"] = ToBoundaryActionKind(action.Kind),
         };
         CopyWorkflowResumePayload(action.WorkflowResume, map);
         CopyLlmSelectionPayload(action.LlmSelection, map);
+        CopyNyxIdApprovalPayload(action.NyxIdApproval, map);
 
         foreach (var argument in action.Arguments)
         {
             if (string.Equals(argument.Key, "action_id", StringComparison.Ordinal) ||
-                string.Equals(argument.Key, "value", StringComparison.Ordinal))
+                string.Equals(argument.Key, "value", StringComparison.Ordinal) ||
+                string.Equals(argument.Key, "action_kind", StringComparison.Ordinal) ||
+                IsReservedNyxIdApprovalArgument(action, argument.Key))
                 continue;
 
             map[argument.Key] = CoerceArgumentValue(argument.Value);
@@ -351,6 +417,22 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
 
         return map;
     }
+
+    private static bool IsReservedNyxIdApprovalArgument(ActionElement action, string key) =>
+        action.NyxIdApproval is not null &&
+        (string.Equals(key, "nyxid_approval_request_id", StringComparison.Ordinal) ||
+         string.Equals(key, "nyxid_approval_approved", StringComparison.Ordinal));
+
+    private static string ToBoundaryActionKind(ActionElementKind kind) =>
+        kind switch
+        {
+            ActionElementKind.Select => "select",
+            ActionElementKind.TextInput => "text_input",
+            ActionElementKind.FormSubmit => "form_submit",
+            ActionElementKind.Link => "link",
+            ActionElementKind.Button => "button",
+            _ => "unspecified",
+        };
 
     private static void CopyWorkflowResumePayload(
         WorkflowResumeActionPayload? payload,
@@ -396,6 +478,24 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             map["service_id"] = payload.ServiceId;
         if (!string.IsNullOrWhiteSpace(payload.PresetId))
             map["preset_id"] = payload.PresetId;
+        if (!string.IsNullOrWhiteSpace(payload.Model))
+            map["model"] = payload.Model;
+        if (payload.Page > 0)
+            map["page"] = payload.Page;
+        if (!string.IsNullOrWhiteSpace(payload.DisplayMode))
+            map["display_mode"] = payload.DisplayMode;
+    }
+
+    private static void CopyNyxIdApprovalPayload(
+        NyxIdApprovalActionPayload? payload,
+        IDictionary<string, object?> map)
+    {
+        if (payload is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(payload.RequestId))
+            map["nyxid_approval_request_id"] = payload.RequestId;
+        map["nyxid_approval_approved"] = payload.Approved;
     }
 
     private static object? CoerceArgumentValue(string raw)

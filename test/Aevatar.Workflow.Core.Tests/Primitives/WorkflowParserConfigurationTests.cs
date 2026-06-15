@@ -1,3 +1,4 @@
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 
@@ -90,6 +91,39 @@ public class WorkflowParserConfigurationTests
     }
 
     [Fact]
+    public void Parse_WhenRoleAndStepDeclareAllowedTools_ShouldBindTypedAgentToolScopes()
+    {
+        var yaml = """
+            name: tool_scope
+            roles:
+              - id: planner
+                allowed_tools: [search, calendar]
+            steps:
+              - id: scoped
+                type: llm_call
+                target_role: planner
+                allowed_tools: [calendar]
+                parameters:
+                  allowed_tools: [search]
+                  prompt_prefix: "Use scoped tool"
+              - id: no_tools
+                type: llm_call
+                target_role: planner
+                allowed_tools: []
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+
+        workflow.Roles.Should().ContainSingle().Subject.AgentToolScope.Should().NotBeNull();
+        workflow.Roles[0].AgentToolScope!.AllowedToolNames.Should().Equal("search", "calendar");
+        workflow.Steps[0].AgentToolScope.Should().NotBeNull();
+        workflow.Steps[0].AgentToolScope!.AllowedToolNames.Should().Equal("calendar");
+        workflow.Steps[0].Parameters.Should().NotContainKey("allowed_tools");
+        workflow.Steps[1].AgentToolScope.Should().NotBeNull();
+        workflow.Steps[1].AgentToolScope!.AllowedToolNames.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Parse_WhenRoleDefinesTopLevelAndExtensionsEventFields_ShouldPreferTopLevel()
     {
         var yaml = """
@@ -143,6 +177,35 @@ public class WorkflowParserConfigurationTests
         workflow.Steps[1].Type.Should().Be("cache");
         workflow.Steps[1].Parameters["child_step_type"].Should().Be("parallel");
         workflow.Steps[2].Type.Should().Be("vote");
+    }
+
+    [Fact]
+    public void Parse_WhenLeaseRootParametersProvided_ShouldLiftToParameters()
+    {
+        var yaml = """
+            name: lease_root_parameters
+            roles: []
+            steps:
+              - id: acquire
+                type: mutex
+                action: acquire
+                key: Shared/Resource
+                on_conflict: wait
+                ttl_ms: 60000
+                wait_timeout_ms: 120000
+                holder_token_variable: lease_token
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+
+        step.Type.Should().Be("lease");
+        step.Parameters["action"].Should().Be("acquire");
+        step.Parameters["key"].Should().Be("Shared/Resource");
+        step.Parameters["on_conflict"].Should().Be("wait");
+        step.Parameters["ttl_ms"].Should().Be("60000");
+        step.Parameters["wait_timeout_ms"].Should().Be("120000");
+        step.Parameters["holder_token_variable"].Should().Be("lease_token");
     }
 
     [Fact]
@@ -264,6 +327,38 @@ public class WorkflowParserConfigurationTests
     }
 
     [Fact]
+    public void Parse_WhenTransformOperationParametersProvided_ShouldLiftTypedSpecAndPreserveMap()
+    {
+        var yaml = """
+            name: transform_operation_lift
+            roles: []
+            steps:
+              - id: sum_amounts
+                type: transform
+                op: group_by
+                group_by: department
+                value_field: amount
+                aggregate: avg
+                precision: 2
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+
+        step.Parameters["op"].Should().Be("group_by");
+        step.Parameters["group_by"].Should().Be("department");
+        step.Parameters["value_field"].Should().Be("amount");
+        step.Parameters["aggregate"].Should().Be("avg");
+        step.Parameters["precision"].Should().Be("2");
+        step.TransformOperation.Should().NotBeNull();
+        step.TransformOperation!.Kind.Should().Be(TransformOperationKind.GroupBy);
+        step.TransformOperation.Key.Should().Be("department");
+        step.TransformOperation.Value.Should().Be("amount");
+        step.TransformOperation.Aggregate.Should().Be(TransformAggregateKind.Avg);
+        step.TransformOperation.Precision.Should().Be(2);
+    }
+
+    [Fact]
     public void Parse_WhenBranchesProvidedAsList_ShouldNormalizeToDictionary()
     {
         var yaml = """
@@ -328,6 +423,91 @@ public class WorkflowParserConfigurationTests
         fanout.Parameters["workers"].Should().Contain("worker_a");
         fanout.Parameters.Should().ContainKey("parallel_count").WhoseValue.Should().Be("3");
         fanout.Parameters.Should().ContainKey("vote_step_type").WhoseValue.Should().Be("vote");
+    }
+
+    [Fact]
+    public void Parse_WhenVoteAgreementRuleFieldsAtRoot_ShouldLiftToParameters()
+    {
+        var yaml = """
+            name: vote_rule_fields
+            roles: []
+            steps:
+              - id: consensus
+                type: vote_consensus
+                rule_mode: label_count_constraints
+                label_source: annotation
+                label_field: vote
+                min_approve_count: 2
+                max_reject_count: 0
+                on_agreed: accepted
+                on_rejected: rejected
+                winner_policy: first_success
+              - id: accepted
+                type: assign
+                parameters:
+                  target: result
+                  value: accepted
+              - id: rejected
+                type: assign
+                parameters:
+                  target: result
+                  value: rejected
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var vote = workflow.Steps.First(s => s.Id == "consensus");
+
+        vote.Type.Should().Be("vote");
+        vote.Parameters["rule_mode"].Should().Be("label_count_constraints");
+        vote.Parameters["label_source"].Should().Be("annotation");
+        vote.Parameters["label_field"].Should().Be("vote");
+        vote.Parameters["min_approve_count"].Should().Be("2");
+        vote.Parameters["max_reject_count"].Should().Be("0");
+        vote.Parameters["on_agreed"].Should().Be("accepted");
+        vote.Parameters["on_rejected"].Should().Be("rejected");
+        vote.Parameters["winner_policy"].Should().Be("first_success");
+    }
+
+    [Fact]
+    public void Parse_WhenParallelVoteRuleFieldsAtRoot_ShouldLiftAsVoteParamFields()
+    {
+        var yaml = """
+            name: parallel_vote_rule_fields
+            roles: []
+            steps:
+              - id: fanout
+                type: parallel
+                workers: [a, b]
+                vote_step_type: vote_consensus
+                rule_mode: quorum
+                quorum_count: 2
+                on_agreed: accepted
+              - id: accepted
+                type: assign
+                parameters:
+                  target: result
+                  value: accepted
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var fanout = workflow.Steps.First(s => s.Id == "fanout");
+
+        fanout.Type.Should().Be("parallel");
+        fanout.Parameters["vote_step_type"].Should().Be("vote");
+        fanout.Parameters["vote_param_rule_mode"].Should().Be("quorum");
+        fanout.Parameters["vote_param_quorum_count"].Should().Be("2");
+        fanout.Parameters["vote_param_on_agreed"].Should().Be("accepted");
+        fanout.Parameters.Should().NotContainKey("rule_mode");
+    }
+
+    [Fact]
+    public void PrimitiveCatalog_ShouldNotExposeStructuredAgreementAlias()
+    {
+        WorkflowPrimitiveCatalog.ToCanonicalType("vote_consensus").Should().Be("vote");
+        WorkflowPrimitiveCatalog.ToCanonicalType("structured_agreement").Should().Be("structured_agreement");
+        WorkflowPrimitiveCatalog.BuiltInCanonicalTypes.Should().Contain("vote");
+        WorkflowPrimitiveCatalog.BuiltInCanonicalTypes.Should().NotContain("structured_agreement");
+        WorkflowPrimitiveCatalog.BuiltInCanonicalTypes.Should().NotContain("agreement");
     }
 
     [Fact]
