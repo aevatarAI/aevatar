@@ -4394,6 +4394,44 @@ describe("StudioPage", () => {
     });
   });
 
+  it("does not offer the Studio inventory entry action for members outside the current Team roster", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce(
+      mockCreateDefaultTeamSummary({ entryMemberId: null })
+    );
+    mockStudioMembers = [
+      {
+        ...mockStudioMembers[0],
+        memberId: "alpha-member",
+        displayName: "Alpha member",
+        teamId: "t-alpha",
+      },
+      {
+        ...mockStudioMembers[0],
+        memberId: "other-team-member",
+        displayName: "Other team member",
+        teamId: "t-beta",
+      },
+    ];
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aother-team-member&tab=studio"
+    );
+
+    const rail = await screen.findByLabelText("Team members");
+    expect(await within(rail).findByRole("button", { name: "Alpha member" })).toBeTruthy();
+    expect(
+      within(rail).queryByRole("button", {
+        name: "Set Other team member as Team entry member",
+      })
+    ).toBeNull();
+    expect(
+      within(rail).queryByRole("button", {
+        name: "Set other-team-member as Team entry member",
+      })
+    ).toBeNull();
+    expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
+  });
+
   it("marks the selected Studio member when it is already the Team entry", async () => {
     (studioApi.getTeam as jest.Mock).mockResolvedValueOnce(
       mockCreateDefaultTeamSummary({ entryMemberId: "workspace-demo" })

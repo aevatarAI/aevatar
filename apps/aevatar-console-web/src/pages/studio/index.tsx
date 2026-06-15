@@ -8959,10 +8959,15 @@ const StudioPage: React.FC = () => {
   const selectedInventoryIsEntryMember =
     Boolean(selectedInventoryEntryMemberId) &&
     selectedInventoryEntryMemberId === studioTeamEntryMemberId;
+  const selectedInventoryEntryMemberResolved =
+    Boolean(selectedInventoryEntryMemberId) &&
+    trimOptional(workbenchStudioMemberSummary?.memberId) ===
+      selectedInventoryEntryMemberId;
   const canSetSelectedInventoryEntryMember = Boolean(
     resolvedStudioScopeId &&
       resolvedStudioTeamId &&
-      selectedInventoryEntryMemberId,
+      selectedInventoryEntryMemberId &&
+      selectedInventoryEntryMemberResolved,
   );
   const handleSetSelectedInventoryEntryMember = useCallback(async () => {
     if (
