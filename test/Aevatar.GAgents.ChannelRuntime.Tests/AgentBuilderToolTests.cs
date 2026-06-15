@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using FluentAssertions;
@@ -210,6 +211,91 @@ public sealed class AgentBuilderToolTests
             await queryPort.DidNotReceive().GetStateVersionForCallerAsync(
                 Arg.Any<string>(),
                 Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DeleteAgent_StillReturnsAccepted_WhenExecutionProjectionHasSchemaDrift()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("skill-runner-drift", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-drift",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                ApiKeyId = string.Empty,
+                OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+            }));
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+            [
+                new UserAgentCatalogReadModelEntry
+                {
+                    AgentId = "skill-runner-drift",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "summary",
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "Asia/Shanghai",
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+                },
+            ]));
+
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        executionQueryPort.QueryByAgentIdsAsync(
+                Arg.Any<IReadOnlyCollection<string>>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyDictionary<string, SkillRunnerExecutionDocument>>(
+                CreateExecutionProjectionDrift()));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        catalogCommandPort.TombstoneAsync("skill-runner-drift", Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "delete_agent",
+                  "agent_id": "skill-runner-drift",
+                  "confirm": true
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("agents").EnumerateArray()
+                .Should().ContainSingle()
+                .Subject.GetProperty("agent_id").GetString().Should().Be("skill-runner-drift");
+
+            await skillRunnerPort.Received(1).DisableAsync(
+                "skill-runner-drift",
+                "delete_agent",
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.Received(1).TombstoneAsync(
+                "skill-runner-drift",
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -500,6 +586,77 @@ public sealed class AgentBuilderToolTests
                 Arg.Any<CancellationToken>());
             await executionQueryPort.Received(1).QueryByAgentIdsAsync(
                 Arg.Is<IReadOnlyCollection<string>>(ids => ids.Contains("skill-runner-list")),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ListAgents_ReturnsCatalogOnlyRows_WhenExecutionProjectionHasSchemaDrift()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+            [
+                new UserAgentCatalogReadModelEntry
+                {
+                    AgentId = "skill-runner-list-drift",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "summary",
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "Asia/Shanghai",
+                    OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+                },
+            ]));
+
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        executionQueryPort.QueryByAgentIdsAsync(
+                Arg.Is<IReadOnlyCollection<string>>(ids => ids.Contains("skill-runner-list-drift")),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyDictionary<string, SkillRunnerExecutionDocument>>(
+                CreateExecutionProjectionDrift()));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list_agents"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("total").GetInt32().Should().Be(1);
+            var agent = doc.RootElement.GetProperty("agents").EnumerateArray().Should().ContainSingle().Subject;
+            agent.GetProperty("agent_id").GetString().Should().Be("skill-runner-list-drift");
+            agent.GetProperty("template").GetString().Should().Be("summary");
+            agent.GetProperty("schedule_cron").GetString().Should().Be("0 9 * * *");
+            agent.GetProperty("schedule_timezone").GetString().Should().Be("Asia/Shanghai");
+            agent.GetProperty("status").GetString().Should().BeEmpty();
+            agent.GetProperty("output_format").GetString().Should().Be("feishu_doc");
+            agent.GetProperty("next_scheduled_run").ValueKind.Should().Be(JsonValueKind.Null);
+            doc.RootElement.TryGetProperty("error", out _).Should().BeFalse();
+
+            await queryPort.Received(1).QueryByCallerAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await executionQueryPort.Received(1).QueryByAgentIdsAsync(
+                Arg.Is<IReadOnlyCollection<string>>(ids => ids.Contains("skill-runner-list-drift")),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -995,6 +1152,13 @@ public sealed class AgentBuilderToolTests
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetService<ILogger<AgentBuilderTool>>());
     }
+
+    private static ProjectionIndexSchemaDriftException CreateExecutionProjectionDrift() =>
+        new(
+            "Elasticsearch",
+            "aevatar-mainnet-skill-runner-execution",
+            "aevatar-mainnet-skill-runner-execution-vold",
+            "aevatar-mainnet-skill-runner-execution-vnew");
 
     private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
     {
