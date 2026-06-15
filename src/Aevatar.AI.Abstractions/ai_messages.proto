@@ -121,6 +121,7 @@ message AgentToolVisibilityScopePayload {
 message AgentToolRequestIdentityPayload {
   string request_id = 1;
   string call_id = 2;
+  string idempotency_key = 3;
 }
 
 message AgentToolCredentialsPayload {

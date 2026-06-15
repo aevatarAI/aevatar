@@ -25,7 +25,6 @@ src/Aevatar.AI.ToolProviders.ServiceInvoke/Schema/EndpointSchemaProvider.cs	153	
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Tools/ListServicesTool.cs	157	empty broad catch block
 src/Aevatar.AI.ToolProviders.Skills/SkillScriptExtractor.cs	119	empty broad catch block
 src/Aevatar.AI.ToolProviders.Skills/UseSkillTool.cs	348	empty broad catch block
-src/Aevatar.Bootstrap/Connectors/HttpConnector.cs	282	empty broad catch block
 src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSinkProjectionLeaseOrchestrator.cs	47	empty broad catch block
 src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSinkProjectionLeaseOrchestrator.cs	59	empty broad catch block
 src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs	170	broad catch returns null without visible failure signal

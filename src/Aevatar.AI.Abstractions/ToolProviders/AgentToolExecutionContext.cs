@@ -98,9 +98,9 @@ public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolN
     }
 }
 
-public sealed record AgentToolRequestIdentity(string? RequestId, string? CallId)
+public sealed record AgentToolRequestIdentity(string? RequestId, string? CallId, string? IdempotencyKey = null)
 {
-    public static AgentToolRequestIdentity Empty { get; } = new(null, null);
+    public static AgentToolRequestIdentity Empty { get; } = new(null, null, null);
 }
 
 public sealed record AgentToolCredentials(

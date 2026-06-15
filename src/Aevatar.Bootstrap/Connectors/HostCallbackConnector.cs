@@ -95,6 +95,7 @@ public sealed class HostCallbackConnector : IConnector
                     Operation = operation,
                     RunId = request.RunId,
                     StepId = request.StepId,
+                    IdempotencyKey = request.IdempotencyKey,
                     Payload = request.Payload ?? string.Empty,
                     Parameters = request.Parameters,
                     Metadata = request.Metadata,
