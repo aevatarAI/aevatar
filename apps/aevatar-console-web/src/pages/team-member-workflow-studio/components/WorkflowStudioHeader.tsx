@@ -1,5 +1,6 @@
 import {
   ArrowLeftOutlined,
+  ClockCircleOutlined,
   CloudUploadOutlined,
   CodeOutlined,
   DeleteOutlined,
@@ -22,6 +23,9 @@ import React from "react";
 import { t } from "@/shared/i18n/messages";
 
 type WorkflowStudioHeaderProps = {
+  readonly automationsHref: string;
+  readonly automationsPlaceholderReason?: string;
+  readonly canOpenAutomations: boolean;
   readonly memberPublished: boolean;
   readonly publishDisabled: boolean;
   readonly publishNotice: string;
@@ -34,6 +38,7 @@ type WorkflowStudioHeaderProps = {
   readonly dirty: boolean;
   readonly activeMemberRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
+  readonly onOpenAutomations: () => void;
   readonly onAddNode: () => void;
   readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
@@ -280,9 +285,13 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
 
 type HeaderPrimaryActionsProps = {
   readonly activeMemberRunPlaceholderReason?: string;
+  readonly automationsHref: string;
+  readonly automationsPlaceholderReason?: string;
+  readonly canOpenAutomations: boolean;
   readonly canOpenDraftRunPanel: boolean;
   readonly canViewYaml: boolean;
   readonly onAddNode: () => void;
+  readonly onOpenAutomations: () => void;
   readonly onOpenDraftRunPanel: () => void;
   readonly onPasteYamlClick: () => void;
   readonly onPublishMember: () => void;
@@ -296,9 +305,13 @@ type HeaderPrimaryActionsProps = {
 
 const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
   activeMemberRunPlaceholderReason,
+  automationsHref,
+  automationsPlaceholderReason,
+  canOpenAutomations,
   canOpenDraftRunPanel,
   canViewYaml,
   onAddNode,
+  onOpenAutomations,
   onOpenDraftRunPanel,
   onPasteYamlClick,
   onPublishMember,
@@ -343,6 +356,26 @@ const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
         {t("teamMemberWorkflowStudio.header.publishMemberShort", "Publish member")}
       </Button>
     ) : null}
+    <Button
+      disabled={!canOpenAutomations}
+      href={canOpenAutomations ? automationsHref : undefined}
+      icon={<ClockCircleOutlined />}
+      onClick={(event) => {
+        event.preventDefault();
+        onOpenAutomations();
+      }}
+      size="small"
+      title={
+        canOpenAutomations
+          ? t(
+              "teamMemberWorkflowStudio.header.openAutomations",
+              "Open recurring work for this member",
+            )
+          : automationsPlaceholderReason
+      }
+    >
+      {t("teamMemberWorkflowStudio.header.recurringWork", "Recurring work")}
+    </Button>
     <Button
       disabled={!canOpenDraftRunPanel}
       icon={<PlayCircleOutlined />}
@@ -463,6 +496,9 @@ const HeaderNodeActions: React.FC<HeaderNodeActionsProps> = ({
 };
 
 const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
+  automationsHref,
+  automationsPlaceholderReason,
+  canOpenAutomations,
   memberPublished,
   publishDisabled,
   publishNotice,
@@ -475,6 +511,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   dirty,
   activeMemberRunPlaceholderReason,
   onPublishMember,
+  onOpenAutomations,
   onAddNode,
   onDeleteConnection,
   onDeleteNode,
@@ -549,9 +586,13 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
         />
         <HeaderPrimaryActions
           activeMemberRunPlaceholderReason={activeMemberRunPlaceholderReason}
+          automationsHref={automationsHref}
+          automationsPlaceholderReason={automationsPlaceholderReason}
+          canOpenAutomations={canOpenAutomations}
           canOpenDraftRunPanel={canOpenDraftRunPanel}
           canViewYaml={canViewYaml}
           onAddNode={onAddNode}
+          onOpenAutomations={onOpenAutomations}
           onOpenDraftRunPanel={onOpenDraftRunPanel}
           onPasteYamlClick={onOpenPasteYaml}
           onPublishMember={onPublishMember}

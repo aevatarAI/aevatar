@@ -1,6 +1,7 @@
 import {
   buildTeamCreateHref,
   buildTeamDetailHref,
+  buildTeamMemberAutomationsHref,
   buildTeamMemberInvokeHref,
   buildTeamMemberWorkflowStudioHref,
   buildTeamStudioHref,
@@ -127,6 +128,35 @@ describe("teamRoutes", () => {
         teamId: "t-alpha",
       }),
     ).toBe(buildTeamsHref());
+  });
+
+  it("builds member-owned automation handoffs without using workflow or service identities", () => {
+    const memberId = "m-alpha";
+    const workflowId = "wf-alpha";
+    const publishedServiceId = "svc-alpha";
+
+    expect(
+      buildTeamMemberAutomationsHref({
+        memberId: ` ${memberId} `,
+        scopeId: " scope-alpha ",
+        teamId: " t-alpha ",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha?memberId=m-alpha&tab=automations");
+    expect(
+      buildTeamMemberAutomationsHref({
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha?tab=automations");
+    expect(
+      buildTeamMemberAutomationsHref({
+        memberId,
+        scopeId: "",
+        teamId: "t-alpha",
+      }),
+    ).toBe(buildTeamsHref());
+    expect(workflowId).not.toBe(memberId);
+    expect(publishedServiceId).not.toBe(memberId);
   });
 
   it("keeps old Studio helpers on /studio", () => {

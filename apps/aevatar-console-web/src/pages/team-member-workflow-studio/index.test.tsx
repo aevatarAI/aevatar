@@ -375,6 +375,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(await screen.findByDisplayValue("Untitled member")).toBeTruthy();
     expect(screen.getByText("Add first step")).toBeTruthy();
     expect(screen.getByText("nodes:0")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Recurring work" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Recurring work" })).toHaveAttribute(
+      "title",
+      "Save this member before adding recurring work.",
+    );
+    expect(screen.queryByRole("link", { name: "Recurring work" })).toBeNull();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(studioApi.getMember).not.toHaveBeenCalled();
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
@@ -1151,6 +1157,70 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "scope-1",
     );
     expect(studioApi.listWorkflows).not.toHaveBeenCalled();
+  });
+
+  it("opens recurring work for a published member without passing workflow or service identities", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "wf-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: "rev-alpha",
+        lifecycleStage: "bind_ready",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "wf-alpha.yaml",
+      filePath: "scope://scope-1/wf-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "wf-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    expect(await screen.findByDisplayValue("Workflow Alpha")).toBeTruthy();
+    const recurringWorkLink = await screen.findByRole("link", {
+      name: "Recurring work",
+    });
+    expect(recurringWorkLink).toHaveAttribute(
+      "href",
+      "/scopes/scope-1/teams/t-alpha?memberId=m-alpha&tab=automations",
+    );
+
+    fireEvent.click(recurringWorkLink);
+
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("memberId")).toBe("m-alpha");
+    expect(params.get("tab")).toBe("automations");
+    expect(params.get("workflowId")).toBeNull();
+    expect(params.get("serviceId")).toBeNull();
+    expect(studioApi.getWorkflow).toHaveBeenCalledWith("wf-alpha", "scope-1");
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("m-alpha", "scope-1");
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("svc-alpha", "scope-1");
   });
 
   it("does not treat the member id as a workflow draft ref when the read model omits the draft ref", async () => {

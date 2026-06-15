@@ -249,6 +249,7 @@ const enUSMessages = {
   'teams.detail.status.kind.workflow': 'Workflow',
   'teams.detail.status.unknown': 'Unknown status',
   'teams.detail.tabList.label': 'Team detail tabs',
+  'teams.detail.tabs.automations': 'Automations',
   'teams.detail.tabs.members': 'Team members',
   'teams.detail.tabs.overview': 'Overview',
   'teams.detail.test.actions.retry': 'Retry',
@@ -559,6 +560,7 @@ const enUSMessages = {
   'teams.members.actions.createFirstWorkflow': 'Create first workflow member',
   'teams.members.actions.createWorkflowMember': 'Create workflow member',
   'teams.members.actions.editInStudio': 'Edit in Studio',
+  'teams.members.actions.automate': 'Automate',
   'teams.members.actions.invokeRequiresBinding':
     'Bind this workflow member before invoking it.',
   'teams.members.actions.invokeWorkflow': 'Invoke',
@@ -567,6 +569,121 @@ const enUSMessages = {
   'teams.members.actions.workflowOnlyTitle':
     'This console currently supports workflow members only.',
   'teams.members.actions.workflowStudio': 'Workflow Studio',
+  'teams.automations.actions.addRecurringWork': 'Add recurring work',
+  'teams.automations.actions.create': 'New automation',
+  'teams.automations.actions.delete': 'Delete',
+  'teams.automations.actions.edit': 'Edit',
+  'teams.automations.actions.pause': 'Pause',
+  'teams.automations.actions.resume': 'Resume',
+  'teams.automations.actions.runNow': 'Run now',
+  'teams.automations.createPanel.description':
+    'Pick a published member, describe the job, choose a cadence, and preview the next runs before creating it.',
+  'teams.automations.createPanel.title': 'Give a member recurring work',
+  'teams.automations.description':
+    'Recurring work belongs to a member. The team view shows every commitment so operators can see what will run next and what needs attention.',
+  'teams.automations.empty.description':
+    'Create an automation from a published member so this team has visible recurring commitments.',
+  'teams.automations.empty.title': 'No recurring work yet',
+  'teams.automations.error.description':
+    'Refresh the page or try again after the schedule service is available.',
+  'teams.automations.error.title': 'Automations could not load',
+  'teams.automations.form.cadence': 'Cadence',
+  'teams.automations.form.cadenceAria': 'Automation cadence',
+  'teams.automations.form.create': 'Create automation',
+  'teams.automations.form.cron': 'Cron expression',
+  'teams.automations.form.cronAria': 'Cron expression',
+  'teams.automations.form.defaultTitle': '{memberName} recurring work',
+  'teams.automations.form.displayName': 'Name',
+  'teams.automations.form.displayNameAria': 'Automation name',
+  'teams.automations.form.displayNamePlaceholder': 'Daily escalation digest',
+  'teams.automations.form.editPromptHint':
+    'Re-enter the recurring prompt to save changes.',
+  'teams.automations.form.editTitle': 'Edit automation',
+  'teams.automations.form.enabled': 'Enabled',
+  'teams.automations.form.identityMissing':
+    "Waiting for this member's published service identity.",
+  'teams.automations.form.identityReady': 'Targets published service {serviceId}.',
+  'teams.automations.form.member': 'Member',
+  'teams.automations.form.memberAria': 'Automation member',
+  'teams.automations.form.preset.custom': 'Custom cron',
+  'teams.automations.form.preset.dailyMorning': 'Daily · 09:00',
+  'teams.automations.form.preset.hourly': 'Hourly',
+  'teams.automations.form.preset.weekdaysMorning': 'Weekdays · 09:00',
+  'teams.automations.form.preset.weeklyMonday': 'Monday · 09:00',
+  'teams.automations.form.preview': 'Preview next runs',
+  'teams.automations.form.previewHint':
+    'Preview uses the schedule service before saving.',
+  'teams.automations.form.prompt': 'Recurring prompt',
+  'teams.automations.form.promptAria': 'Recurring prompt',
+  'teams.automations.form.promptPlaceholder':
+    'Summarize escalations, blocked accounts, and follow-up owners.',
+  'teams.automations.form.save': 'Save changes',
+  'teams.automations.form.timezone': 'Timezone',
+  'teams.automations.form.timezoneAria': 'Timezone',
+  'teams.automations.form.title': 'New member automation',
+  'teams.automations.member.publishFirst':
+    'Publish this member before adding recurring work.',
+  'teams.automations.member.unknown': 'Unknown member',
+  'teams.automations.member.workflowOnly':
+    'Only workflow members can have recurring work.',
+  'teams.automations.messages.createFailed':
+    'Automation was not created: {message}',
+  'teams.automations.messages.createSuccess': 'Automation created.',
+  'teams.automations.messages.cronRequired': 'Enter a cron expression first.',
+  'teams.automations.messages.deleteSuccess': 'Automation deleted.',
+  'teams.automations.messages.previewFailed': 'Preview failed: {message}',
+  'teams.automations.messages.promptRequired':
+    'Describe the recurring work before saving it.',
+  'teams.automations.messages.runNowFailed': 'Run request failed: {message}',
+  'teams.automations.messages.runNowSuccess': 'Run requested.',
+  'teams.automations.messages.serviceIdentityLoading':
+    'Service identity is still loading.',
+  'teams.automations.messages.serviceIdentityMissing':
+    'The selected member does not have a service identity yet.',
+  'teams.automations.messages.updateFailed':
+    'Automation was not updated: {message}',
+  'teams.automations.messages.updateSuccess': 'Automation updated.',
+  'teams.automations.noPublishedMember.description':
+    'Automations need a member with a published service identity before they can run.',
+  'teams.automations.noPublishedMember.title': 'Publish a member first',
+  'teams.automations.preview.daily.cadence': 'Every weekday · 09:00',
+  'teams.automations.preview.daily.member': 'Support Analyst',
+  'teams.automations.preview.daily.nextRun': 'Next run today',
+  'teams.automations.preview.daily.prompt':
+    'Summarize escalations, blocked accounts, and follow-up owners.',
+  'teams.automations.preview.daily.title': 'Daily customer escalation digest',
+  'teams.automations.preview.runsThroughMember':
+    'Runs through the member service',
+  'teams.automations.preview.runsThroughService':
+    'Runs through {serviceId}',
+  'teams.automations.preview.status.active': 'Active',
+  'teams.automations.preview.status.attention': 'Needs attention',
+  'teams.automations.preview.weekly.cadence': 'Friday · 16:30',
+  'teams.automations.preview.weekly.member': 'Release Manager',
+  'teams.automations.preview.weekly.nextRun': 'Needs channel permission',
+  'teams.automations.preview.weekly.prompt':
+    'Prepare release handoff notes and flag deploy risks.',
+  'teams.automations.preview.weekly.title': 'Weekly release handoff',
+  'teams.automations.previewOnly': 'Automation API wiring is coming next.',
+  'teams.automations.row.nextRun': 'Next {time}',
+  'teams.automations.row.noNextRun': 'No next run',
+  'teams.automations.row.target': 'Workflow chat · {endpoint}',
+  'teams.automations.status.active': 'Active',
+  'teams.automations.status.error': 'Error',
+  'teams.automations.status.paused': 'Paused',
+  'teams.automations.title': 'Automations',
+  'teams.automations.untitled': 'Untitled automation',
+  'teams.automations.unavailable.title': 'Not ready for automation',
+  'teams.automations.upcoming.attention.caption':
+    'Weekly release handoff needs attention',
+  'teams.automations.upcoming.empty': 'No upcoming runs are visible yet.',
+  'teams.automations.upcoming.friday': 'Friday · 16:30',
+  'teams.automations.upcoming.memberCaption': '{memberName} recurring work',
+  'teams.automations.upcoming.scheduled.caption':
+    'Scheduled teammate commitment',
+  'teams.automations.upcoming.title': 'Upcoming',
+  'teams.automations.upcoming.today': 'Today · 09:00',
+  'teams.automations.upcoming.tomorrow': 'Tomorrow · 18:00',
   'teams.members.columns.actions': 'Actions',
   'teams.members.columns.implementation': 'Implementation',
   'teams.members.columns.member': 'Member',
@@ -681,6 +798,10 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.activation.publishing': 'Publishing',
   'teamMemberWorkflowStudio.header.activation.ready': 'Ready',
   'teamMemberWorkflowStudio.header.addNode': 'Add node',
+  'teamMemberWorkflowStudio.header.automations.publishFirst':
+    'Publish this member before adding recurring work.',
+  'teamMemberWorkflowStudio.header.automations.saveFirst':
+    'Save this member before adding recurring work.',
   'teamMemberWorkflowStudio.header.back': 'Back',
   'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
   'teamMemberWorkflowStudio.header.deleteConnection': 'Delete connection',
@@ -690,6 +811,8 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow draft and node actions',
+  'teamMemberWorkflowStudio.header.openAutomations':
+    'Open recurring work for this member',
   'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
@@ -697,6 +820,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
   'teamMemberWorkflowStudio.header.runActiveMember': 'Run draft',
   'teamMemberWorkflowStudio.header.runDraft': 'Run draft',
+  'teamMemberWorkflowStudio.header.recurringWork': 'Recurring work',
   'teamMemberWorkflowStudio.header.save': 'Save',
   'teamMemberWorkflowStudio.header.saveDraft': 'Save draft',
   'teamMemberWorkflowStudio.header.tabs.editor': 'Editor',

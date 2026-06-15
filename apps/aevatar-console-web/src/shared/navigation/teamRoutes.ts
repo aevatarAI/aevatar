@@ -2,6 +2,7 @@ import { buildStudioRoute } from '@/shared/studio/navigation';
 
 type TeamDetailTab =
   | 'overview'
+  | 'automations'
   | 'members';
 
 type TeamToStudioMode = 'create-member' | 'edit-member' | 'build-member';
@@ -36,6 +37,7 @@ function parseTeamTab(
 ): TeamDetailTab {
   switch (trimOptional(value).toLowerCase()) {
     case 'overview':
+    case 'automations':
     case 'members':
       return trimOptional(value).toLowerCase() as TeamDetailTab;
     default:
@@ -220,6 +222,34 @@ export function buildTeamMemberInvokeHref(options: {
   }
 
   return `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/invoke`;
+}
+
+export function buildTeamMemberAutomationsHref(options: {
+  memberId?: string;
+  scopeId: string;
+  teamId: string;
+}): string {
+  const scopeId = trimOptional(options.scopeId);
+  const teamId = trimOptional(options.teamId);
+  if (!scopeId || !teamId) {
+    return buildTeamsHref();
+  }
+
+  const memberId = trimOptional(options.memberId);
+  if (!memberId) {
+    return buildTeamDetailHref({
+      scopeId,
+      tab: 'automations',
+      teamId,
+    });
+  }
+
+  return buildTeamDetailHref({
+    memberId,
+    scopeId,
+    tab: 'automations',
+    teamId,
+  });
 }
 
 export function readTeamDetailRouteState(
