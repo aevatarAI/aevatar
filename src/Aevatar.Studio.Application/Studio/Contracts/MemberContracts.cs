@@ -192,8 +192,21 @@ public sealed record CreateStudioMemberRequest(
 /// empty-string value reaching the actor.
 /// </summary>
 public sealed record UpdateStudioMemberRequest(
+    PatchValue<string> DisplayName = default,
     PatchValue<string> TeamId = default,
     PatchValue<StudioMemberImplementationRefResponse> ImplementationRef = default);
+
+public static class StudioMemberCommandStatusNames
+{
+    public const string Accepted = "accepted";
+    public const string NoChange = "no_change";
+}
+
+public sealed record StudioMemberCommandResponse(
+    string Status,
+    string ScopeId,
+    string MemberId,
+    DateTimeOffset? AckedAt = null);
 
 /// <summary>
 /// Centralized input bounds applied at the create boundary so a single

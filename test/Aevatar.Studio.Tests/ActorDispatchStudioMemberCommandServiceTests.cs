@@ -183,6 +183,26 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
+    public async Task RenameAsync_ShouldDispatchRenamedEventToCanonicalActor()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
+
+        await service.RenameAsync(ScopeId, "m-1", "  Renamed Workflow  ", CancellationToken.None);
+
+        bootstrap.EnsuredActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-member:scope-1:m-1");
+        dispatch.Dispatches.Should().ContainSingle();
+        var dispatched = dispatch.Dispatches[0];
+        dispatched.ActorId.Should().Be("studio-member:scope-1:m-1");
+        dispatched.Envelope.Payload.Is(StudioMemberRenamedEvent.Descriptor).Should().BeTrue();
+        var evt = dispatched.Envelope.Payload.Unpack<StudioMemberRenamedEvent>();
+        evt.DisplayName.Should().Be("Renamed Workflow");
+        evt.UpdatedAtUtc.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task StartBindingRunAsync_ShouldDispatchRequestedEventToRunActor()
     {
         var bootstrap = new RecordingBootstrap();
