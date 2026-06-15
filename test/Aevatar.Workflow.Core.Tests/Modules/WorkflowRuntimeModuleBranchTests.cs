@@ -1216,6 +1216,32 @@ public sealed class WorkflowRuntimeModuleBranchTests
         public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default) =>
             ClearStateAsync(scopeKey, ct);
 
+        public Task<WorkflowCompensationTransitionResult> TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            CancellationToken ct = default)
+        {
+            _ = terminalFailure;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
+
         public Task UpdateExecutionContextAsync(
             WorkflowRunExecutionContextDelta delta,
             CancellationToken ct = default)

@@ -43,6 +43,7 @@ public sealed class WorkflowRunGAgent
     private const string StoppedStatus = "stopped";
     private const string CompensatingSagaStatus = "compensating";
     private const string CompensatedFailedSagaStatus = "compensated_failed";
+    private const string CompensationDeadLetterSagaStatus = "compensation_dead_letter";
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
@@ -210,7 +211,6 @@ public sealed class WorkflowRunGAgent
         return BuildCompensationResult(
             WorkflowCompensationTransitionStatus.Started,
             entry,
-            cursor,
             executionId);
     }
 
@@ -237,6 +237,10 @@ public sealed class WorkflowRunGAgent
             return EmptyCompensationResult(WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate);
         }
 
+        var remainingUncompensated = completion.Success
+            ? 0
+            : CalculateRemainingUncompensated(State.CompensableLedger.Count, cursor);
+
         await PersistDomainEventAsync(new CompensationStepCompletedEvent
         {
             RunId = WorkflowRunIdNormalizer.Normalize(completion.RunId),
@@ -247,7 +251,16 @@ public sealed class WorkflowRunGAgent
         }, ct);
 
         if (!completion.Success)
-            return EmptyCompensationResult(WorkflowCompensationTransitionStatus.FailedSeam);
+        {
+            await PersistDomainEventAsync(new WorkflowCompensationFailedEvent
+            {
+                RunId = State.RunId ?? string.Empty,
+                FailedCompensationStepId = currentEntry.CompensationStepId ?? string.Empty,
+                RemainingUncompensated = remainingUncompensated,
+                Error = completion.Error ?? string.Empty,
+            }, ct);
+            return EmptyCompensationResult(WorkflowCompensationTransitionStatus.CompensationDeadLettered);
+        }
 
         var nextCursor = cursor - 1;
         if (nextCursor < 0)
@@ -275,7 +288,6 @@ public sealed class WorkflowRunGAgent
         return BuildCompensationResult(
             WorkflowCompensationTransitionStatus.AdvancedAndRequestedNext,
             nextEntry,
-            nextCursor,
             nextExecutionId);
     }
 
@@ -998,6 +1010,7 @@ public sealed class WorkflowRunGAgent
             .On<CompensationRequestEvent>(ApplyCompensationRequest)
             .On<CompensationStepCompletedEvent>(ApplyCompensationStepCompleted)
             .On<WorkflowCompensationCompletedEvent>(ApplyWorkflowCompensationCompleted)
+            .On<WorkflowCompensationFailedEvent>(ApplyWorkflowCompensationFailed)
             .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
             .On<WorkflowRunStoppedEvent>(ApplyWorkflowRunStopped)
@@ -1035,6 +1048,9 @@ public sealed class WorkflowRunGAgent
         next.CompensationCursor = 0;
         next.SagaStatus = string.Empty;
         next.CompensationExecutionId = string.Empty;
+        next.DeadLetterFailedCompensationStepId = string.Empty;
+        next.DeadLetterRemainingUncompensated = 0;
+        next.DeadLetterError = string.Empty;
         next.ExecutionStates.Clear();
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.SubWorkflowBindings.Clear();
@@ -1077,6 +1093,9 @@ public sealed class WorkflowRunGAgent
         next.CompensationCursor = 0;
         next.SagaStatus = string.Empty;
         next.CompensationExecutionId = string.Empty;
+        next.DeadLetterFailedCompensationStepId = string.Empty;
+        next.DeadLetterRemainingUncompensated = 0;
+        next.DeadLetterError = string.Empty;
         next.ExecutionContext ??= new WorkflowRunExecutionContextState();
         ApplyExecutionContextDelta(next.ExecutionContext, evt.ExecutionContextDelta);
         if (string.IsNullOrWhiteSpace(next.DefinitionActorId) && !string.IsNullOrWhiteSpace(evt.DefinitionActorId))
@@ -1292,6 +1311,22 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
+    private static WorkflowRunState ApplyWorkflowCompensationFailed(
+        WorkflowRunState current,
+        WorkflowCompensationFailedEvent evt)
+    {
+        var next = current.Clone();
+        next.Status = FailedStatus;
+        next.FinalOutput = string.Empty;
+        next.FinalError = evt.Error ?? string.Empty;
+        next.SagaStatus = CompensationDeadLetterSagaStatus;
+        next.CompensationExecutionId = string.Empty;
+        next.DeadLetterFailedCompensationStepId = evt.FailedCompensationStepId ?? string.Empty;
+        next.DeadLetterRemainingUncompensated = Math.Max(0, evt.RemainingUncompensated);
+        next.DeadLetterError = evt.Error ?? string.Empty;
+        return next;
+    }
+
     private static WorkflowRunState ApplyWorkflowStopped(WorkflowRunState current, WorkflowStoppedEvent evt)
     {
         var next = current.Clone();
@@ -1378,26 +1413,31 @@ public sealed class WorkflowRunGAgent
         return BuildCompensationResult(
             status,
             entry,
-            State.CompensationCursor,
             State.CompensationExecutionId ?? string.Empty);
     }
 
     private static WorkflowCompensationTransitionResult BuildCompensationResult(
         WorkflowCompensationTransitionStatus status,
         CompletedStepLedgerEntry entry,
-        int cursor,
         string executionId) =>
         new(
             status,
             entry.CompensationStepId ?? string.Empty,
             entry.IdempotencyKey ?? string.Empty,
             entry.CapturedOutput ?? string.Empty,
-            cursor,
             executionId ?? string.Empty);
 
     private static WorkflowCompensationTransitionResult EmptyCompensationResult(
         WorkflowCompensationTransitionStatus status) =>
-        new(status, string.Empty, string.Empty, string.Empty, 0, string.Empty);
+        new(status, string.Empty, string.Empty, string.Empty, string.Empty);
+
+    private static int CalculateRemainingUncompensated(int ledgerCount, int cursor)
+    {
+        if (ledgerCount <= 0)
+            return 0;
+
+        return Math.Clamp(cursor + 1, 0, ledgerCount);
+    }
 
     private bool TryGetLedgerEntry(int cursor, [NotNullWhen(true)] out CompletedStepLedgerEntry? entry)
     {
