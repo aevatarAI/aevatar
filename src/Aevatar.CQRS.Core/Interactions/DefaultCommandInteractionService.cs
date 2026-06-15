@@ -273,7 +273,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(
+            _logger.LogWarning(
                 ex,
                 "Observed buffered-frame flush failure after command interaction pump failure. command={CommandType}, target={TargetType}",
                 typeof(TCommand).FullName,
@@ -293,7 +293,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(
+            _logger.LogWarning(
                 ex,
                 "Observed command interaction pump completion after cancellation. command={CommandType}, target={TargetType}",
                 typeof(TCommand).FullName,
