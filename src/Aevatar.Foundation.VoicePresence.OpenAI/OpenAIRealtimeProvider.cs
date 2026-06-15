@@ -27,28 +27,33 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 
     private readonly IOpenAIRealtimeSessionFactory _sessionFactory;
     private readonly OpenAIRealtimeProviderOptions _options;
+    private readonly IRealtimeProviderCredentialResolver? _credentialResolver;
     private readonly ILogger _logger;
 
     private bool _disposed;
 
     public OpenAIRealtimeProvider(
         OpenAIRealtimeProviderOptions? options = null,
-        ILogger<OpenAIRealtimeProvider>? logger = null)
+        ILogger<OpenAIRealtimeProvider>? logger = null,
+        IRealtimeProviderCredentialResolver? credentialResolver = null)
         : this(
             new OpenAIRealtimeSessionFactory(),
             options ?? new OpenAIRealtimeProviderOptions(),
-            logger ?? NullLogger<OpenAIRealtimeProvider>.Instance)
+            logger ?? NullLogger<OpenAIRealtimeProvider>.Instance,
+            credentialResolver)
     {
     }
 
     internal OpenAIRealtimeProvider(
         IOpenAIRealtimeSessionFactory sessionFactory,
         OpenAIRealtimeProviderOptions options,
-        ILogger logger)
+        ILogger logger,
+        IRealtimeProviderCredentialResolver? credentialResolver = null)
     {
         _sessionFactory = sessionFactory ?? throw new ArgumentNullException(nameof(sessionFactory));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _credentialResolver = credentialResolver;
     }
 
     public async Task<RealtimeVoiceProviderSession> ConnectAsync(
@@ -62,9 +67,11 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(eventSink);
         ArgumentNullException.ThrowIfNull(audioSink);
-        ValidateProviderConfig(config);
 
-        var session = await _sessionFactory.StartConversationSessionAsync(config, _options.DefaultModel, ct);
+        var effectiveConfig = await ResolveEffectiveConfigAsync(sessionKey, config, ct);
+        ValidateProviderConfig(effectiveConfig);
+
+        var session = await _sessionFactory.StartConversationSessionAsync(effectiveConfig, _options.DefaultModel, ct);
         var providerSession = new OpenAIRealtimeProviderSession(sessionKey, session, this, _logger, eventSink, audioSink);
         providerSession.Start();
         return providerSession;
@@ -289,6 +296,28 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         }
 
         return requested;
+    }
+
+    // Refactor (cluster-voice-nyxid-ephemeral-broker):
+    //   Old pattern: config.ApiKey was a static OPENAI_API_KEY loaded from host config/env and used as-is.
+    //   New principle: when a credential resolver is wired (NyxID broker mode), resolve a short-lived
+    //     ephemeral key per connect; otherwise fall back to the static config key (local/direct dev).
+    //   The resolved key only opens the provider connection and is never persisted.
+    private async Task<VoiceProviderConfig> ResolveEffectiveConfigAsync(
+        VoiceProviderSessionKey sessionKey,
+        VoiceProviderConfig config,
+        CancellationToken ct)
+    {
+        if (_credentialResolver is null)
+            return config;
+
+        var resolvedApiKey = await _credentialResolver.ResolveApiKeyAsync(sessionKey, config, ct);
+        if (string.IsNullOrWhiteSpace(resolvedApiKey))
+            return config;
+
+        var effective = config.Clone();
+        effective.ApiKey = resolvedApiKey;
+        return effective;
     }
 
     private static void ValidateProviderConfig(VoiceProviderConfig config)

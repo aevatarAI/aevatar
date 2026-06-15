@@ -571,6 +571,69 @@ public class OpenAIRealtimeProviderTests
         callCount.ShouldBeGreaterThanOrEqualTo(3);
     }
 
+    [Fact]
+    public async Task Connect_uses_resolver_provided_ephemeral_key_over_static_config()
+    {
+        var session = new FakeSession();
+        var factory = new FakeSessionFactory(session);
+        var provider = new OpenAIRealtimeProvider(
+            factory,
+            new OpenAIRealtimeProviderOptions(),
+            NullLogger<OpenAIRealtimeProvider>.Instance,
+            new StubCredentialResolver("ek_session_123"));
+
+        await using var providerSession = await provider.ConnectAsync(
+            new VoiceProviderSessionKey("session-1", "owner-1", "transport-1", 1),
+            new VoiceProviderConfig { ProviderName = "openai", ApiKey = string.Empty, Model = "gpt-realtime" },
+            static (_, _, _) => Task.CompletedTask,
+            static (_, _, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        factory.LastConfig.ShouldNotBeNull();
+        factory.LastConfig!.ApiKey.ShouldBe("ek_session_123");
+    }
+
+    [Fact]
+    public async Task Connect_without_resolver_uses_static_config_key()
+    {
+        var session = new FakeSession();
+        var factory = new FakeSessionFactory(session);
+        var provider = new OpenAIRealtimeProvider(
+            factory,
+            new OpenAIRealtimeProviderOptions(),
+            NullLogger<OpenAIRealtimeProvider>.Instance);
+
+        await using var providerSession = await provider.ConnectAsync(
+            new VoiceProviderSessionKey("session-1", "owner-1", "transport-1", 1),
+            CreateConfig(),
+            static (_, _, _) => Task.CompletedTask,
+            static (_, _, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        factory.LastConfig!.ApiKey.ShouldBe("sk-test");
+    }
+
+    [Fact]
+    public async Task Connect_when_resolver_returns_null_falls_back_to_static_config_key()
+    {
+        var session = new FakeSession();
+        var factory = new FakeSessionFactory(session);
+        var provider = new OpenAIRealtimeProvider(
+            factory,
+            new OpenAIRealtimeProviderOptions(),
+            NullLogger<OpenAIRealtimeProvider>.Instance,
+            new StubCredentialResolver(null));
+
+        await using var providerSession = await provider.ConnectAsync(
+            new VoiceProviderSessionKey("session-1", "owner-1", "transport-1", 1),
+            CreateConfig(),
+            static (_, _, _) => Task.CompletedTask,
+            static (_, _, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        factory.LastConfig!.ApiKey.ShouldBe("sk-test");
+    }
+
     private static OpenAIRealtimeProvider CreateProvider(
         IOpenAIRealtimeSession session,
         OpenAIRealtimeProviderOptions? options = null)
@@ -622,6 +685,15 @@ public class OpenAIRealtimeProviderTests
             },
             ct);
 
+    private sealed class StubCredentialResolver(string? apiKey) : IRealtimeProviderCredentialResolver
+    {
+        public Task<string?> ResolveApiKeyAsync(
+            VoiceProviderSessionKey sessionKey,
+            VoiceProviderConfig config,
+            CancellationToken ct) =>
+            Task.FromResult(apiKey);
+    }
+
     private sealed class FakeSessionFactory : IOpenAIRealtimeSessionFactory
     {
         private readonly IOpenAIRealtimeSession _session;
@@ -631,12 +703,14 @@ public class OpenAIRealtimeProviderTests
             _session = session;
         }
 
+        public VoiceProviderConfig? LastConfig { get; private set; }
+
         public Task<IOpenAIRealtimeSession> StartConversationSessionAsync(
             VoiceProviderConfig config,
             string defaultModel,
             CancellationToken ct)
         {
-            _ = config;
+            LastConfig = config;
             _ = defaultModel;
             _ = ct;
             return Task.FromResult(_session);
