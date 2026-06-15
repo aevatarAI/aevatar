@@ -442,6 +442,9 @@ public sealed class StudioMemberService : IStudioMemberService
         var detail = await _memberQueryPort.GetAsync(normalizedScopeId, memberId, ct)
             ?? throw new StudioMemberNotFoundException(normalizedScopeId, memberId);
 
+        if (!HasCurrentCompletedBinding(detail))
+            throw BuildMemberNotBoundException(memberId);
+
         var publishedServiceId = detail.Summary.PublishedServiceId;
         if (string.IsNullOrWhiteSpace(publishedServiceId))
         {
@@ -472,6 +475,11 @@ public sealed class StudioMemberService : IStudioMemberService
             service,
             revisions);
     }
+
+    private static bool HasCurrentCompletedBinding(StudioMemberDetailResponse detail) =>
+        string.Equals(detail.Summary.LifecycleStage, MemberLifecycleStageNames.BindReady, StringComparison.Ordinal)
+        && (!string.IsNullOrWhiteSpace(detail.Summary.LastBoundRevisionId)
+            || !string.IsNullOrWhiteSpace(detail.LastBinding?.RevisionId));
 
     private static ServiceRevisionSnapshot ResolveRevisionOrThrow(
         ServiceRevisionCatalogSnapshot? revisions,

@@ -168,7 +168,21 @@ public sealed class StudioTeamEntryMemberResolverTests
     }
 
     [Fact]
-    public async Task ResolveAsync_ShouldThrowNotReady_WhenPublishedServiceMissing()
+    public async Task ResolveAsync_ShouldThrowNotReady_WhenCompletedBindingMissing()
+    {
+        var resolver = new StudioTeamEntryMemberResolver(
+            new TeamQueryPort(NewTeam()),
+            new MemberQueryPort(NewMember(lastBoundRevisionId: null)),
+            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true));
+
+        var act = () => resolver.ResolveAsync(ScopeId, TeamId, "chat");
+
+        await act.Should().ThrowAsync<TeamEntryMemberResolutionException>()
+            .Where(ex => ex.Code == TeamEntryMemberErrorCodes.EntryMemberNotReady);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldThrowNotReady_WhenCompletedBindingHasNoServiceIdentity()
     {
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(NewTeam()),
@@ -247,7 +261,8 @@ public sealed class StudioTeamEntryMemberResolverTests
     private static StudioMemberDetailResponse NewMember(
         string? teamId = TeamId,
         string lifecycleStage = MemberLifecycleStageNames.BindReady,
-        string publishedServiceId = PublishedServiceId)
+        string publishedServiceId = PublishedServiceId,
+        string? lastBoundRevisionId = "rev-1")
     {
         var summary = new StudioMemberSummaryResponse(
             MemberId: EntryMemberId,
@@ -257,7 +272,7 @@ public sealed class StudioTeamEntryMemberResolverTests
             ImplementationKind: MemberImplementationKindNames.Workflow,
             LifecycleStage: lifecycleStage,
             PublishedServiceId: publishedServiceId,
-            LastBoundRevisionId: "rev-1",
+            LastBoundRevisionId: lastBoundRevisionId,
             CreatedAt: DateTimeOffset.UtcNow.AddDays(-1),
             UpdatedAt: DateTimeOffset.UtcNow)
         {

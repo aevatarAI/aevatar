@@ -191,12 +191,38 @@ public sealed class StudioMemberServiceContractAndRevisionTests
     [Fact]
     public async Task GetEndpointContractAsync_ShouldThrowInvalidOperation_WhenMemberNotYetBound()
     {
-        // Member exists but has not been bound, so the platform lifecycle
-        // port has no service catalog entry. Surface as InvalidOperation,
-        // which endpoints map to 400, distinct from 404 missing-member.
-        var detail = NewDetail();
+        // The member-owned publishedServiceId is stable identity, not a
+        // completed binding fact. Even if a platform service catalog entry
+        // exists for that identity, member-first contract reads must wait for
+        // the member read model to expose a current completed binding.
+        var detail = NewDetail(lastBoundRevisionId: null);
         var queryPort = new InMemoryMemberQueryPort(detail);
-        var lifecycle = new InMemoryServiceLifecycleQueryPort { Service = null };
+        var lifecycle = new InMemoryServiceLifecycleQueryPort
+        {
+            Service = NewService(
+                endpoints:
+                [
+                    new ServiceEndpointSnapshot(
+                        EndpointId: "chat",
+                        DisplayName: "Chat",
+                        Kind: "chat",
+                        RequestTypeUrl: "type.googleapis.com/x.Request",
+                        ResponseTypeUrl: "type.googleapis.com/x.Response",
+                        Description: string.Empty),
+                ]),
+            Revisions = NewRevisions(
+                implementationKind: ServiceImplementationKind.Workflow,
+                endpoints:
+                [
+                    new ServiceEndpointSnapshot(
+                        EndpointId: "chat",
+                        DisplayName: "Chat",
+                        Kind: "chat",
+                        RequestTypeUrl: "type.googleapis.com/x.Request",
+                        ResponseTypeUrl: "type.googleapis.com/x.Response",
+                        Description: string.Empty),
+                ]),
+        };
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
@@ -210,6 +236,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*has no published service yet*");
+        lifecycle.LastIdentity.Should().BeNull();
     }
 
     [Fact]
@@ -391,7 +418,9 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         commandPort.OperationsInOrder.Should().BeEmpty();
     }
 
-    private static StudioMemberDetailResponse NewDetail()
+    private static StudioMemberDetailResponse NewDetail(
+        string lifecycleStage = MemberLifecycleStageNames.BindReady,
+        string? lastBoundRevisionId = "rev-1")
     {
         var summary = new StudioMemberSummaryResponse(
             MemberId: MemberId,
@@ -399,9 +428,9 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             DisplayName: "Test Member",
             Description: string.Empty,
             ImplementationKind: MemberImplementationKindNames.Workflow,
-            LifecycleStage: MemberLifecycleStageNames.BindReady,
+            LifecycleStage: lifecycleStage,
             PublishedServiceId: PublishedServiceId,
-            LastBoundRevisionId: "rev-1",
+            LastBoundRevisionId: lastBoundRevisionId,
             CreatedAt: DateTimeOffset.UtcNow.AddDays(-1),
             UpdatedAt: DateTimeOffset.UtcNow.AddHours(-1));
 

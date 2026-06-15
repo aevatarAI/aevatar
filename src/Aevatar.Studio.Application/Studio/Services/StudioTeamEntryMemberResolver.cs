@@ -86,13 +86,22 @@ public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
         }
 
         if (!string.Equals(member.Summary.LifecycleStage, MemberLifecycleStageNames.BindReady, StringComparison.Ordinal)
-            || string.IsNullOrWhiteSpace(member.Summary.PublishedServiceId))
+            || !HasCompletedBinding(member))
         {
             throw Failure(
                 TeamEntryMemberErrorCodes.EntryMemberNotReady,
                 team.ScopeId,
                 team.TeamId,
                 $"entry member '{entryMemberId}' is not bind-ready.");
+        }
+
+        if (string.IsNullOrWhiteSpace(member.Summary.PublishedServiceId))
+        {
+            throw Failure(
+                TeamEntryMemberErrorCodes.EntryMemberNotReady,
+                team.ScopeId,
+                team.TeamId,
+                $"entry member '{entryMemberId}' has no published service identity.");
         }
 
         var readiness = await _readinessQueryPort.GetReadinessAsync(
@@ -116,6 +125,10 @@ public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
             EntryMemberId: entryMemberId,
             PublishedServiceId: member.Summary.PublishedServiceId);
     }
+
+    private static bool HasCompletedBinding(StudioMemberDetailResponse member) =>
+        !string.IsNullOrWhiteSpace(member.Summary.LastBoundRevisionId)
+        || !string.IsNullOrWhiteSpace(member.LastBinding?.RevisionId);
 
     private static string NormalizeRequired(string? value, string fieldName)
     {

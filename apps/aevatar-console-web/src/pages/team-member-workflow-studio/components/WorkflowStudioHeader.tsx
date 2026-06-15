@@ -7,6 +7,7 @@ import {
   FileTextOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  ReloadOutlined,
   SaveOutlined,
 } from "@ant-design/icons";
 import {
@@ -28,12 +29,15 @@ type WorkflowStudioHeaderProps = {
   readonly publishPending: boolean;
   readonly publishPlaceholderReason?: string;
   readonly publishTone: "default" | "processing" | "success" | "warning" | "error";
+  readonly refreshPublishStatusPending: boolean;
+  readonly showRefreshPublishStatus: boolean;
   readonly canOpenDraftRunPanel: boolean;
   readonly canSave: boolean;
   readonly canViewYaml: boolean;
   readonly dirty: boolean;
   readonly activeMemberRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
+  readonly onRefreshPublishStatus: () => void;
   readonly onAddNode: () => void;
   readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
@@ -70,7 +74,7 @@ function formatPublishStatusLabel(input: {
   }
 
   if (input.tone === "processing") {
-    return t("teamMemberWorkflowStudio.header.publish.binding", "Binding");
+    return t("teamMemberWorkflowStudio.header.publish.publishingStatus", "Publishing");
   }
 
   return input.checked
@@ -286,12 +290,15 @@ type HeaderPrimaryActionsProps = {
   readonly onOpenDraftRunPanel: () => void;
   readonly onPasteYamlClick: () => void;
   readonly onPublishMember: () => void;
+  readonly onRefreshPublishStatus: () => void;
   readonly onViewYaml: () => void;
   readonly pasteYamlPending: boolean;
   readonly publishDisabled: boolean;
   readonly publishPending: boolean;
   readonly publishPlaceholderReason?: string;
+  readonly refreshPublishStatusPending: boolean;
   readonly showPublishButton: boolean;
+  readonly showRefreshPublishStatus: boolean;
 };
 
 const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
@@ -302,12 +309,15 @@ const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
   onOpenDraftRunPanel,
   onPasteYamlClick,
   onPublishMember,
+  onRefreshPublishStatus,
   onViewYaml,
   pasteYamlPending,
   publishDisabled,
   publishPending,
   publishPlaceholderReason,
+  refreshPublishStatusPending,
   showPublishButton,
+  showRefreshPublishStatus,
 }) => (
   <section
     aria-label={t(
@@ -341,6 +351,23 @@ const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
         }
       >
         {t("teamMemberWorkflowStudio.header.publishMemberShort", "Publish member")}
+      </Button>
+    ) : null}
+    {showRefreshPublishStatus ? (
+      <Button
+        icon={<ReloadOutlined />}
+        loading={refreshPublishStatusPending}
+        onClick={onRefreshPublishStatus}
+        size="small"
+        title={t(
+          "teamMemberWorkflowStudio.header.refreshPublishStatusTitle",
+          "Refresh published member status",
+        )}
+      >
+        {t(
+          "teamMemberWorkflowStudio.header.refreshPublishStatus",
+          "Refresh status",
+        )}
       </Button>
     ) : null}
     <Button
@@ -469,6 +496,8 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   publishPending,
   publishPlaceholderReason,
   publishTone,
+  refreshPublishStatusPending,
+  showRefreshPublishStatus,
   canOpenDraftRunPanel,
   canSave,
   canViewYaml,
@@ -480,6 +509,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   onDeleteNode,
   onOpenDraftRunPanel,
   onOpenPasteYaml,
+  onRefreshPublishStatus,
   onViewYaml,
   onNavigateBack,
   onNavigateToTeam,
@@ -506,10 +536,8 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
     .join(" · ");
   const showPublishButton =
     publishPending ||
-    publishTone === "processing" ||
     publishTone === "error" ||
-    dirty ||
-    !memberPublished ||
+    (!memberPublished && publishTone !== "processing") ||
     !publishDisabled;
   return (
     <header
@@ -555,12 +583,15 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           onOpenDraftRunPanel={onOpenDraftRunPanel}
           onPasteYamlClick={onOpenPasteYaml}
           onPublishMember={onPublishMember}
+          onRefreshPublishStatus={onRefreshPublishStatus}
           onViewYaml={onViewYaml}
           pasteYamlPending={pasteYamlPending}
           publishDisabled={publishDisabled}
           publishPending={publishPending}
           publishPlaceholderReason={publishPlaceholderReason}
+          refreshPublishStatusPending={refreshPublishStatusPending}
           showPublishButton={showPublishButton}
+          showRefreshPublishStatus={showRefreshPublishStatus}
         />
       </div>
       <div

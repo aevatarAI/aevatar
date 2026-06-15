@@ -330,4 +330,29 @@ describe("TeamMemberInvokePage", () => {
       "/scopes/scope-1/teams/team-1/members/member-alpha/workflow",
     );
   });
+
+  it("does not treat a member service identity as a completed binding", async () => {
+    (studioApi.getMember as jest.Mock).mockResolvedValueOnce(
+      createWorkflowMember({
+        lastBoundRevisionId: null,
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "svc-alpha",
+      }),
+    );
+    (studioApi.getMemberBinding as jest.Mock).mockResolvedValueOnce({
+      currentBindingRun: null,
+      lastBinding: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
+      createService(),
+    ]);
+
+    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+
+    expect(
+      await screen.findByText("This workflow member is not bound yet."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+  });
 });
