@@ -739,7 +739,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             EnsureToolStatusAllowsCompletion(
                 _toolFailureCounter.FailureCount,
                 _toolFailureCounter.SuccessCount,
-                State.RequiresNyxidProxySuccess);
+                State.RequiresNyxidProxySuccess,
+                _toolFailureCounter.LatestFailure ?? _toolFailureCounter.FirstFailure);
 
             if (_interactiveDeliveryTracker.HasSuccessfulInteractiveDelivery)
             {
@@ -1113,21 +1114,25 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     internal static void EnsureToolStatusAllowsCompletion(
         int failureCount,
         int successCount,
-        bool requiresNyxidProxySuccess)
+        bool requiresNyxidProxySuccess,
+        SkillRunnerToolFailureSample? latestFailure = null)
     {
         if (failureCount > 0 && successCount == 0)
         {
+            var diagnostic = latestFailure?.ToDiagnosticString();
+            var diagnosticSentence = string.IsNullOrWhiteSpace(diagnostic)
+                ? string.Empty
+                : $" 最近失败：{diagnostic}.";
             throw new InvalidOperationException(
-                $"All {failureCount} nyxid_proxy tool call(s) in this run failed; refusing to record an empty-day report as a successful execution. " +
-                "Inspect the previous attempt's tool output for the underlying NyxID/upstream error envelope.");
+                $"定时任务的数据源请求全部失败（nyxid_proxy {failureCount} 次），已拒绝把这次执行记录成空报告。{diagnosticSentence} " +
+                "通常是 Ornn skill 里的目标服务、仓库、组织或 API 路径写错，也可能是上游服务暂时不可用；请检查 skill 指令或重新配置该定时任务。");
         }
 
         if (requiresNyxidProxySuccess && successCount == 0)
         {
             throw new InvalidOperationException(
-                "Skill requires at least one successful nyxid_proxy tool call but completed with zero. " +
-                "The LLM produced output without fetching source data (e.g. hallucinated a report from prior context). " +
-                "Refusing to record this run as a successful execution.");
+                "这个定时任务要求至少成功读取一次数据源，但本次执行没有任何成功的 nyxid_proxy 调用。 " +
+                "模型生成了输出，却没有取到实时数据；已拒绝把这次执行记录成成功。请检查 Ornn skill 指令和任务的数据源配置。");
         }
     }
 
