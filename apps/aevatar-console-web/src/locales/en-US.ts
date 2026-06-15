@@ -48,7 +48,7 @@ const enUSMessages = {
   'platform.overview.modules.accessRules.description':
     'Control which callers, bindings, and exposed endpoints can invoke a capability.',
   'platform.overview.modules.accessRules.summary':
-    '{policyCount} policies and {bindingCount} active bindings on the first visible capability.',
+    'Policies: {policyCount}; active bindings: {bindingCount} on the first visible capability.',
   'platform.overview.modules.accessRules.summaryDetail': 'Sampled from {serviceName}.',
   'platform.overview.modules.accessRules.summaryFallback':
     'Choose a capability to inspect who can call it and which rules apply.',
@@ -73,7 +73,7 @@ const enUSMessages = {
   'platform.overview.modules.releases.description':
     'Promote revisions, inspect rollout state, and verify traffic target evidence.',
   'platform.overview.modules.releases.summary':
-    '{deploymentCount} deployments are visible for the first capability.',
+    'Visible deployments for the first capability: {deploymentCount}.',
   'platform.overview.modules.releases.summaryDetail':
     'Traffic evidence covers {trafficTargetCount} active target links.',
   'platform.overview.modules.releases.summaryFallback':
@@ -97,7 +97,7 @@ const enUSMessages = {
   'platform.overview.modules.runs.description':
     'Inspect run records, streamed events, prompts, and human handoff state.',
   'platform.overview.modules.runs.summary':
-    '{runCount} recent local runs, latest status {status}.',
+    'Recent local runs: {runCount}; latest status {status}.',
   'platform.overview.modules.runs.summaryDetail': 'Latest local record: {time}.',
   'platform.overview.modules.runs.summaryFallback':
     'No recent local run handoff has been recorded in this browser.',

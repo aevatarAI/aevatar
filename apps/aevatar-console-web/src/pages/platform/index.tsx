@@ -183,17 +183,21 @@ function buildServiceIdentityQuery(service: ServiceCatalogSnapshot | null) {
     : undefined;
 }
 
+function buildLoadingSummary(): PlatformModuleSummary {
+  return {
+    status: "loading",
+    text: t("platform.overview.summary.loading", "Reading current workspace signals."),
+    tone: "info",
+  };
+}
+
 function buildCapabilitiesSummary(
   services: readonly ServiceCatalogSnapshot[] | undefined,
   isLoading: boolean,
   isError: boolean,
 ): PlatformModuleSummary {
   if (isLoading) {
-    return {
-      status: "loading",
-      text: t("platform.overview.summary.loading", "Reading current workspace signals."),
-      tone: "info",
-    };
+    return buildLoadingSummary();
   }
 
   if (isError) {
@@ -242,11 +246,7 @@ function buildAccessRulesSummary(
   isError: boolean,
 ): PlatformModuleSummary {
   if (!service && isLoading) {
-    return {
-      status: "loading",
-      text: t("platform.overview.summary.loading", "Reading current workspace signals."),
-      tone: "info",
-    };
+    return buildLoadingSummary();
   }
 
   if (!service) {
@@ -258,11 +258,7 @@ function buildAccessRulesSummary(
   }
 
   if (isLoading) {
-    return {
-      status: "loading",
-      text: t("platform.overview.summary.loading", "Reading current workspace signals."),
-      tone: "info",
-    };
+    return buildLoadingSummary();
   }
 
   if (isError) {
@@ -285,7 +281,7 @@ function buildAccessRulesSummary(
     status: "ready",
     text: t(
       "platform.overview.modules.accessRules.summary",
-      "{policyCount} policies and {bindingCount} active bindings on the first visible capability.",
+      "Policies: {policyCount}; active bindings: {bindingCount} on the first visible capability.",
       { bindingCount: activeBindings.length, policyCount },
     ),
     tone: policyCount || activeBindings.length ? "success" : "info",
@@ -300,11 +296,7 @@ function buildReleasesSummary(
   isError: boolean,
 ): PlatformModuleSummary {
   if (!service && isLoading) {
-    return {
-      status: "loading",
-      text: t("platform.overview.summary.loading", "Reading current workspace signals."),
-      tone: "info",
-    };
+    return buildLoadingSummary();
   }
 
   if (!service) {
@@ -316,11 +308,7 @@ function buildReleasesSummary(
   }
 
   if (isLoading) {
-    return {
-      status: "loading",
-      text: t("platform.overview.summary.loading", "Reading current workspace signals."),
-      tone: "info",
-    };
+    return buildLoadingSummary();
   }
 
   if (isError) {
@@ -344,7 +332,7 @@ function buildReleasesSummary(
     status: "ready",
     text: t(
       "platform.overview.modules.releases.summary",
-      "{deploymentCount} deployments are visible for the first capability.",
+      "Visible deployments for the first capability: {deploymentCount}.",
       { deploymentCount },
     ),
     tone: deploymentCount > 0 ? "success" : "info",
@@ -372,7 +360,7 @@ function buildRunsSummary(): PlatformModuleSummary {
     status: "ready",
     text: t(
       "platform.overview.modules.runs.summary",
-      "{runCount} recent local runs, latest status {status}.",
+      "Recent local runs: {runCount}; latest status {status}.",
       { runCount: recentRuns.length, status: latestRun.status || "unknown" },
     ),
     tone: "success",
@@ -385,11 +373,7 @@ function buildRuntimeMapSummary(
   isError: boolean,
 ): PlatformModuleSummary {
   if (isLoading) {
-    return {
-      status: "loading",
-      text: t("platform.overview.summary.loading", "Reading current workspace signals."),
-      tone: "info",
-    };
+    return buildLoadingSummary();
   }
 
   if (isError) {
@@ -715,7 +699,7 @@ const PlatformOverviewPage: React.FC = () => {
 
       <Space
         align="start"
-        direction="vertical"
+        orientation="vertical"
         size={8}
         style={{
           background: token.colorBgContainer,
