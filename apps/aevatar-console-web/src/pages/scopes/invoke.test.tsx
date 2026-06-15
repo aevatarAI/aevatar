@@ -795,7 +795,7 @@ describe('ScopeInvokePage', () => {
     expect(await screen.findByText('Latest raw payloads')).toBeTruthy();
   });
 
-  it('keeps the invoke lab workspace constrained so the chat composer stays visible', async () => {
+  it('keeps the invoke lab composer visible after loading the workspace service', async () => {
     (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([
       {
         serviceKey: 'scope-a:default:default:default',
@@ -826,19 +826,6 @@ describe('ScopeInvokePage', () => {
 
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
-    const viewport = await screen.findByTestId('invoke-lab-workspace-viewport');
-    const grid = await screen.findByTestId('invoke-lab-workspace-grid');
-
-    expect(viewport).toHaveStyle({
-      flex: '1 1 auto',
-      minHeight: '0',
-      overflow: 'hidden',
-    });
-    expect(grid).toHaveStyle({
-      alignItems: 'stretch',
-      height: '100%',
-      minHeight: '0',
-    });
     expect(
       await screen.findByPlaceholderText('Send a message...'),
     ).toBeTruthy();

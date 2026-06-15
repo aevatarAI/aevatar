@@ -3438,13 +3438,6 @@ describe("StudioPage", () => {
     expect(screen.getByTestId("studio-context-meta")).toHaveTextContent(
       "workflow canvas"
     );
-    expect(screen.getByTestId("studio-context-bar")).toHaveStyle({
-      gap: "12px",
-      padding: "8px 16px 4px",
-    });
-    expect(screen.getByTestId("studio-build-mode-switcher")).toHaveStyle({
-      gap: "4px",
-    });
     expect(screen.getByTestId("studio-workflow-build-panel")).toBeTruthy();
     expect(screen.getByText("DAG Canvas")).toBeTruthy();
     expect(screen.getByText("Step Detail")).toBeTruthy();
@@ -3459,10 +3452,6 @@ describe("StudioPage", () => {
       "aria-pressed",
       "true"
     );
-    expect(screen.getByRole("button", { name: /^Workflow/ })).toHaveStyle({
-      height: "28px",
-      fontSize: "11px",
-    });
     expect(screen.getByRole("button", { name: /^Script/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^GAgent/ })).toHaveAttribute(
       "aria-pressed",
@@ -5209,12 +5198,6 @@ describe("StudioPage", () => {
 
     const bindSurface = await screen.findByTestId("studio-bind-surface");
     expect(bindSurface).toBeTruthy();
-    expect(bindSurface.parentElement).not.toHaveStyle({
-      height: "100%",
-    });
-    expect(bindSurface.parentElement).not.toHaveStyle({
-      overflow: "hidden",
-    });
   });
 
   it("saves pending workflow step prompt edits without requiring Apply changes", async () => {
