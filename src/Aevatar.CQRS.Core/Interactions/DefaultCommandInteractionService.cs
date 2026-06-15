@@ -232,7 +232,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         }
     }
 
-    private static async Task PumpAndFlushAcceptedFramesAsync(
+    private async Task PumpAndFlushAcceptedFramesAsync(
         Task pumpTask,
         CancellationTokenSource pumpCancellation,
         Channel<TFrame> frames,
@@ -265,18 +265,23 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
             await emitAsync(frame, ct).ConfigureAwait(false);
     }
 
-    private static async Task ObserveFlushFailureAsync(Task flushTask)
+    private async Task ObserveFlushFailureAsync(Task flushTask)
     {
         try
         {
             await flushTask.ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogDebug(
+                ex,
+                "Observed buffered-frame flush failure after command interaction pump failure. command={CommandType}, target={TargetType}",
+                typeof(TCommand).FullName,
+                typeof(TTarget).FullName);
         }
     }
 
-    private static async Task CancelAndObservePumpAsync(
+    private async Task CancelAndObservePumpAsync(
         Task pumpTask,
         CancellationTokenSource pumpCancellation)
     {
@@ -286,8 +291,13 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         {
             await pumpTask.ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogDebug(
+                ex,
+                "Observed command interaction pump completion after cancellation. command={CommandType}, target={TargetType}",
+                typeof(TCommand).FullName,
+                typeof(TTarget).FullName);
         }
     }
 
