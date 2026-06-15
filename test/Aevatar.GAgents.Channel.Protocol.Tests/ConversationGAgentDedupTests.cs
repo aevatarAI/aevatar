@@ -3907,6 +3907,84 @@ public sealed class ConversationGAgentDedupTests
         completed.SentActivityId.ShouldStartWith("nyx-relay-stream:");
     }
 
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_CardCreationFailedWithInitialTextSendInFlight_CoalescesFinalEdit()
+    {
+        // Production regression: CardKit create failed, so the first card chunk fell back
+        // to the Nyx relay text sink and started the initial /reply send. The LLM final
+        // ready event arrived before that send returned a platform message id. The finalize
+        // guard used to see "Idle + no platformMessageId" and fall through to RunLlmReplyAsync,
+        // issuing a second /reply against the same single-use reply token. It must instead
+        // coalesce the final text onto the in-flight send and flush it with /reply/update
+        // after the first send completes.
+        var streamCalls = new List<(string Text, string? CurrentPlatformMessageId)>();
+        var text = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (chunk, currentPmid) =>
+            {
+                streamCalls.Add((chunk.AccumulatedText, currentPmid));
+                return ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_text_first");
+            },
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = await CreateAgentAsync(text, "conv-card-fb-inflight-final", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyCardStreamChunkAsync(
+            CreateCardStreamChunk("act-card-fb-inflight-final", "relay-msg-1", "partial answer"));
+        var lifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-fb-inflight-final",
+            lifecycle.LarkCardInFlightSequence,
+            lifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-fb-inflight-final", "relay-msg-1", "partial answer"),
+            success: false,
+            errorCode: "card_create_failed",
+            errorSummary: "lark_code=9499 msg=Invalid parameter"));
+
+        var fallbackTextLifecycle = agent.State.ActiveReplyLifecycles.Single(x =>
+            x.Mode == ConversationReplyLifecycleMode.NyxRelayText);
+        fallbackTextLifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextIdle);
+        fallbackTextLifecycle.NyxRelayInFlightOperation.ShouldBe(NyxRelayTextOperationKind.Interim);
+        fallbackTextLifecycle.PlatformMessageId.ShouldBeEmpty();
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-card-fb-inflight-final",
+            RegistrationId = "reg-1",
+            RunId = "act-card-fb-inflight-final",
+            SourceActorId = "agent-run",
+            Activity = CreateRelayActivity("act-card-fb-inflight-final", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "final answer" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        });
+
+        text.LlmReplyCount.ShouldBe(0);
+        var coalesced = agent.State.ActiveReplyLifecycles.Single(x =>
+            x.Mode == ConversationReplyLifecycleMode.NyxRelayText);
+        coalesced.PendingFinalizeText.ShouldBe("final answer");
+
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        var finalEdit = agent.State.ActiveReplyLifecycles.Single(x =>
+            x.Mode == ConversationReplyLifecycleMode.NyxRelayText);
+        finalEdit.NyxRelayInFlightOperation.ShouldBe(NyxRelayTextOperationKind.Final);
+        finalEdit.PlatformMessageId.ShouldBe("om_text_first");
+        finalEdit.PendingFinalizeText.ShouldBe("final answer");
+
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        text.LlmReplyCount.ShouldBe(0);
+        streamCalls.Count.ShouldBe(2);
+        streamCalls[0].ShouldBe(("partial answer", null));
+        streamCalls[1].ShouldBe(("final answer", "om_text_first"));
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        completed.Outbound.Text.ShouldBe("final answer");
+        completed.SentActivityId.ShouldBe("nyx-relay-stream:om_text_first");
+    }
+
     private static LlmReplyCardStreamChunkEvent CreateCardStreamChunk(string correlationId, string replyMessageId, string accumulatedText) =>
         new()
         {

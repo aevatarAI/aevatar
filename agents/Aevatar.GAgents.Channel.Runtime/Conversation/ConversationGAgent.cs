@@ -1269,11 +1269,6 @@ public sealed partial class ConversationGAgent :
             return true;
 
         var state = GetOrInitNyxRelayStreamingState(correlationId);
-        if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.Finalize))
-            return false;
-
-        var platformMessageId = state.PlatformMessageId!;
-
         if (state.InFlight is not null)
         {
             if (evt.TerminalState == LlmReplyTerminalState.Failed)
@@ -1303,6 +1298,11 @@ public sealed partial class ConversationGAgent :
                 return true;
             }
         }
+
+        if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.Finalize))
+            return false;
+
+        var platformMessageId = state.PlatformMessageId!;
 
         // Streaming-start already consumed the reply token. On Failed, falling through to
         // RunLlmReplyAsync would issue a fresh /reply against the dead token and surface

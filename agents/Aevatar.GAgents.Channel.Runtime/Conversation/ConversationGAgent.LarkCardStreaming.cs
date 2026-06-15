@@ -728,9 +728,10 @@ public sealed partial class ConversationGAgent
             }
 
             Logger.LogInformation(
-                "Card create failed; falling back to text-edit for the rest of this turn. correlation={CorrelationId}, code={ErrorCode}, rateLimited={RateLimited}, tableLimit={TableLimit}, cardUnavailable={CardUnavailable}",
+                "Card create failed; falling back to text-edit for the rest of this turn. correlation={CorrelationId}, code={ErrorCode}, summary={ErrorSummary}, rateLimited={RateLimited}, tableLimit={TableLimit}, cardUnavailable={CardUnavailable}",
                 evt.CorrelationId,
                 result.ErrorCode,
+                TrimLogValue(result.ErrorSummary, 512),
                 result.IsRateLimited,
                 result.IsTableLimitExceeded,
                 result.IsCardUnavailable);
@@ -993,6 +994,16 @@ public sealed partial class ConversationGAgent
             ? "Exception"
             : raw.ExceptionType;
         return $"{operationName}_threw:{exceptionType}";
+    }
+
+    private static string TrimLogValue(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxLength
+            ? trimmed
+            : trimmed[..maxLength] + "...";
     }
 
     [EventHandler(AllowSelfHandling = true)]
