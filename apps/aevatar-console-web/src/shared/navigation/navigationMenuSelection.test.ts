@@ -1,6 +1,10 @@
 import { getNavigationSelectedKeys } from "./navigationMenuSelection";
 
 describe("getNavigationSelectedKeys", () => {
+  it("selects the task-oriented Platform overview entry", () => {
+    expect(getNavigationSelectedKeys("/platform")).toEqual(["/platform"]);
+  });
+
   it("does not select a primary navigation item for the hidden Create Team compatibility route", () => {
     expect(getNavigationSelectedKeys("/teams/new")).toEqual([]);
   });
@@ -12,6 +16,12 @@ describe("getNavigationSelectedKeys", () => {
   it("maps hidden governance workbench pages back to Governance", () => {
     expect(getNavigationSelectedKeys("/governance/bindings")).toEqual([
       "/governance",
+    ]);
+  });
+
+  it("maps the platform overview compatibility route back to Overview", () => {
+    expect(getNavigationSelectedKeys("/platform/overview")).toEqual([
+      "/platform",
     ]);
   });
 

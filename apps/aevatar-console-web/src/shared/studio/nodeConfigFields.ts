@@ -6,6 +6,7 @@ import {
   resolveStepParameterName,
 } from './document';
 import type { StudioConnectorDefinition } from './models';
+import { t } from '@/shared/i18n/messages';
 
 export type NodeConfigFieldKind = 'json' | 'select' | 'text';
 
@@ -32,14 +33,19 @@ export type NodeConfigFieldSet = {
   readonly parseError: string;
 };
 
+type NodeConfigFieldMessage = {
+  readonly defaultMessage: string;
+  readonly id: string;
+};
+
 type NodeConfigFieldSource = {
   readonly name: string;
-  readonly label?: string;
-  readonly description?: string;
+  readonly label?: string | NodeConfigFieldMessage;
+  readonly description?: string | NodeConfigFieldMessage;
   readonly default?: string;
   readonly enumValues?: readonly string[];
   readonly kind?: NodeConfigFieldKind;
-  readonly placeholder?: string;
+  readonly placeholder?: string | NodeConfigFieldMessage;
   readonly required?: boolean;
   readonly type?: string;
 };
@@ -50,50 +56,96 @@ const PROMPT_PREFIX_PARAMETER = 'prompt_prefix';
 const CONNECTOR_CALL_FIELDS: readonly NodeConfigFieldSource[] = [
   {
     name: 'connector',
-    label: 'Connector',
-    description: 'Connector name passed to the runtime.',
+    label: {
+      id: 'shared.studio.nodeConfigFields.connector.label',
+      defaultMessage: 'Connector',
+    },
+    description: {
+      id: 'shared.studio.nodeConfigFields.connector.description',
+      defaultMessage: 'Connector name passed to the runtime.',
+    },
     kind: 'select',
-    placeholder: 'Select connector',
+    placeholder: {
+      id: 'shared.studio.nodeConfigFields.connector.placeholder',
+      defaultMessage: 'Select connector',
+    },
     type: 'string',
   },
   {
     name: 'operation',
-    label: 'Operation',
-    description: 'Optional operation name for connector implementations that expose multiple operations.',
+    label: {
+      id: 'shared.studio.nodeConfigFields.operation.label',
+      defaultMessage: 'Operation',
+    },
+    description: {
+      id: 'shared.studio.nodeConfigFields.operation.description',
+      defaultMessage:
+        'Optional operation name for connector implementations that expose multiple operations.',
+    },
     type: 'string',
   },
   {
     name: 'path',
-    label: 'Path',
-    description: 'Optional request path or connector-specific target.',
+    label: {
+      id: 'shared.studio.nodeConfigFields.path.label',
+      defaultMessage: 'Path',
+    },
+    description: {
+      id: 'shared.studio.nodeConfigFields.path.description',
+      defaultMessage: 'Optional request path or connector-specific target.',
+    },
     type: 'string',
   },
   {
     name: 'method',
-    label: 'Method',
-    description: 'HTTP method or connector-specific verb.',
+    label: {
+      id: 'shared.studio.nodeConfigFields.method.label',
+      defaultMessage: 'Method',
+    },
+    description: {
+      id: 'shared.studio.nodeConfigFields.method.description',
+      defaultMessage: 'HTTP method or connector-specific verb.',
+    },
     enumValues: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     type: 'string',
     default: 'POST',
   },
   {
     name: 'timeout_ms',
-    label: 'Timeout ms',
-    description: 'Connector timeout in milliseconds.',
+    label: {
+      id: 'shared.studio.nodeConfigFields.timeout.label',
+      defaultMessage: 'Timeout ms',
+    },
+    description: {
+      id: 'shared.studio.nodeConfigFields.timeout.description',
+      defaultMessage: 'Connector timeout in milliseconds.',
+    },
     type: 'number',
     default: '10000',
   },
   {
     name: 'retry',
-    label: 'Retry',
-    description: 'Retry count for transient connector failures.',
+    label: {
+      id: 'shared.studio.nodeConfigFields.retry.label',
+      defaultMessage: 'Retry',
+    },
+    description: {
+      id: 'shared.studio.nodeConfigFields.retry.description',
+      defaultMessage: 'Retry count for transient connector failures.',
+    },
     type: 'number',
     default: '0',
   },
   {
     name: 'on_error',
-    label: 'On error',
-    description: 'Failure behavior when the connector call cannot complete.',
+    label: {
+      id: 'shared.studio.nodeConfigFields.onError.label',
+      defaultMessage: 'On error',
+    },
+    description: {
+      id: 'shared.studio.nodeConfigFields.onError.description',
+      defaultMessage: 'Failure behavior when the connector call cannot complete.',
+    },
     enumValues: ['fail', 'continue'],
     type: 'string',
     default: 'fail',
@@ -103,15 +155,39 @@ const CONNECTOR_CALL_FIELDS: readonly NodeConfigFieldSource[] = [
 const LLM_CALL_FIELDS: readonly NodeConfigFieldSource[] = [
   {
     name: PROMPT_PREFIX_PARAMETER,
-    label: 'Prompt instruction',
-    description: 'Instruction added before each workflow run input reaches the LLM.',
-    placeholder: 'e.g. Translate the user input to Japanese',
+    label: {
+      id: 'shared.studio.nodeConfigFields.promptInstruction.label',
+      defaultMessage: 'Prompt instruction',
+    },
+    description: {
+      id: 'shared.studio.nodeConfigFields.promptInstruction.description',
+      defaultMessage:
+        'Instruction added before each workflow run input reaches the LLM.',
+    },
+    placeholder: {
+      id: 'shared.studio.nodeConfigFields.promptInstruction.placeholder',
+      defaultMessage: 'e.g. Translate the user input to Japanese',
+    },
     type: 'string',
   },
 ];
 
 function normalizeString(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function formatFieldMessage(
+  value: string | NodeConfigFieldMessage | null | undefined,
+): string {
+  if (!value) {
+    return '';
+  }
+
+  if (typeof value === 'string') {
+    return normalizeString(value);
+  }
+
+  return t(value.id, value.defaultMessage);
 }
 
 function normalizeStepType(value: unknown): string {
@@ -231,12 +307,18 @@ function createField(
     name,
     label:
       isLLMPromptInstructionParameter(stepType, name)
-        ? 'Prompt instruction'
-        : normalizeString(normalizedSource.label) || formatLabel(name),
+        ? t(
+            'shared.studio.nodeConfigFields.promptInstruction.label',
+            'Prompt instruction',
+          )
+        : formatFieldMessage(normalizedSource.label) || formatLabel(name),
     description:
       isLLMPromptInstructionParameter(stepType, name)
-        ? 'Instruction added before each workflow run input reaches the LLM.'
-        : normalizeString(normalizedSource.description) ||
+        ? t(
+            'shared.studio.nodeConfigFields.promptInstruction.description',
+            'Instruction added before each workflow run input reaches the LLM.',
+          )
+        : formatFieldMessage(normalizedSource.description) ||
           `Type: ${normalizeValueType(normalizedSource.type)}`,
     kind: inferFieldKind(value, {
       ...normalizedSource,
@@ -244,8 +326,11 @@ function createField(
     }),
     placeholder:
       isLLMPromptInstructionParameter(stepType, name)
-        ? 'e.g. Translate the user input to Japanese'
-        : normalizeString(normalizedSource.placeholder) ||
+        ? t(
+            'shared.studio.nodeConfigFields.promptInstruction.placeholder',
+            'e.g. Translate the user input to Japanese',
+          )
+        : formatFieldMessage(normalizedSource.placeholder) ||
           normalizeString(normalizedSource.default) ||
           normalizeValueType(normalizedSource.type) ||
           'Value',
@@ -264,7 +349,10 @@ function createInferredFieldSource(
     return {
       name,
       label: formatLabel(name),
-      description: 'Array value edited as JSON.',
+      description: t(
+        'shared.studio.nodeConfigFields.inferred.array',
+        'Array value edited as JSON.',
+      ),
       kind: 'json',
       type: 'array',
     };
@@ -274,7 +362,10 @@ function createInferredFieldSource(
     return {
       name,
       label: formatLabel(name),
-      description: 'Object value edited as JSON.',
+      description: t(
+        'shared.studio.nodeConfigFields.inferred.object',
+        'Object value edited as JSON.',
+      ),
       kind: 'json',
       type: 'object',
     };
@@ -284,7 +375,10 @@ function createInferredFieldSource(
     return {
       name,
       label: formatLabel(name),
-      description: 'Boolean value.',
+      description: t(
+        'shared.studio.nodeConfigFields.inferred.boolean',
+        'Boolean value.',
+      ),
       enumValues: ['true', 'false'],
       type: 'boolean',
     };
@@ -294,7 +388,10 @@ function createInferredFieldSource(
     return {
       name,
       label: formatLabel(name),
-      description: 'Numeric value.',
+      description: t(
+        'shared.studio.nodeConfigFields.inferred.number',
+        'Numeric value.',
+      ),
       type: 'number',
     };
   }
@@ -302,7 +399,10 @@ function createInferredFieldSource(
   return {
     name,
     label: formatLabel(name),
-    description: 'String value.',
+    description: t(
+      'shared.studio.nodeConfigFields.inferred.string',
+      'String value.',
+    ),
     type: 'string',
   };
 }
@@ -376,7 +476,12 @@ function withConnectorOptions(
           ...field,
           kind: 'select',
           options: connectorOptions,
-          placeholder: field.placeholder || 'Select connector',
+          placeholder:
+            field.placeholder ||
+            t(
+              'shared.studio.nodeConfigFields.connector.placeholder',
+              'Select connector',
+            ),
         }
       : field,
   );

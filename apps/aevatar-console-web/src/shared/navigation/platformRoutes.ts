@@ -46,6 +46,10 @@ function buildPlatformIdentityQuery(
   };
 }
 
+export function buildPlatformOverviewHref(): string {
+  return "/platform";
+}
+
 export function buildPlatformServicesHref(
   options?: PlatformIdentityOptions,
 ): string {

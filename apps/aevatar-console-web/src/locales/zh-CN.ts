@@ -9,6 +9,8 @@ const zhCNMessages = {
   'common.language.zhCN': '中文',
   'common.user.logout': '退出登录',
   'common.user.settings': '设置',
+  'menu.Access & Rules': '访问与规则',
+  'menu.Capabilities': '能力',
   'menu.Connectors': '连接器',
   'menu.Create Team': '创建团队',
   'menu.Deployments': '部署',
@@ -18,6 +20,10 @@ const zhCNMessages = {
   'menu.Members': '成员',
   'menu.Mission Control': '任务控制',
   'menu.My Teams': '我的团队',
+  'menu.Overview': '总览',
+  'menu.Releases': '发布',
+  'menu.Runs': '运行',
+  'menu.Runtime Map': '运行地图',
   'menu.Services': '服务',
   'menu.Settings': '设置',
   'menu.Team Details': '团队详情',
@@ -25,13 +31,102 @@ const zhCNMessages = {
   'nav.groups.platform': '平台',
   'nav.groups.settings': '设置',
   'nav.groups.teams': '团队',
-  'nav.items.deployments': '部署',
-  'nav.items.eventStream': '事件流',
-  'nav.items.governance': '治理',
+  'nav.items.accessRules': '访问与规则',
+  'nav.items.capabilities': '能力',
   'nav.items.myTeams': '我的团队',
-  'nav.items.services': '服务',
+  'nav.items.platformOverview': '总览',
+  'nav.items.releases': '发布',
+  'nav.items.runs': '运行',
   'nav.items.settings': '设置',
-  'nav.items.topology': '拓扑',
+  'nav.items.topology': '运行地图',
+  'pages.platform.overview.badge.deepLinks': '稳定深链',
+  'pages.platform.overview.badge.noSyntheticHealth': '不伪造健康分',
+  'pages.platform.overview.badge.taskFirst': '任务优先流程',
+  'pages.platform.overview.breadcrumb': 'Aevatar / 平台',
+  'pages.platform.overview.description':
+    '面向发布、治理、运行和诊断能力的任务入口。每张卡片保留原有深链，概览页只展示已经诚实可说明的信息。',
+  'pages.platform.overview.journey.capability': '确认能力',
+  'pages.platform.overview.journey.capability.description':
+    '先从已发布服务入口出发，而不是从后端对象列表开始。',
+  'pages.platform.overview.journey.description':
+    '概览页只命名主要操作任务；详细事实仍在原有工作台中加载。',
+  'pages.platform.overview.journey.run': '运行并检查',
+  'pages.platform.overview.journey.run.description':
+    '真实执行需要观察时，进入运行与运行地图。',
+  'pages.platform.overview.journey.rules': '治理发布',
+  'pages.platform.overview.journey.rules.description':
+    '流量变更前检查访问、策略、绑定、修订和发布事实。',
+  'pages.platform.overview.journey.step1': '第 1 步',
+  'pages.platform.overview.journey.step2': '第 2 步',
+  'pages.platform.overview.journey.step3': '第 3 步',
+  'pages.platform.overview.journey.title': '发布到运行路径',
+  'pages.platform.overview.modules.accessRules.cta': '打开访问与规则',
+  'pages.platform.overview.modules.accessRules.description':
+    '围绕选中的能力查看绑定、策略、端点暴露和治理变更。',
+  'pages.platform.overview.modules.accessRules.summary':
+    '选择 Scope 或服务后展示治理事实。',
+  'pages.platform.overview.modules.accessRules.title': '访问与规则',
+  'pages.platform.overview.modules.capabilities.cta': '打开能力',
+  'pages.platform.overview.modules.capabilities.description':
+    '找到团队成员已发布的服务入口，确认契约，并继续进入调用或治理工作。',
+  'pages.platform.overview.modules.capabilities.summary':
+    '打开工作台时读取服务目录。',
+  'pages.platform.overview.modules.capabilities.title': '能力',
+  'pages.platform.overview.modules.description':
+    '使用这些稳定入口，从能力发现继续到访问、发布、运行和诊断。',
+  'pages.platform.overview.modules.releases.cta': '打开发布',
+  'pages.platform.overview.modules.releases.description':
+    '在流量切换前检查发布证据、服务目标、修订交接和发布动作可用性。',
+  'pages.platform.overview.modules.releases.summary':
+    '使用发布工作台中的部署与发布记录。',
+  'pages.platform.overview.modules.releases.title': '发布',
+  'pages.platform.overview.modules.runs.cta': '打开运行',
+  'pages.platform.overview.modules.runs.description':
+    '启动或检查一次真实执行，跟随流式输出，并恢复需要人工输入或信号的运行。',
+  'pages.platform.overview.modules.runs.summary':
+    '保留最近本地运行交接，并按需读取运行事实。',
+  'pages.platform.overview.modules.runs.title': '运行',
+  'pages.platform.overview.modules.runtimeMap.cta': '打开运行地图',
+  'pages.platform.overview.modules.runtimeMap.description':
+    '把 Actor、运行或服务上下文映射到拓扑、时间线、边和快照视图，用于诊断。',
+  'pages.platform.overview.modules.runtimeMap.summary':
+    '从明确运行上下文开始；概览页不猜测 Actor 图。',
+  'pages.platform.overview.modules.runtimeMap.title': '运行地图',
+  'pages.platform.overview.modules.title': '平台模块',
+  'pages.platform.overview.title': '平台总览',
+  'pages.studio.studioinspectorpane.no.structured.parameters':
+    '未推断出结构化参数。可在下方编辑原始 JSON。',
+  'shared.studio.nodeConfigFields.connector.description':
+    '传递给运行时的连接器名称。',
+  'shared.studio.nodeConfigFields.connector.label': '连接器',
+  'shared.studio.nodeConfigFields.connector.placeholder': '选择连接器',
+  'shared.studio.nodeConfigFields.inferred.array': '数组值通过 JSON 编辑。',
+  'shared.studio.nodeConfigFields.inferred.boolean': '布尔值。',
+  'shared.studio.nodeConfigFields.inferred.number': '数值。',
+  'shared.studio.nodeConfigFields.inferred.object': '对象值通过 JSON 编辑。',
+  'shared.studio.nodeConfigFields.inferred.string': '字符串值。',
+  'shared.studio.nodeConfigFields.method.description':
+    'HTTP 方法或连接器专用动作。',
+  'shared.studio.nodeConfigFields.method.label': '方法',
+  'shared.studio.nodeConfigFields.onError.description':
+    '连接器调用无法完成时的失败处理方式。',
+  'shared.studio.nodeConfigFields.onError.label': '出错时',
+  'shared.studio.nodeConfigFields.operation.description':
+    '连接器实现暴露多个操作时使用的可选操作名称。',
+  'shared.studio.nodeConfigFields.operation.label': '操作',
+  'shared.studio.nodeConfigFields.path.description':
+    '可选请求路径或连接器专用目标。',
+  'shared.studio.nodeConfigFields.path.label': '路径',
+  'shared.studio.nodeConfigFields.promptInstruction.description':
+    '每次工作流运行输入进入 LLM 前追加的指令。',
+  'shared.studio.nodeConfigFields.promptInstruction.label': '提示指令',
+  'shared.studio.nodeConfigFields.promptInstruction.placeholder':
+    '例如：把用户输入翻译成日语',
+  'shared.studio.nodeConfigFields.retry.description': '连接器瞬时失败的重试次数。',
+  'shared.studio.nodeConfigFields.retry.label': '重试',
+  'shared.studio.nodeConfigFields.timeout.description':
+    '连接器超时时间，单位毫秒。',
+  'shared.studio.nodeConfigFields.timeout.label': '超时毫秒',
   'teams.home.actions.createTeam': '组建新团队',
   'teams.home.actions.createMember': '创建成员',
   'teams.home.actions.editEntryMember': '编辑入口成员',

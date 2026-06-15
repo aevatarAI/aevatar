@@ -9,6 +9,8 @@ const enUSMessages = {
   'common.language.zhCN': '中文',
   'common.user.logout': 'Logout',
   'common.user.settings': 'Settings',
+  'menu.Access & Rules': 'Access & Rules',
+  'menu.Capabilities': 'Capabilities',
   'menu.Connectors': 'Connectors',
   'menu.Create Team': 'Create Team',
   'menu.Deployments': 'Deployments',
@@ -18,6 +20,10 @@ const enUSMessages = {
   'menu.Members': 'Members',
   'menu.Mission Control': 'Mission Control',
   'menu.My Teams': 'My Teams',
+  'menu.Overview': 'Overview',
+  'menu.Releases': 'Releases',
+  'menu.Runs': 'Runs',
+  'menu.Runtime Map': 'Runtime Map',
   'menu.Services': 'Services',
   'menu.Settings': 'Settings',
   'menu.Team Details': 'Team Details',
@@ -25,13 +31,103 @@ const enUSMessages = {
   'nav.groups.platform': 'Platform',
   'nav.groups.settings': 'Settings',
   'nav.groups.teams': 'Teams',
-  'nav.items.deployments': 'Deployments',
-  'nav.items.eventStream': 'Event Stream',
-  'nav.items.governance': 'Governance',
+  'nav.items.accessRules': 'Access & Rules',
+  'nav.items.capabilities': 'Capabilities',
   'nav.items.myTeams': 'My Teams',
-  'nav.items.services': 'Services',
+  'nav.items.platformOverview': 'Overview',
+  'nav.items.releases': 'Releases',
+  'nav.items.runs': 'Runs',
   'nav.items.settings': 'Settings',
-  'nav.items.topology': 'Topology',
+  'nav.items.topology': 'Runtime Map',
+  'pages.platform.overview.badge.deepLinks': 'Stable deep links',
+  'pages.platform.overview.badge.noSyntheticHealth': 'No synthetic health score',
+  'pages.platform.overview.badge.taskFirst': 'Task-first workflow',
+  'pages.platform.overview.breadcrumb': 'Aevatar / Platform',
+  'pages.platform.overview.description':
+    'A task-oriented entry for publishing, governing, running, and diagnosing capabilities. Each card keeps its existing deep link while the overview stays honest about what it has loaded.',
+  'pages.platform.overview.journey.capability': 'Confirm capability',
+  'pages.platform.overview.journey.capability.description':
+    'Start from the published service entry instead of a backend object list.',
+  'pages.platform.overview.journey.description':
+    'The overview names the main operator tasks; detailed facts load inside the unchanged workbenches.',
+  'pages.platform.overview.journey.run': 'Run and inspect',
+  'pages.platform.overview.journey.run.description':
+    'Open runs and the runtime map when a real execution needs observation.',
+  'pages.platform.overview.journey.rules': 'Govern release',
+  'pages.platform.overview.journey.rules.description':
+    'Check access, policy, binding, revision, and rollout facts before traffic moves.',
+  'pages.platform.overview.journey.step1': 'Step 1',
+  'pages.platform.overview.journey.step2': 'Step 2',
+  'pages.platform.overview.journey.step3': 'Step 3',
+  'pages.platform.overview.journey.title': 'Publish-and-run path',
+  'pages.platform.overview.modules.accessRules.cta': 'Open access and rules',
+  'pages.platform.overview.modules.accessRules.description':
+    'Review bindings, policies, endpoint exposure, and governance changes around a selected capability.',
+  'pages.platform.overview.modules.accessRules.summary':
+    'Shows governance facts after a scope or service is selected.',
+  'pages.platform.overview.modules.accessRules.title': 'Access & Rules',
+  'pages.platform.overview.modules.capabilities.cta': 'Open capabilities',
+  'pages.platform.overview.modules.capabilities.description':
+    'Find the published service entry for a team member, confirm its contract, and continue into invoke or governance work.',
+  'pages.platform.overview.modules.capabilities.summary':
+    'Reads the service catalog when you open the workbench.',
+  'pages.platform.overview.modules.capabilities.title': 'Capabilities',
+  'pages.platform.overview.modules.description':
+    'Use these stable entry points to move from capability discovery to access, release, run, and diagnostics.',
+  'pages.platform.overview.modules.releases.cta': 'Open releases',
+  'pages.platform.overview.modules.releases.description':
+    'Check rollout evidence, serving target, revision handoff, and release action readiness before traffic moves.',
+  'pages.platform.overview.modules.releases.summary':
+    'Uses deployment and release records from the release workbench.',
+  'pages.platform.overview.modules.releases.title': 'Releases',
+  'pages.platform.overview.modules.runs.cta': 'Open runs',
+  'pages.platform.overview.modules.runs.description':
+    'Launch or inspect a real execution, follow streaming output, and recover runs that need human input or signals.',
+  'pages.platform.overview.modules.runs.summary':
+    'Keeps recent local run handoffs visible and then reads run facts on demand.',
+  'pages.platform.overview.modules.runs.title': 'Runs',
+  'pages.platform.overview.modules.runtimeMap.cta': 'Open runtime map',
+  'pages.platform.overview.modules.runtimeMap.description':
+    'Map an actor, run, or service context into topology, timeline, edge, and snapshot views for diagnostics.',
+  'pages.platform.overview.modules.runtimeMap.summary':
+    'Starts from explicit runtime context; no actor graph is guessed on the overview.',
+  'pages.platform.overview.modules.runtimeMap.title': 'Runtime Map',
+  'pages.platform.overview.modules.title': 'Platform modules',
+  'pages.platform.overview.title': 'Platform overview',
+  'pages.studio.studioinspectorpane.no.structured.parameters':
+    'No structured parameters inferred. Edit the raw JSON below.',
+  'shared.studio.nodeConfigFields.connector.description':
+    'Connector name passed to the runtime.',
+  'shared.studio.nodeConfigFields.connector.label': 'Connector',
+  'shared.studio.nodeConfigFields.connector.placeholder': 'Select connector',
+  'shared.studio.nodeConfigFields.inferred.array': 'Array value edited as JSON.',
+  'shared.studio.nodeConfigFields.inferred.boolean': 'Boolean value.',
+  'shared.studio.nodeConfigFields.inferred.number': 'Numeric value.',
+  'shared.studio.nodeConfigFields.inferred.object': 'Object value edited as JSON.',
+  'shared.studio.nodeConfigFields.inferred.string': 'String value.',
+  'shared.studio.nodeConfigFields.method.description':
+    'HTTP method or connector-specific verb.',
+  'shared.studio.nodeConfigFields.method.label': 'Method',
+  'shared.studio.nodeConfigFields.onError.description':
+    'Failure behavior when the connector call cannot complete.',
+  'shared.studio.nodeConfigFields.onError.label': 'On error',
+  'shared.studio.nodeConfigFields.operation.description':
+    'Optional operation name for connector implementations that expose multiple operations.',
+  'shared.studio.nodeConfigFields.operation.label': 'Operation',
+  'shared.studio.nodeConfigFields.path.description':
+    'Optional request path or connector-specific target.',
+  'shared.studio.nodeConfigFields.path.label': 'Path',
+  'shared.studio.nodeConfigFields.promptInstruction.description':
+    'Instruction added before each workflow run input reaches the LLM.',
+  'shared.studio.nodeConfigFields.promptInstruction.label': 'Prompt instruction',
+  'shared.studio.nodeConfigFields.promptInstruction.placeholder':
+    'e.g. Translate the user input to Japanese',
+  'shared.studio.nodeConfigFields.retry.description':
+    'Retry count for transient connector failures.',
+  'shared.studio.nodeConfigFields.retry.label': 'Retry',
+  'shared.studio.nodeConfigFields.timeout.description':
+    'Connector timeout in milliseconds.',
+  'shared.studio.nodeConfigFields.timeout.label': 'Timeout ms',
   'teams.home.actions.createTeam': 'Create team',
   'teams.home.actions.createMember': 'Create member',
   'teams.home.actions.editEntryMember': 'Edit entry member',

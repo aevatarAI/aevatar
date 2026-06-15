@@ -1,10 +1,15 @@
 import {
+  buildPlatformOverviewHref,
   buildPlatformDeploymentsHref,
   buildPlatformGovernanceHref,
   buildPlatformServicesHref,
 } from "./platformRoutes";
 
 describe("platformRoutes", () => {
+  it("keeps the platform overview at the task-oriented platform entry", () => {
+    expect(buildPlatformOverviewHref()).toBe("/platform");
+  });
+
   it("builds service workbench links with scoped identity", () => {
     expect(
       buildPlatformServicesHref({

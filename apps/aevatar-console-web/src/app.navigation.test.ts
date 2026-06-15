@@ -27,4 +27,15 @@ describe("app navigation groups", () => {
       "nav.groups.settings",
     ]);
   });
+
+  it("keeps Platform navigation labels task-oriented", () => {
+    const messages = require("./locales/en-US").default as Record<string, string>;
+
+    expect(messages["nav.items.platformOverview"]).toBe("Overview");
+    expect(messages["nav.items.capabilities"]).toBe("Capabilities");
+    expect(messages["nav.items.accessRules"]).toBe("Access & Rules");
+    expect(messages["nav.items.releases"]).toBe("Releases");
+    expect(messages["nav.items.runs"]).toBe("Runs");
+    expect(messages["nav.items.topology"]).toBe("Runtime Map");
+  });
 });

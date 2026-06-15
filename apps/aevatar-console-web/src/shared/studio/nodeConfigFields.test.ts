@@ -3,6 +3,7 @@ import {
   updateNodeConfigFieldParametersText,
   validateNodeConfigParametersText,
 } from './nodeConfigFields';
+import { setLocale } from '@umijs/max';
 
 describe('nodeConfigFields', () => {
   it('adapts connector fields without requiring the renderer to know the node type', () => {
@@ -76,6 +77,29 @@ describe('nodeConfigFields', () => {
     expect(JSON.parse(nextText)).toEqual({
       prompt_prefix: 'Translate the input.',
     });
+  });
+
+  it('formats built-in field descriptors through the active locale', () => {
+    setLocale('zh-CN', false);
+
+    try {
+      const fieldSet = buildNodeConfigFields({
+        nodeType: 'connector_call',
+        parametersText: JSON.stringify({ connector: 'web-search' }),
+      });
+
+      expect(fieldSet.fields.find((field) => field.name === 'connector')).toMatchObject({
+        description: '传递给运行时的连接器名称。',
+        label: '连接器',
+        placeholder: '选择连接器',
+      });
+      expect(fieldSet.fields.find((field) => field.name === 'timeout_ms')).toMatchObject({
+        description: '连接器超时时间，单位毫秒。',
+        label: '超时毫秒',
+      });
+    } finally {
+      setLocale('en-US', false);
+    }
   });
 
   it('infers unknown-node fields and edits object or array values through JSON fallback', () => {
