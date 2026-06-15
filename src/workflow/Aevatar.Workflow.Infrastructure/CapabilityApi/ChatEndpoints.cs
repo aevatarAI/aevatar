@@ -122,11 +122,12 @@ public static class WorkflowCapabilityEndpoints
             logger?.LogError(ex, "Workflow chat execution failed.");
             if (!writer.Started)
             {
+                var (code, message) = WorkflowExecutionErrorMapper.ToError(ex);
                 await WriteJsonErrorResponseAsync(
                     http,
                     StatusCodes.Status500InternalServerError,
-                    "EXECUTION_FAILED",
-                    "Workflow execution failed.",
+                    code,
+                    message,
                     CancellationToken.None);
                 return;
             }
@@ -649,14 +650,15 @@ public static class WorkflowCapabilityEndpoints
     {
         try
         {
+            var (code, message) = WorkflowExecutionErrorMapper.ToError(ex);
             await writer.WriteAsync(
                 new WorkflowRunEventEnvelope
                 {
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     RunError = new WorkflowRunErrorEventPayload
                     {
-                        Code = "EXECUTION_FAILED",
-                        Message = $"Workflow execution failed: {SanitizeErrorMessage(ex.Message)}",
+                        Code = code,
+                        Message = message,
                     },
                 },
                 ct);
@@ -683,15 +685,36 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
-    private static string SanitizeErrorMessage(string? message)
+    public static class WorkflowExecutionErrorMapper
     {
-        if (string.IsNullOrWhiteSpace(message))
-            return "unknown error";
+        public const string CompatibilityErrorCode = "WORKFLOW_REVISION_INCOMPATIBLE";
+        private const string DescriptorMissingMarker = "Type registry has no descriptor for type name";
 
-        return message
-            .Replace("\r", " ", StringComparison.Ordinal)
-            .Replace("\n", " ", StringComparison.Ordinal)
-            .Trim();
+        public static (string Code, string Message) ToError(Exception ex)
+        {
+            ArgumentNullException.ThrowIfNull(ex);
+
+            return IsCompatibilityFailure(ex)
+                ? (
+                    CompatibilityErrorCode,
+                    "Workflow revision is incompatible with this backend. Re-publish or migrate the workflow/service revision.")
+                : (
+                    "EXECUTION_FAILED",
+                    "Workflow execution failed.");
+        }
+
+        public static bool IsCompatibilityFailure(Exception ex)
+        {
+            ArgumentNullException.ThrowIfNull(ex);
+
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (current.Message.Contains(DescriptorMissingMarker, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
     }
 
     internal static async Task HandleChatWebSocket(
