@@ -22,7 +22,7 @@ import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import {
   buildTeamDetailHref,
-  buildTeamStudioHref,
+  buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
 import { studioApi } from "@/shared/studio/api";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
@@ -39,7 +39,8 @@ import {
 import { describeError } from "@/shared/ui/errorText";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
 import {
-  buildScopeHref,
+  buildTeamCreateRoute,
+  buildTeamWorkspaceRoute,
   readScopeQueryDraft,
 } from "../scopes/components/scopeQuery";
 import type { WorkflowOperationalAttention } from "./workflowOperationalUnits";
@@ -464,6 +465,10 @@ function groupMembersByTeamId(
   return result;
 }
 
+function isWorkflowMember(member: StudioMemberSummary | null | undefined): boolean {
+  return trimOptional(member?.implementationKind).toLowerCase() === "workflow";
+}
+
 function resolveMemberPreviewService(input: {
   readonly member: StudioMemberSummary;
   readonly services: readonly ServiceCatalogSnapshot[];
@@ -560,11 +565,12 @@ function buildTeamRosterPreview(input: {
     }),
   );
   const sortedMembers = [...input.members].sort(compareMembers);
-  const latestRun =
-    memberPreviews
-      .map((preview) => preview.latestRun)
-      .filter((run): run is ScopeServiceRunSummary => Boolean(run))
-      .sort(compareRuns)[0] ?? null;
+  const memberCount =
+    input.team.memberCount > 0 ? input.team.memberCount : input.members.length;
+  const entryMemberId = trimOptional(input.team.entryMemberId);
+  const entryMemberPreview = entryMemberId
+    ? memberPreviews.find((preview) => preview.memberId === entryMemberId)
+    : undefined;
   const statusRank: Record<TeamOperationalAttention, number> = {
     failed: 0,
     waiting: 1,
@@ -581,59 +587,53 @@ function buildTeamRosterPreview(input: {
         parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt) ||
         right.memberId.localeCompare(left.memberId),
     )[0];
-  const memberCount =
-    input.team.memberCount > 0 ? input.team.memberCount : input.members.length;
-  const teamHomeHref = buildScopeHref("/teams", { scopeId: input.scopeId });
-  const entryMemberId = trimOptional(input.team.entryMemberId);
-  const preferredEditMemberId =
-    entryMemberId ||
-    (memberCount === 1 && input.members.length === 1
-      ? trimOptional(input.members[0]?.memberId)
-      : "");
-  const memberQuickAction: TeamMemberQuickAction = entryMemberId
+  const entryMember = entryMemberId
+    ? input.members.find((member) => trimOptional(member.memberId) === entryMemberId)
+    : undefined;
+  const runtimeSignalPreview = entryMemberPreview ?? mostImportantMemberPreview;
+  const latestRun = runtimeSignalPreview?.latestRun ?? null;
+  // Deferred P2: keep the current workflow-member fallback when the entry is non-workflow.
+  // A later pass should surface an explicit entry-unsupported/manage-members state.
+  const preferredWorkflowMember =
+    (entryMember && isWorkflowMember(entryMember) ? entryMember : undefined) ??
+    sortedMembers.find(isWorkflowMember);
+  const preferredWorkflowMemberId = trimOptional(preferredWorkflowMember?.memberId);
+  const memberQuickAction: TeamMemberQuickAction = preferredWorkflowMemberId
     ? {
-        href: buildTeamStudioHref({
-          memberId: entryMemberId,
+        href: buildTeamMemberWorkflowStudioHref({
+          memberId: preferredWorkflowMemberId,
           mode: "edit-member",
-          returnTo: teamHomeHref,
           scopeId: input.scopeId,
           teamId: input.team.teamId,
         }),
-        kind: "edit-entry-member",
-        label: t("teams.home.actions.editEntryMember", "Edit entry member"),
+        kind:
+          preferredWorkflowMemberId === entryMemberId
+            ? "edit-entry-member"
+            : "edit-member",
+        label:
+          preferredWorkflowMemberId === entryMemberId
+            ? t("teams.home.actions.debugEntryWorkflow", "Debug entry workflow")
+            : t("teams.home.actions.debugWorkflow", "Debug workflow"),
       }
-    : preferredEditMemberId
+    : memberCount === 0
       ? {
-          href: buildTeamStudioHref({
-            memberId: preferredEditMemberId,
-            mode: "edit-member",
-            returnTo: teamHomeHref,
+          href: buildTeamMemberWorkflowStudioHref({
+            mode: "create-member",
             scopeId: input.scopeId,
             teamId: input.team.teamId,
           }),
-          kind: "edit-member",
-          label: t("teams.home.actions.editMember", "Edit member"),
+          kind: "create-member",
+          label: t("teams.home.actions.createWorkflowMember", "Create workflow member"),
         }
-      : memberCount === 0
-        ? {
-            href: buildTeamStudioHref({
-              mode: "create-member",
-              returnTo: teamHomeHref,
-              scopeId: input.scopeId,
-              teamId: input.team.teamId,
-            }),
-            kind: "create-member",
-            label: t("teams.home.actions.createMember", "Create member"),
-          }
-        : {
-            href: buildTeamDetailHref({
-              scopeId: input.scopeId,
-              tab: "members",
-              teamId: input.team.teamId,
-            }),
-            kind: "manage-members",
-            label: t("teams.home.actions.manageMembers", "Manage members"),
-          };
+      : {
+          href: buildTeamDetailHref({
+            scopeId: input.scopeId,
+            tab: "members",
+            teamId: input.team.teamId,
+          }),
+          kind: "manage-members",
+          label: t("teams.home.actions.manageMembers", "Manage members"),
+        };
   const firstMemberLabel = pickMeaningfulLabel(
     sortedMembers[0]?.displayName,
     sortedMembers[0]?.memberId,
@@ -661,7 +661,10 @@ function buildTeamRosterPreview(input: {
   const serviceTooltip =
     uniqueServiceLabels.length > 0 ? uniqueServiceLabels.join(" / ") : undefined;
   const primaryMemberPreview =
-    memberPreviews.find((preview) => preview.serviceId) ?? memberPreviews[0] ?? null;
+    entryMemberPreview ??
+    memberPreviews.find((preview) => preview.serviceId) ??
+    memberPreviews[0] ??
+    null;
   const detailHref = buildTeamDetailHref({
     memberId: primaryMemberPreview?.memberId || undefined,
     runId: latestRun?.runId || undefined,
@@ -676,13 +679,13 @@ function buildTeamRosterPreview(input: {
   });
 
   let attention: TeamOperationalAttention =
-    mostImportantMemberPreview?.attention ?? "draft";
+    runtimeSignalPreview?.attention ?? "draft";
   let attentionDetail = t("pages.teams.home.team", "This team has no members yet. Next: add an entry member, then test the team.");
   if (input.team.lifecycleStage === "archived") {
     attention = "draft";
     attentionDetail = t("pages.teams.home.team.roster", "This team has been archived; the list keeps only its backend roster fact.");
-  } else if (mostImportantMemberPreview) {
-    attentionDetail = mostImportantMemberPreview.attentionDetail;
+  } else if (runtimeSignalPreview) {
+    attentionDetail = runtimeSignalPreview.attentionDetail;
   }
 
   return {
@@ -704,7 +707,7 @@ function buildTeamRosterPreview(input: {
     title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || t("pages.teams.home.team.2", "Unnamed team"),
     updatedAt:
       latestRun?.lastUpdatedAt ||
-      mostImportantMemberPreview?.updatedAt ||
+      runtimeSignalPreview?.updatedAt ||
       input.team.updatedAt ||
       null,
   };
@@ -856,18 +859,6 @@ const TeamRosterCard: React.FC<{
         </span>
       </div>
 
-      <Typography.Text
-        title={preview.teamId}
-        ellipsis={{ tooltip: preview.teamId }}
-        style={{
-          color: token.colorTextSecondary,
-          display: "block",
-          fontSize: 12,
-        }}
-      >
-        {t("pages.teams.home.id", "ID：")}{preview.teamId}
-      </Typography.Text>
-
       <div
         style={{
           borderTop: `1px solid ${token.colorBorderSecondary}`,
@@ -976,18 +967,6 @@ const TeamRosterRow: React.FC<{
           >
             {preview.attentionDetail}
           </Typography.Paragraph>
-          <Typography.Text
-            title={preview.teamId}
-            ellipsis={{ tooltip: preview.teamId }}
-            style={{
-              color: token.colorTextSecondary,
-              display: "block",
-              fontSize: 12,
-              marginTop: 4,
-            }}
-          >
-            {t("pages.teams.home.id.2", "ID：")}{preview.teamId}
-          </Typography.Text>
         </div>
 
         <div className="teams-home-roster-row-actions">
@@ -1091,7 +1070,7 @@ const TeamsHomePage: React.FC = () => {
       return;
     }
 
-    const nextPath = buildScopeHref("/teams", { scopeId });
+    const nextPath = buildTeamWorkspaceRoute(scopeId);
     const currentPath =
       typeof window === "undefined"
         ? ""
@@ -1149,35 +1128,78 @@ const TeamsHomePage: React.FC = () => {
     () => groupMembersByTeamId(studioMembers),
     [studioMembers],
   );
-  const runtimeTrackableMembers = React.useMemo(
+  const runtimeTrackableEntryMemberServices = React.useMemo(() => {
+    const membersById = new Map(
+      studioMembers
+        .map((member) => [trimOptional(member.memberId), member] as const)
+        .filter(([memberId]) => memberId.length > 0),
+    );
+    const result: Array<{
+      readonly memberId: string;
+      readonly serviceId: string;
+    }> = [];
+
+    studioTeams.forEach((team) => {
+      const entryMemberId = trimOptional(team.entryMemberId);
+      if (!entryMemberId) {
+        return;
+      }
+
+      const member = membersById.get(entryMemberId);
+      const serviceId = trimOptional(member?.publishedServiceId);
+      if (!member || !serviceId) {
+        return;
+      }
+
+      result.push({
+        memberId: entryMemberId,
+        serviceId,
+      });
+    });
+
+    return result;
+  }, [studioMembers, studioTeams]);
+  const runtimeTrackableServiceIds = React.useMemo(
     () =>
-      studioMembers.filter(
-        (member) =>
-          Boolean(trimOptional(member.publishedServiceId)) ||
-          Boolean(trimOptional(member.lastBoundRevisionId)),
+      Array.from(
+        new Set(
+          runtimeTrackableEntryMemberServices.map((entry) => entry.serviceId),
+        ),
       ),
-    [studioMembers],
+    [runtimeTrackableEntryMemberServices],
   );
   const memberRunQueries = useQueries({
-    queries: runtimeTrackableMembers.map((member) => ({
+    queries: runtimeTrackableServiceIds.map((serviceId) => ({
       enabled: canLoadRoster && membersQuery.isSuccess,
-      queryKey: ["teams", "member-runs", queryScopeId, member.memberId],
+      queryKey: ["teams", "service-runs", queryScopeId, serviceId],
       queryFn: () =>
-        scopeRuntimeApi.listMemberRuns(queryScopeId, member.memberId, {
-          take: 12,
+        scopeRuntimeApi.listServiceRuns(queryScopeId, serviceId, {
+          take: 1,
         }),
       retry: false,
     })),
   });
   const runsByMemberId = React.useMemo(
-    () =>
-      Object.fromEntries(
-        runtimeTrackableMembers.map((member, index) => [
-          trimOptional(member.memberId),
+    () => {
+      const runsByServiceId = Object.fromEntries(
+        runtimeTrackableServiceIds.map((serviceId, index) => [
+          serviceId,
           memberRunQueries[index]?.data?.runs ?? [],
         ]),
-      ) as Record<string, readonly ScopeServiceRunSummary[]>,
-    [memberRunQueries, runtimeTrackableMembers],
+      ) as Record<string, readonly ScopeServiceRunSummary[]>;
+
+      return Object.fromEntries(
+        runtimeTrackableEntryMemberServices.map((entry) => [
+          entry.memberId,
+          runsByServiceId[entry.serviceId] ?? [],
+        ]),
+      ) as Record<string, readonly ScopeServiceRunSummary[]>;
+    },
+    [
+      memberRunQueries,
+      runtimeTrackableEntryMemberServices,
+      runtimeTrackableServiceIds,
+    ],
   );
   const teamPreviews = React.useMemo(
     () =>
@@ -1245,7 +1267,7 @@ const TeamsHomePage: React.FC = () => {
           <Button
             icon={<PlusOutlined />}
             onClick={() =>
-              history.push(buildScopeHref("/teams/new", { scopeId }))
+              history.push(buildTeamCreateRoute(scopeId))
             }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
@@ -1415,7 +1437,7 @@ const TeamsHomePage: React.FC = () => {
               >
                 <Button
                   onClick={() =>
-                    history.push(buildScopeHref("/teams/new", { scopeId }))
+                    history.push(buildTeamCreateRoute(scopeId))
                   }
                   type="primary"
                 >

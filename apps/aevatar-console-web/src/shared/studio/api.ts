@@ -171,6 +171,8 @@ function toCommittedWorkflowSummary(
   workflow: ScopeWorkflowSummary
 ): StudioWorkflowSummary {
   return {
+    activeRevisionId: trimOptional(workflow.activeRevisionId) ?? null,
+    serviceKey: trimOptional(workflow.serviceKey) ?? null,
     workflowId: workflow.workflowId,
     name: resolveScopeWorkflowName(workflow),
     description: "",
@@ -1598,7 +1600,6 @@ export const studioApi = {
     displayName: string;
     implementationKind: StudioMemberImplementationKind;
     description?: string | null;
-    memberId?: string | null;
     teamId?: string | null;
   }): Promise<StudioMemberSummary> {
     return requestDecodedJson(
@@ -1612,10 +1613,54 @@ export const studioApi = {
             displayName: input.displayName.trim(),
             implementationKind: input.implementationKind,
             description: trimOptional(input.description),
-            memberId: trimOptional(input.memberId),
             teamId: trimOptional(input.teamId),
           })
         ),
+      }
+    );
+  },
+
+  createMemberWithId(input: {
+    scopeId: string;
+    memberId: string;
+    displayName: string;
+    implementationKind: StudioMemberImplementationKind;
+    description?: string | null;
+    teamId?: string | null;
+  }): Promise<StudioMemberSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members`,
+      decodeStudioMemberSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName: input.displayName.trim(),
+            implementationKind: input.implementationKind,
+            description: trimOptional(input.description),
+            memberId: input.memberId.trim(),
+            teamId: trimOptional(input.teamId),
+          })
+        ),
+      }
+    );
+  },
+
+  updateMemberTeamAssignment(input: {
+    scopeId: string;
+    memberId: string;
+    teamId: string | null;
+  }): Promise<StudioMemberDetail> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeStudioMemberDetail,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          teamId: input.teamId === null ? null : input.teamId.trim(),
+        }),
       }
     );
   },
@@ -1728,6 +1773,8 @@ export const studioApi = {
           existing
             ? {
                 ...draft,
+                activeRevisionId: existing.activeRevisionId ?? null,
+                serviceKey: existing.serviceKey ?? null,
                 updatedAtUtc: selectLatestTimestamp(
                   draft.updatedAtUtc,
                   existing.updatedAtUtc

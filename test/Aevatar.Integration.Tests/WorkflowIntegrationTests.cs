@@ -56,9 +56,11 @@ public class WorkflowIntegrationTests
           - id: research
             type: llm_call
             target_role: researcher
+            next: review
           - id: review
             type: llm_call
             target_role: reviewer
+            next: write
           - id: write
             type: llm_call
             target_role: writer

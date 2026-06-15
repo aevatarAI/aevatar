@@ -136,6 +136,42 @@ public sealed class WorkflowScheduleEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldAcceptTenantlessWorkflowScheduleAuth()
+    {
+        var service = new RecordingScheduleService();
+
+        var result = await WorkflowScheduleEndpoints.Create(
+            new WorkflowScheduleConfigurationHttpRequest
+            {
+                ScheduleId = "schedule-1",
+                WorkflowName = "daily",
+                Prompt = "hello",
+                CronExpression = "0 9 * * *",
+                Auth = new WorkflowScheduleAuthHttpRequest
+                {
+                    SenderNyxId = new WorkflowScheduleNyxIdCredentialSourceHttpRequest
+                    {
+                        Subject = new WorkflowScheduleNyxIdSubjectRefHttpRequest
+                        {
+                            Platform = "lark",
+                            Tenant = " ",
+                            ExternalUserId = "ou-user-1",
+                        },
+                        Scope = "proxy",
+                    },
+                },
+            },
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.Created.Should().ContainSingle()
+            .Which.Auth!.SenderNyxId!.Subject.Tenant.Should().BeEmpty();
+    }
+
+    [Fact]
     public void WorkflowScheduleModels_ShouldNotExposeDeadSourceActorIdField()
     {
         typeof(WorkflowScheduleConfigurationHttpRequest)
@@ -150,6 +186,85 @@ public sealed class WorkflowScheduleEndpointsTests
             .GetProperty("SourceActorId")
             .Should()
             .BeNull();
+    }
+
+    [Fact]
+    public async Task Create_ShouldReturnBadRequest_WhenAuthIsEmpty()
+    {
+        var result = await WorkflowScheduleEndpoints.Create(
+            new WorkflowScheduleConfigurationHttpRequest
+            {
+                ScheduleId = "schedule-1",
+                WorkflowName = "daily",
+                Prompt = "hello",
+                CronExpression = "0 9 * * *",
+                Auth = new WorkflowScheduleAuthHttpRequest(),
+            },
+            new RecordingScheduleService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
+    public async Task Create_ShouldReturnBadRequest_WhenAuthSubjectIsNull()
+    {
+        var result = await WorkflowScheduleEndpoints.Create(
+            new WorkflowScheduleConfigurationHttpRequest
+            {
+                ScheduleId = "schedule-1",
+                WorkflowName = "daily",
+                Prompt = "hello",
+                CronExpression = "0 9 * * *",
+                Auth = new WorkflowScheduleAuthHttpRequest
+                {
+                    SenderNyxId = new WorkflowScheduleNyxIdCredentialSourceHttpRequest
+                    {
+                        Subject = null!,
+                        Scope = "proxy",
+                    },
+                },
+            },
+            new RecordingScheduleService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
+    public async Task Create_ShouldReturnBadRequest_WhenAuthFieldsAreBlank()
+    {
+        var result = await WorkflowScheduleEndpoints.Create(
+            new WorkflowScheduleConfigurationHttpRequest
+            {
+                ScheduleId = "schedule-1",
+                WorkflowName = "daily",
+                Prompt = "hello",
+                CronExpression = "0 9 * * *",
+                Auth = new WorkflowScheduleAuthHttpRequest
+                {
+                    SenderNyxId = new WorkflowScheduleNyxIdCredentialSourceHttpRequest
+                    {
+                        Subject = new WorkflowScheduleNyxIdSubjectRefHttpRequest
+                        {
+                            Platform = "lark",
+                            Tenant = " ",
+                            ExternalUserId = "ou-user-1",
+                        },
+                        Scope = "",
+                    },
+                },
+            },
+            new RecordingScheduleService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
     }
 
     [Fact]
@@ -412,15 +527,18 @@ public sealed class WorkflowScheduleEndpointsTests
     public async Task ScheduledServiceInvocationDispatchPort_ShouldInvokeExplicitServiceInvocationPort()
     {
         var invocationPort = new RecordingServiceInvocationPort();
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort);
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort());
 
         var receipt = await port.DispatchAsync(
-            new ServiceInvocationRequest
-            {
-                CommandId = "cmd-invoke",
-                CorrelationId = "corr-invoke",
-                Payload = Any.Pack(new Empty()),
-            });
+            new ScheduledServiceInvocationDispatchRequest(
+                new ServiceInvocationRequest
+                {
+                    CommandId = "cmd-invoke",
+                    CorrelationId = "corr-invoke",
+                    Payload = Any.Pack(new Empty()),
+                }));
 
         invocationPort.Requests.Should().ContainSingle();
         receipt.CommandId.Should().Be("cmd-invoke");
@@ -643,6 +761,18 @@ public sealed class WorkflowScheduleEndpointsTests
                 CorrelationId = request.CorrelationId,
                 TargetActorId = "service-actor",
             });
+        }
+    }
+
+    private sealed class RecordingScheduledServiceInvocationCredentialExchangePort
+        : IScheduledServiceInvocationCredentialExchangePort
+    {
+        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
+            ScheduledServiceInvocationNyxIdCredentialSource source,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(ScheduledServiceInvocationCredentialExchangeResult.Success("sender-token"));
         }
     }
 

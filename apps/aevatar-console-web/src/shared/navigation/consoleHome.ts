@@ -1,4 +1,4 @@
-export const TEAMS_HOME_ROUTE = "/teams";
+export const TEAMS_HOME_ROUTE = "/scopes";
 
 export function getConsoleHomeRoute(): string {
   return TEAMS_HOME_ROUTE;

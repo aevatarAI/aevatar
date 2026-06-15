@@ -1,6 +1,8 @@
 import {
   buildTeamCreateHref,
   buildTeamDetailHref,
+  buildTeamMemberInvokeHref,
+  buildTeamMemberWorkflowStudioHref,
   buildTeamStudioHref,
   buildTeamsHref,
   readTeamDetailRouteState,
@@ -20,11 +22,11 @@ describe("teamRoutes", () => {
         tab: "members",
       }),
     ).toBe(
-      "/teams/scope-alpha/t-alpha?memberId=member-alpha&workflowId=workflow-1&tab=members&serviceId=service-1&runId=run-1&testTeam=1",
+      "/scopes/scope-alpha/teams/t-alpha?memberId=member-alpha&workflowId=workflow-1&tab=members&serviceId=service-1&runId=run-1&testTeam=1",
     );
   });
 
-  it("falls back to /teams when the scope is empty", () => {
+  it("falls back to the scope resolver when the scope is empty", () => {
     expect(
       buildTeamDetailHref({
         scopeId: " ",
@@ -33,14 +35,14 @@ describe("teamRoutes", () => {
     ).toBe(buildTeamsHref());
   });
 
-  it("returns to the teams list with scope context when teamId is missing", () => {
+  it("returns to the scoped teams list when teamId is missing", () => {
     expect(
       buildTeamDetailHref({
         memberId: "member-alpha",
         scopeId: " scope-alpha ",
         serviceId: "service-1",
       }),
-    ).toBe("/teams?scopeId=scope-alpha");
+    ).toBe("/scopes/scope-alpha/teams");
   });
 
   it("builds a Team-scoped Studio create-member handoff", () => {
@@ -51,7 +53,7 @@ describe("teamRoutes", () => {
         teamId: " t-alpha ",
       }),
     ).toBe(
-      "/studio?scopeId=scope-alpha&teamId=t-alpha&tab=studio&intent=create-member&returnTo=%2Fteams%2Fscope-alpha%2Ft-alpha%3Ftab%3Dmembers",
+      "/studio?scopeId=scope-alpha&teamId=t-alpha&tab=studio&intent=create-member&returnTo=%2Fscopes%2Fscope-alpha%2Fteams%2Ft-alpha%3Ftab%3Dmembers",
     );
   });
 
@@ -64,17 +66,88 @@ describe("teamRoutes", () => {
         teamId: "t-alpha",
       }),
     ).toBe(
-      "/studio?scopeId=scope-alpha&teamId=t-alpha&member=member%3Amember-alpha&step=build&returnTo=%2Fteams%2Fscope-alpha%2Ft-alpha%3FmemberId%3Dmember-alpha%26tab%3Dmembers",
+      "/studio?scopeId=scope-alpha&teamId=t-alpha&member=member%3Amember-alpha&step=build&returnTo=%2Fscopes%2Fscope-alpha%2Fteams%2Ft-alpha%3FmemberId%3Dmember-alpha%26tab%3Dmembers",
     );
+  });
+
+  it("builds explicit Team member workflow studio routes", () => {
+    expect(
+      buildTeamMemberWorkflowStudioHref({
+        mode: "create-member",
+        scopeId: " scope-alpha ",
+        teamId: " t-alpha ",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha/members/new/workflow");
+
+    expect(
+      buildTeamMemberWorkflowStudioHref({
+        memberId: " member-alpha ",
+        mode: "edit-member",
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+        workflowId: " workflow-alpha ",
+      }),
+    ).toBe(
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+
+    expect(
+      buildTeamMemberWorkflowStudioHref({
+        memberId: " member-alpha ",
+        mode: "edit-member",
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+        workflowId: " member-member-alpha ",
+      }),
+    ).toBe(
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=member-member-alpha",
+    );
+  });
+
+  it("builds explicit Team member invoke routes", () => {
+    expect(
+      buildTeamMemberInvokeHref({
+        memberId: " member-alpha ",
+        scopeId: " scope-alpha ",
+        teamId: " t-alpha ",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha/members/member-alpha/invoke");
+
+    expect(
+      buildTeamMemberInvokeHref({
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha?tab=members");
+
+    expect(
+      buildTeamMemberInvokeHref({
+        memberId: "member-alpha",
+        scopeId: "",
+        teamId: "t-alpha",
+      }),
+    ).toBe(buildTeamsHref());
+  });
+
+  it("keeps old Studio helpers on /studio", () => {
+    expect(
+      buildTeamStudioHref({
+        memberId: "member-alpha",
+        mode: "edit-member",
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }).startsWith("/studio?"),
+    ).toBe(true);
   });
 
   it("preserves draft team names when returning to the create page", () => {
     expect(
       buildTeamCreateHref({
+        scopeId: "scope-alpha",
         teamName: "订单助手团队",
       }),
     ).toBe(
-      "/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F",
+      "/scopes/scope-alpha/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F",
     );
   });
 
@@ -82,7 +155,7 @@ describe("teamRoutes", () => {
     expect(
       readTeamDetailRouteState(
         "?memberId=member-alpha&teamId=stale-team&workflowId=wf-1&serviceId=service-1&runId=run-1&tab=members",
-        "/teams/scope-alpha/t-alpha",
+        "/scopes/scope-alpha/teams/t-alpha",
       ),
     ).toEqual({
       memberId: "member-alpha",
@@ -96,11 +169,39 @@ describe("teamRoutes", () => {
     });
   });
 
+  it("reads scope, team, member, and draft workflow identities from scoped member workflow routes", () => {
+    expect(
+      readTeamDetailRouteState(
+        "?workflowId=wf-alpha",
+        "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow",
+      ),
+    ).toMatchObject({
+      memberId: "member-alpha",
+      scopeId: "scope-alpha",
+      teamId: "t-alpha",
+      workflowId: "wf-alpha",
+    });
+  });
+
+  it("does not read removed legacy Team member workflow routes", () => {
+    expect(
+      readTeamDetailRouteState(
+        "?workflowId=wf-alpha",
+        "/teams/scope-alpha/t-alpha/members/member-alpha/workflow",
+      ),
+    ).toMatchObject({
+      memberId: "",
+      scopeId: "",
+      teamId: "",
+      workflowId: "wf-alpha",
+    });
+  });
+
   it("reads Team Test auto-open intent from the team detail query", () => {
     expect(
       readTeamDetailRouteState(
         "?memberId=member-alpha&testTeam=1",
-        "/teams/scope-alpha/t-alpha",
+        "/scopes/scope-alpha/teams/t-alpha",
       ),
     ).toMatchObject({
       memberId: "member-alpha",
@@ -110,14 +211,14 @@ describe("teamRoutes", () => {
     });
   });
 
-  it("reads legacy query team links", () => {
+  it("does not read removed legacy query team links", () => {
     expect(
       readTeamDetailRouteState(
         "?teamId=t-alpha&tab=members",
         "/teams/scope-alpha",
       ),
     ).toMatchObject({
-      scopeId: "scope-alpha",
+      scopeId: "",
       tab: "members",
       teamId: "t-alpha",
     });
@@ -127,7 +228,7 @@ describe("teamRoutes", () => {
     expect(
       readTeamDetailRouteState(
         "?workflowId=wf-2&tab=not-real",
-        "/teams/scope-query",
+        "/scopes/scope-query/teams",
       ),
     ).toEqual({
       memberId: "",

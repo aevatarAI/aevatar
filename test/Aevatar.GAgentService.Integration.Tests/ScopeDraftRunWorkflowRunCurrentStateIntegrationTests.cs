@@ -33,6 +33,9 @@ namespace Aevatar.GAgentService.Integration.Tests;
 
 public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
 {
+    private static readonly TimeSpan ReadModelVisibilityTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ReadModelVisibilityPollInterval = TimeSpan.FromMilliseconds(100);
+
     [Fact]
     public async Task DraftRunEndpoint_ShouldExposeCompletedWorkflowActorCurrentStateViaWorkflowActorCurrentState()
     {
@@ -50,18 +53,62 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         var actorId = ExtractRunContextActorId(body);
         actorId.Should().NotBeNullOrWhiteSpace();
 
-        using var snapshotResponse = await host.Client.GetAsync($"/api/workflow-actors/{Uri.EscapeDataString(actorId!)}/current-state");
-        var snapshot = await snapshotResponse.Content.ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>();
+        var snapshot = await WaitForCompletedCurrentStateAsync(host.Client, actorId!);
 
-        snapshotResponse.StatusCode.Should().Be(HttpStatusCode.OK);
-        snapshot.Should().NotBeNull();
-        snapshot!.ActorId.Should().Be(actorId);
+        snapshot.ActorId.Should().Be(actorId);
         snapshot.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.Completed);
         snapshot.LastSuccess.Should().BeTrue();
         snapshot.LastOutput.Should().Be("y\nz");
         snapshot.LastError.Should().BeEmpty();
         snapshot.RequestedSteps.Should().Be(0);
         snapshot.CompletedSteps.Should().Be(0);
+    }
+
+    private static async Task<WorkflowActorCurrentStateHttpResponse> WaitForCompletedCurrentStateAsync(
+        HttpClient client,
+        string actorId)
+    {
+        using var timeout = new CancellationTokenSource();
+        timeout.CancelAfter(ReadModelVisibilityTimeout);
+
+        WorkflowActorCurrentStateHttpResponse? lastSnapshot = null;
+        HttpStatusCode? lastStatus = null;
+        try
+        {
+            while (true)
+            {
+                using var snapshotResponse = await client.GetAsync(
+                    $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state",
+                    timeout.Token);
+                lastStatus = snapshotResponse.StatusCode;
+                if (snapshotResponse.StatusCode == HttpStatusCode.OK)
+                {
+                    lastSnapshot = await snapshotResponse.Content
+                        .ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>(timeout.Token);
+                    if (lastSnapshot is
+                        {
+                            CompletionStatus: WorkflowRunCompletionStatus.Completed,
+                            LastSuccess: true,
+                            LastOutput: "y\nz"
+                        })
+                    {
+                        return lastSnapshot;
+                    }
+                }
+
+                await Task.Delay(ReadModelVisibilityPollInterval, timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                "Timed out waiting for workflow actor current-state read model to reach completed output. " +
+                $"actor_id={actorId}, last_status={(int?)lastStatus}, " +
+                $"last_completion_status={lastSnapshot?.CompletionStatus.ToString() ?? "<none>"}, " +
+                $"last_state_version={lastSnapshot?.StateVersion.ToString() ?? "<none>"}, " +
+                $"last_success={lastSnapshot?.LastSuccess.ToString() ?? "<none>"}, " +
+                $"last_output={lastSnapshot?.LastOutput ?? "<none>"}");
+        }
     }
 
     private static string? ExtractRunContextActorId(string sseBody)
@@ -207,6 +254,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         public Task<TeamEntryMemberResolution> ResolveAsync(
             string scopeId,
             string teamId,
+            string endpointId,
             CancellationToken ct = default) =>
             throw new TeamEntryMemberResolutionException(
                 TeamEntryMemberErrorCodes.TeamNotFound,
@@ -280,6 +328,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         steps:
           - id: call_level1
             type: workflow_call
+            next: format_final_output
             parameters:
               workflow: "subworkflow_level1"
 
@@ -296,6 +345,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         steps:
           - id: call_level2
             type: workflow_call
+            next: reverse_lines_level1
             parameters:
               workflow: "subworkflow_level2"
 
@@ -311,6 +361,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         steps:
           - id: call_level3
             type: workflow_call
+            next: distinct_level2
             parameters:
               workflow: "subworkflow_level3"
 

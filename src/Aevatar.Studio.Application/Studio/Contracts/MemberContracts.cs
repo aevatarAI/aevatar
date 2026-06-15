@@ -1,5 +1,7 @@
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
+using System.Text.Json.Serialization;
+
 /// <summary>
 /// Wire-format implementation kind for HTTP/JSON. Uses lowercase strings so
 /// Studio's HTTP surface stays member-centric and frontend-friendly. Mapped
@@ -37,6 +39,27 @@ public static class StudioMemberBindingRunStatusNames
     public const string Rejected = "rejected";
     public const string Unknown = "unknown";
 }
+
+public static class StudioMemberInvocationReadinessStatusNames
+{
+    public const string Ready = "ready";
+    public const string ServiceCatalogMissing = "service_catalog_missing";
+    public const string ServingSetMissing = "serving_set_missing";
+    public const string EligibleServingTargetMissing = "eligible_serving_target_missing";
+    public const string ServiceCatalogTargetMissing = "service_catalog_target_missing";
+    public const string TrafficViewTargetMissing = "traffic_view_target_missing";
+    public const string PreparedArtifactMissing = "prepared_artifact_missing";
+    public const string Unknown = "unknown";
+}
+
+public sealed record StudioMemberInvocationReadinessResponse(
+    bool CanInvoke,
+    string Status,
+    string ReasonCode,
+    string Message,
+    string? RevisionId = null,
+    string? DeploymentId = null,
+    DateTimeOffset? ObservedAtUtc = null);
 
 /// <summary>
 /// Wire-format status values returned in
@@ -186,8 +209,26 @@ public sealed record UpdateStudioMemberBindingRequest(
     StudioMemberScriptBindingSpec? Script = null,
     StudioMemberGAgentBindingSpec? GAgent = null);
 
-public sealed record StudioMemberWorkflowBindingSpec(
-    IReadOnlyList<string> WorkflowYamls);
+public sealed record StudioMemberWorkflowBindingSpec
+{
+    [JsonConstructor]
+    public StudioMemberWorkflowBindingSpec(
+        string WorkflowId,
+        IReadOnlyList<string> WorkflowYamls)
+    {
+        this.WorkflowId = WorkflowId;
+        this.WorkflowYamls = WorkflowYamls;
+    }
+
+    public StudioMemberWorkflowBindingSpec(IReadOnlyList<string> WorkflowYamls)
+        : this(string.Empty, WorkflowYamls)
+    {
+    }
+
+    public string WorkflowId { get; init; }
+
+    public IReadOnlyList<string> WorkflowYamls { get; init; }
+}
 
 public sealed record StudioMemberScriptBindingSpec(
     string ScriptId,
@@ -247,6 +288,7 @@ public sealed record StudioMemberEndpointContractResponse(
     string? SampleRequestJson,
     string DeploymentStatus,
     string RevisionId,
+    StudioMemberInvocationReadinessResponse InvocationReadiness,
     string? CurlExample = null,
     string? FetchExample = null);
 

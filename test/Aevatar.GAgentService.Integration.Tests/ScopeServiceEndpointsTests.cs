@@ -2268,11 +2268,18 @@ public sealed class ScopeServiceEndpointsTests
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/invoke/chat:stream", new
-        {
-            prompt = "hello member",
-            headers = new Dictionary<string, string> { ["channel"] = "member-tests" },
-        });
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/member-a/invoke/chat:stream",
+            new
+            {
+                prompt = "hello member",
+                headers = new Dictionary<string, string> { ["channel"] = "member-tests" },
+            },
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
+
+        var response = await host.Client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
@@ -2365,7 +2372,7 @@ public sealed class ScopeServiceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
-        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a"));
+        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a", "chat"));
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-member-a");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
@@ -2802,18 +2809,25 @@ public sealed class ScopeServiceEndpointsTests
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/invoke/chat", new
-        {
-            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
-            payloadBase64 = "",
-        });
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/member-a/invoke/chat",
+            new
+            {
+                payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+                payloadBase64 = "",
+            },
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
+
+        var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
         response.Headers.Location.Should().NotBeNull();
-        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
+        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/services/member-a/runs/run-1");
         var receipt = await response.Content.ReadFromJsonAsync<ServiceInvocationAcceptedReceipt>();
         receipt.Should().NotBeNull();
-        receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
+        receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/services/member-a/runs/run-1");
         host.InvocationPort.LastRequest.Should().NotBeNull();
         host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
         {
@@ -2847,7 +2861,7 @@ public sealed class ScopeServiceEndpointsTests
         var receipt = await response.Content.ReadFromJsonAsync<ServiceInvocationAcceptedReceipt>();
         receipt.Should().NotBeNull();
         receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
-        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a"));
+        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a", "chat"));
         host.InvocationPort.LastRequest.Should().NotBeNull();
         host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
         {
@@ -5240,7 +5254,7 @@ public sealed class ScopeServiceEndpointsTests
 
     private sealed class FakeTeamEntryMemberResolver : ITeamEntryMemberResolver
     {
-        public List<(string ScopeId, string TeamId)> Calls { get; } = [];
+        public List<(string ScopeId, string TeamId, string EndpointId)> Calls { get; } = [];
 
         public TeamEntryMemberResolution Result { get; set; } =
             new("scope-a", "team-a", "member-a", "member-a");
@@ -5250,9 +5264,10 @@ public sealed class ScopeServiceEndpointsTests
         public Task<TeamEntryMemberResolution> ResolveAsync(
             string scopeId,
             string teamId,
+            string endpointId,
             CancellationToken ct = default)
         {
-            Calls.Add((scopeId, teamId));
+            Calls.Add((scopeId, teamId, endpointId));
             if (Exception != null)
                 throw Exception;
 

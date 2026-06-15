@@ -1,4 +1,4 @@
-import { Alert, message } from 'antd';
+import { Alert, Tooltip, message } from 'antd';
 import React, {
   useCallback,
   useEffect,
@@ -55,8 +55,10 @@ type StudioMemberInvokePanelProps = {
   readonly memberId?: string;
   readonly memberRevision?: StudioMemberBindingRevision | null;
   readonly teamId?: string;
+  readonly runtimeTarget?: 'default' | 'member' | 'service' | 'team';
   readonly services: readonly ScopeConsoleServiceOption[];
   readonly selectedMemberLabel?: string;
+  readonly targetSummaryVariant?: 'default' | 'member-run';
   readonly emptyState?: {
     readonly description?: string;
     readonly message: string;
@@ -74,6 +76,12 @@ type StudioMemberInvokePanelProps = {
   ) => void;
 };
 
+type TargetMetaItem = {
+  readonly key: string;
+  readonly label?: string;
+  readonly value: string;
+};
+
 function createClientId(prefix: string): string {
   const generated = globalThis.crypto?.randomUUID?.();
   if (generated) {
@@ -81,6 +89,30 @@ function createClientId(prefix: string): string {
   }
 
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function resolveInvokeRouteTarget(input: {
+  memberId: string;
+  runtimeTarget: NonNullable<StudioMemberInvokePanelProps['runtimeTarget']>;
+  selectedServiceId?: string;
+  teamId: string;
+}) {
+  switch (input.runtimeTarget) {
+    case 'member':
+      return input.memberId ? { memberId: input.memberId } : {};
+    case 'service':
+      return input.selectedServiceId ? { serviceId: input.selectedServiceId } : {};
+    case 'team':
+      return input.teamId ? { teamId: input.teamId } : {};
+    default:
+      if (input.teamId) {
+        return { teamId: input.teamId };
+      }
+
+      return input.selectedServiceId
+        ? { serviceId: input.selectedServiceId }
+        : {};
+  }
 }
 
 function cloneChatMessages(
@@ -152,6 +184,32 @@ function getHistoryOutputText(entry: InvokeHistoryEntry): string {
     trimOptional(entry.errorDetail) ||
     trimOptional(entry.snapshot.result.error)
   );
+}
+
+function renderTargetMetaItem(item: TargetMetaItem): React.ReactNode {
+  const content = item.label ? `${item.label}: ${item.value}` : item.value;
+
+  return (
+    <Tooltip key={item.key} placement="topLeft" title={content}>
+      <span style={targetMetaItemWrapStyle}>
+        <span style={targetMetaItemStyle}>{content}</span>
+      </span>
+    </Tooltip>
+  );
+}
+
+function renderTargetMetaItems(items: readonly TargetMetaItem[]): React.ReactNode {
+  return items.flatMap((item, index) => {
+    const rendered = renderTargetMetaItem(item);
+    return index === 0
+      ? [rendered]
+      : [
+          <span aria-hidden key={`${item.key}-separator`}>
+            ·
+          </span>,
+          rendered,
+        ];
+  });
 }
 
 function createPendingRunResult(input: {
@@ -261,6 +319,30 @@ const targetTitleStyle: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 800,
   lineHeight: '22px',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const targetTitleWrapStyle: React.CSSProperties = {
+  flex: '1 1 320px',
+  minWidth: 0,
+};
+
+const targetMetaItemStyle: React.CSSProperties = {
+  display: 'inline-block',
+  maxWidth: '100%',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  verticalAlign: 'bottom',
+  whiteSpace: 'nowrap',
+};
+
+const targetMetaItemWrapStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  maxWidth: 'min(420px, 100%)',
   minWidth: 0,
 };
 
@@ -386,6 +468,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   memberId,
   memberRevision,
   teamId,
+  runtimeTarget = 'default',
   services,
   selectedMemberLabel,
   emptyState,
@@ -393,6 +476,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   initialEndpointId,
   onSelectionChange,
   onObserveSessionChange,
+  targetSummaryVariant = 'default',
 }) => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeHistoryEntryIdRef = useRef('');
@@ -455,17 +539,24 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentMemberLabel =
     trimOptional(selectedMemberLabel) ||
     trimOptional(selectedService?.displayName) ||
-    trimOptional(selectedService?.serviceId) ||
-    t("pages.studio.studiomemberinvokepanel.current.members", "current members");
+    t("pages.studio.studiomemberinvokepanel.current.member", "Member");
   const canInvoke = Boolean(
     scopeId && normalizedMemberId && selectedService && selectedEndpoint,
   );
   const invokeRouteTarget = useMemo(
     () =>
-      normalizedTeamId
-        ? { teamId: normalizedTeamId }
-        : { serviceId: selectedService?.serviceId },
-    [normalizedTeamId, selectedService?.serviceId],
+      resolveInvokeRouteTarget({
+        memberId: normalizedMemberId,
+        runtimeTarget,
+        selectedServiceId: selectedService?.serviceId,
+        teamId: normalizedTeamId,
+      }),
+    [
+      normalizedMemberId,
+      normalizedTeamId,
+      runtimeTarget,
+      selectedService?.serviceId,
+    ],
   );
   const visibleRequestHistory = useMemo(() => {
     const currentServiceId =
@@ -516,9 +607,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const endpointLabel =
     selectedEndpoint?.displayName || selectedEndpointId || '—';
   const endpointSummaryLabel =
-    endpointLabel === selectedEndpointId
-      ? endpointLabel
-      : `${endpointLabel} (${selectedEndpointId || '—'})`;
+    selectedEndpoint?.displayName ||
+    t("pages.studio.studiomemberinvokepanel.endpoint", "Endpoint");
   const currentPublishedContext =
     describeStudioMemberBindingRevisionContext(memberRevision) || '';
   const currentImplementationKind =
@@ -529,6 +619,68 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(endpointContract?.revisionId) ||
     trimOptional(memberRevision?.revisionId);
   const lifecycleLabel = getLifecycleLabel(memberRevision);
+  const targetMetaItems = useMemo<TargetMetaItem[]>(() => {
+    if (targetSummaryVariant === 'member-run') {
+      return [
+        {
+          key: 'endpoint',
+          label: 'Endpoint',
+          value: endpointSummaryLabel,
+        },
+        {
+          key: 'status',
+          label: 'Status',
+          value: lifecycleLabel,
+        },
+      ];
+    }
+
+    return [
+      ...(normalizedTeamId
+        ? [
+            {
+              key: 'team',
+              label: 'Team',
+              value: t("pages.studio.studiomemberinvokepanel.team.context", "Team context"),
+            },
+          ]
+        : []),
+      {
+        key: 'member',
+        label: 'Member',
+        value: currentMemberLabel,
+      },
+      {
+        key: 'service',
+        label: 'Service',
+        value:
+          selectedService?.displayName ||
+          t("pages.studio.studiomemberinvokepanel.bound.service", "Bound service"),
+      },
+      {
+        key: 'endpoint',
+        label: 'Endpoint',
+        value: endpointSummaryLabel,
+      },
+      {
+        key: 'implementation',
+        value: currentImplementationKind,
+      },
+      {
+        key: 'lifecycle',
+        label: 'Lifecycle',
+        value: lifecycleLabel,
+      },
+    ];
+  }, [
+    currentImplementationKind,
+    currentMemberLabel,
+    endpointSummaryLabel,
+    lifecycleLabel,
+    normalizedTeamId,
+    selectedService?.displayName,
+    targetSummaryVariant,
+  ]);
   const invokeBlockedReason = !scopeId
     ? t("pages.studio.studiomemberinvokepanel.missing.workspace.scope", "Missing workspace scope.")
     : !normalizedMemberId
@@ -1374,34 +1526,26 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             data-testid="studio-invoke-target-summary"
             style={targetSummaryStyle}
           >
-              <div style={{ minWidth: 0 }}>
-                <div title={currentMemberLabel} style={targetTitleStyle}>
+            <div style={targetTitleWrapStyle}>
+              <Tooltip placement="topLeft" title={currentMemberLabel}>
+                <div style={targetTitleStyle}>
                   {currentMemberLabel}
                 </div>
-                <div style={targetMetaStyle}>
-                  {normalizedTeamId ? (
-                    <>
-                      <span>Team: {normalizedTeamId}</span>
-                      <span>·</span>
-                    </>
-                  ) : null}
-                  <span>Member: {normalizedMemberId || t("pages.studio.studiomemberinvokepanel.not.selected", "not selected")}</span>
-                  <span>·</span>
-                  <span>Service: {selectedService?.displayName || selectedServiceId || t("pages.studio.studiomemberinvokepanel.not.selected.2", "not selected")}</span>
-                  <span>·</span>
-                  <span>Endpoint: {endpointSummaryLabel}</span>
-                  <span>·</span>
-                  <span>{currentImplementationKind}</span>
-                  <span>·</span>
-                  <span>Lifecycle: {lifecycleLabel}</span>
-                  {invokeBlockedReason ? (
-                    <>
-                      <span>·</span>
-                      <span>{invokeBlockedReason}</span>
-                    </>
-                  ) : null}
-                </div>
+              </Tooltip>
+              <div style={targetMetaStyle}>
+                {renderTargetMetaItems(targetMetaItems)}
+                {invokeBlockedReason ? (
+                  <>
+                    <span>·</span>
+                    <Tooltip placement="topLeft" title={invokeBlockedReason}>
+                      <span style={targetMetaItemStyle}>
+                        {invokeBlockedReason}
+                      </span>
+                    </Tooltip>
+                  </>
+                ) : null}
               </div>
+            </div>
             <div style={targetPillStyle}>
               <span
                 style={{
@@ -1468,9 +1612,6 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                       currentRunRequest={currentRunRequest}
                       endpointLabel={endpointLabel}
                       invokeResult={invokeResult}
-                      memberId={normalizedMemberId}
-                      publishedContext={currentPublishedContext}
-                      revisionId={currentRevisionId}
                       runElapsedLabel={runElapsedLabel}
                       runViewMode={runViewMode}
                       transcriptViewportRef={transcriptViewportRef}
@@ -1504,13 +1645,6 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 writeClipboardText(
                   entry ? getHistoryOutputText(entry) : '',
                   'Output',
-                );
-              }}
-              onCopyRunId={(entryId) => {
-                const entry = requestHistory.find((item) => item.id === entryId);
-                writeClipboardText(
-                  entry?.runId || entry?.snapshot.result.runId || '',
-                  'Run id',
                 );
               }}
               onRetryAsNewRun={(entryId) => {

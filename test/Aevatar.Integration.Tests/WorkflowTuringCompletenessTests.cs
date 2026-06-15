@@ -67,6 +67,7 @@ public sealed class WorkflowTuringCompletenessTests
                 {
                     Id = "init_c1",
                     Type = "assign",
+                    Next = "init_c2",
                     Parameters = new Dictionary<string, string>
                     {
                         ["target"] = "c1",
@@ -77,6 +78,7 @@ public sealed class WorkflowTuringCompletenessTests
                 {
                     Id = "init_c2",
                     Type = "assign",
+                    Next = "check_c1",
                     Parameters = new Dictionary<string, string>
                     {
                         ["target"] = "c2",
@@ -147,6 +149,7 @@ public sealed class WorkflowTuringCompletenessTests
                 {
                     Id = "init_a",
                     Type = "assign",
+                    Next = "init_b",
                     Parameters = new Dictionary<string, string>
                     {
                         ["target"] = "a",
@@ -157,6 +160,7 @@ public sealed class WorkflowTuringCompletenessTests
                 {
                     Id = "init_b",
                     Type = "assign",
+                    Next = "check_b",
                     Parameters = new Dictionary<string, string>
                     {
                         ["target"] = "b",

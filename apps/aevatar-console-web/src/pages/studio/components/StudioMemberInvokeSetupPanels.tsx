@@ -175,15 +175,6 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             >
               {primaryButtonLabel}
             </Button>
-            {layout === 'dock' && !isRunning ? (
-              <Button
-                disabled
-                icon={<StopOutlined />}
-                size="large"
-                style={dockComposerSecondaryButtonStyle}
-              >
-                {t("pages.studio.studiomemberinvokesetuppanels.stop.3", "Stop")}</Button>
-            ) : null}
             {layout === 'dock' ? (
               <Button
                 icon={<ClearOutlined />}
