@@ -271,6 +271,13 @@ public sealed class StudioMemberServiceTeamTests
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
             Task.CompletedTask;
 
+        public Task RenameAsync(
+            string scopeId,
+            string memberId,
+            string displayName,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
         public Task StartBindingRunAsync(
             StudioMemberBindingRunStartRequest request,
             CancellationToken ct = default) =>

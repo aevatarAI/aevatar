@@ -25,13 +25,13 @@ internal static class StudioMemberCreateRequestValidator
         ValidateTeamId(request.TeamId);
     }
 
-    private static void ValidateDisplayName(string? displayName)
+    public static string ValidateAndNormalizeDisplayName(string? displayName)
     {
         var trimmed = displayName?.Trim();
         if (string.IsNullOrEmpty(trimmed))
         {
             throw new InvalidOperationException(
-                "displayName is required when creating a member.");
+                "displayName is required.");
         }
 
         if (trimmed.Length > StudioMemberInputLimits.MaxDisplayNameLength)
@@ -39,7 +39,12 @@ internal static class StudioMemberCreateRequestValidator
             throw new InvalidOperationException(
                 $"displayName must be at most {StudioMemberInputLimits.MaxDisplayNameLength} characters.");
         }
+
+        return trimmed;
     }
+
+    private static void ValidateDisplayName(string? displayName) =>
+        _ = ValidateAndNormalizeDisplayName(displayName);
 
     private static void ValidateDescription(string? description)
     {

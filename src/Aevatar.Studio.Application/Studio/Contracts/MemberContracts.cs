@@ -191,6 +191,7 @@ public sealed record CreateStudioMemberRequest(
 /// empty-string value reaching the actor.
 /// </summary>
 public sealed record UpdateStudioMemberRequest(
+    PatchValue<string> DisplayName = default,
     PatchValue<string> TeamId = default,
     PatchValue<StudioMemberImplementationRefResponse> ImplementationRef = default);
 

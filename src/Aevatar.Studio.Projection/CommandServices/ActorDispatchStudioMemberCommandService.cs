@@ -187,6 +187,25 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
+    public async Task RenameAsync(
+        string scopeId,
+        string memberId,
+        string displayName,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+        var normalizedDisplayName = (displayName ?? string.Empty).Trim();
+
+        var evt = new StudioMemberRenamedEvent
+        {
+            DisplayName = normalizedDisplayName,
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
+    }
+
     public async Task StartBindingRunAsync(
         StudioMemberBindingRunStartRequest request,
         CancellationToken ct = default)

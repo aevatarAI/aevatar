@@ -157,6 +157,36 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public async Task HandleRenamed_ShouldPreserveDescription_WhenOnlyDisplayNameChanges()
+    {
+        var current = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            Description = "Existing description",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var updatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1));
+        var eventSourcing = new RecordingEventSourcing(current);
+        var agent = NewHandlerAgent(current, eventSourcing, new RecordingEventPublisher());
+
+        await agent.HandleRenamed(new StudioMemberRenamedEvent
+        {
+            DisplayName = "Renamed Workflow",
+            UpdatedAtUtc = updatedAt,
+        });
+
+        var renamed = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberRenamedEvent>().Subject;
+        renamed.DisplayName.Should().Be("Renamed Workflow");
+        renamed.Description.Should().Be("Existing description");
+        renamed.UpdatedAtUtc.Should().Be(updatedAt);
+    }
+
+    [Fact]
     public void ImplementationUpdated_ShouldAdvanceLifecycleToBuildReady()
     {
         var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent

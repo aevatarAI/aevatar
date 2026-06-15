@@ -196,6 +196,59 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
+    public async Task HandlePatchAsync_ShouldForwardDisplayNamePatch()
+    {
+        var patched = new StudioMemberDetailResponse(
+            NewSummary() with { DisplayName = "Renamed Workflow" },
+            ImplementationRef: null,
+            LastBinding: null);
+        var service = new RecordingMemberService
+        {
+            UpdateResponse = patched,
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            new StudioMemberEndpoints.StudioMemberPatchBody
+            {
+                DisplayName = JsonSerializer.SerializeToElement("Renamed Workflow"),
+            },
+            service,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<StudioMemberDetailResponse>>()
+            .Which.Value.Should().BeSameAs(patched);
+        service.UpdateRequest!.DisplayName.HasValue.Should().BeTrue();
+        service.UpdateRequest.DisplayName.Value.Should().Be("Renamed Workflow");
+        service.UpdateRequest.TeamId.HasValue.Should().BeFalse();
+        service.UpdateRequest.ImplementationRef.HasValue.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldRejectNonStringDisplayName()
+    {
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            new StudioMemberEndpoints.StudioMemberPatchBody
+            {
+                DisplayName = JsonSerializer.SerializeToElement(42),
+            },
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_REQUEST");
+        service.UpdateInvoked.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task HandlePatchAsync_ShouldReturnBadRequest_OnValidationError()
     {
         var service = new RecordingMemberService

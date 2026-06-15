@@ -318,6 +318,7 @@ internal static class StudioMemberEndpoints
     /// </summary>
     public sealed class StudioMemberPatchBody
     {
+        public JsonElement? DisplayName { get; set; }
         public JsonElement? TeamId { get; set; }
         public JsonElement? ImplementationRef { get; set; }
     }
@@ -335,6 +336,24 @@ internal static class StudioMemberEndpoints
 
         if (body == null)
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", "request body is required.");
+
+        PatchValue<string> displayNamePatch;
+        if (!body.DisplayName.HasValue)
+        {
+            displayNamePatch = PatchValue<string>.Absent;
+        }
+        else
+        {
+            var jsonValue = body.DisplayName.Value;
+            if (jsonValue.ValueKind != JsonValueKind.String)
+            {
+                return BadRequest(
+                    "INVALID_STUDIO_MEMBER_REQUEST",
+                    "displayName must be a string or absent.");
+            }
+
+            displayNamePatch = PatchValue<string>.Of(jsonValue.GetString());
+        }
 
         // Translate the wire body into the application contract. JsonElement
         // semantics:
@@ -403,7 +422,7 @@ internal static class StudioMemberEndpoints
             var detail = await memberService.UpdateAsync(
                 scopeId,
                 memberId,
-                new UpdateStudioMemberRequest(teamIdPatch, implementationRefPatch),
+                new UpdateStudioMemberRequest(displayNamePatch, teamIdPatch, implementationRefPatch),
                 ct);
             return Results.Ok(detail);
         }

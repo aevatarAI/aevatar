@@ -420,6 +420,16 @@ public sealed class StudioMemberServiceBindingTests
             return Task.CompletedTask;
         }
 
+        public Task RenameAsync(
+            string scopeId,
+            string memberId,
+            string displayName,
+            CancellationToken ct = default)
+        {
+            OperationsInOrder.Add("Rename");
+            return Task.CompletedTask;
+        }
+
         public Task StartBindingRunAsync(
             StudioMemberBindingRunStartRequest request,
             CancellationToken ct = default)
