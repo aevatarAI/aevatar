@@ -134,6 +134,9 @@ type TeamMemberWorkflowStudioState = {
   readonly publishPending: boolean;
   readonly publishPlaceholderReason: string;
   readonly publishTone: WorkflowPublishTone;
+  readonly refreshPublishStatus: () => void;
+  readonly refreshPublishStatusPending: boolean;
+  readonly showRefreshPublishStatus: boolean;
   readonly backHref: string;
   readonly navigateToTeam: () => void;
   readonly navigateToTeams: () => void;
@@ -1731,6 +1734,26 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       : memberIsPublished
         ? "Published member workflow is serviceable."
         : "Draft member workflow is not published to the active member yet.");
+  const showRefreshPublishStatus = Boolean(
+    route.mode === "existing" &&
+      route.scopeId &&
+      route.memberId &&
+      publishBindingStillInProgress &&
+      !publishPending,
+  );
+  const refreshPublishStatusPending = Boolean(
+    memberQuery.isFetching || workflowQuery.isFetching,
+  );
+  const refreshPublishStatus = React.useCallback(() => {
+    if (route.mode !== "existing" || !route.scopeId || !route.memberId) {
+      return;
+    }
+
+    void memberQuery.refetch();
+    if (routeDraftWorkflowId) {
+      void workflowQuery.refetch();
+    }
+  }, [memberQuery, route.memberId, route.mode, route.scopeId, routeDraftWorkflowId, workflowQuery]);
   const executionStatus = activeMemberRunMutation.isPending
     ? "running"
     : resolveWorkflowExecutionStatus(executionDetail);
@@ -2107,6 +2130,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     publishPending,
     publishPlaceholderReason,
     publishTone,
+    refreshPublishStatus,
+    refreshPublishStatusPending,
+    showRefreshPublishStatus,
     backHref,
     navigateToTeam: () => {
       if (!dirty || confirmDiscardUnsavedChanges()) {
@@ -2166,7 +2192,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         runMessage: trimOptional(executionRunMessage),
         title: activeMemberTitle,
       });
-      setDraftRunPanelOpen(false);
     },
     activeMemberRunPending: activeMemberRunMutation.isPending,
     activeMemberRunPlaceholderReason,

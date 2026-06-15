@@ -20,6 +20,7 @@ import type {
   StudioMemberBindingRunStatusResponse,
   StudioMemberBindingViewResponse,
   StudioMemberCommandResponse,
+  StudioMemberCommandStatus,
   StudioMemberDetail,
   StudioMemberImplementationKind,
   StudioMemberImplementationRef,
@@ -1064,50 +1065,6 @@ function readStudioTeamLifecycle(
   );
 }
 
-function normalizeStudioMemberCommandStatus(
-  value: string | null | undefined
-): StudioMemberCommandResponse["status"] {
-  switch (String(value || "").trim().toLowerCase()) {
-    case "accepted":
-      return "accepted";
-    case "no_change":
-      return "no_change";
-    default:
-      return "unknown";
-  }
-}
-
-function decodeStudioMemberCommandResponse(
-  value: unknown
-): StudioMemberCommandResponse {
-  const record = expectRecord(value, "StudioMemberCommandResponse");
-  return {
-    status: normalizeStudioMemberCommandStatus(
-      readString(
-        record,
-        ["status", "Status"],
-        "StudioMemberCommandResponse.status"
-      )
-    ),
-    scopeId: readString(
-      record,
-      ["scopeId", "ScopeId"],
-      "StudioMemberCommandResponse.scopeId"
-    ),
-    memberId: readString(
-      record,
-      ["memberId", "MemberId"],
-      "StudioMemberCommandResponse.memberId"
-    ),
-    ackedAt:
-      readNullableString(
-        record,
-        ["ackedAt", "AckedAt"],
-        "StudioMemberCommandResponse.ackedAt"
-      ) ?? null,
-  };
-}
-
 function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
   const record = expectRecord(value, "StudioMemberSummary");
   return {
@@ -1380,6 +1337,29 @@ function normalizeStudioMemberBindingRunStatus(
   }) as StudioMemberBindingRunStatus;
 }
 
+function normalizeStudioMemberCommandStatus(
+  value: string | number | null | undefined
+): StudioMemberCommandStatus {
+  if (value == null) {
+    return "unknown";
+  }
+
+  const normalized = normalizeEnumValue(value, "status", {
+    "0": "unknown",
+    "1": "accepted",
+    "2": "no_change",
+    accepted: "accepted",
+    no_change: "no_change",
+    nochange: "no_change",
+    unchanged: "no_change",
+    unknown: "unknown",
+  });
+
+  return normalized === "accepted" || normalized === "no_change"
+    ? normalized
+    : "unknown";
+}
+
 function decodeStudioMemberBindingFailure(
   value: unknown
 ): StudioMemberBindingFailure {
@@ -1468,6 +1448,33 @@ function decodeStudioMemberBindingAcceptedResponse(
       ["memberId", "MemberId"],
       "StudioMemberBindingAcceptedResponse.memberId"
     ),
+  };
+}
+
+function decodeStudioMemberCommandResponse(
+  value: unknown
+): StudioMemberCommandResponse {
+  const record = expectRecord(value, "StudioMemberCommandResponse");
+  return {
+    status: normalizeStudioMemberCommandStatus(
+      readOptionalScalar(record, ["status", "Status"])
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberCommandResponse.scopeId"
+    ),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberCommandResponse.memberId"
+    ),
+    ackedAt:
+      readNullableString(
+        record,
+        ["ackedAt", "AckedAt"],
+        "StudioMemberCommandResponse.ackedAt"
+      ) ?? null,
   };
 }
 

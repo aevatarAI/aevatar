@@ -2064,7 +2064,7 @@ describe('studioApi host-session requests', () => {
 
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      status: 200,
+      status: 202,
       json: async () => ({
         summary: {
           memberId: 'm-alpha',

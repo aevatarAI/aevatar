@@ -401,6 +401,37 @@ async function flushAsyncWork() {
   }
 }
 
+function openYamlActionsMenu() {
+  fireEvent.click(screen.getByRole("button", { name: "YAML" }));
+}
+
+function clickYamlAction(name: "Paste YAML" | "View YAML") {
+  openYamlActionsMenu();
+  fireEvent.click(screen.getByRole("menuitem", { name }));
+}
+
+function openMoreActionsMenu() {
+  fireEvent.click(screen.getByRole("button", { name: "More workflow actions" }));
+}
+
+function closeOpenMenu() {
+  fireEvent.keyDown(document, { key: "Escape" });
+  fireEvent.click(document.body);
+}
+
+function clickMoreAction(
+  name:
+    | "Delete selected connection"
+    | "Delete selected node",
+) {
+  openMoreActionsMenu();
+  fireEvent.click(screen.getByRole("menuitem", { name }));
+}
+
+function clickPublishAction() {
+  fireEvent.click(screen.getByRole("button", { name: "Publish" }));
+}
+
 function createPointerDragEvent(
   type: "pointerdown" | "pointermove" | "pointerup",
   clientX: number,
@@ -476,7 +507,7 @@ function mockNewWorkflowMemberCreateFixtures() {
 
 describe("TeamMemberWorkflowStudioPage", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
     window.history.replaceState({}, "", "/");
     mockTeam();
     mockSerializeYaml();
@@ -667,7 +698,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     expect(screen.getByRole("button", { name: "node:step:llm_step" })).toBeTruthy();
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
@@ -1094,7 +1125,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(await screen.findByDisplayValue("Workflow Alpha")).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     expect(screen.getByRole("button", { name: "node:step:triage" })).toBeTruthy();
     expect(studioApi.getMember).toHaveBeenCalledWith("scope-1", "member-alpha");
@@ -1157,9 +1188,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
-    fireEvent.click(screen.getByRole("button", { name: "View YAML" }));
+    clickYamlAction("View YAML");
 
     const yamlView = await screen.findByLabelText("Current workflow YAML");
     await waitFor(() => {
@@ -1192,7 +1223,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     await waitFor(() => {
       expect(screen.queryByLabelText("Workflow YAML panel")).toBeNull();
     });
-    fireEvent.click(screen.getByRole("button", { name: "View YAML" }));
+    clickYamlAction("View YAML");
     await screen.findByLabelText("Current workflow YAML");
     expect(studioApi.serializeYaml).toHaveBeenCalledTimes(1);
   });
@@ -1247,9 +1278,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
-    fireEvent.click(screen.getByRole("button", { name: "View YAML" }));
+    clickYamlAction("View YAML");
 
     expect(await screen.findByText("Serialization failed")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -1362,7 +1393,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
 
@@ -1420,7 +1451,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(await screen.findByDisplayValue("Untitled member")).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     expect(studioApi.getMember).toHaveBeenCalledWith(
       "scope-1",
@@ -1539,7 +1570,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(await screen.findByDisplayValue("Untitled member")).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     expect(screen.getByRole("button", { name: "node:step:llm_step" })).toBeTruthy();
     expect(
@@ -1710,7 +1741,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(saveButton).toBeDisabled();
       expect(screen.getByDisplayValue("Untitled member 9")).toBeTruthy();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Paste YAML" }));
+    clickYamlAction("Paste YAML");
     fireEvent.change(await screen.findByLabelText("Workflow YAML"), {
       target: {
         value: "name: Imported member 9\nsteps:\n  - id: triage\n    type: llm_call\n",
@@ -1719,7 +1750,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
       expect(saveButton).toBeEnabled();
     });
     fireEvent.click(saveButton);
@@ -1808,7 +1839,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         "untitled-member-9",
         "scope-1",
       );
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
       expect(saveButton).toBeDisabled();
     });
     fireEvent.click(screen.getByRole("button", { name: "Add node" }));
@@ -2109,7 +2140,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.click(screen.getByRole("button", { name: "Add node" }));
     fireEvent.click(await screen.findByRole("button", { name: "Insert Guard node" }));
@@ -2117,7 +2148,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByText("nodes:2")).toBeTruthy();
       expect(screen.getByText("Unsaved changes")).toBeTruthy();
     });
-    fireEvent.click(screen.getByRole("button", { name: "View YAML" }));
+    clickYamlAction("View YAML");
 
     const yamlView = await screen.findByLabelText("Current workflow YAML");
     await waitFor(() => {
@@ -2185,14 +2216,25 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
-    expect(screen.getByRole("button", { name: "Delete node" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Delete node" }));
+    openMoreActionsMenu();
+    expect(
+      screen.getByRole("menuitem", { name: "Delete selected node" }),
+    ).toBeTruthy();
+    closeOpenMenu();
+    const confirmSpy = jest
+      .spyOn(window, "confirm")
+      .mockImplementation(() => true);
+    clickMoreAction("Delete selected node");
     await waitFor(() => {
       expect(screen.getByText("nodes:0")).toBeTruthy();
     });
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Delete the selected node? This cannot be undone.",
+    );
+    confirmSpy.mockRestore();
 
     fireEvent.click(screen.getByRole("button", { name: "Add node" }));
     fireEvent.click(await screen.findByRole("button", { name: "Insert LLM call node" }));
@@ -2298,16 +2340,27 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "edge:edge:triage:publish:linear" }),
     );
+    openMoreActionsMenu();
     expect(
-      screen.getByRole("button", { name: "Delete connection" }),
-    ).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Delete connection" }));
+      screen.getByRole("menuitem", { name: "Delete selected connection" }),
+    ).toBeTruthy();
+    closeOpenMenu();
+    const confirmSpy = jest
+      .spyOn(window, "confirm")
+      .mockImplementation(() => true);
+    clickMoreAction("Delete selected connection");
     expect(screen.queryByRole("button", {
       name: "edge:edge:triage:publish:linear",
     })).toBeNull();
     expect(screen.getByText("nodes:2")).toBeTruthy();
     expect(screen.queryByTestId("workflow-node-inspector")).toBeNull();
-    expect(screen.getByRole("button", { name: "Delete node" })).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "More workflow actions" }),
+    ).toBeNull();
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Delete the selected connection? This cannot be undone.",
+    );
+    confirmSpy.mockRestore();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -2409,7 +2462,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
         name: "edge:edge:guard:branch_target:branch:next",
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Delete connection" }));
+    const confirmSpy = jest
+      .spyOn(window, "confirm")
+      .mockImplementation(() => true);
+    clickMoreAction("Delete selected connection");
+    confirmSpy.mockRestore();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -2475,7 +2532,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
     const inspector = screen.getByLabelText("Node inspector");
@@ -2781,7 +2838,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
     expect(screen.queryByLabelText("Raw node configuration")).toBeNull();
@@ -2850,7 +2907,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.click(
       screen.getByRole("button", { name: "node:step:wait_for_signal" }),
@@ -2943,7 +3000,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.click(screen.getByRole("button", { name: "node:step:cache_response" }));
 
@@ -3045,7 +3102,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.click(screen.getByRole("button", { name: "node:step:custom_step" }));
 
@@ -3152,7 +3209,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.click(screen.getByRole("button", { name: "node:step:custom_step" }));
     fireEvent.click(screen.getByText("Advanced raw configuration"));
@@ -3244,7 +3301,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.click(screen.getByRole("button", { name: "node:step:custom_step" }));
     fireEvent.change(screen.getByLabelText("Payload"), {
@@ -3315,10 +3372,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     const runDraftButton = await screen.findByRole("button", {
-      name: "Run draft",
+      name: "Run",
     });
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     expect(screen.getByLabelText("Workflow title")).toHaveAttribute(
       "title",
@@ -3328,13 +3385,17 @@ describe("TeamMemberWorkflowStudioPage", () => {
       screen.getByRole("button", { name: "Edit workflow name" }),
     );
     expect(screen.getByLabelText("Workflow title")).toHaveFocus();
+    fireEvent.blur(screen.getByLabelText("Workflow title"));
     const headerIdentity = screen.getByTestId("workflow-header-identity");
     const headerPrimaryActions = screen.getByTestId(
       "workflow-header-primary-actions",
     );
-    const headerNodeActions = screen.getByTestId(
-      "workflow-header-node-actions",
-    );
+    const headerMainRow = screen.getByTestId("workflow-header-main-row");
+    expect(headerMainRow).toHaveClass("workflow-studio-header__row");
+    expect(headerPrimaryActions).toHaveClass("workflow-studio-header__actions");
+    expect(headerPrimaryActions).toHaveAttribute("data-nowrap", "true");
+    expect(screen.queryByTestId("workflow-header-context-row")).toBeNull();
+    expect(screen.queryByTestId("workflow-header-node-actions")).toBeNull();
     expect(within(headerIdentity).getByRole("link", { name: "Team" })).toHaveAttribute(
       "href",
       "/scopes",
@@ -3353,33 +3414,49 @@ describe("TeamMemberWorkflowStudioPage", () => {
       within(headerIdentity).getByRole("button", { name: "Edit workflow name" }),
     ).toBeTruthy();
     expect(
-      within(headerPrimaryActions).queryByRole("button", {
-        name: "Publish member",
-      }),
-    ).toBeNull();
-    expect(
       within(headerPrimaryActions).getByRole("button", {
-        name: "Run draft",
+        name: "Run",
       }),
     ).toBeTruthy();
     expect(
       within(headerPrimaryActions).getByRole("button", { name: "Add node" }),
     ).toBeTruthy();
     expect(
-      within(headerPrimaryActions).getByRole("button", { name: "Paste YAML" }),
-    ).toBeTruthy();
-    expect(screen.queryByText("Runs")).toBeNull();
-    expect(
-      within(headerNodeActions).getByRole("button", { name: "Delete node" }),
+      within(headerPrimaryActions).getByRole("button", { name: "Save" }),
     ).toBeTruthy();
     expect(
-      within(headerNodeActions).getByRole("button", { name: "Save" }),
+      within(headerPrimaryActions).queryByRole("button", { name: "Publish" }),
+    ).toBeNull();
+    expect(
+      within(headerPrimaryActions).queryByRole("button", {
+        name: "Refresh status",
+      }),
+    ).toBeNull();
+    expect(
+      within(headerPrimaryActions).getByRole("button", { name: "YAML" }),
     ).toBeTruthy();
     expect(
-      within(headerNodeActions).queryByRole("button", {
+      within(headerPrimaryActions).queryByRole("button", {
         name: "More workflow actions",
       }),
     ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Paste YAML" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "View YAML" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete node" })).toBeNull();
+    openYamlActionsMenu();
+    expect(
+      screen.getByRole("menuitem", { name: "View YAML" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "Paste YAML" }),
+    ).toBeTruthy();
+    closeOpenMenu();
+    expect(screen.queryByRole("menuitem", { name: "Publish member" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Refresh status" })).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Delete selected node" }),
+    ).toBeNull();
+    expect(screen.queryByText("Runs")).toBeNull();
     expect(screen.queryByText("Set as Team entry")).toBeNull();
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     expect(screen.queryByText("Workflow member")).toBeNull();
@@ -3417,7 +3494,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     );
     const resultPanel = await screen.findByTestId("member-run-result-panel");
     const consolePanel = screen.getByLabelText("Draft run console");
-    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
+    expect(screen.getByLabelText("Draft run panel")).toBeTruthy();
     const consoleResizeHandle = screen.getByRole("separator", {
       name: "Resize run console",
     });
@@ -3499,6 +3576,109 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
   });
 
+  it("keeps the header action bar stable while save, YAML, and contextual delete states change", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: "rev-1",
+        lifecycleStage: "bind_ready",
+        memberId: "member-alpha",
+        publishedServiceId: "service-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+
+    const headerMainRow = screen.getByTestId("workflow-header-main-row");
+    const headerPrimaryActions = screen.getByTestId(
+      "workflow-header-primary-actions",
+    );
+    const readActionButtonNames = () =>
+      within(headerPrimaryActions)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label") || button.textContent);
+
+    expect(headerMainRow).toHaveClass("workflow-studio-header__row");
+    expect(headerPrimaryActions).toHaveAttribute("data-nowrap", "true");
+    expect(screen.queryByTestId("workflow-header-context-row")).toBeNull();
+    expect(screen.queryByTestId("workflow-header-node-actions")).toBeNull();
+    expect(readActionButtonNames()).toEqual([
+      "Run",
+      "Add node",
+      "Save",
+      "YAML",
+    ]);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+
+    expect(
+      within(headerPrimaryActions).queryByRole("button", {
+        name: "More workflow actions",
+      }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Delete selected node" }),
+    ).toBeNull();
+
+    openYamlActionsMenu();
+    expect(screen.getByRole("menuitem", { name: "View YAML" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Paste YAML" })).toBeTruthy();
+    closeOpenMenu();
+
+    fireEvent.change(screen.getByLabelText("Workflow title"), {
+      target: {
+        value:
+          "A very long workflow title that should truncate instead of pushing actions down",
+      },
+    });
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(readActionButtonNames()).toEqual([
+      "Run",
+      "Add node",
+      "Save",
+      "Publish",
+      "YAML",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+    openMoreActionsMenu();
+    expect(
+      screen.getByRole("menuitem", { name: "Delete selected node" }),
+    ).toBeTruthy();
+  });
+
   it("renders draft run log cards as SSE frames arrive", async () => {
     window.history.replaceState(
       {},
@@ -3547,7 +3727,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     const runDraftButton = await screen.findByRole("button", {
-      name: "Run draft",
+      name: "Run",
     });
     await waitFor(() => {
       expect(runDraftButton).toBeEnabled();
@@ -3684,7 +3864,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     const runDraftButton = await screen.findByRole("button", {
-      name: "Run draft",
+      name: "Run",
     });
     await waitFor(() => {
       expect(runDraftButton).toBeEnabled();
@@ -3707,7 +3887,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     expect(resultPanel).not.toHaveTextContent("Member run");
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
+    expect(screen.getByLabelText("Draft run panel")).toBeTruthy();
   });
 
   it("runs draft workflow members before they are published", async () => {
@@ -3759,10 +3939,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     const runDraftButton = await screen.findByRole("button", {
-      name: "Run draft",
+      name: "Run",
     });
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     await waitFor(() => {
       expect(runDraftButton).toBeEnabled();
@@ -3772,7 +3952,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.click(
       within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
     );
-    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
+    expect(screen.getByLabelText("Draft run panel")).toBeTruthy();
 
     await waitFor(() => {
       expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
@@ -3864,7 +4044,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     await waitFor(() => {
       expect(screen.getByText("nodes:0")).toBeTruthy();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Paste YAML" }));
+    clickYamlAction("Paste YAML");
     expect(screen.getByLabelText("Paste workflow YAML panel")).toBeTruthy();
     fireEvent.change(await screen.findByLabelText("Workflow YAML"), {
       target: {
@@ -3960,7 +4140,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     await waitFor(() => {
       expect(screen.getByText("nodes:0")).toBeTruthy();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Paste YAML" }));
+    clickYamlAction("Paste YAML");
     expect(screen.getByLabelText("Paste workflow YAML panel")).toBeTruthy();
     fireEvent.change(await screen.findByLabelText("Workflow YAML"), {
       target: {
@@ -3974,7 +4154,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByText("nodes:2")).toBeTruthy();
     });
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "View YAML" }));
+    clickYamlAction("View YAML");
 
     const yamlView = await screen.findByLabelText("Current workflow YAML");
     await waitFor(() => {
@@ -4045,9 +4225,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
-    fireEvent.click(screen.getByRole("button", { name: "Paste YAML" }));
+    clickYamlAction("Paste YAML");
     expect(screen.getByLabelText("Paste workflow YAML panel")).toBeTruthy();
     fireEvent.change(await screen.findByLabelText("Workflow YAML"), {
       target: { value: "not: valid" },
@@ -4063,7 +4243,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.getByLabelText("Paste workflow YAML panel")).toBeTruthy();
     expect(screen.getByText("Invalid workflow YAML")).toBeTruthy();
     expect(await screen.findByLabelText("Workflow YAML")).toHaveValue("not: valid");
-    expect(screen.getByText("nodes:1")).toBeTruthy();
+    expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     expect(screen.getByRole("button", { name: "node:step:triage" })).toBeTruthy();
     expect(screen.queryByText("Unsaved changes")).toBeNull();
     expect(studioApi.serializeYaml).not.toHaveBeenCalled();
@@ -4124,10 +4304,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     const runDraftButton = await screen.findByRole("button", {
-      name: "Run draft",
+      name: "Run",
     });
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     expect(studioApi.getWorkflow).toHaveBeenCalledWith(
       "workflow-alpha",
@@ -4281,13 +4461,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.change(screen.getByLabelText("Workflow title"), {
       target: { value: "Workflow Alpha Published" },
     });
     expect(screen.queryByRole("switch")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Publish member" }));
+    clickPublishAction();
 
     await waitFor(() => {
       expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
@@ -4365,7 +4545,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     fireEvent.change(screen.getByLabelText("Workflow title"), {
       target: { value: "Workflow Alpha Published" },
@@ -4376,8 +4556,8 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
 
     expect(await screen.findByText("Instruction is required.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Publish member" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Publish member" }));
+    expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+    clickPublishAction();
 
     await flushAsyncWork();
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
@@ -4441,9 +4621,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
-    fireEvent.click(screen.getByRole("button", { name: "Publish member" }));
+    clickPublishAction();
 
     await waitFor(() => {
       expect(screen.getByText("Error")).toBeTruthy();
@@ -4516,9 +4696,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
       renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
       await waitFor(() => {
-        expect(screen.getByText("nodes:1")).toBeTruthy();
+        expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
       });
-      fireEvent.click(screen.getByRole("button", { name: "Publish member" }));
+      clickPublishAction();
 
       await waitFor(() => {
         expect(screen.getByText("Publishing")).toBeTruthy();
@@ -4531,15 +4711,19 @@ describe("TeamMemberWorkflowStudioPage", () => {
       }
 
       await waitFor(() => {
-        expect(screen.queryByText("Publishing")).toBeNull();
-        expect(screen.getByText("Binding")).toBeTruthy();
+        expect(screen.getByText("Publishing")).toBeTruthy();
       });
-      expect(screen.getByRole("button", { name: "Publish member" })).toBeDisabled();
       expect(
         screen.getAllByTitle(/Publish was accepted and binding is still in progress/).length,
       ).toBeGreaterThan(0);
+      expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
       expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(8);
     } finally {
+      await act(async () => {
+        jest.runOnlyPendingTimers();
+        await flushAsyncWork();
+      });
       jest.useRealTimers();
     }
   });
@@ -4618,19 +4802,20 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
       expect(screen.getByText("Published")).toBeTruthy();
       expect(
-        screen.queryByRole("button", { name: "Publish member" }),
+        screen.queryByRole("button", { name: "Publish" }),
       ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
     });
     expect(screen.getByDisplayValue("Workflow Alpha")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Workflow title"), {
       target: { value: "Workflow Alpha v2" },
     });
 
-    const publishButton = await screen.findByRole("button", {
-      name: "Publish member",
+    const publishButton = screen.getByRole("button", {
+      name: "Publish",
     });
     await waitFor(() => {
       expect(publishButton).toBeEnabled();
@@ -4713,12 +4898,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("button", { name: "More workflow actions" }),
-    ).toBeNull();
     expect(screen.queryByText("Set as Team entry")).toBeNull();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
   });
@@ -4765,7 +4947,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
     });
     expect(screen.queryByText("Runs")).toBeNull();
     expect(screen.queryByLabelText("Member runs")).toBeNull();
@@ -4798,6 +4980,20 @@ describe("TeamMemberWorkflowStudioPage", () => {
         teamId: "t-alpha",
         updatedAt: "2026-06-08T00:00:00Z",
       },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
     });
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
