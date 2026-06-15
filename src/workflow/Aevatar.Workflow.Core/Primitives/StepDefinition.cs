@@ -43,6 +43,11 @@ public sealed class StepDefinition
     public string? Next { get; init; }
 
     /// <summary>
+    /// 可选补偿步骤 id：声明撤销本步骤的同 workflow 步骤；仅在反向补偿走查时执行，不在正向路径自动插入。
+    /// </summary>
+    public string? Compensation { get; init; }
+
+    /// <summary>
     /// 子步骤列表，用于并行或嵌套结构。
     /// </summary>
     public List<StepDefinition>? Children { get; init; }
@@ -56,6 +61,11 @@ public sealed class StepDefinition
     /// 步骤级重试配置。为 null 表示不重试（失败即终止或走 on_error）。
     /// </summary>
     public StepRetryPolicy? Retry { get; init; }
+
+    /// <summary>
+    /// 可选幂等键表达式；缺省解析与分发线程化由 #2098 处理，本步仅承载授权字段。
+    /// </summary>
+    public string? IdempotencyKey { get; init; }
 
     /// <summary>
     /// 步骤级错误处理策略。为 null 表示使用默认行为（fail，终止 workflow）。

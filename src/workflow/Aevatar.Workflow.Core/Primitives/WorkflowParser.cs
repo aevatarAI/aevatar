@@ -166,9 +166,11 @@ public sealed class WorkflowParser
             Presentation = presentation,
             AgentToolScope = agentToolScope,
             Next = s.Next,
+            Compensation = NormalizeText(s.Compensation),
             Children = s.Children?.Select(MapStep).ToList(),
             Branches = NormalizeBranches(s.Branches),
             Retry = MapRetry(s.Retry),
+            IdempotencyKey = NormalizeText(s.IdempotencyKey),
             OnError = MapOnError(s.OnError),
             TimeoutMs = s.TimeoutMs,
         };
@@ -1269,9 +1271,11 @@ public sealed class WorkflowParser
         public RawStepPresentation? Presentation { get; set; }
         public Dictionary<string, object?>? Parameters { get; set; }
         public string? Next { get; set; }
+        public string? Compensation { get; set; }
         public List<RawStep>? Children { get; set; }
         public object? Branches { get; set; }
         public RawRetry? Retry { get; set; }
+        public string? IdempotencyKey { get; set; }
         public RawOnError? OnError { get; set; }
         public int? TimeoutMs { get; set; }
     }
