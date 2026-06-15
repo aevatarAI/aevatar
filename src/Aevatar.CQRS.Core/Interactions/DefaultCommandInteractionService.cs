@@ -3,6 +3,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Threading.Channels;
 
 namespace Aevatar.CQRS.Core.Interactions;
 
@@ -90,12 +91,15 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
             var durableCompletionAttempted = false;
             Exception? executionException = null;
             using var pumpCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var acceptedGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-            async ValueTask EmitAfterAcceptedAsync(TFrame frame, CancellationToken frameCt)
+            var bufferedFrames = Channel.CreateUnbounded<TFrame>(new UnboundedChannelOptions
             {
-                await acceptedGate.Task.WaitAsync(frameCt).ConfigureAwait(false);
-                await emitAsync(frame, frameCt).ConfigureAwait(false);
+                SingleReader = true,
+                SingleWriter = true,
+            });
+
+            async ValueTask BufferFrameAsync(TFrame frame, CancellationToken frameCt)
+            {
+                await bufferedFrames.Writer.WriteAsync(frame, frameCt).ConfigureAwait(false);
             }
 
             var liveEvents = ObserveCompletionBeforeEmissionAsync(
@@ -112,7 +116,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                 pumpCancellation.Token);
             var pumpTask = _outputStream.PumpAsync(
                 liveEvents,
-                EmitAfterAcceptedAsync,
+                BufferFrameAsync,
                 shouldStop: null,
                 pumpCancellation.Token);
 
@@ -120,9 +124,8 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
             {
                 _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch
             {
-                acceptedGate.TrySetException(ex);
                 await CancelAndObservePumpAsync(pumpTask, pumpCancellation).ConfigureAwait(false);
                 throw;
             }
@@ -133,9 +136,12 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct).ConfigureAwait(false);
 
-                acceptedGate.TrySetResult();
-
-                await pumpTask.ConfigureAwait(false);
+                await PumpAndFlushAcceptedFramesAsync(
+                    pumpTask,
+                    pumpCancellation,
+                    bufferedFrames,
+                    emitAsync,
+                    ct).ConfigureAwait(false);
 
                 if (!observedCompleted)
                 {
@@ -162,7 +168,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
             catch (Exception ex)
             {
                 executionException = ex;
-                acceptedGate.TrySetException(ex);
+                bufferedFrames.Writer.TryComplete(ex);
                 await CancelAndObservePumpAsync(pumpTask, pumpCancellation).ConfigureAwait(false);
                 throw;
             }
@@ -223,6 +229,50 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
 
             if (stop)
                 yield break;
+        }
+    }
+
+    private static async Task PumpAndFlushAcceptedFramesAsync(
+        Task pumpTask,
+        CancellationTokenSource pumpCancellation,
+        Channel<TFrame> frames,
+        Func<TFrame, CancellationToken, ValueTask> emitAsync,
+        CancellationToken ct)
+    {
+        var flushTask = FlushBufferedFramesAsync(frames.Reader, emitAsync, ct);
+
+        try
+        {
+            await pumpTask.ConfigureAwait(false);
+            frames.Writer.TryComplete();
+            await flushTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            frames.Writer.TryComplete(ex);
+            await CancelAndObservePumpAsync(pumpTask, pumpCancellation).ConfigureAwait(false);
+            await ObserveFlushFailureAsync(flushTask).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task FlushBufferedFramesAsync(
+        ChannelReader<TFrame> frames,
+        Func<TFrame, CancellationToken, ValueTask> emitAsync,
+        CancellationToken ct)
+    {
+        await foreach (var frame in frames.ReadAllAsync(ct).ConfigureAwait(false))
+            await emitAsync(frame, ct).ConfigureAwait(false);
+    }
+
+    private static async Task ObserveFlushFailureAsync(Task flushTask)
+    {
+        try
+        {
+            await flushTask.ConfigureAwait(false);
+        }
+        catch
+        {
         }
     }
 

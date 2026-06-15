@@ -112,6 +112,13 @@ public sealed class DefaultCommandInteractionServiceTests
         order.IndexOf("observe").Should().BeLessThan(order.IndexOf("dispatch"));
 
         await sink.PushAsync("done:completed", CancellationToken.None);
+        (await completionPolicy.ObservedEvents.Reader.ReadAsync(CancellationToken.None))
+            .Should().Be("done:completed");
+        frames.Should().BeEmpty();
+        completionPolicy.Events.Should().Equal("progress", "done:completed");
+        outputStream.Completed.Task.IsCompleted.Should().BeTrue();
+        order.Should().NotContain("dispatch-admitted");
+
         sink.Complete();
         pipeline.ReleaseDispatch();
 
