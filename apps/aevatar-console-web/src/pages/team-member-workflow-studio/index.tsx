@@ -234,12 +234,15 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         publishPending={studio.publishPending}
         publishPlaceholderReason={studio.publishPlaceholderReason}
         publishTone={studio.publishTone}
+        refreshPublishStatusPending={studio.refreshPublishStatusPending}
+        showRefreshPublishStatus={studio.showRefreshPublishStatus}
         canOpenDraftRunPanel={studio.canOpenDraftRunPanel}
         canSave={studio.canSave}
         canViewYaml={studio.canViewYaml}
         dirty={studio.dirty}
         activeMemberRunPlaceholderReason={studio.activeMemberRunPlaceholderReason}
         onPublishMember={studio.publishMember}
+        onRefreshPublishStatus={studio.refreshPublishStatus}
         onAddNode={studio.openNodeLibrary}
         onDeleteConnection={studio.deleteSelectedConnection}
         onDeleteNode={studio.deleteSelectedNode}
