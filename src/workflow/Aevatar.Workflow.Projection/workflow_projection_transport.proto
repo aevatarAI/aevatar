@@ -58,6 +58,14 @@ message WorkflowExecutionCurrentStateDocument {
   string fork_seed_last_failed_step_id = 22;
   string scope_id = 23;
   repeated WorkflowExecutionInputFileRefReadModel input_file_ref_entries = 24;
+  map<string, WorkflowStepIdempotencyReadModel> fork_seed_idempotency_entries = 25;
+}
+
+message WorkflowStepIdempotencyReadModel {
+  string logical_run_id = 1;
+  string step_id = 2;
+  int32 logical_attempt = 3;
+  string idempotency_key = 4;
 }
 
 message WorkflowExecutionInputFileRefReadModel {

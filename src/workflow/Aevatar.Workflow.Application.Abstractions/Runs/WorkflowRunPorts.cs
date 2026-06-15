@@ -89,7 +89,8 @@ public sealed record WorkflowRunForkSeedView(
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
     string FinalError,
-    string ScopeId = "")
+    string ScopeId = "",
+    IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null)
 {
     public WorkflowRunForkSeedView()
         : this(
@@ -101,7 +102,20 @@ public sealed record WorkflowRunForkSeedView(
             [],
             string.Empty,
             string.Empty,
-            string.Empty)
+            string.Empty,
+            new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal))
+    {
+    }
+}
+
+public sealed record WorkflowStepIdempotencyView(
+    string LogicalRunId,
+    string StepId,
+    int LogicalAttempt,
+    string IdempotencyKey)
+{
+    public WorkflowStepIdempotencyView()
+        : this(string.Empty, string.Empty, 0, string.Empty)
     {
     }
 }

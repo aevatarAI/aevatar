@@ -149,7 +149,8 @@ public sealed class ToolCallModuleContextTests
             ctx,
             tool.Name,
             input: """{"operation":"read"}""",
-            executionId: "exec-1");
+            executionId: "exec-1",
+            idempotencyKey: "idem-tool-1");
 
         tool.LastRequest.Should().NotBeNull();
         tool.LastRequest!.ArgumentsJson.Should().Be("""{"operation":"read"}""");
@@ -157,6 +158,7 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.StepId.Should().Be("call_proxy");
         tool.LastRequest.ExecutionId.Should().Be("exec-1");
         tool.LastRequest.CallId.Should().Be("workflow:run-1:call_proxy:exec-1");
+        tool.LastRequest.IdempotencyKey.Should().Be("idem-tool-1");
         tool.LastRequest.ScopeId.Should().Be("scope-1");
         tool.LastRequest.CallerCredential.BearerToken.Should().Be("typed-token");
         tool.LastRequest.RuntimeContext.ParentActorId.Should().Be("agent-1");
@@ -269,7 +271,8 @@ public sealed class ToolCallModuleContextTests
         string stepId = "call_proxy",
         string input = "{}",
         string executionId = "",
-        IReadOnlyList<WorkflowFileRef>? inputFileRefs = null)
+        IReadOnlyList<WorkflowFileRef>? inputFileRefs = null,
+        string idempotencyKey = "")
     {
         var request = new StepRequestEvent
         {
@@ -277,6 +280,7 @@ public sealed class ToolCallModuleContextTests
             StepType = "tool_call",
             RunId = ctx.RunId,
             ExecutionId = executionId,
+            IdempotencyKey = idempotencyKey,
             Input = input,
             Parameters = { ["tool"] = toolName },
         };

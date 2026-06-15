@@ -70,7 +70,25 @@ public sealed class WorkflowExecutionCurrentStateProjector
                 StringComparer.Ordinal),
             ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
             ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
+            ForkSeedIdempotencies = seedSnapshot.IdempotencyByStepId.ToDictionary(
+                x => x.Key,
+                x => MapStepIdempotency(x.Value),
+                StringComparer.Ordinal),
             InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
+        };
+    }
+
+    private static WorkflowStepIdempotencyReadModel MapStepIdempotency(
+        WorkflowStepIdempotencyState source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new WorkflowStepIdempotencyReadModel
+        {
+            LogicalRunId = source.LogicalRunId ?? string.Empty,
+            StepId = source.StepId ?? string.Empty,
+            LogicalAttempt = source.LogicalAttempt,
+            IdempotencyKey = source.IdempotencyKey ?? string.Empty,
         };
     }
 

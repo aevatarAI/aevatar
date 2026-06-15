@@ -73,7 +73,8 @@ public sealed record WorkflowChatRunForkSeed(
     string SourceRunId,
     string StartAtStepId,
     IReadOnlyDictionary<string, string> Variables,
-    int Attempt = 0);
+    int Attempt = 0,
+    WorkflowStepIdempotencyView? StartStepIdempotency = null);
 
 public enum WorkflowChatSourceKind
 {
