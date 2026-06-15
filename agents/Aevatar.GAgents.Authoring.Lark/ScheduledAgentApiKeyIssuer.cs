@@ -10,6 +10,13 @@ internal sealed class ScheduledAgentApiKeyIssuer
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    // Omit null fields (notably target_org_id) so an all-personal key request stays byte-identical
+    // to the pre-org behavior; only org-owned scoped keys carry target_org_id.
+    private static readonly JsonSerializerOptions CreateKeyJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     private readonly INyxIdApiClientFactory _nyxClientFactory;
     private readonly ScheduledAgentCreatorOptions _options;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
@@ -48,7 +55,7 @@ internal sealed class ScheduledAgentApiKeyIssuer
         var servicesJson = await client.ListServicesAsync(token, ct);
         var resolution = ResolveServiceIds(servicesJson, slugs);
         if (resolution.Error is not null)
-            return ScheduledAgentApiKeyIssueResult.Failed(resolution.Error);
+            return ScheduledAgentApiKeyIssueResult.Failed(resolution.Error, resolution.Detail, resolution.Hint);
 
         var response = await client.CreateApiKeyAsync(
             token,
@@ -60,7 +67,13 @@ internal sealed class ScheduledAgentApiKeyIssuer
                 allow_all_services = false,
                 allow_all_nodes = true,
                 allowed_service_ids = resolution.ServiceIds,
-            }, JsonOptions),
+                // When every required service is shared through one organization, the scoped key
+                // must be created under that org (its user_id). NyxID validates each allowed
+                // service id against the key owner, so a personal-owned key referencing org-owned
+                // services is rejected with HTTP 400 (surfaced as api_key_create_failed). Null for
+                // all-personal services and omitted from the payload by CreateKeyJsonOptions.
+                target_org_id = resolution.TargetOrgId,
+            }, CreateKeyJsonOptions),
             ct);
 
         var issuedKey = ExtractIssuedKey(response);
@@ -276,8 +289,8 @@ internal sealed class ScheduledAgentApiKeyIssuer
             return ScheduledAgentServiceResolution.Failed("service_resolution_failed");
 
         var matches = requiredSlugs
-            .Select(static slug => (slug, ids: new List<string>()))
-            .ToDictionary(static x => x.slug, static x => x.ids, StringComparer.Ordinal);
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(static slug => slug, static _ => new List<ResolvedService>(), StringComparer.Ordinal);
 
         try
         {
@@ -288,12 +301,12 @@ internal sealed class ScheduledAgentApiKeyIssuer
                     continue;
 
                 var slug = ReadString(item, "slug") ?? ReadString(item, "service_slug");
-                if (slug is null || !matches.TryGetValue(slug, out var ids))
+                if (slug is null || !matches.TryGetValue(slug, out var candidates))
                     continue;
 
                 var id = ReadString(item, "id") ?? ReadString(item, "service_id") ?? ReadString(item, "user_service_id");
                 if (!string.IsNullOrWhiteSpace(id))
-                    ids.Add(id.Trim());
+                    candidates.Add(new ResolvedService(id.Trim(), ReadServiceOwner(item)));
             }
         }
         catch (JsonException)
@@ -301,27 +314,82 @@ internal sealed class ScheduledAgentApiKeyIssuer
             return ScheduledAgentServiceResolution.Failed("service_resolution_invalid_json");
         }
 
-        var resolved = new List<string>();
+        var resolvedIds = new List<string>();
+        var distinctOwners = new Dictionary<string, ServiceOwner>(StringComparer.Ordinal);
+        var ownerBySlug = new List<(string Slug, ServiceOwner Owner)>();
         foreach (var slug in requiredSlugs.Distinct(StringComparer.Ordinal))
         {
-            var ids = matches[slug].Distinct(StringComparer.Ordinal).ToArray();
-            if (ids.Length == 0)
+            var byId = matches[slug]
+                .GroupBy(static candidate => candidate.Id, StringComparer.Ordinal)
+                .ToArray();
+            if (byId.Length == 0)
                 return ScheduledAgentServiceResolution.Failed($"required_service_not_found:{slug}");
-            if (ids.Length > 1)
+            if (byId.Length > 1)
                 return ScheduledAgentServiceResolution.Failed($"required_service_ambiguous:{slug}");
 
-            resolved.Add(ids[0]);
+            var resolved = byId[0].First();
+            resolvedIds.Add(resolved.Id);
+            distinctOwners[resolved.Owner.Key] = resolved.Owner;
+            ownerBySlug.Add((slug, resolved.Owner));
         }
 
-        return resolved.Count == 0
-            ? ScheduledAgentServiceResolution.Failed("required_service_ids_empty")
-            : new ScheduledAgentServiceResolution(resolved, null);
+        if (resolvedIds.Count == 0)
+            return ScheduledAgentServiceResolution.Failed("required_service_ids_empty");
+
+        // A NyxID API key has a single owner and every allowed_service_id is validated against it,
+        // so the required services must share one owner. Otherwise no single scoped key can
+        // authorize the whole run, and surfacing that up front beats an opaque NyxID 400.
+        if (distinctOwners.Count > 1)
+        {
+            var summary = string.Join(
+                ", ",
+                ownerBySlug.Select(static entry => $"{entry.Slug} => {entry.Owner.DisplayName}"));
+            return ScheduledAgentServiceResolution.Failed(
+                "required_services_cross_owner",
+                $"The scheduled agent requires services owned by different NyxID accounts, so a single scoped key cannot authorize all of them: {summary}.",
+                "Make every required service belong to the same owner — share them all through one organization (and be an admin of it), or keep them all personal — then recreate the scheduled agent.");
+        }
+
+        // null for all-personal services; the org's user_id when every service is shared through it.
+        return new ScheduledAgentServiceResolution(resolvedIds, distinctOwners.Values.Single().OrgId, null);
+    }
+
+    private static ServiceOwner ReadServiceOwner(JsonElement item)
+    {
+        if (!item.TryGetProperty("credential_source", out var source) || source.ValueKind != JsonValueKind.Object)
+            return ServiceOwner.Personal;
+
+        // NyxID serializes provenance as { "type": "personal" | "org", "org_id": ..., "org_name": ... }.
+        if (!string.Equals(ReadString(source, "type"), "org", StringComparison.OrdinalIgnoreCase))
+            return ServiceOwner.Personal;
+
+        var orgId = ReadString(source, "org_id");
+        // An org provenance without a usable org id cannot be targeted; treat it as personal so the
+        // ownership check fails loudly at NyxID rather than silently dropping the field.
+        return string.IsNullOrWhiteSpace(orgId)
+            ? ServiceOwner.Personal
+            : ServiceOwner.ForOrg(orgId, ReadString(source, "org_name"));
     }
 
     private static ScheduledAgentApiKeyIssueResult ExtractIssuedKey(string response)
     {
-        if (LooksLikeErrorEnvelope(response))
-            return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_failed");
+        // NyxID's 400 reason (e.g. "UserService '<id>' not found or not owned by user") is carried
+        // in the adapter error envelope's status/body. Surface it instead of collapsing every
+        // create failure to an opaque code the chat/runner cannot act on.
+        if (TryReadErrorEnvelope(response, out var status, out var body, out var message))
+        {
+            var detailSuffix = string.IsNullOrWhiteSpace(body) ? message : body;
+            var detail = "NyxID rejected the scheduled-agent API key creation" +
+                         (status.HasValue ? $" with HTTP {status.Value}" : string.Empty) +
+                         (string.IsNullOrWhiteSpace(detailSuffix) ? "." : $". Response: {detailSuffix}");
+            var hint = status switch
+            {
+                400 => "A required NyxID service is not owned by the key's account. If the services are shared through an organization, ensure they all belong to the same org and that you are an admin of it; if they are personal, ensure none were disabled.",
+                403 => "The caller cannot create an API key under the resolved owner. For org-owned services you must be an admin of that organization.",
+                _ => "Inspect the NyxID response detail, fix the offending service, then recreate the scheduled agent.",
+            };
+            return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_failed", detail, hint, status);
+        }
 
         try
         {
@@ -438,9 +506,35 @@ internal sealed class ScheduledAgentApiKeyIssuer
     private string GetOrnnServiceSlug() =>
         Normalize(_options.OrnnServiceSlug) ?? ScheduledAgentCreatorOptions.DefaultOrnnServiceSlug;
 
-    private sealed record ScheduledAgentServiceResolution(IReadOnlyList<string> ServiceIds, string? Error)
+    private sealed record ScheduledAgentServiceResolution(
+        IReadOnlyList<string> ServiceIds,
+        string? TargetOrgId,
+        string? Error,
+        string? Detail = null,
+        string? Hint = null)
     {
-        public static ScheduledAgentServiceResolution Failed(string error) => new([], error);
+        public static ScheduledAgentServiceResolution Failed(string error, string? detail = null, string? hint = null) =>
+            new([], null, error, detail, hint);
+    }
+
+    private sealed record ResolvedService(string Id, ServiceOwner Owner);
+
+    /// <summary>
+    /// Owner of a resolved NyxID service: personal (<see cref="OrgId"/> is <c>null</c>) or an
+    /// organization identified by its user id. Used to decide the <c>target_org_id</c> the scoped
+    /// key must be created under so NyxID's per-owner <c>allowed_service_ids</c> check passes.
+    /// </summary>
+    private sealed record ServiceOwner(string? OrgId, string? OrgName)
+    {
+        public static readonly ServiceOwner Personal = new((string?)null, null);
+
+        public static ServiceOwner ForOrg(string orgId, string? orgName) => new(orgId, orgName);
+
+        public string Key => OrgId is null ? "personal" : $"org:{OrgId}";
+
+        public string DisplayName => OrgId is null
+            ? "personal"
+            : string.IsNullOrWhiteSpace(OrgName) ? $"org {OrgId}" : $"org {OrgName}";
     }
 }
 

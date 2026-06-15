@@ -568,6 +568,107 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenApiKeyCreateReturns400_ShouldSurfaceNyxIdReasonAndHttpStatus()
+    {
+        // Regression for the 2026-06-15 Lark incident: a personal-owned key referencing org-owned
+        // services makes NyxID reject create with HTTP 400 ("UserService '<id>' not found or not
+        // owned by user"). The reason must reach the chat/runner instead of an opaque code.
+        var handler = CreateSuccessHandler();
+        handler.Add(
+            HttpMethod.Post,
+            "/api/v1/api-keys",
+            """{"error":"validation_error","message":"UserService 'svc-lark' not found or not owned by user"}""",
+            HttpStatusCode.BadRequest);
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("api_key_create_failed");
+            document.RootElement.GetProperty("http_status").GetInt32().Should().Be(400);
+            document.RootElement.GetProperty("detail").GetString().Should().Contain("not owned by user");
+            document.RootElement.GetProperty("hint").GetString().Should().Contain("organization");
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRequiredServicesAreOrgOwned_ShouldMintKeyUnderTargetOrg()
+    {
+        // Every required service is shared through the same org -> the scoped key must be created
+        // under that org's user_id so NyxID's per-owner allowed_service_ids check passes.
+        var handler = CreateSuccessHandler(serviceListJson: """
+            {
+              "keys": [
+                {"id":"svc-ornn","slug":"ornn-api","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI"}},
+                {"id":"svc-lark","slug":"api-lark-bot","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI"}},
+                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI"}}
+              ]
+            }
+            """);
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-chrono");
+            createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+            createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
+                .Select(static x => x.GetString())
+                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRequiredServicesSpanOwners_ShouldFailCrossOwnerWithoutCreatingKey()
+    {
+        // Mixed ownership (one org service + one personal service) cannot be expressed as a single
+        // scoped key, since NyxID validates every allowed_service_id against one owner. Fail up
+        // front with an actionable error instead of an opaque NyxID 400.
+        var handler = CreateSuccessHandler(serviceListJson: """
+            {
+              "keys": [
+                {"id":"svc-ornn","slug":"ornn-api","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI"}},
+                {"id":"svc-lark","slug":"api-lark-bot"},
+                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI"}}
+              ]
+            }
+            """);
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("required_services_cross_owner");
+            document.RootElement.GetProperty("detail").GetString().Should().Contain("api-lark-bot");
+            document.RootElement.GetProperty("detail").GetString().Should().Contain("personal");
+            document.RootElement.GetProperty("hint").GetString().Should().Contain("same owner");
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Fact]
     public async Task ExecuteAsync_Success_ShouldMintScopedKey_MapCommand_AndReturnAcceptedOnly()
     {
         var caller = OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender");
@@ -674,6 +775,9 @@ public sealed class ScheduledAgentCreatorToolTests
             createBody.RootElement.GetProperty("scopes").GetString().Should().Be("read write proxy");
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
+            // Personal-owned services: target_org_id is omitted so the request stays byte-identical
+            // to the pre-org behavior.
+            createBody.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
 
             var preflight = harness.Handler.Requests.Should().ContainSingle(request =>
                     request.Method == HttpMethod.Get &&
@@ -970,18 +1074,22 @@ public sealed class ScheduledAgentCreatorToolTests
         return new CreatorHarness(tool, handler, skillRunnerPort, queryPort);
     }
 
-    private static RoutingJsonHandler CreateSuccessHandler(string createApiKeyResponse = """{"id":"key-created","full_key":"full-secret-key"}""")
+    private const string DefaultServiceListJson = """
+        {
+          "keys": [
+            {"id":"svc-ornn","slug":"ornn-api"},
+            {"id":"svc-lark","slug":"api-lark-bot"},
+            {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
+          ]
+        }
+        """;
+
+    private static RoutingJsonHandler CreateSuccessHandler(
+        string createApiKeyResponse = """{"id":"key-created","full_key":"full-secret-key"}""",
+        string? serviceListJson = null)
     {
         var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/keys", """
-            {
-              "keys": [
-                {"id":"svc-ornn","slug":"ornn-api"},
-                {"id":"svc-lark","slug":"api-lark-bot"},
-                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
-              ]
-            }
-            """);
+        handler.Add(HttpMethod.Get, "/api/v1/keys", serviceListJson ?? DefaultServiceListJson);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", createApiKeyResponse);
         handler.Add(HttpMethod.Get, "/api/v1/proxy/s/ornn-api/api/v1/skills/daily-report/json", """
             {
