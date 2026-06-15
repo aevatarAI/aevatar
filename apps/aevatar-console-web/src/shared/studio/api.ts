@@ -1520,6 +1520,33 @@ function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
   };
 }
 
+function synthesizeStudioMemberCommandResponseFromDetail(
+  detail: StudioMemberDetail
+): StudioMemberCommandResponse {
+  return {
+    status: "accepted",
+    scopeId: detail.summary.scopeId,
+    memberId: detail.summary.memberId,
+    ackedAt: null,
+  };
+}
+
+function decodeCompatibleStudioMemberPatchResponse(
+  value: unknown
+): StudioMemberCommandResponse {
+  try {
+    return decodeStudioMemberCommandResponse(value);
+  } catch (commandResponseError) {
+    try {
+      return synthesizeStudioMemberCommandResponseFromDetail(
+        decodeStudioMemberDetail(value)
+      );
+    } catch {
+      throw commandResponseError;
+    }
+  }
+}
+
 export const studioApi = {
   getAppContext(): Promise<StudioAppContext> {
     return requestJson("/api/studio/context");
@@ -1707,7 +1734,7 @@ export const studioApi = {
   }): Promise<StudioMemberCommandResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
-      decodeStudioMemberCommandResponse,
+      decodeCompatibleStudioMemberPatchResponse,
       {
         method: "PATCH",
         headers: JSON_HEADERS,
@@ -1723,14 +1750,15 @@ export const studioApi = {
     memberId: string;
     displayName: string;
   }): Promise<StudioMemberCommandResponse> {
+    const displayName = input.displayName.trim();
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
-      decodeStudioMemberCommandResponse,
+      decodeCompatibleStudioMemberPatchResponse,
       {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({
-          displayName: input.displayName.trim(),
+          displayName,
         }),
       }
     );
@@ -1743,7 +1771,7 @@ export const studioApi = {
   }): Promise<StudioMemberCommandResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
-      decodeStudioMemberCommandResponse,
+      decodeCompatibleStudioMemberPatchResponse,
       {
         method: "PATCH",
         headers: JSON_HEADERS,
