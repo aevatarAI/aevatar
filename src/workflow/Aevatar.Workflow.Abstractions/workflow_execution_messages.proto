@@ -851,6 +851,7 @@ message CompensationRequestEvent
   string compensation_step_id = 3;
   string idempotency_key = 4;
   string captured_output = 5;
+  string execution_id = 6;
 }
 
 message CompensationStepCompletedEvent
@@ -859,6 +860,7 @@ message CompensationStepCompletedEvent
   string compensation_step_id = 2;
   bool success = 3;
   string error = 4;
+  string execution_id = 5;
 }
 
 message WorkflowCompensationCompletedEvent
