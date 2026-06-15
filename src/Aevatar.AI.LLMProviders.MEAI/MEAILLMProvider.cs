@@ -269,6 +269,7 @@ public sealed class MEAILLMProvider : ILLMProvider
     private static List<Microsoft.Extensions.AI.ChatMessage> ConvertMessages(
         IEnumerable<Aevatar.AI.Abstractions.LLMProviders.ChatMessage> messages)
     {
+        messages = ChatMessageToolCallTranscript.WithoutInvalidToolCallPairs(messages);
         var result = new List<Microsoft.Extensions.AI.ChatMessage>();
 
         foreach (var msg in messages)
