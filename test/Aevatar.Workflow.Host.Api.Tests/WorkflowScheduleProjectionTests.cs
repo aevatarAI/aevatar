@@ -321,7 +321,7 @@ public sealed class WorkflowScheduleProjectionTests
         result.Items.Should().ContainSingle();
         var deletedFilter = reader.Queries[0].Filters.Should().ContainSingle(filter =>
             filter.FieldPath == nameof(ScheduledDispatchDocument.Deleted)).Subject;
-        deletedFilter.Operator.Should().Be(ProjectionDocumentFilterOperator.Eq);
+        deletedFilter.Operator.Should().Be(ProjectionDocumentFilterOperator.EqOrMissing);
         deletedFilter.Value.Kind.Should().Be(ProjectionDocumentValueKind.Bool);
         deletedFilter.Value.RawValue.Should().Be(false);
         var summary = result.Items.Single();

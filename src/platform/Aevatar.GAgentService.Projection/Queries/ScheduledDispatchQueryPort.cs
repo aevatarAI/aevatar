@@ -55,7 +55,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             new()
             {
                 FieldPath = nameof(ScheduledDispatchDocument.Deleted),
-                Operator = ProjectionDocumentFilterOperator.Eq,
+                Operator = ProjectionDocumentFilterOperator.EqOrMissing,
                 Value = ProjectionDocumentValue.FromBool(false),
             },
         };

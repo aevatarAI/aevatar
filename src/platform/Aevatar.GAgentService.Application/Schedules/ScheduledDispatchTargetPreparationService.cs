@@ -121,10 +121,20 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
             return payload.Clone();
 
         var chatRequest = payload.Unpack<ChatRequestEvent>();
-        if (chatRequest.LlmControl == null)
-            return payload.Clone();
+        if (chatRequest.LlmControl != null)
+        {
+            chatRequest.LlmControl.NyxIdAccessToken = string.Empty;
+            chatRequest.LlmControl.NyxIdOrgToken = string.Empty;
+            chatRequest.LlmControl.SenderNyxIdAccessToken = string.Empty;
+        }
 
-        chatRequest.LlmControl = null;
+        if (chatRequest.ToolContext?.Credentials != null)
+        {
+            chatRequest.ToolContext.Credentials.NyxIdAccessToken = string.Empty;
+            chatRequest.ToolContext.Credentials.NyxIdOrgToken = string.Empty;
+            chatRequest.ToolContext.Credentials.SenderNyxIdAccessToken = string.Empty;
+        }
+
         return Any.Pack(chatRequest);
     }
 
