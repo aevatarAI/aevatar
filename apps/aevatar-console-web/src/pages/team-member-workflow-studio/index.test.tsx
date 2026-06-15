@@ -138,6 +138,7 @@ jest.mock("@/shared/studio/api", () => {
       startExecution: jest.fn(),
       createMember: jest.fn(),
       createMemberWithId: jest.fn(),
+      updateMemberDisplayName: jest.fn(),
       updateMemberImplementationRef: jest.fn(),
       updateMemberTeamAssignment: jest.fn(),
     },
@@ -512,6 +513,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
     mockSerializeYaml();
     (studioApi.listWorkflows as jest.Mock).mockResolvedValue([]);
     (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([]);
+    (studioApi.updateMemberDisplayName as jest.Mock).mockResolvedValue({
+      ackedAt: "2026-06-08T00:00:01Z",
+      memberId: "member-alpha",
+      scopeId: "scope-1",
+      status: "accepted",
+    });
   });
 
   afterEach(() => {
@@ -715,6 +722,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         teamId: "t-alpha",
       });
       expect(studioApi.createMemberWithId).not.toHaveBeenCalled();
+      expect(studioApi.updateMemberDisplayName).not.toHaveBeenCalled();
       expect(studioApi.updateMemberTeamAssignment).not.toHaveBeenCalled();
       expect(studioApi.updateMemberImplementationRef).toHaveBeenCalledWith({
         scopeId: "scope-1",
@@ -1697,7 +1705,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     );
     (studioApi.parseYaml as jest.Mock).mockResolvedValue({
       document: {
-        name: "Untitled member 9",
+        name: "Imported member 9",
         roles: mockWorkflowDocument.roles,
         steps: [
           {
@@ -1720,9 +1728,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
       filePath: "scope://scope-1/untitled-member-9.yaml",
       findings: [],
       layout: null,
-      name: "Untitled member 9",
+      name: "Imported member 9",
       workflowId: "untitled-member-9",
-      yaml: "name: Untitled member 9\nsteps:\n  - id: triage\n    type: llm_call\n",
+      yaml: "name: Imported member 9\nsteps:\n  - id: triage\n    type: llm_call\n",
       document: null,
       updatedAtUtc: "2026-06-08T00:00:02Z",
     });
@@ -1736,7 +1744,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     clickYamlAction("Paste YAML");
     fireEvent.change(await screen.findByLabelText("Workflow YAML"), {
       target: {
-        value: "name: Untitled member 9\nsteps:\n  - id: triage\n    type: llm_call\n",
+        value: "name: Imported member 9\nsteps:\n  - id: triage\n    type: llm_call\n",
       },
     });
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
@@ -1754,7 +1762,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
           scopeId: "scope-1",
           directoryId: "scope:scope-1",
           workflowId: "",
-          workflowName: "Untitled member 9",
+          workflowName: "Imported member 9",
         }),
       );
     });
@@ -1768,6 +1776,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
         implementationKind: "workflow",
         workflowId: "untitled-member-9",
       },
+    });
+    expect(studioApi.updateMemberDisplayName).toHaveBeenCalledWith({
+      scopeId: "scope-1",
+      memberId: "m-untitled-9",
+      displayName: "Imported member 9",
     });
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
     expect(studioApi.startExecution).not.toHaveBeenCalled();
@@ -2182,6 +2195,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
           }),
         }),
       );
+      expect(studioApi.updateMemberDisplayName).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "member-alpha",
+        displayName: "Workflow Renamed",
+      });
     });
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
     expect(studioApi.startExecution).not.toHaveBeenCalled();
@@ -3766,7 +3784,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "Run",
       "Add node",
       "Save",
-      "Refresh status",
+      "Publish",
       "YAML",
     ]);
 
@@ -4492,7 +4510,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=workflow-alpha",
     );
     (studioApi.getMember as jest.Mock).mockResolvedValue({
       implementationRef: {
@@ -4506,8 +4524,8 @@ describe("TeamMemberWorkflowStudioPage", () => {
         implementationKind: "workflow",
         lastBoundRevisionId: null,
         lifecycleStage: "build_ready",
-        memberId: "member-alpha",
-        publishedServiceId: "",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
         scopeId: "scope-1",
         teamId: "t-alpha",
         updatedAt: "2026-06-08T00:00:00Z",
@@ -4543,13 +4561,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValue({
       bindingRunId: "binding-run-1",
-      memberId: "member-alpha",
+      memberId: "m-alpha",
       scopeId: "scope-1",
       status: "accepted",
     });
     (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValue({
       bindingRunId: "binding-run-1",
-      memberId: "member-alpha",
+      memberId: "m-alpha",
       scopeId: "scope-1",
       status: "succeeded",
       stateVersion: 2,
@@ -4575,16 +4593,21 @@ describe("TeamMemberWorkflowStudioPage", () => {
           workflowName: "Workflow Alpha Published",
         }),
       );
+      expect(studioApi.updateMemberDisplayName).toHaveBeenCalledWith({
+        displayName: "Workflow Alpha Published",
+        memberId: "m-alpha",
+        scopeId: "scope-1",
+      });
       expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith({
         displayName: "Workflow Alpha Published",
-        memberId: "member-alpha",
+        memberId: "m-alpha",
         scopeId: "scope-1",
         workflowId: "workflow-alpha",
         workflowYamls: [expect.stringContaining("name: Workflow Alpha Published")],
       });
       expect(studioApi.getMemberBindingRun).toHaveBeenCalledWith(
         "scope-1",
-        "member-alpha",
+        "m-alpha",
         "binding-run-1",
       );
     });
@@ -4866,6 +4889,76 @@ describe("TeamMemberWorkflowStudioPage", () => {
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
     });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+      expect(screen.getByText("Published")).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Publish" }),
+      ).toBeNull();
+      expect(screen.getByRole("button", { name: "Refresh status" })).toBeTruthy();
+    });
+    expect(screen.getByDisplayValue("Workflow Alpha")).toBeTruthy();
+    const getMemberCallCount = (studioApi.getMember as jest.Mock).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: /Refresh status/ }));
+    await waitFor(() => {
+      expect(studioApi.getMember).toHaveBeenCalledTimes(getMemberCallCount + 1);
+    });
+    expect(studioApi.getMember).toHaveBeenLastCalledWith("scope-1", "m-alpha");
+    expect(studioApi.getWorkflow).toHaveBeenCalledWith("wf-alpha", "scope-1");
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.getMemberBindingRun).not.toHaveBeenCalled();
+    expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
+  });
+
+  it("allows publishing a changed draft version for an already published workflow member", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "wf-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: "rev-1",
+        lifecycleStage: "bind_ready",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+      lastBinding: {
+        boundAt: "2026-06-08T00:00:00Z",
+        implementationKind: "workflow",
+        publishedServiceId: "svc-alpha",
+        revisionId: "rev-1",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "wf-alpha.yaml",
+      filePath: "scope://scope-1/wf-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "wf-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
     (studioApi.saveWorkflow as jest.Mock).mockResolvedValue({
       directoryId: "scope:scope-1",
       directoryLabel: "scope-1",
@@ -4883,6 +4976,20 @@ describe("TeamMemberWorkflowStudioPage", () => {
       },
       updatedAtUtc: "2026-06-08T00:00:01Z",
     });
+    (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValue({
+      bindingRunId: "binding-run-v2",
+      memberId: "m-alpha",
+      scopeId: "scope-1",
+      status: "accepted",
+    });
+    (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValue({
+      bindingRunId: "binding-run-v2",
+      memberId: "m-alpha",
+      scopeId: "scope-1",
+      status: "succeeded",
+      stateVersion: 3,
+      updatedAt: "2026-06-08T00:00:02Z",
+    });
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
@@ -4899,21 +5006,40 @@ describe("TeamMemberWorkflowStudioPage", () => {
       target: { value: "Workflow Alpha v2" },
     });
 
-    await waitFor(() => {
-      expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    const publishButton = screen.getByRole("button", {
+      name: "Publish",
     });
+    await waitFor(() => {
+      expect(publishButton).toBeEnabled();
+    });
+    fireEvent.click(publishButton);
 
-    expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
-    const getMemberCallCount = (studioApi.getMember as jest.Mock).mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: /Refresh status/ }));
     await waitFor(() => {
-      expect(studioApi.getMember).toHaveBeenCalledTimes(getMemberCallCount + 1);
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          workflowId: "wf-alpha",
+          workflowName: "Workflow Alpha v2",
+        }),
+      );
+      expect(studioApi.updateMemberDisplayName).toHaveBeenCalledWith({
+        displayName: "Workflow Alpha v2",
+        memberId: "m-alpha",
+        scopeId: "scope-1",
+      });
+      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith({
+        displayName: "Workflow Alpha v2",
+        memberId: "m-alpha",
+        scopeId: "scope-1",
+        workflowId: "wf-alpha",
+        workflowYamls: [expect.stringContaining("name: Workflow Alpha v2")],
+      });
+      expect(studioApi.getMemberBindingRun).toHaveBeenCalledWith(
+        "scope-1",
+        "m-alpha",
+        "binding-run-v2",
+      );
     });
-    expect(studioApi.getMember).toHaveBeenLastCalledWith("scope-1", "m-alpha");
-    expect(studioApi.getWorkflow).toHaveBeenCalledWith("wf-alpha", "scope-1");
-    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
-    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
-    expect(studioApi.getMemberBindingRun).not.toHaveBeenCalled();
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
   });
 

@@ -528,6 +528,18 @@ export interface StudioMemberBindingAcceptedResponse {
   readonly memberId: string;
 }
 
+export type StudioMemberCommandStatus =
+  | 'accepted'
+  | 'no_change'
+  | 'unknown';
+
+export interface StudioMemberCommandResponse {
+  readonly status: StudioMemberCommandStatus;
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly ackedAt?: string | null;
+}
+
 export interface StudioMemberDetail {
   readonly summary: StudioMemberSummary;
   readonly implementationRef?: StudioMemberImplementationRef | null;

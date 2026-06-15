@@ -774,13 +774,14 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
     .filter(Boolean)
     .join(" · ");
   const showPublishAction =
-    !showRefreshPublishStatus &&
-    (publishPending ||
-      publishTone === "processing" ||
-      publishTone === "error" ||
-      dirty ||
-      !memberPublished ||
-      !publishDisabled);
+    (dirty && !publishDisabled) ||
+    (!showRefreshPublishStatus &&
+      (publishPending ||
+        publishTone === "processing" ||
+        publishTone === "error" ||
+        dirty ||
+        !memberPublished ||
+        !publishDisabled));
 
   return (
     <header className="workflow-studio-header">

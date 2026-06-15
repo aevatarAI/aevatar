@@ -19,6 +19,8 @@ import type {
   StudioMemberBindingRunStatus,
   StudioMemberBindingRunStatusResponse,
   StudioMemberBindingViewResponse,
+  StudioMemberCommandResponse,
+  StudioMemberCommandStatus,
   StudioMemberDetail,
   StudioMemberImplementationKind,
   StudioMemberImplementationRef,
@@ -1335,6 +1337,29 @@ function normalizeStudioMemberBindingRunStatus(
   }) as StudioMemberBindingRunStatus;
 }
 
+function normalizeStudioMemberCommandStatus(
+  value: string | number | null | undefined
+): StudioMemberCommandStatus {
+  if (value == null) {
+    return "unknown";
+  }
+
+  const normalized = normalizeEnumValue(value, "status", {
+    "0": "unknown",
+    "1": "accepted",
+    "2": "no_change",
+    accepted: "accepted",
+    no_change: "no_change",
+    nochange: "no_change",
+    unchanged: "no_change",
+    unknown: "unknown",
+  });
+
+  return normalized === "accepted" || normalized === "no_change"
+    ? normalized
+    : "unknown";
+}
+
 function decodeStudioMemberBindingFailure(
   value: unknown
 ): StudioMemberBindingFailure {
@@ -1426,6 +1451,33 @@ function decodeStudioMemberBindingAcceptedResponse(
   };
 }
 
+function decodeStudioMemberCommandResponse(
+  value: unknown
+): StudioMemberCommandResponse {
+  const record = expectRecord(value, "StudioMemberCommandResponse");
+  return {
+    status: normalizeStudioMemberCommandStatus(
+      readOptionalScalar(record, ["status", "Status"])
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberCommandResponse.scopeId"
+    ),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberCommandResponse.memberId"
+    ),
+    ackedAt:
+      readNullableString(
+        record,
+        ["ackedAt", "AckedAt"],
+        "StudioMemberCommandResponse.ackedAt"
+      ) ?? null,
+  };
+}
+
 function decodeStudioMemberBindingViewResponse(
   value: unknown
 ): StudioMemberBindingViewResponse {
@@ -1473,6 +1525,33 @@ function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
           ),
     ...(currentBindingRun === undefined ? {} : { currentBindingRun }),
   };
+}
+
+function synthesizeStudioMemberCommandResponseFromDetail(
+  detail: StudioMemberDetail
+): StudioMemberCommandResponse {
+  return {
+    status: "accepted",
+    scopeId: detail.summary.scopeId,
+    memberId: detail.summary.memberId,
+    ackedAt: null,
+  };
+}
+
+function decodeCompatibleStudioMemberPatchResponse(
+  value: unknown
+): StudioMemberCommandResponse {
+  try {
+    return decodeStudioMemberCommandResponse(value);
+  } catch (commandResponseError) {
+    try {
+      return synthesizeStudioMemberCommandResponseFromDetail(
+        decodeStudioMemberDetail(value)
+      );
+    } catch {
+      throw commandResponseError;
+    }
+  }
 }
 
 export const studioApi = {
@@ -1659,10 +1738,10 @@ export const studioApi = {
     scopeId: string;
     memberId: string;
     teamId: string | null;
-  }): Promise<StudioMemberDetail> {
+  }): Promise<StudioMemberCommandResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
-      decodeStudioMemberDetail,
+      decodeCompatibleStudioMemberPatchResponse,
       {
         method: "PATCH",
         headers: JSON_HEADERS,
@@ -1673,14 +1752,33 @@ export const studioApi = {
     );
   },
 
+  updateMemberDisplayName(input: {
+    scopeId: string;
+    memberId: string;
+    displayName: string;
+  }): Promise<StudioMemberCommandResponse> {
+    const displayName = input.displayName.trim();
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeCompatibleStudioMemberPatchResponse,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          displayName,
+        }),
+      }
+    );
+  },
+
   updateMemberImplementationRef(input: {
     scopeId: string;
     memberId: string;
     implementationRef: StudioMemberImplementationRef;
-  }): Promise<StudioMemberDetail> {
+  }): Promise<StudioMemberCommandResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
-      decodeStudioMemberDetail,
+      decodeCompatibleStudioMemberPatchResponse,
       {
         method: "PATCH",
         headers: JSON_HEADERS,
