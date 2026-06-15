@@ -1,6 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.GAgents.Platform.Lark;
 using Microsoft.Extensions.Logging;
 
@@ -11,6 +11,17 @@ namespace Aevatar.GAgents.Scheduled;
 /// bind it to the conversation as an interactive message, write the final markdown content,
 /// then close streaming mode.
 /// </summary>
+/// <remarks>
+/// Refactor (2026-06-15): this sink used to hand-roll the CardKit HTTP wire protocol
+/// (create / element-content PUT / settings PATCH) directly against <c>NyxIdApiClient</c>,
+/// duplicating <c>LarkCardKitClient</c> and missing its <c>data</c>/<c>settings</c>-as-JSON-string
+/// quirk (Lark rejects inline objects with code 9499). It now routes through the shared
+/// <see cref="ILarkCardKitClient"/> abstraction so the CardKit wire protocol has exactly one
+/// implementation, matching the direct-chat path (<c>ChannelCardConversationTurnRunner</c>).
+/// The bind step still goes through <see cref="ILarkOutboundDispatcher"/> because the
+/// scheduled path owns primary/fallback receive_id retry semantics that the direct-chat path
+/// does not need.
+/// </remarks>
 internal sealed class SkillRunnerCardKitReplySink
 {
     private const string StreamingElementId = "streaming_main";
@@ -20,20 +31,22 @@ internal sealed class SkillRunnerCardKitReplySink
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    private readonly NyxIdApiClient _client;
+    private readonly ILarkCardKitClient _cardKit;
     private readonly ILarkOutboundDispatcher _outboundDispatcher;
     private readonly LarkSendNewMessageRequest _interactiveMessageTemplate;
+    private readonly string _token;
     private readonly ILogger? _logger;
 
     public SkillRunnerCardKitReplySink(
-        NyxIdApiClient client,
+        ILarkCardKitClient cardKit,
         ILarkOutboundDispatcher outboundDispatcher,
         LarkSendNewMessageRequest interactiveMessageTemplate,
         ILogger? logger)
     {
-        _client = client ?? throw new ArgumentNullException(nameof(client));
+        _cardKit = cardKit ?? throw new ArgumentNullException(nameof(cardKit));
         _outboundDispatcher = outboundDispatcher ?? throw new ArgumentNullException(nameof(outboundDispatcher));
         _interactiveMessageTemplate = interactiveMessageTemplate ?? throw new ArgumentNullException(nameof(interactiveMessageTemplate));
+        _token = interactiveMessageTemplate.NyxApiKey;
         _logger = logger;
     }
 
@@ -76,21 +89,9 @@ internal sealed class SkillRunnerCardKitReplySink
     {
         try
         {
-            var body = JsonSerializer.Serialize(
-                new Dictionary<string, object?>
-                {
-                    ["type"] = "card_json",
-                    ["data"] = LarkStreamingCardShell.BuildInitialCardJson(StreamingElementId),
-                },
-                JsonOptions);
-
-            var response = await _client.ProxyRequestAsync(
-                _interactiveMessageTemplate.NyxApiKey,
-                _interactiveMessageTemplate.NyxProviderSlug,
-                "open-apis/cardkit/v1/cards",
-                "POST",
-                body,
-                extraHeaders: null,
+            var response = await _cardKit.CreateCardAsync(
+                _token,
+                new LarkCardKitCreateRequest("card_json", LarkStreamingCardShell.BuildInitialCardJson(StreamingElementId)),
                 ct).ConfigureAwait(false);
 
             if (LarkProxyResponse.TryGetError(response, out var larkCode, out var detail))
@@ -153,22 +154,14 @@ internal sealed class SkillRunnerCardKitReplySink
     {
         try
         {
-            var body = JsonSerializer.Serialize(
-                new Dictionary<string, object?>
-                {
-                    ["content"] = content,
-                    ["sequence"] = sequence,
-                    ["uuid"] = $"scheduled-final-{cardId}-{sequence}",
-                },
-                JsonOptions);
-
-            var response = await _client.ProxyRequestAsync(
-                _interactiveMessageTemplate.NyxApiKey,
-                _interactiveMessageTemplate.NyxProviderSlug,
-                $"open-apis/cardkit/v1/cards/{Uri.EscapeDataString(cardId)}/elements/{Uri.EscapeDataString(StreamingElementId)}/content",
-                "PUT",
-                body,
-                extraHeaders: null,
+            var response = await _cardKit.StreamElementContentAsync(
+                _token,
+                new LarkCardKitStreamElementContentRequest(
+                    CardId: cardId,
+                    ElementId: StreamingElementId,
+                    Content: content,
+                    Sequence: sequence,
+                    IdempotencyKey: $"scheduled-final-{cardId}-{sequence}"),
                 ct).ConfigureAwait(false);
 
             return LarkProxyResponse.TryGetError(response, out var larkCode, out var detail)
@@ -194,22 +187,13 @@ internal sealed class SkillRunnerCardKitReplySink
     {
         try
         {
-            var body = JsonSerializer.Serialize(
-                new Dictionary<string, object?>
-                {
-                    ["settings"] = LarkStreamingCardShell.BuildCloseStreamingSettingsJson(),
-                    ["sequence"] = sequence,
-                    ["uuid"] = $"scheduled-close-{cardId}-{sequence}",
-                },
-                JsonOptions);
-
-            var response = await _client.ProxyRequestAsync(
-                _interactiveMessageTemplate.NyxApiKey,
-                _interactiveMessageTemplate.NyxProviderSlug,
-                $"open-apis/cardkit/v1/cards/{Uri.EscapeDataString(cardId)}/settings",
-                "PATCH",
-                body,
-                extraHeaders: null,
+            var response = await _cardKit.SetCardSettingsAsync(
+                _token,
+                new LarkCardKitSettingsRequest(
+                    CardId: cardId,
+                    SettingsJson: LarkStreamingCardShell.BuildCloseStreamingSettingsJson(),
+                    Sequence: sequence,
+                    IdempotencyKey: $"scheduled-close-{cardId}-{sequence}"),
                 ct).ConfigureAwait(false);
 
             return LarkProxyResponse.TryGetError(response, out var larkCode, out var detail)

@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.LLMProviders;
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -34,6 +35,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private const string LarkDocxCreateToolName = "lark_docx_create";
 
     private readonly NyxIdApiClient? _nyxIdApiClient;
+    private readonly ILarkCardKitClient? _larkCardKitClient;
     private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
@@ -62,7 +64,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService = null,
         IToolApprovalHandler? approvalHandler = null,
         IClock? clock = null,
-        ILarkOutboundDispatcher? larkOutboundDispatcher = null)
+        ILarkOutboundDispatcher? larkOutboundDispatcher = null,
+        ILarkCardKitClient? larkCardKitClient = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -76,7 +79,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             workflowDispatchService,
             approvalHandler,
             clock,
-            larkOutboundDispatcher)
+            larkOutboundDispatcher,
+            larkCardKitClient)
     {
     }
 
@@ -93,7 +97,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService,
         IToolApprovalHandler? approvalHandler,
         IClock? clock,
-        ILarkOutboundDispatcher? larkOutboundDispatcher)
+        ILarkOutboundDispatcher? larkOutboundDispatcher,
+        ILarkCardKitClient? larkCardKitClient)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -105,6 +110,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     {
         _nyxIdApiClient = nyxIdApiClient;
         _larkOutboundDispatcher = larkOutboundDispatcher;
+        _larkCardKitClient = larkCardKitClient;
         _ownerLlmConfigSource = ownerLlmConfigSource;
         _remoteSkillFetcher = remoteSkillFetcher;
         _workflowDispatchService = workflowDispatchService;
@@ -923,7 +929,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             State.OutboundConfig.ConversationId);
 
         return new SkillRunnerCardKitReplySink(
-            client,
+            ResolveLarkCardKitClient(client, State.OutboundConfig.NyxProviderSlug),
             ResolveLarkOutboundDispatcher(client),
             new LarkSendNewMessageRequest(
                 State.OutboundConfig.NyxApiKey,
@@ -1670,6 +1676,24 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher(NyxIdApiClient client) =>
         _larkOutboundDispatcher ?? Services.GetService<ILarkOutboundDispatcher>() ?? new LarkOutboundDispatcher(client, Logger);
+
+    /// <summary>
+    /// Resolves the CardKit client for a scheduled run. Prefers an injected/DI instance; falls
+    /// back to a per-agent <see cref="LarkCardKitClient"/> bound to this agent's own Nyx provider
+    /// slug so the CardKit wire protocol stays the single shared implementation used by both the
+    /// scheduled and direct-chat paths.
+    /// </summary>
+    private ILarkCardKitClient ResolveLarkCardKitClient(NyxIdApiClient client, string providerSlug)
+    {
+        if (_larkCardKitClient is { } injected)
+            return injected;
+
+        if (Services.GetService<ILarkCardKitClient>() is { } fromDi)
+            return fromDi;
+
+        var effectiveSlug = string.IsNullOrWhiteSpace(providerSlug) ? "api-lark-bot" : providerSlug;
+        return new LarkCardKitClient(new LarkToolOptions { ProviderSlug = effectiveSlug }, client);
+    }
 
     private static string BuildLarkRejectionMessage(int? larkCode, string detail)
     {
