@@ -1558,7 +1558,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByLabelText("测试 Prompt")).toBeTruthy();
   });
 
-  it("does not treat bind-ready members without a published service as Team entry candidates", async () => {
+  it("does not treat bind-ready members without a published service as Team Test candidates", async () => {
     (studioApi.getTeam as jest.Mock).mockImplementation(async () => ({
       ...mockCreateTeamSummary(),
       entryMemberId: null,
@@ -1582,6 +1582,35 @@ describe("TeamDetailPage", () => {
     ).toBeNull();
     expect(within(dialog).getByRole("link", { name: "先 Build / Bind" }))
       .toHaveAttribute("href", expect.stringContaining("member-unpublished"));
+  });
+
+  it("allows members without a published service to be configured as Team entry members", async () => {
+    (studioApi.getTeam as jest.Mock).mockImplementation(async () => ({
+      ...mockCreateTeamSummary(),
+      entryMemberId: null,
+    }));
+    (studioApi.listTeamMembers as jest.Mock).mockImplementation(
+      async () => mockCreateTeamMembersCatalogWithUnpublishedReadyMember(),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    expect(await screen.findByText("Unpublished Ready Member")).toBeTruthy();
+
+    const setEntryButtons = await screen.findAllByRole("button", {
+      name: "设为入口成员",
+    });
+    fireEvent.click(setEntryButtons[1]);
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "member-unpublished",
+      );
+    });
   });
 
   it("sets a ready member as entry before testing when the Team has no entry", async () => {

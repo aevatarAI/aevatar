@@ -19,6 +19,7 @@ import {
 type TeamRosterMemberRow = {
   readonly canInvokeAsEntry: boolean;
   readonly canInvokeMember: boolean;
+  readonly canSetAsEntry: boolean;
   readonly description: string;
   readonly implementationKind: string;
   readonly isServiceBound: boolean;
@@ -647,7 +648,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           >
                             {intl.formatMessage({ id: "teams.members.actions.clearEntry" })}
                           </Button>
-                        ) : row.canInvokeAsEntry && onSetEntry ? (
+                        ) : row.canSetAsEntry && onSetEntry ? (
                           <Button
                             className="team-members-table-entry-action"
                             disabled={

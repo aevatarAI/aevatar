@@ -4360,7 +4360,10 @@ describe("StudioPage", () => {
     );
   });
 
-  it("does not offer Team entry actions for an unbound workflow member", async () => {
+  it("allows unbound workflow members to be configured as Team entry members", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce(
+      mockCreateDefaultTeamSummary({ entryMemberId: null })
+    );
     mockStudioMembers = [
       {
         ...mockStudioMembers[0],
@@ -4376,12 +4379,19 @@ describe("StudioPage", () => {
 
     const rail = await screen.findByLabelText("Team members");
     expect(await within(rail).findByRole("button", { name: "workspace-demo" })).toBeTruthy();
-    expect(
-      within(rail).queryByRole("button", {
+    fireEvent.click(
+      await within(rail).findByRole("button", {
         name: "Set workspace-demo as Team entry member",
       })
-    ).toBeNull();
-    expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
+    );
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "workspace-demo"
+      );
+    });
   });
 
   it("marks the selected Studio member when it is already the Team entry", async () => {
