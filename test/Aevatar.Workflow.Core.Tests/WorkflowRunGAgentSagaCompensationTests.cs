@@ -35,6 +35,10 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         firstRequest.CompensationStepId.Should().Be("refund_payment");
         firstRequest.CapturedOutput.Should().Be("charge-output");
         firstRequest.IdempotencyKey.Should().Be($"{harness.RunId}:charge_payment:1");
+        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Where(x => !x.Success)
+            .Should()
+            .BeEmpty();
 
         await CompleteCompensationAsync(harness, firstRequest);
         var secondRequest = CompensationRequests(harness.Publisher).Last();
@@ -44,6 +48,10 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
 
         await CompleteCompensationAsync(harness, secondRequest);
 
+        CommittedEvents<CompensationStepCompletedEvent>(harness.CommittedPublisher)
+            .Select(x => x.CompensationStepId)
+            .Should()
+            .Equal("refund_payment", "cancel_order");
         CommittedEvents<WorkflowCompensationCompletedEvent>(harness.CommittedPublisher)
             .Should()
             .ContainSingle()
@@ -78,7 +86,37 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         reactivated.Agent.State.CompensationExecutionId.Should().Be(originalRequests[0].ExecutionId);
         var replayed = CompensationRequests(reactivated.Publisher).Should().ContainSingle().Subject;
         replayed.CompensationStepId.Should().Be(originalRequests[0].CompensationStepId);
+        replayed.IdempotencyKey.Should().Be(originalRequests[0].IdempotencyKey);
+        replayed.CapturedOutput.Should().Be(originalRequests[0].CapturedOutput);
         replayed.ExecutionId.Should().Be(originalRequests[0].ExecutionId);
+        CommittedEvents<CompensationRequestEvent>(reactivated.CommittedPublisher).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Reactivation_AfterPartialCompensation_ShouldReplayRemainingCurrentRequest()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var firstRequest = CompensationRequests(harness.Publisher).Single();
+        await CompleteCompensationAsync(harness, firstRequest);
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+
+        var reactivated = await CreateRunAsync(
+            harness.RunId,
+            SagaWorkflowYaml(),
+            harness.EventStore,
+            autoReplaySelfPublished: false);
+
+        reactivated.Agent.State.SagaStatus.Should().Be("compensating");
+        reactivated.Agent.State.CompensationCursor.Should().Be(0);
+        var replayed = CompensationRequests(reactivated.Publisher).Should().ContainSingle().Subject;
+        replayed.CompensationStepId.Should().Be("cancel_order");
+        replayed.IdempotencyKey.Should().Be(secondRequest.IdempotencyKey);
+        replayed.CapturedOutput.Should().Be("order-output");
+        replayed.ExecutionId.Should().Be(secondRequest.ExecutionId);
         CommittedEvents<CompensationRequestEvent>(reactivated.CommittedPublisher).Should().BeEmpty();
     }
 
@@ -131,6 +169,8 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             .Should()
             .ContainSingle()
             .Which.ReceivedExecutionId.Should().Be("stale-execution");
+        CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher).Should().BeEmpty();
+        CommittedEvents<WorkflowCompensationCompletedEvent>(harness.CommittedPublisher).Should().BeEmpty();
         harness.Agent.State.CompensationCursor.Should().Be(1);
 
         await CompleteCompensationAsync(harness, request);
@@ -238,6 +278,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             .Where(x => !x.Success)
             .Should()
             .BeEmpty();
+        CommittedEvents<WorkflowCompensationCompletedEvent>(harness.CommittedPublisher).Should().BeEmpty();
         harness.Agent.State.Status.Should().Be("failed");
         harness.Agent.State.SagaStatus.Should().Be("compensation_dead_letter");
         harness.Agent.State.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");

@@ -1,6 +1,8 @@
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.Reflection;
 
 namespace Aevatar.Workflow.Core.Tests;
 
@@ -53,35 +55,71 @@ public sealed class WorkflowSagaContractTests
     [Fact]
     public void WorkflowExecutionMessages_ShouldExposeCompensationEventContracts()
     {
-        new CompensationRequestEvent
+        AssertField<CompensationRequestEvent>("run_id", 1);
+        AssertField<CompensationRequestEvent>("failed_step_id", 2);
+        AssertField<CompensationRequestEvent>("compensation_step_id", 3);
+        AssertField<CompensationRequestEvent>("idempotency_key", 4);
+        AssertField<CompensationRequestEvent>("captured_output", 5);
+        AssertField<CompensationRequestEvent>("execution_id", 6);
+        AssertRoundTrip(new CompensationRequestEvent
         {
             RunId = "run-1",
             FailedStepId = "charge_payment",
             CompensationStepId = "cancel_order",
             IdempotencyKey = "run-1:create_order",
             CapturedOutput = """{"orderId":"order-1"}""",
-        }.Should().NotBeNull();
+            ExecutionId = "compensate-1",
+        });
 
-        new CompensationStepCompletedEvent
+        AssertField<CompensationStepCompletedEvent>("run_id", 1);
+        AssertField<CompensationStepCompletedEvent>("compensation_step_id", 2);
+        AssertField<CompensationStepCompletedEvent>("success", 3);
+        AssertField<CompensationStepCompletedEvent>("error", 4);
+        AssertField<CompensationStepCompletedEvent>("execution_id", 5);
+        AssertRoundTrip(new CompensationStepCompletedEvent
         {
             RunId = "run-1",
             CompensationStepId = "cancel_order",
             Success = true,
             Error = "",
-        }.Should().NotBeNull();
+            ExecutionId = "compensate-1",
+        });
 
-        new WorkflowCompensationCompletedEvent
+        AssertField<WorkflowCompensationCompletedEvent>("run_id", 1);
+        AssertField<WorkflowCompensationCompletedEvent>("compensated_steps", 2);
+        AssertRoundTrip(new WorkflowCompensationCompletedEvent
         {
             RunId = "run-1",
             CompensatedSteps = 1,
-        }.Should().NotBeNull();
+        });
 
-        new WorkflowCompensationFailedEvent
+        AssertField<WorkflowCompensationFailedEvent>("run_id", 1);
+        AssertField<WorkflowCompensationFailedEvent>("failed_compensation_step_id", 2);
+        AssertField<WorkflowCompensationFailedEvent>("remaining_uncompensated", 3);
+        AssertField<WorkflowCompensationFailedEvent>("error", 4);
+        AssertRoundTrip(new WorkflowCompensationFailedEvent
         {
             RunId = "run-1",
             FailedCompensationStepId = "cancel_order",
             RemainingUncompensated = 1,
             Error = "failed",
-        }.Should().NotBeNull();
+        });
+    }
+
+    private static void AssertField<TMessage>(string name, int number)
+        where TMessage : IMessage<TMessage>, new()
+    {
+        var field = new TMessage().Descriptor.FindFieldByName(name);
+
+        field.Should().NotBeNull();
+        field!.FieldNumber.Should().Be(number);
+    }
+
+    private static void AssertRoundTrip<TMessage>(TMessage message)
+        where TMessage : IMessage<TMessage>, new()
+    {
+        var clone = new TMessage().Descriptor.Parser.ParseFrom(message.ToByteArray());
+
+        clone.Should().BeEquivalentTo(message);
     }
 }

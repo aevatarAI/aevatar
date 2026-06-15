@@ -71,6 +71,36 @@ roles:
   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
 
+### Saga compensation
+
+Every step may declare `compensation: <step_id>` when its successful side effect can be undone by another step in the same workflow. The compensation target must resolve to an existing step id during validation; it is not a late-bound name or inline body.
+
+```yaml
+steps:
+  - id: create_order
+    type: connector_call
+    next: charge_payment
+    compensation: cancel_order
+  - id: charge_payment
+    type: connector_call
+    next: ship_order
+    compensation: refund_payment
+  - id: ship_order
+    type: connector_call
+  - id: refund_payment
+    type: connector_call
+  - id: cancel_order
+    type: connector_call
+```
+
+Runtime semantics:
+
+- A successful step with a valid `compensation` declaration is added to the run actor's `compensable_ledger`.
+- If a later terminal failure occurs while the ledger is non-empty, compensation runs in reverse ledger order.
+- The saga status moves `running -> compensating -> compensated_failed` when every compensation step succeeds.
+- If a compensation step fails, the run moves to `compensation_dead_letter` and emits `WorkflowCompensationFailedEvent` with the failed compensation step, remaining uncompensated count, and error.
+- Compensation dispatch uses self continuation. Stale or duplicate compensation completions are rejected by execution id and do not advance the cursor.
+
 ## 2. Data 原语
 
 ### `transform`
