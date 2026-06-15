@@ -3,7 +3,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;

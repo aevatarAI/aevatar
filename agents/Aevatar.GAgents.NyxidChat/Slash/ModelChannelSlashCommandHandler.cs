@@ -5,7 +5,6 @@ using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Application.Studio.Services;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 

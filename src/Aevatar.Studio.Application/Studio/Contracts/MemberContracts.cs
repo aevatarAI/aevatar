@@ -181,7 +181,8 @@ public sealed record CreateStudioMemberRequest(
     string? MemberId = null,
     // Optional initial team assignment (ADR-0017). Empty string is rejected
     // at the application boundary; null / absent means "do not assign".
-    string? TeamId = null);
+    string? TeamId = null,
+    StudioMemberImplementationRefResponse? ImplementationRef = null);
 
 /// <summary>
 /// Wire body for <c>PATCH /api/scopes/{scopeId}/members/{memberId}</c> when

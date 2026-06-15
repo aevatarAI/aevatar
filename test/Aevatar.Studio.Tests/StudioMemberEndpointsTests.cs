@@ -29,9 +29,16 @@ public sealed class StudioMemberEndpointsTests
     [Fact]
     public async Task HandleCreateAsync_ShouldReturnCreated_OnSuccess()
     {
+        var implementationRef = new StudioMemberImplementationRefResponse(
+            ImplementationKind: MemberImplementationKindNames.Workflow,
+            WorkflowId: "wf-alpha");
         var service = new RecordingMemberService
         {
-            CreateResponse = NewSummary(),
+            CreateResponse = NewSummary() with
+            {
+                ImplementationRef = implementationRef,
+                LifecycleStage = MemberLifecycleStageNames.BuildReady,
+            },
         };
 
         var result = await InvokeHandle<IResult>(
@@ -40,13 +47,15 @@ public sealed class StudioMemberEndpointsTests
             ScopeId,
             new CreateStudioMemberRequest(
                 DisplayName: "Alpha",
-                ImplementationKind: MemberImplementationKindNames.Workflow),
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                ImplementationRef: implementationRef),
             service,
             CancellationToken.None);
 
         result.Should().BeOfType<Created<StudioMemberSummaryResponse>>()
             .Which.Location.Should().Be($"/api/scopes/{ScopeId}/members/{NewSummary().MemberId}");
         service.CreateInvoked.Should().BeTrue();
+        service.CreateRequest!.ImplementationRef.Should().Be(implementationRef);
     }
 
     [Fact]
@@ -159,20 +168,50 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
-    public async Task HandlePatchAsync_ShouldReturnOk_OnImplementationRefPatch()
+    public async Task HandlePatchAsync_ShouldReturnOk_OnTeamPatch()
     {
         var patched = new StudioMemberDetailResponse(
-            NewSummary() with { MemberId = "m-alpha", LifecycleStage = MemberLifecycleStageNames.BuildReady },
-            new StudioMemberImplementationRefResponse(
-                ImplementationKind: MemberImplementationKindNames.Workflow,
-                WorkflowId: "wf-alpha"),
+            NewSummary() with { MemberId = "m-alpha", TeamId = "team-alpha" },
+            ImplementationRef: null,
             LastBinding: null);
+        var request = new StudioMemberEndpoints.StudioMemberPatchBody
+        {
+            TeamId = System.Text.Json.JsonSerializer.SerializeToElement("team-alpha"),
+        };
+        var service = new RecordingMemberService
+        {
+            UpdateResponse = patched,
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            request,
+            service,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<StudioMemberDetailResponse>>()
+            .Which.Value.Should().BeSameAs(patched);
+        service.UpdateInvoked.Should().BeTrue();
+        service.UpdateRequest!.TeamId.HasValue.Should().BeTrue();
+        service.UpdateRequest.TeamId.Value.Should().Be("team-alpha");
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldMapImplementationRefPatch()
+    {
         var implementationRef = new StudioMemberImplementationRefResponse(
             ImplementationKind: MemberImplementationKindNames.Workflow,
             WorkflowId: "wf-alpha");
+        var patched = new StudioMemberDetailResponse(
+            NewSummary() with { MemberId = "m-alpha" },
+            ImplementationRef: implementationRef,
+            LastBinding: null);
         var request = new StudioMemberEndpoints.StudioMemberPatchBody
         {
-            ImplementationRef = JsonSerializer.SerializeToElement(implementationRef),
+            ImplementationRef = System.Text.Json.JsonSerializer.SerializeToElement(implementationRef),
         };
         var service = new RecordingMemberService
         {
@@ -253,7 +292,7 @@ public sealed class StudioMemberEndpointsTests
     {
         var service = new RecordingMemberService
         {
-            UpdateException = new InvalidOperationException("implementationRef.workflowId is required."),
+            UpdateException = new InvalidOperationException("teamId must not be empty."),
         };
 
         var result = await InvokeHandle<IResult>(
@@ -263,10 +302,7 @@ public sealed class StudioMemberEndpointsTests
             "m-alpha",
             new StudioMemberEndpoints.StudioMemberPatchBody
             {
-                ImplementationRef = JsonSerializer.SerializeToElement(
-                    new StudioMemberImplementationRefResponse(
-                        ImplementationKind: MemberImplementationKindNames.Workflow,
-                        WorkflowId: string.Empty)),
+                TeamId = System.Text.Json.JsonSerializer.SerializeToElement("team-alpha"),
             },
             service,
             CancellationToken.None);
@@ -289,10 +325,7 @@ public sealed class StudioMemberEndpointsTests
             "m-missing",
             new StudioMemberEndpoints.StudioMemberPatchBody
             {
-                ImplementationRef = JsonSerializer.SerializeToElement(
-                    new StudioMemberImplementationRefResponse(
-                        ImplementationKind: MemberImplementationKindNames.Workflow,
-                        WorkflowId: "wf-alpha")),
+                TeamId = System.Text.Json.JsonSerializer.SerializeToElement("team-alpha"),
             },
             service,
             CancellationToken.None);
@@ -863,6 +896,7 @@ public sealed class StudioMemberEndpointsTests
         public StudioMemberSummaryResponse? CreateResponse { get; set; }
         public Exception? CreateException { get; set; }
         public bool CreateInvoked { get; private set; }
+        public CreateStudioMemberRequest? CreateRequest { get; private set; }
 
         public StudioMemberRosterResponse? ListResponse { get; set; }
         public StudioMemberDetailResponse? GetResponse { get; set; }
@@ -883,6 +917,7 @@ public sealed class StudioMemberEndpointsTests
             string scopeId, CreateStudioMemberRequest request, CancellationToken ct = default)
         {
             CreateInvoked = true;
+            CreateRequest = request;
             if (CreateException != null) throw CreateException;
             return Task.FromResult(CreateResponse!);
         }

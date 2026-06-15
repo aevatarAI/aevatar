@@ -53,6 +53,49 @@ public sealed class ChannelCardActionRoutingTests
     }
 
     [Fact]
+    public void TryBuildWorkflowResumeCommand_should_preserve_nested_tool_approval_payload()
+    {
+        var inbound = new InboundMessage
+        {
+            Platform = "lark",
+            ConversationId = "oc_chat_1",
+            SenderId = "ou_user_1",
+            SenderName = string.Empty,
+            Text = "{}",
+            MessageId = "evt_card_tool_approval_1",
+            ChatType = "card_action",
+            CardAction = new CardActionSubmission
+            {
+                ActionKind = ActionElementKind.FormSubmit,
+                WorkflowResume = new WorkflowResumeActionPayload
+                {
+                    ActorId = "run-actor-1",
+                    RunId = "run-1",
+                    StepId = "tool-step",
+                    Approved = true,
+                    ToolApproval = new WorkflowToolApprovalResumeActionPayload
+                    {
+                        ExecutionId = "exec-1",
+                        ToolCallId = "tool-call-1",
+                        ApprovalRequestId = "approval-1",
+                    },
+                },
+            },
+        };
+
+        var matched = ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var command);
+
+        matched.Should().BeTrue();
+        command.Should().NotBeNull();
+        command!.ToolApproval.Should().NotBeNull();
+        command.ToolApproval!.ExecutionId.Should().Be("exec-1");
+        command.ToolApproval.ToolCallId.Should().Be("tool-call-1");
+        command.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
+        command.Metadata.Should().NotContainKey("execution_id");
+        command.Metadata.Should().NotContainKey("approval_request_id");
+    }
+
+    [Fact]
     public void TryBuildWorkflowResumeCommand_should_reject_deprecated_literal_key_fallback()
     {
         var inbound = new InboundMessage

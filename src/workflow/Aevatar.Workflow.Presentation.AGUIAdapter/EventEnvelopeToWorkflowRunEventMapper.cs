@@ -657,7 +657,6 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
                             ToolName = evt.ToolApproval?.ToolName ?? string.Empty,
                             ToolCallId = evt.ToolApproval?.ToolCallId ?? string.Empty,
                             ApprovalRequestId = evt.ToolApproval?.ApprovalRequestId ?? string.Empty,
-                            ArgumentsJson = evt.ToolApproval?.ArgumentsJson ?? string.Empty,
                         }),
                     },
                 },

@@ -46,6 +46,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         "disable-agent",
         "enable-agent",
         "delete-agent",
+        "clear",
+        "reset",
+    };
+
+    private static readonly HashSet<string> ClearHistoryCommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "clear",
+        "reset",
     };
 
     private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject);
@@ -280,6 +288,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!TryParseSlashCommand(inbound.Text, out var commandName, out var argumentText))
             return null;
 
+        // /clear is a conversation-state command, not a user-identity command: the
+        // retained transcript window belongs to the conversation actor running this
+        // turn, so it is handled here (no binding required) and the actor applies the
+        // typed clear outcome through its own committed domain event.
+        if (ClearHistoryCommands.Contains(commandName))
+            return await HandleClearHistoryCommandAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+
         var queryPort = _identityBindingQueryPort;
         if (queryPort is null)
         {
@@ -347,6 +362,38 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             registration,
             runtimeContext,
             ct).ConfigureAwait(false);
+    }
+
+    private async Task<ConversationTurnResult> HandleClearHistoryCommandAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        // Group transcripts are shared context owned by every participant; a single
+        // member must not wipe them. DM transcripts belong to the sender alone.
+        if (!IsPrivateChat(inbound))
+        {
+            return await SendReplyAsync(
+                "/clear 仅支持单聊会话:群聊上下文由全体成员共享,不能由单个成员清空。",
+                activity,
+                inbound,
+                registration,
+                runtimeContext,
+                ct).ConfigureAwait(false);
+        }
+
+        var sent = await SendReplyAsync(
+            "✅ 已清空本会话的对话记忆,后续对话将从干净的上下文开始。",
+            activity,
+            inbound,
+            registration,
+            runtimeContext,
+            ct).ConfigureAwait(false);
+        // The flag rides back even when the confirmation send failed: the user asked
+        // for the wipe, and the conversation actor owns (and commits) that outcome.
+        return sent with { RetainedHistoryClearRequested = true };
     }
 
     private static bool TryParseSlashCommand(string? text, out string commandName, out string argumentText)
@@ -1781,7 +1828,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             Credentials = new AgentToolCredentials(token, token, null),
             Caller = new AgentToolCallerContext(
                 inboundEvent.RegistrationScopeId,
-                null,
+                inboundEvent.RegistrationScopeId,
                 inboundEvent.MessageId),
             Channel = new AgentToolChannelContext(
                 inboundEvent.Platform,
@@ -1993,7 +2040,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             Caller = new AgentToolCallerContext(
                 inboundEvent.RegistrationScopeId,
-                null,
+                inboundEvent.RegistrationScopeId,
                 inboundEvent.MessageId),
             Channel = new AgentToolChannelContext(
                 inboundEvent.Platform,
@@ -2398,10 +2445,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             _logger.LogDebug(
                 "Lark typing reaction task did not complete within timeout before clear; proceeding anyway");
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // The typing task already logged its own exception — proceed with the clear so any
-            // already-visible Typing reaction is still removed whenever possible.
+            _logger.LogWarning(
+                ex,
+                "Lark typing reaction task failed before clear; proceeding with clear");
         }
 
         await TryClearTypingReactionAsync(inbound, registration, ct);
@@ -2499,7 +2547,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(
+                    _logger.LogWarning(
                         ex,
                         "Lark typing reaction delete threw: provider={ProviderSlug}, message={MessageId}, reaction={ReactionId}",
                         providerSlug,

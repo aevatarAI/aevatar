@@ -797,7 +797,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         {
             if (timeoutLease != null)
             {
-                await TryCancelLeaseAsync(timeoutLease, ctx, CancellationToken.None);
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    ctx,
+                    timeoutLease,
+                    "workflow_loop rolled-back timeout cleanup",
+                    CancellationToken.None);
                 state.TimeoutsByStepId.Remove(step.Id);
                 await SaveStateAsync(state, ctx, CancellationToken.None);
             }
@@ -841,25 +845,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             ct: ct);
     }
 
-    private static async Task TryCancelLeaseAsync(
-        RuntimeCallbackLease lease,
-        IWorkflowExecutionContext ctx,
-        CancellationToken ct)
-    {
-        try
-        {
-            await ctx.CancelDurableCallbackAsync(lease, ct);
-        }
-        catch (Exception ex)
-        {
-            ctx.Logger.LogDebug(
-                ex,
-                "workflow_loop: failed to cancel rolled-back timeout callback={CallbackId} generation={Generation}",
-                lease.CallbackId,
-                lease.Generation);
-        }
-    }
-
     private async Task CancelTimeoutAsync(
         WorkflowExecutionKernelState state,
         string stepId,
@@ -876,7 +861,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
 
         await SaveStateAsync(state, ctx, ct);
-        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, lease, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            lease,
+            "workflow_loop timeout cleanup",
+            ct);
     }
 
     private async Task CancelRetryBackoffAsync(
@@ -889,7 +878,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             return;
 
         await SaveStateAsync(state, ctx, ct);
-        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.Lease, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            pending.Lease,
+            "workflow_loop retry backoff cleanup",
+            ct);
     }
 
     private async Task CleanupRunAsync(
@@ -939,9 +932,17 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         await SaveStateAsync(state, ctx, ct);
 
         foreach (var lease in timeoutLeases)
-            await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, lease, ct);
+            await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                ctx,
+                lease,
+                "workflow_loop run timeout cleanup",
+                ct);
         foreach (var lease in retryLeases)
-            await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, lease, ct);
+            await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                ctx,
+                lease,
+                "workflow_loop run retry cleanup",
+                ct);
     }
 
     private static WorkflowExecutionKernelState LoadState(IWorkflowExecutionContext ctx) =>
@@ -1454,7 +1455,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         {
             if (createdTimeoutLease && timeoutLease != null)
             {
-                await TryCancelLeaseAsync(timeoutLease, ctx, CancellationToken.None);
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    ctx,
+                    timeoutLease,
+                    "workflow_loop resumed timeout cleanup",
+                    CancellationToken.None);
                 state.TimeoutsByStepId.Remove(step.Id);
                 await SaveStateAsync(state, ctx, CancellationToken.None);
             }

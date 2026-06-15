@@ -67,6 +67,8 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             PublishedServiceId = publishedServiceId,
             CreatedAtUtc = Timestamp.FromDateTimeOffset(createdAt),
         };
+        if (request.ImplementationRef != null)
+            evt.ImplementationRef = BuildImplementationRefMessage(request.ImplementationRef);
 
         await DispatchAsync(normalizedScopeId, memberId, evt, ct);
 
@@ -98,12 +100,17 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             DisplayName: displayName,
             Description: evt.Description,
             ImplementationKind: MemberImplementationKindMapper.ToWireName(implementationKind),
-            LifecycleStage: MemberLifecycleStageNames.Created,
+            LifecycleStage: request.ImplementationRef == null
+                ? MemberLifecycleStageNames.Created
+                : MemberLifecycleStageNames.BuildReady,
             PublishedServiceId: publishedServiceId,
             LastBoundRevisionId: null,
             CreatedAt: createdAt,
             UpdatedAt: createdAt)
-        { TeamId = responseTeamId };
+        {
+            TeamId = responseTeamId,
+            ImplementationRef = request.ImplementationRef,
+        };
     }
 
     public async Task PatchTeamAssignmentAsync(

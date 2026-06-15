@@ -137,6 +137,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         kind switch
         {
             ScheduledDispatchScheduleKind.Workflow => ScheduledDispatchScheduleKindState.Workflow,
+            ScheduledDispatchScheduleKind.SkillRunner => ScheduledDispatchScheduleKindState.SkillRunner,
             _ => ScheduledDispatchScheduleKindState.Generic,
         };
 

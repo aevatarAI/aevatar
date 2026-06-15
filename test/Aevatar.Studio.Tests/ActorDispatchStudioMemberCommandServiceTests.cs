@@ -80,6 +80,37 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         summary.MemberId.Should().NotContain(":");
     }
 
+    [Fact]
+    public async Task CreateAsync_ShouldDispatchInitialImplementationRef_WhenProvided()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(
+            new RecordingBootstrap(),
+            CreateCommandDispatch(dispatch));
+        var implementationRef = new StudioMemberImplementationRefResponse(
+            ImplementationKind: MemberImplementationKindNames.Workflow,
+            WorkflowId: "wf-alpha",
+            WorkflowRevision: "rev-1");
+
+        var summary = await service.CreateAsync(
+            ScopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: "Alpha",
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                MemberId: "m-alpha",
+                ImplementationRef: implementationRef),
+            CancellationToken.None);
+
+        summary.LifecycleStage.Should().Be(MemberLifecycleStageNames.BuildReady);
+        summary.ImplementationRef.Should().Be(implementationRef);
+
+        var evt = dispatch.Dispatches.Should().ContainSingle().Subject
+            .Envelope.Payload.Unpack<StudioMemberCreatedEvent>();
+        evt.ImplementationRef.Should().NotBeNull();
+        evt.ImplementationRef.Workflow.WorkflowId.Should().Be("wf-alpha");
+        evt.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-1");
+    }
+
     // Note: input validation (length caps, slug pattern, empty display
     // name) is now enforced at the Application boundary in
     // StudioMemberCreateRequestValidator. The Projection-layer command

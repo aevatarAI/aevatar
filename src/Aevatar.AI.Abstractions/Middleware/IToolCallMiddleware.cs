@@ -31,6 +31,11 @@ public sealed record ToolApprovalPendingContext(
     bool IsReadOnly,
     bool IsDestructive);
 
+public sealed record ToolApprovalGrant(
+    string ApprovalRequestId,
+    string ToolName,
+    string ToolCallId);
+
 /// <summary>Context for tool call middleware.</summary>
 public sealed class ToolCallContext
 {
@@ -57,6 +62,9 @@ public sealed class ToolCallContext
 
     /// <summary>Typed business keys for a tool approval yield.</summary>
     public ToolApprovalPendingContext? PendingApproval { get; set; }
+
+    /// <summary>Typed approval replay grant supplied by the workflow actor.</summary>
+    public ToolApprovalGrant? ApprovalGrant { get; set; }
 
     /// <summary>When true, tool execution is skipped and Result is returned as-is.</summary>
     public bool Terminate { get; set; }

@@ -39,14 +39,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
     private readonly ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? _workflowDispatchService;
     private readonly IClock _clock;
-    private readonly ITimeZoneResolver _timeZoneResolver;
     // Per-run counter for nyxid_proxy outcomes, populated by the instance-owned
     // NyxIdProxyToolFailureCountingMiddleware appended to the tool-call middleware chain.
     // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
     // #439 — see EnsureToolStatusAllowsCompletion.
     private readonly SkillRunnerToolFailureCounter _toolFailureCounter;
     private string? _systemPromptOverride;
-    private ChannelScheduleRunner? _scheduler;
+    private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _oneShotLease;
     private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _retryLease;
 
     public SkillRunnerGAgent(
@@ -62,7 +61,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService = null,
         IToolApprovalHandler? approvalHandler = null,
         IClock? clock = null,
-        ITimeZoneResolver? timeZoneResolver = null,
         ILarkOutboundDispatcher? larkOutboundDispatcher = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
@@ -77,7 +75,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             workflowDispatchService,
             approvalHandler,
             clock,
-            timeZoneResolver,
             larkOutboundDispatcher)
     {
     }
@@ -95,7 +92,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService,
         IToolApprovalHandler? approvalHandler,
         IClock? clock,
-        ITimeZoneResolver? timeZoneResolver,
         ILarkOutboundDispatcher? larkOutboundDispatcher)
         : base(
             llmProviderFactory,
@@ -112,7 +108,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         _remoteSkillFetcher = remoteSkillFetcher;
         _workflowDispatchService = workflowDispatchService;
         _clock = clock ?? new SystemClock();
-        _timeZoneResolver = timeZoneResolver ?? new TimeZoneResolver();
         _toolFailureCounter = toolMiddlewareChain.Counter;
     }
 
@@ -201,25 +196,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         return new ToolMiddlewareChain(combined, counter);
     }
 
-    private ChannelScheduleRunner Scheduler => _scheduler ??= new ChannelScheduleRunner(
-        callbackId: SkillRunnerDefaults.TriggerCallbackId,
-        schedulableSource: () => State,
-        triggerFactory: () => new TriggerSkillRunnerExecutionCommand { Reason = ResolveScheduleTriggerReason(State) },
-        persistNextRunEventAsync: nextRunUtc => PersistDomainEventAsync(new SkillRunnerNextRunScheduledEvent
-        {
-            NextRunAt = Timestamp.FromDateTimeOffset(nextRunUtc),
-        }),
-        scheduleTimeoutAsync: (id, dueTime, evt, ct) => ScheduleSelfDurableTimeoutAsync(id, dueTime, evt, ct: ct),
-        cancelCallbackAsync: (lease, ct) => CancelDurableCallbackAsync(lease, ct),
-        clock: _clock,
-        timeZoneResolver: _timeZoneResolver,
-        logger: Logger,
-        ownerDescription: $"Skill runner {Id}");
-
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await Scheduler.BootstrapOnActivateAsync(ct);
         await RecoverExternalTriggerDeliveriesAsync(ct);
     }
 
@@ -328,10 +307,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         await PersistDomainEventAsync(initialized);
 
-        // Refactor (iter89/cluster-089-scheduled-runner-wall-clock):
-        //   Old: SkillRunnerGAgent sampled DateTimeOffset.UtcNow and cron helper resolved timezone inline.
-        //   New: ChannelScheduleRunner owns injected clock/timezone dependencies and samples once for this turn.
-        await Scheduler.ScheduleNextRunAsync(CancellationToken.None);
+        await ScheduleOneShotRunAsync(_clock.UtcNow, CancellationToken.None);
         await UpsertRegistryAsync(CancellationToken.None);
     }
 
@@ -457,7 +433,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 return;
             }
 
-            await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
+            await ScheduleOneShotRunAsync(now, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -493,13 +469,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 return;
             }
 
-            await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
+            await ScheduleOneShotRunAsync(now, CancellationToken.None);
         }
     }
 
     private async Task RetireOneShotAsync(DateTimeOffset retiredAt, string reason, CancellationToken ct)
     {
-        await Scheduler.CancelAsync(ct);
+        await CancelOneShotLeaseAsync(ct);
         await CancelRetryLeaseAsync(ct);
         await PersistDomainEventAsync(new SkillRunnerOneShotRetiredEvent
         {
@@ -534,7 +510,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     [EventHandler]
     public async Task HandleDisableAsync(DisableSkillRunnerCommand command)
     {
-        await Scheduler.CancelAsync(CancellationToken.None);
+        await CancelOneShotLeaseAsync(CancellationToken.None);
         await CancelRetryLeaseAsync(CancellationToken.None);
 
         await PersistDomainEventAsync(new SkillRunnerDisabledEvent
@@ -554,7 +530,46 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             });
         }
 
-        await Scheduler.ScheduleNextRunAsync(CancellationToken.None);
+        await ScheduleOneShotRunAsync(_clock.UtcNow, CancellationToken.None);
+    }
+
+    private async Task ScheduleOneShotRunAsync(DateTimeOffset sampledUtc, CancellationToken ct)
+    {
+        if (!State.Enabled ||
+            State.ScheduleMode != SkillRunnerScheduleMode.OneShot ||
+            State.RetiredAt != null ||
+            State.OneShotRunAt == null)
+        {
+            return;
+        }
+
+        var runAtUtc = State.OneShotRunAt.ToDateTimeOffset().ToUniversalTime();
+        if (runAtUtc <= sampledUtc)
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} skipped one-shot scheduling because run_at_utc is not in the future",
+                Id);
+            return;
+        }
+
+        await CancelOneShotLeaseAsync(ct);
+        _oneShotLease = await ScheduleSelfDurableTimeoutAsync(
+            SkillRunnerDefaults.TriggerCallbackId,
+            runAtUtc - sampledUtc,
+            new TriggerSkillRunnerExecutionCommand { Reason = SkillRunnerDefaults.OneShotTriggerReason },
+            ct: ct);
+        await PersistDomainEventAsync(new SkillRunnerNextRunScheduledEvent
+        {
+            NextRunAt = Timestamp.FromDateTimeOffset(runAtUtc),
+        }, ct);
+    }
+
+    private async Task CancelOneShotLeaseAsync(CancellationToken ct)
+    {
+        if (_oneShotLease == null)
+            return;
+        await CancelDurableCallbackAsync(_oneShotLease, ct);
+        _oneShotLease = null;
     }
 
     private async Task RecoverExternalTriggerDeliveriesAsync(CancellationToken ct)
@@ -1979,11 +1994,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         scheduleMode == SkillRunnerScheduleMode.OneShot
             ? SkillRunnerScheduleMode.OneShot
             : SkillRunnerScheduleMode.Cron;
-
-    private static string ResolveScheduleTriggerReason(SkillRunnerState state) =>
-        state.ScheduleMode == SkillRunnerScheduleMode.OneShot
-            ? SkillRunnerDefaults.OneShotTriggerReason
-            : "schedule";
 
     private static string ResolvePlatform(string? platform) =>
         string.IsNullOrWhiteSpace(platform) ? SkillRunnerDefaults.DefaultPlatform : platform.Trim();

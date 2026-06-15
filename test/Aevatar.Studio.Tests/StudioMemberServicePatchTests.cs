@@ -135,7 +135,7 @@ public sealed class StudioMemberServicePatchTests
     }
 
     [Fact]
-    public async Task PatchAsync_GAgentImplementationRef_ShouldUpdateActorTypeName()
+    public async Task PatchAsync_GAgentImplementationRef_ShouldUpdateDiagnosticActorTypeName()
     {
         var commandPort = new RecordingMemberCommandPort();
         var service = NewService(
@@ -202,7 +202,7 @@ public sealed class StudioMemberServicePatchTests
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task PatchAsync_GAgentImplementationRef_ShouldRejectEmptyActorTypeName(string actorTypeName)
+    public async Task PatchAsync_GAgentImplementationRef_ShouldRejectEmptyDiagnosticActorTypeName(string diagnosticActorTypeName)
     {
         var service = NewService(
             new RecordingMemberCommandPort(),
@@ -213,17 +213,17 @@ public sealed class StudioMemberServicePatchTests
             MemberId,
             ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.GAgent,
-                    DiagnosticActorTypeName: actorTypeName)),
+                    DiagnosticActorTypeName: diagnosticActorTypeName)),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*implementationRef.actorTypeName is required*");
+            .WithMessage("*implementationRef.diagnosticActorTypeName is required*");
     }
 
     [Theory]
     [InlineData("scriptId")]
     [InlineData("scriptRevision")]
-    [InlineData("actorTypeName")]
+    [InlineData("diagnosticActorTypeName")]
     public async Task PatchAsync_WorkflowImplementationRef_ShouldRejectNonWorkflowFields(string disallowedField)
     {
         var service = NewService(
@@ -240,7 +240,7 @@ public sealed class StudioMemberServicePatchTests
                 MemberImplementationKindNames.Workflow,
                 WorkflowId: "wf-alpha",
                 ScriptRevision: "rev-script-1"),
-            "actorTypeName" => new StudioMemberImplementationRefResponse(
+            "diagnosticActorTypeName" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.Workflow,
                 WorkflowId: "wf-alpha",
                 DiagnosticActorTypeName: "Aevatar.SomeAgent"),
@@ -260,7 +260,7 @@ public sealed class StudioMemberServicePatchTests
     [Theory]
     [InlineData("workflowId")]
     [InlineData("workflowRevision")]
-    [InlineData("actorTypeName")]
+    [InlineData("diagnosticActorTypeName")]
     public async Task PatchAsync_ScriptImplementationRef_ShouldRejectNonScriptFields(string disallowedField)
     {
         var service = NewService(
@@ -277,7 +277,7 @@ public sealed class StudioMemberServicePatchTests
                 MemberImplementationKindNames.Script,
                 WorkflowRevision: "wf-rev-1",
                 ScriptId: "script-alpha"),
-            "actorTypeName" => new StudioMemberImplementationRefResponse(
+            "diagnosticActorTypeName" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.Script,
                 ScriptId: "script-alpha",
                 DiagnosticActorTypeName: "Aevatar.SomeAgent"),

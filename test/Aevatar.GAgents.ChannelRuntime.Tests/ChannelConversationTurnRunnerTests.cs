@@ -144,8 +144,8 @@ public sealed class ChannelConversationTurnRunnerTests
     public async Task RunInboundAsync_ShouldThreadRegistrationScopeIntoLlmReplyToolContext()
     {
         // Regression: a plain (non-"::") automation turn must carry the bot's registration scope
-        // into the deferred LLM-reply tool context, otherwise scope-scoped tools such as
-        // scheduled_agent_creator fail with "scope_id_unavailable" on the relay path.
+        // into the deferred LLM-reply caller context, otherwise scope-scoped tools fail with
+        // missing scope/owner/request context on the relay path.
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(registrationQueryPort, adapter);
@@ -158,6 +158,8 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Should().NotBeNull();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
         toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("scope-1");
+        toolContext.Caller.ResponseId.Should().Be("msg-sched-1");
         toolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
         // The inbound bot's provider slug is also exposed as the default OUTBOUND delivery provider,
         // so scheduled_agent_creator resolves one without manual config (was failing with
@@ -1995,6 +1997,7 @@ public sealed class ChannelConversationTurnRunnerTests
         // Scope is threaded as a typed Caller field (not via metadata — see the scope_id assertion
         // above), so scope-scoped tools (e.g. scheduled_agent_creator) work on the bound-sender path too.
         toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("scope-1");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
         toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
         llmControl.SenderNyxIdAccessToken.Should().Be("test-access-token-for-bnd-user-1");
@@ -2049,6 +2052,55 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Outbound.Text.Should().Contain("/oauth/authorize");
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("/oauth/authorize");
+    }
+
+    // /clear is a conversation-state command handled by the runner without identity
+    // requirements: the typed outcome flag tells the conversation actor (sole owner of
+    // retained history) to commit the cleared event. Works for unbound senders too —
+    // a poisoned DM transcript must be recoverable before /init.
+    [Fact]
+    public async Task RunInboundAsync_ShouldFlagRetainedHistoryClear_WhenClearCommandInPrivateChat()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("/clear", "msg-clear-dm", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        result.RetainedHistoryClearRequested.Should().BeTrue();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("已清空");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRefuseRetainedHistoryClear_WhenClearCommandInGroupChat()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("/clear", "msg-clear-group", ConversationScope.Group, "oc_group_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.RetainedHistoryClearRequested.Should().BeFalse();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("仅支持单聊");
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown

@@ -1367,7 +1367,7 @@ public sealed class WorkflowRunGAgent
             }
             catch (Exception ex)
             {
-                Logger.LogDebug(ex, "Failed to parse current workflow while capturing role actor ids for reset.");
+                Logger.LogWarning(ex, "Failed to parse current workflow while capturing role actor ids for reset.");
             }
         }
 

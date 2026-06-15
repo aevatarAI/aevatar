@@ -50,7 +50,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         AgentToolExecutionContext? OwnerFallbackToolContext,
         bool DisableTools);
 
-    private sealed record SenderPreferenceApplication(bool AnyApplied, bool RouteApplied);
+    private sealed record SenderPreferenceApplication(
+        bool ModelApplied,
+        bool RouteApplied,
+        bool MaxToolRoundsApplied)
+    {
+        public bool AnyApplied => ModelApplied || RouteApplied || MaxToolRoundsApplied;
+    }
 
     private sealed record SenderPreferenceResult(LLMControlContext Control, SenderPreferenceApplication Application);
 
@@ -266,7 +272,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             ChatMessage.System(BuildSystemPrompt(externalMetadata, input.AttachmentVisibilityInstruction)),
         };
-        initialMessages.AddRange((priorHistory ?? []).Select(ToChatMessage));
+        initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
 
         return new AgentRunReplyStepPlan(
@@ -297,7 +303,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
         //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
         //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
-        if (_localSkillCatalog is not null || _remoteSkillFetcher is not null)
+        if ((_localSkillCatalog is not null || _remoteSkillFetcher is not null) &&
+            tools.Get("use_skill") is null)
         {
             tools.Register(new UseSkillTool(_localSkillCatalog ?? new LocalSkillCatalog(), _remoteSkillFetcher));
         }
@@ -336,7 +343,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             MaxMessages = MaxHistoryMessages + Math.Min(priorHistory?.Count ?? 0, MaxHistoryMessages),
         };
-        history.AddRange((priorHistory ?? []).Select(ToChatMessage));
+        history.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).Select(ToChatMessage));
         var importedPriorCount = history.Messages.Count;
         var runtime = new ChatRuntime(
             providerFactory: ResolveProvider,
@@ -641,16 +648,37 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    // Reasoning content is per-turn working memory, never conversation input: replaying a
+    // prior turn's reasoning_content to the provider violates the reasoning-model contract
+    // (DeepSeek documents it as a request error; through the NyxID proxy it instead silently
+    // derails generation — the 2026-06-12 prod incident where every turn in a
+    // reasoning-history-bearing conversation completed empty). History entries keep the
+    // reasoning durably for audit; the rehydration boundary strips it from LLM input.
     private static ChatMessage ToChatMessage(ConversationHistoryEntry entry) =>
         new()
         {
             Role = string.IsNullOrWhiteSpace(entry.Role) ? "user" : entry.Role,
             Content = string.IsNullOrEmpty(entry.Content) ? null : entry.Content,
-            ReasoningContent = string.IsNullOrEmpty(entry.ReasoningContent) ? null : entry.ReasoningContent,
+            ReasoningContent = null,
             ContentParts = entry.ContentParts.Select(ContentPartProtoMapper.FromProto).ToArray(),
             ToolCallId = string.IsNullOrEmpty(entry.ToolCallId) ? null : entry.ToolCallId,
             ToolCalls = entry.ToolCalls.Select(ToToolCall).ToArray(),
         };
+
+    // Assistant entries with no wire-visible content (no text, no content parts, no tool
+    // calls — e.g. reasoning-only turns persisted before AgentRunGAgent stopped appending
+    // them to durable history) are skipped on replay: providers drop bare reasoning on
+    // assistant history messages, so such entries degenerate into empty assistant turns
+    // that corrupt every later request in the conversation.
+    private static bool IsReplayableHistoryEntry(ConversationHistoryEntry entry)
+    {
+        if (!string.Equals(entry.Role, "assistant", StringComparison.Ordinal))
+            return true;
+
+        return !string.IsNullOrWhiteSpace(entry.Content)
+               || entry.ContentParts.Count > 0
+               || entry.ToolCalls.Count > 0;
+    }
 
     private static ConversationHistoryEntry ToConversationHistoryEntry(ChatMessage message)
     {
@@ -817,6 +845,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 var preferenceResult = await ApplyPreferencesAsync(senderBindingId, effectiveControl, ct);
                 effectiveControl = preferenceResult.Control;
                 var applied = preferenceResult.Application;
+                _logger.LogInformation(
+                    "Resolved sender LLM config: bindingId={BindingId} applied={Applied} modelApplied={ModelApplied} routeApplied={RouteApplied} maxToolRoundsApplied={MaxToolRoundsApplied} effectiveModel={Model} effectiveRoute={Route} effectiveMaxToolRounds={MaxToolRounds}",
+                    senderBindingId,
+                    applied.AnyApplied,
+                    applied.ModelApplied,
+                    applied.RouteApplied,
+                    applied.MaxToolRoundsApplied,
+                    string.IsNullOrWhiteSpace(effectiveControl.ModelOverride) ? "<server-default>" : effectiveControl.ModelOverride,
+                    string.IsNullOrWhiteSpace(effectiveControl.NyxIdRoutePreference) ? "<server-default>" : effectiveControl.NyxIdRoutePreference,
+                    effectiveControl.MaxToolRoundsOverride);
                 if (applied.RouteApplied)
                 {
                     if (!string.IsNullOrWhiteSpace(llmControl?.SenderNyxIdAccessToken))
@@ -839,6 +877,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                         ownerFallbackToolContext = null;
                     }
                 }
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Sender binding is present but LLM preferences store is unavailable; using bot owner/default LLM config: bindingId={BindingId}",
+                    senderBindingId);
             }
         }
 
@@ -889,7 +933,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         CancellationToken ct)
     {
         if (_preferencesStore is null)
-            return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false));
+            return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false, false));
 
         NyxIdUserLlmPreferences preferences;
         try
@@ -900,9 +944,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
-            return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false));
+            _logger.LogWarning(
+                ex,
+                "Failed to load sender LLM config; using bot owner/default LLM config: bindingId={BindingId}",
+                senderBindingId);
+            return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false, false));
         }
 
         var modelApplied = !string.IsNullOrWhiteSpace(preferences.DefaultModel);
@@ -919,7 +967,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
         return new SenderPreferenceResult(
             effectiveControl,
-            new SenderPreferenceApplication(modelApplied || routeApplied || roundsApplied, routeApplied));
+            new SenderPreferenceApplication(modelApplied, routeApplied, roundsApplied));
     }
 
     private static Dictionary<string, string> CreateOwnerFallbackSnapshot(Dictionary<string, string> effective)

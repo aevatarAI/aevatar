@@ -132,6 +132,33 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         await PersistDomainEventAsync(evt);
     }
 
+    [EventHandler]
+    public async Task HandleVoicePresenceEnableRequested(VoicePresenceEnableRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var moduleName = NormalizeModuleExtensionText(command.ModuleName);
+        if (string.IsNullOrWhiteSpace(moduleName))
+            throw new InvalidOperationException("module_name is required.");
+
+        var defaults = command.VoiceSessionDefaults?.Clone() ?? new VoiceSessionDefaults();
+        var runtimeState = CreateEnabledVoicePresenceRuntimeState(defaults, command.RemoteAudioSupport);
+        await PersistDomainEventsAsync(
+        [
+            new VoicePresenceEnabledEvent
+            {
+                ModuleName = moduleName,
+                VoiceSessionDefaults = defaults.Clone(),
+                RuntimeState = runtimeState.Clone(),
+            },
+            new VoicePresenceRuntimeStateChangedEvent
+            {
+                ModuleName = moduleName,
+                State = runtimeState.Clone(),
+            },
+        ]);
+    }
+
     /// <summary>Handles tool approval decisions from the frontend or NyxID remote.</summary>
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleToolApprovalDecision(ToolApprovalDecisionEvent evt)
@@ -664,6 +691,24 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return next;
     }
 
+    private static RoleGAgentState ApplyVoicePresenceEnabled(
+        RoleGAgentState current,
+        VoicePresenceEnabledEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.ModuleName))
+            return current;
+
+        var moduleName = NormalizeModuleExtensionText(evt.ModuleName);
+        var next = current.Clone();
+        next.VoiceSessionDefaults[moduleName] = evt.VoiceSessionDefaults?.Clone() ?? new VoiceSessionDefaults();
+        next.VoicePresence[moduleName] = evt.RuntimeState?.Clone() ?? new VoicePresenceRuntimeState
+        {
+            Initialized = true,
+            RemoteAudioSupport = VoiceRemoteAudioSupport.Supported,
+        };
+        return next;
+    }
+
     /// <summary>Returns agent description.</summary>
     public override Task<string> GetDescriptionAsync() =>
         Task.FromResult($"RoleGAgent[{RoleName}]:{Id}");
@@ -677,6 +722,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             .On<PendingToolApprovalPersistedEvent>(ApplyPendingApproval)
             .On<RemoteToolApprovalSubmittedEvent>(ApplyRemoteApprovalSubmitted)
             .On<ClearPendingApprovalEvent>(ApplyClearPendingApproval)
+            .On<VoicePresenceEnabledEvent>(ApplyVoicePresenceEnabled)
             .On<VoicePresenceRuntimeStateChangedEvent>(ApplyVoicePresenceRuntimeStateChanged)
             .OrCurrent();
 
@@ -1409,6 +1455,28 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             state.ConfigOverrides = new AIAgentConfigOverrides();
         return state.ConfigOverrides;
     }
+
+    private static VoicePresenceRuntimeState CreateEnabledVoicePresenceRuntimeState(
+        VoiceSessionDefaults defaults,
+        VoiceRemoteAudioSupport remoteAudioSupport)
+    {
+        var runtimeState = new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.Idle,
+            Initialized = true,
+            RemoteAudioSupport = NormalizeEnableRemoteAudioSupport(remoteAudioSupport),
+        };
+
+        if (defaults.HasSampleRateHz && defaults.SampleRateHz > 0)
+            runtimeState.PcmSampleRateHz = defaults.SampleRateHz;
+
+        return runtimeState;
+    }
+
+    private static VoiceRemoteAudioSupport NormalizeEnableRemoteAudioSupport(VoiceRemoteAudioSupport remoteAudioSupport) =>
+        remoteAudioSupport == VoiceRemoteAudioSupport.Unspecified
+            ? VoiceRemoteAudioSupport.Supported
+            : remoteAudioSupport;
 
     private async Task ApplyModuleExtensionsFromStateIfNeededAsync(RoleGAgentState state, CancellationToken ct)
     {

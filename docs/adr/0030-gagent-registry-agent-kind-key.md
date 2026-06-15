@@ -26,7 +26,7 @@ Registry state, registry commands/events, admission checks, draft-run targets, H
 
 Legacy registry rows keyed by CLR type names are migrated by the registry authority only. `GAgentRegistryGAgent` probes the actor-owned kind contract, commits one `ActorRegistrationKeyCanonicalizedEvent` per actor when the canonical kind is known, and quarantines unmappable rows. No application, read model, or adapter may use CLR-name mapping fallback for admission.
 
-The scope GAgent catalog route is `/api/scopes/gagent-kinds`. The old `/api/scopes/gagent-types` route is not mapped and returns ordinary `404 Not Found`.
+The Studio-facing scope GAgent catalog route is `/api/scopes/gagent-types`, but the route returns a strongly typed `AgentKind` catalog. The route name is a UI capability surface, not permission to use CLR type names as registry identity.
 
 ## Consequences
 

@@ -33,15 +33,20 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 - `ActorRuntime:Provider=Orleans`
 - `ActorRuntime:OrleansStreamBackend=KafkaProvider`
 - `ActorRuntime:OrleansPersistenceBackend=Garnet`
-- `Orleans:ClusteringMode=Localhost`
+- `Orleans:ClusteringMode=Garnet`
 
 在上述配置下，Event Sourcing 的 `IEventStore` 会自动使用 `GarnetEventStore`（连接串复用 `ActorRuntime:OrleansGarnetConnectionString`）。
 `Projection:Graph:Providers:Neo4j:Password` 不再在仓库内提供默认明文值，需通过环境变量注入。
 
 `Orleans:ClusteringMode` 支持：
 
-- `Localhost`：本机多进程开发模式（默认）。
-- `Development`：多机测试模式（主节点 + 从节点），通过 `Orleans:PrimarySiloEndpoint` 加入集群。
+- `Garnet`：共享 membership 模式（Distributed 配置默认，生产必须）。membership 表与
+  reminder 表、grain state 共用同一 Garnet 实例与 `ServiceId`，滚动发布期间新旧 silo
+  组成同一集群、分摊 reminder ring，避免双触发与 grain-state etag 冲突。
+  `Orleans:SiloHost` 留空时自动通告第一个非回环网卡地址（k8s 内即 Pod IP）。
+- `Localhost`：本机单进程开发模式（代码默认值），membership 仅在进程内，禁止用于多副本部署。
+- `Development`：多机测试模式（主节点 + 从节点），通过 `Orleans:PrimarySiloEndpoint` 加入集群；
+  membership 由主节点内存持有，主节点重启即丢失，不可用于生产。
 
 可通过 `AEVATAR_` 前缀环境变量覆盖，例如：
 

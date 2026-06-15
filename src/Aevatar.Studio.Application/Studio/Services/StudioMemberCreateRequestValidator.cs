@@ -15,7 +15,7 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// </summary>
 internal static class StudioMemberCreateRequestValidator
 {
-    public static void Validate(CreateStudioMemberRequest request)
+    public static CreateStudioMemberRequest Validate(CreateStudioMemberRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -23,6 +23,37 @@ internal static class StudioMemberCreateRequestValidator
         ValidateDescription(request.Description);
         ValidateMemberId(request.MemberId);
         ValidateTeamId(request.TeamId);
+
+        var implementationKind = ValidateImplementationKind(request.ImplementationKind);
+        var implementationRef = request.ImplementationRef == null
+            ? null
+            : StudioMemberService.NormalizeImplementationRef(
+                implementationKind,
+                request.ImplementationRef);
+
+        return request with
+        {
+            DisplayName = request.DisplayName.Trim(),
+            Description = request.Description?.Trim(),
+            MemberId = string.IsNullOrWhiteSpace(request.MemberId) ? null : request.MemberId.Trim(),
+            TeamId = request.TeamId?.Trim(),
+            ImplementationKind = implementationKind,
+            ImplementationRef = implementationRef,
+        };
+    }
+
+    private static string ValidateImplementationKind(string? implementationKind)
+    {
+        var normalized = implementationKind?.Trim().ToLowerInvariant() ?? string.Empty;
+        return normalized switch
+        {
+            MemberImplementationKindNames.Workflow
+                or MemberImplementationKindNames.Script
+                or MemberImplementationKindNames.GAgent => normalized,
+            "" => throw new InvalidOperationException("implementationKind is required."),
+            _ => throw new InvalidOperationException(
+                $"implementationKind '{implementationKind}' is not supported."),
+        };
     }
 
     public static string ValidateAndNormalizeDisplayName(string? displayName)

@@ -77,6 +77,12 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 ToolCallId = Normalize(request.CallId) ?? string.Empty,
                 ArgumentsJson = request.ArgumentsJson,
                 CancellationToken = ct,
+                ApprovalGrant = request.ApprovalGrant == null
+                    ? null
+                    : new Aevatar.AI.Abstractions.Middleware.ToolApprovalGrant(
+                        request.ApprovalGrant.ApprovalRequestId,
+                        request.ApprovalGrant.ToolName,
+                        request.ApprovalGrant.ToolCallId),
             };
 
             await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
@@ -86,6 +92,15 @@ public sealed class AgentWorkflowToolSourceAdapter(
 
                 toolCallContext.Result = await _tool.ExecuteAsync(toolCallContext.ArgumentsJson, ct).ConfigureAwait(false);
             }).ConfigureAwait(false);
+
+            if (toolCallContext.Terminate &&
+                toolCallContext.TerminationKind == ToolCallTerminationKind.ApprovalPending &&
+                toolCallContext.PendingApproval != null)
+            {
+                return new WorkflowToolExecutionResult(
+                    string.Empty,
+                    PendingApproval: ToWorkflowToolApprovalPendingOutcome(toolCallContext.PendingApproval));
+            }
 
             if (toolCallContext.Terminate)
                 throw new InvalidOperationException(FormatMiddlewareTermination(toolCallContext));
@@ -98,6 +113,17 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 resultJson,
                 ToWorkflowManagedHandoffOutcome(receipt?.ManagedWorkflowHandoff));
         }
+
+        private static WorkflowToolApprovalPendingOutcome ToWorkflowToolApprovalPendingOutcome(
+            ToolApprovalPendingContext pending) =>
+            new(
+                pending.ApprovalRequestId,
+                pending.ToolName,
+                pending.ToolCallId,
+                pending.ArgumentsJson,
+                pending.ApprovalMode.ToString(),
+                pending.IsReadOnly,
+                pending.IsDestructive);
 
         private static string? Normalize(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();

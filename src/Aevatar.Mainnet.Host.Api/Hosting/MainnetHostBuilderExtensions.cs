@@ -128,12 +128,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChatbotClassifier();
         builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
-        // Composition root owns the ES vs InMemory store choice for the
-        // Identity module: AddChannelIdentity registers actors / projector /
-        // broker / slash-commands and AddChannelIdentityProjectionStores
-        // wires the document store. Tests / demos can mix and match.
         builder.Services.AddChannelIdentity(builder.Configuration);
-        builder.Services.AddChannelIdentityProjectionStores(builder.Configuration);
         builder.Services.Configure<AevatarOAuthClientEsAclOptions>(options =>
         {
             // Mainnet stores the cluster-singleton OAuth client readmodel in Elasticsearch.
@@ -150,10 +145,8 @@ public static class MainnetHostBuilderExtensions
             ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHealthProbeExecutor, AevatarCoreLoopStatusProbeExecutor>());
-        // Ingress layer v1: registers the ChatRoutePolicy current-state readmodel
-        // document store (Elasticsearch in prod, InMemory otherwise — same
-        // selection pattern as AddScheduledAgents / AddDeviceRegistration).
         builder.Services.AddChatRoutingAgents(builder.Configuration);
+        builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddChatRoutingCore();
         builder.Services.Configure<ChatRoutingOptions>(options =>
         {
@@ -274,6 +267,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<InvokeTeamToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,
+                    CreateToolSource<ReadWorkflowRunArtifactToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,
                     CreateToolSource<ChannelInteractiveReplyToolSource>,
                     CreateToolSource<ChannelRegistrationToolSource>,
@@ -317,6 +311,7 @@ public static class MainnetHostBuilderExtensions
         app.UseAevatarDefaultHost();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
+        app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();
@@ -325,10 +320,23 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();
-        app.MapPolicyAwareVoiceEndpoint();
         app.MapStatusEndpoints();
-        app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
-            .RequireAuthorization("voice-dev");
+
+        // Voice service registration is conditional on a configured provider
+        // (RegisterVoicePresenceModules skips everything otherwise). Mapping
+        // the real handlers without those services turns every /ws/voice
+        // request into an unhandled DI 500 (issue #2023) — map the fail-closed
+        // 503 stand-ins instead.
+        if (PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(app.Services))
+        {
+            app.MapPolicyAwareVoiceEndpoint();
+            app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
+                .RequireAuthorization("voice-dev");
+        }
+        else
+        {
+            app.MapVoiceNotConfiguredEndpoints();
+        }
 
         return app;
     }

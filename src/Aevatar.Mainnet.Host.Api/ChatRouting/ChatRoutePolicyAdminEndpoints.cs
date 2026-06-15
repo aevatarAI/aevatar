@@ -1,7 +1,7 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgents.ChatRouting;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;

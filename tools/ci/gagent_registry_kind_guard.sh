@@ -88,13 +88,13 @@ report_filtered_matches \
   "${registry_identity_paths[@]}"
 
 report_matches \
-  "Scope GAgent route production code must not expose gagent-types" \
-  "gagent-types|/gagent-types|HandleListGAgentTypesAsync|GAgentTypeCatalogHttpResponse" \
+  "Scope GAgent catalog production code must not reintroduce type-keyed catalog models" \
+  "HandleListGAgentTypesAsync|GAgentTypeCatalogHttpResponse" \
   "src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeGAgentEndpoints.cs"
 
 report_matches \
   "Frontend runtime identity code must not keep type-keyed catalog aliases" \
-  "RuntimeGAgentTypeDescriptor|selectedGAgentTypeName|gAgentTypes|listTypes\\(|gagent-types|/gagent-types|normalizeRuntimeGAgentTypeName" \
+  "RuntimeGAgentTypeDescriptor|selectedGAgentTypeName|gAgentTypes|listTypes\\(|normalizeRuntimeGAgentTypeName" \
   "${frontend_runtime_identity_paths[@]}"
 
 report_filtered_matches \
@@ -106,7 +106,7 @@ report_filtered_matches \
 report_filtered_matches \
   "GAgent bind request and command paths must not accept caller actorTypeName aliases" \
   "ActorTypeName|actorTypeName|gAgentType|gagentType|gagent_type" \
-  "LEGACY_ACTOR_TYPE_NAME_REJECTED|HasLegacyActorTypeName|gagent\\.actorTypeName is not accepted|string\\.Equals\\(key, \"actorTypeName\"|string\\.Equals\\(key, \"ActorTypeName\"|ActorTypeName = diagnosticClrTypeName|StaticSpec\\.ActorTypeName|staticSpec\\.ActorTypeName|Implementation\\?\\.Static\\?\\.ActorTypeName|DiagnosticClrTypeName|DiagnosticActorTypeName|StaticActorTypeName|result\\.GAgent\\?\\.DiagnosticClrTypeName" \
+  "LEGACY_ACTOR_TYPE_NAME_REJECTED|HasLegacyActorTypeName|gagent\\.actorTypeName is not accepted|string\\.Equals\\(key, \"actorTypeName\"|string\\.Equals\\(key, \"ActorTypeName\"|ActorTypeName = diagnosticClrTypeName|StaticSpec\\.ActorTypeName|staticSpec\\.ActorTypeName|Implementation\\?\\.Static\\?\\.ActorTypeName|DiagnosticClrTypeName|DiagnosticActorTypeName|diagnosticActorTypeName|StaticActorTypeName|result\\.GAgent\\?\\.DiagnosticClrTypeName" \
   "${bind_identity_paths[@]}"
 
 set +e
@@ -153,9 +153,9 @@ report_filtered_matches \
   "test/Aevatar.AI.ToolProviders.Binding.Tests"
 
 report_filtered_matches \
-  "Positive tests must not use the old gagent-types route" \
-  "gagent-types|/gagent-types" \
-  "NotContain|Should\\(\\)\\.Be\\(StatusCodes\\.Status404NotFound\\)|Should\\(\\)\\.Be\\(HttpStatusCode\\.NotFound\\)|GetAsync\\(\"/api/scopes/gagent-types\"\\)|returns 404|old route" \
+  "Tests must not treat gagent-types as a legacy type-keyed route" \
+  "GAgentTypeCatalog|gagent type|old gagent-types|old /api/scopes/gagent-types" \
+  "NotContain" \
   "test" \
   "apps/aevatar-console-web/src"
 

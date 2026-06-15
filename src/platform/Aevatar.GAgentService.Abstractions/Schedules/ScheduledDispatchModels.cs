@@ -13,6 +13,7 @@ public enum ScheduledDispatchScheduleKind
 {
     Generic = 0,
     Workflow = 1,
+    SkillRunner = 2,
 }
 
 public sealed record ScheduledDispatchTargetDescriptor(

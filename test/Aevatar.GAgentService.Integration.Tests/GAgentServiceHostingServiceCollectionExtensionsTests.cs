@@ -14,7 +14,7 @@ using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.Bootstrap.Hosting;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
