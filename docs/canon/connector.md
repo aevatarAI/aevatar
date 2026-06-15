@@ -23,7 +23,7 @@ owner: eanzhao
 简化链路：
 
 1. 启动时读取 `connectors.json`；
-2. 按 `type` 用 Builder 构造具体 Connector（`http/cli/mcp/host_callback`）；
+2. 按 `type` 用 Builder 构造具体 Connector（`http/cli/mcp`）；
 3. 注册到 `IConnectorRegistry`；
 4. 运行 `connector_call` 步骤时按名称解析并调用。
 
@@ -73,7 +73,7 @@ owner: eanzhao
 公共字段（`ConnectorConfigEntry`）：
 
 - `name`：Connector 名称（workflow 用它引用）
-- `type`：`http` / `cli` / `mcp` / `host_callback`
+- `type`：`http` / `cli` / `mcp`
 - `enabled`：默认 `true`
 - `timeoutMs`：默认 `30000`
 - `retry`：默认 `0`
@@ -82,14 +82,10 @@ owner: eanzhao
 
 - `http`：
   - `baseUrl`、`allowedMethods`、`allowedPaths`、`allowedInputKeys`、`defaultHeaders`
-  - `auth.type=client_credentials`：OAuth client credentials provider
-  - `auth.type=secret_ref_header`：通过 `secretRef` 在 HTTP request edge 解析一个 secret，并写入一个固定 header
 - `cli`：
   - `command`、`fixedArguments`、`allowedOperations`、`allowedInputKeys`、`workingDirectory`、`environment`
 - `mcp`：
   - `serverName`、`command`、`arguments`、`environment`、`defaultTool`、`allowedTools`、`allowedInputKeys`
-- `host_callback`：
-  - `handler`、`allowedOperations`、`allowedInputKeys`
 
 ## 2.4 启动加载与注册
 
@@ -109,7 +105,7 @@ Builder 当前行为：
 
 注意：
 
-- `http`、`cli`、`host_callback` builder 在 `AddAevatarBootstrap()` 默认注册；
+- `http`、`cli` builder 在 `AddAevatarBootstrap()` 默认注册；
 - `mcp` builder 只有在 `AddAevatarAIFeatures(..., options => options.EnableMCPTools = true)` 时注册。
 
 ---
@@ -135,8 +131,6 @@ roles:
 - 会注入 `allowed_connectors=...` 到步骤参数中。
 
 这一步只负责“传授权信息”，不直接执行 connector。
-
-注意：`roles[].connectors` 只约束 `connector_call` 对中心化 connector 的访问；它不控制 LLM agent tool。`llm_call` 的 agent tool 可见范围使用 role/step 根部的 `allowed_tools`，并通过 typed `agent_tool_scope` 传到 AI 工具执行上下文。
 
 ## 3.2 connector_call 执行主链路
 
@@ -178,7 +172,7 @@ Ergonomic 别名（解析期归一化到 `connector_call`）：
 - 通用：`connector.name/type/operation/attempts/timeout_ms/duration_ms`
 - skip：`connector.skipped`, `connector.skip_reason`
 - continue：`connector.continued_on_error`, `connector.error`
-- 具体实现附加字段：`connector.http.*` / `connector.cli.*` / `connector.mcp.*` / `host_callback.result.*`
+- 具体实现附加字段：`connector.http.*` / `connector.cli.*` / `connector.mcp.*`
 
 ## 3.3 三类 Connector 的执行逻辑
 
@@ -190,31 +184,6 @@ Ergonomic 别名（解析期归一化到 `connector_call`）：
 - 强制校验目标 URL 不能逃逸 `baseUrl` 的 scheme/host/port；
 - 可用 `allowedInputKeys` 校验 payload JSON key；
 - 返回 HTTP 状态和耗时元数据。
-- `defaultHeaders` 只用于非 secret 静态 header。secret-bearing header 必须使用 `auth.type=secret_ref_header`，避免 raw secret 被复制进 connector config、workflow 参数、annotations、read model 或通用 bag。
-
-`secret_ref_header` 配置形状：
-
-```json
-{
-  "type": "http",
-  "http": {
-    "baseUrl": "https://api.example.com",
-    "auth": {
-      "type": "secret_ref_header",
-      "secretRef": "secrets://connectors/example-api-key",
-      "headerName": "X-API-Key",
-      "headerValuePrefix": "Bearer "
-    }
-  }
-}
-```
-
-约束：
-
-- `secretRef` 与 `headerName` 必填；
-- `headerName` 必须是合法 HTTP header token，且不能与 `defaultHeaders` 冲突；
-- runtime 必须有可用 `ICredentialProvider`，且 secret 解析结果不能为空；
-- 只支持单 secret ref、单 header、可选静态 prefix；不支持多 header、body/path/query 模板或 request metadata 取值。
 
 ### CLI Connector
 
@@ -233,31 +202,6 @@ Ergonomic 别名（解析期归一化到 `connector_call`）：
 - 可通过 `allowedTools` 做工具白名单；
 - 可通过 `allowedInputKeys` 做 payload key 白名单；
 - 返回 server/tool/耗时元数据。
-
-### Host Callback Connector
-
-- 这是 host-owned connector，不新增 workflow primitive，也不新增 engine endpoint。
-- handler 通过 `IHostCallbackConnectorHandler` 注册到宿主，workflow 只看到普通 `connector_call`。
-- `operation` 必须通过 `allowedOperations` 白名单；否则 fail closed。
-- `payload` 若声明了 `allowedInputKeys`，必须是 JSON object 且 key 全部在 allowlist 内；否则 fail closed。
-- handler 返回结构化 JSON 结果；connector：
-  - 原样写入 `ConnectorResponse.Output`
-  - 同时把稳定字段展平到 metadata，例如 `host_callback.result.route=phase9-router`
-- 这类 connector 适合“host 已拥有的 published surface”，例如 GitHub label/merge/close 分类、phase9-router entry routing、vibe-map closure 等宿主职责；引擎不为这些场景新增内置控制器能力。
-
-## 3.4 Host 责任边界
-
-以下职责明确属于 host，而不是 workflow engine：
-
-- GitHub 入站事件处理、label/merge/close 动作接入
-- 跨条目的 `phase9-router`
-- `vibe-map` closure
-
-约束口径：
-
-- `host-not-controller`：Host 可以通过 connector callback 暴露已存在的宿主能力，但 workflow engine 不为此新增 controller 式编排能力。
-- `published-surfaces-only`：workflow 只能消费 host 已正式发布的 surface，例如 `host_callback` handler 契约；不能要求 host 暴露新的内部 runtime 侧读接口。
-- `no-new-aevatar-endpoints`：这类能力不通过新增 Aevatar endpoint 进入 engine 主链。
 
 ---
 

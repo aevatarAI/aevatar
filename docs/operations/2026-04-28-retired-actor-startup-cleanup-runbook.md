@@ -59,16 +59,16 @@ For each spec the service:
    is not blocked on completion.
 2. Streams targets from `DiscoverDynamicTargetsAsync` first, then iterates
    `Targets`.
-3. For each target: probes the runtime kind via `IActorKindProbe`, then
+3. For each target: probes the runtime type via `IActorTypeProbe`, then
    revalidates the same target immediately before destructive work. When the
-   final check still matches a retired kind token, it removes upstream relays from
+   final check still matches a retired token, it removes upstream relays from
    `SourceStreamId`, removes outgoing relays best-effort, deletes module-owned
    read models best-effort, destroys the actor, and resets the event stream.
 
 There is no "completed forever" marker. The cleanup runs every startup; targets
-already cleaned by a previous pod are detected as either "no runtime kind and no
-event stream" (skip) or "no runtime kind but stream still present" (continue
-reset path). Targets recreated with a current runtime kind between discovery and
+already cleaned by a previous pod are detected as either "no runtime type and no
+event stream" (skip) or "no runtime type but stream still present" (continue
+reset path). Targets recreated with a current runtime type between discovery and
 cleanup are skipped by the per-target revalidation fence.
 
 ## Active Specs
@@ -100,10 +100,10 @@ on every pod restart until the persisted data is cleaned.
 
 ## Adding a New Retired-Actor Spec
 
-When a runtime kind is retired:
+When a new runtime CLR type is retired (rename, move, delete):
 
 1. Add a class implementing `IRetiredActorSpec` (or extending `RetiredActorSpec`)
-   in the module that owns the replacement. Declare the retired kind tokens and
+   in the module that owns the replacement. Declare the retired type tokens and
    the well-known actor ids that previously persisted them.
 2. Override `DeleteReadModelsForActorAsync` if the module owns documents whose
    `ActorId` field references the retired actors.
@@ -120,7 +120,7 @@ the targets are fully cleaned (and remains a no-op afterwards). No changes to
 - Duplicate cleanup passes converge through per-target revalidation and
   idempotent actor / stream / read-model cleanup.
 - New projection startup recreates the needed actors using the current runtime
-  kinds and rebuild paths. Startup cleanup is best-effort background work; it is
+  types and rebuild paths. Startup cleanup is best-effort background work; it is
   not a startup-wide readiness barrier.
 
 ## Validation
@@ -131,14 +131,14 @@ Healthy startup logs should include one entry per spec:
 - `Retired actor cleanup pass finished for spec device.`
 - `Retired actor cleanup pass finished for spec scheduled.`
 
-During the first cleanup of a newly-retired kind, `IActorKindProbe` may activate
-the retired actor long enough to read its persisted kind. Orleans can emit
-transient error logs like `Unable to resolve agent kind …` for those actors
+During the first cleanup of a newly-retired type, `IActorTypeProbe` may activate
+the retired actor long enough to read its persisted type name. Orleans can emit
+transient error logs like `Unable to resolve agent type …` for those actors
 before the cleanup removes them. Treat those as expected only when they are
 followed by `Retired actor cleanup pass finished for spec …`.
 
 The failure signatures below should disappear once the relevant retired actor
 targets have been cleaned by one of the idempotent startup passes:
 
-- `Unable to resolve agent kind channel.*`
+- `Unable to resolve agent type Aevatar.GAgents.ChannelRuntime.*`
 - `projection.durable.scope:* is not a ProjectionMaterializationScopeGAgent<...new namespace...>`

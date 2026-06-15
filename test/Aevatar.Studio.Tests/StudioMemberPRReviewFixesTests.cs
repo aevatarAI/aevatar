@@ -255,7 +255,7 @@ public sealed class StudioMemberPRReviewFixesTests
         public Task<StudioMemberBindingRevisionActionResponse> RetireBindingRevisionAsync(
             string scopeId, string memberId, string revisionId, CancellationToken ct = default) => throw _ex;
 
-        public Task<StudioMemberCommandResponse> UpdateAsync(
+        public Task<StudioMemberDetailResponse> UpdateAsync(
             string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default)
                 => throw _ex;
     }

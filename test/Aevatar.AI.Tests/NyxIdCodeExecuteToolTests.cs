@@ -16,11 +16,10 @@ public class NyxIdCodeExecuteToolTests
     }
 
     [Fact]
-    public void ApprovalMode_NeverRequiresApproval()
+    public void RequiresApproval_AlwaysTrue()
     {
         var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
-        ((IAgentTool)tool).RequiresApproval("""{"language":"python","code":"print(1)"}""").Should().BeNull();
+        tool.RequiresApproval("""{"language":"python","code":"print(1)"}""").Should().BeTrue();
     }
 
     [Fact]

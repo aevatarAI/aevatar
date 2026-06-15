@@ -3,15 +3,12 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
-using Aevatar.Workflow.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Infrastructure.Schedules;
 
 public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceInvocationDispatchPort
 {
-    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
-
     private readonly IServiceInvocationPort _serviceInvocationPort;
     private readonly IScheduledServiceInvocationCredentialExchangePort _credentialExchangePort;
 
@@ -45,35 +42,23 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         CancellationToken ct)
     {
         if (dispatch.Auth?.SenderNyxId == null)
-        {
-            return EnrichChatPayload(
-                dispatch.Request,
-                dispatch.Headers,
-                senderNyxIdAccessToken: null,
-                projectSenderNyxIdAccessTokenToWorkflowCallerCredential:
-                    dispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential);
-        }
+            return EnrichChatPayload(dispatch.Request, dispatch.Headers, senderNyxIdAccessToken: null);
 
         var exchange = await _credentialExchangePort.IssueSenderNyxIdAsync(dispatch.Auth.SenderNyxId, ct);
-        if (!exchange.Succeeded)
+        if (!exchange.Succeeded || string.IsNullOrWhiteSpace(exchange.AccessToken))
         {
             throw new InvalidOperationException(string.IsNullOrWhiteSpace(exchange.Error)
                 ? "Scheduled service invocation sender NyxID credential exchange failed."
                 : exchange.Error.Trim());
         }
 
-        return EnrichChatPayload(
-            dispatch.Request,
-            dispatch.Headers,
-            NormalizeSenderNyxIdAccessToken(exchange.AccessToken),
-            dispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential);
+        return EnrichChatPayload(dispatch.Request, dispatch.Headers, exchange.AccessToken);
     }
 
     private static ServiceInvocationRequest EnrichChatPayload(
         ServiceInvocationRequest request,
         IReadOnlyDictionary<string, string>? headers,
-        string? senderNyxIdAccessToken,
-        bool projectSenderNyxIdAccessTokenToWorkflowCallerCredential)
+        string? senderNyxIdAccessToken)
     {
         if ((headers == null || headers.Count == 0) && string.IsNullOrWhiteSpace(senderNyxIdAccessToken))
             return request;
@@ -85,12 +70,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         if (headers != null)
         {
             foreach (var (key, value) in headers)
-            {
-                if (string.Equals(key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal))
-                    continue;
-
                 chatRequest.Metadata[key] = value;
-            }
         }
 
         if (!string.IsNullOrWhiteSpace(senderNyxIdAccessToken))
@@ -101,22 +81,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 SenderNyxIdAccessToken = token,
             };
             chatRequest.LlmControl = control.ToPayload();
-            if (projectSenderNyxIdAccessTokenToWorkflowCallerCredential)
-                chatRequest.ConnectorHttpAuthorization = $"Bearer {token}";
         }
 
         cloned.Payload = Any.Pack(chatRequest);
         return cloned;
-    }
-
-    private static string NormalizeSenderNyxIdAccessToken(string? accessToken)
-    {
-        var parsed = WorkflowCallerCredentialTokens.ParseOptional(accessToken);
-        if (parsed.IsMissing)
-            throw new InvalidOperationException("Scheduled service invocation sender NyxID credential exchange returned an empty access token.");
-        if (parsed.IsInvalid)
-            throw new InvalidOperationException("Scheduled service invocation sender NyxID credential exchange returned an invalid access token.");
-
-        return parsed.NormalizedBearerToken!;
     }
 }

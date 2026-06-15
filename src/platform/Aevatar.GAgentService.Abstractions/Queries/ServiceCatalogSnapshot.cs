@@ -14,8 +14,7 @@ public sealed record ServiceCatalogSnapshot(
     string DeploymentStatus,
     IReadOnlyList<ServiceEndpointSnapshot> Endpoints,
     IReadOnlyList<string> PolicyIds,
-    DateTimeOffset UpdatedAt,
-    ServiceExternalExposureSnapshot? ExternalExposure = null);
+    DateTimeOffset UpdatedAt);
 
 public sealed record ServiceEndpointSnapshot(
     string EndpointId,
@@ -24,7 +23,3 @@ public sealed record ServiceEndpointSnapshot(
     string RequestTypeUrl,
     string ResponseTypeUrl,
     string Description);
-
-public sealed record ServiceExternalExposureSnapshot(
-    string NyxidSlug,
-    DateTimeOffset? RegisteredAt);

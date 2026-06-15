@@ -1,8 +1,6 @@
 using System.Runtime.ExceptionServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.SkillInvocations;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -292,33 +290,15 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         }
 
         var control = command.LlmControl ?? LLMControlContext.Empty;
-        var effectiveControl = control with
+        chatRequest.LlmControl = (control with
         {
             NyxIdAccessToken = string.IsNullOrWhiteSpace(command.AccessToken)
                 ? control.NyxIdAccessToken
                 : command.AccessToken.Trim(),
-        };
-        chatRequest.LlmControl = effectiveControl.ToPayload();
+        }).ToPayload();
         AppendMetadata(chatRequest.Metadata, command.Metadata);
-        chatRequest.ToolContext = BuildToolContext(command, effectiveControl).ToPayload();
 
         return CreateDirectEnvelope(context, chatRequest);
-    }
-
-    private static AgentToolExecutionContext BuildToolContext(NyxIdChatCommand command, LLMControlContext effectiveControl)
-    {
-        var skillRecovery = SkillInvocationTriggerParser.TryParse(command.Prompt, platform: "cli", out var trigger)
-            ? AgentSkillRecoveryContextBuilder.FromTrigger(trigger)
-            : AgentSkillRecoveryContext.Empty;
-        var toolContext = AgentToolExecutionContext.Empty with
-        {
-            Request = new AgentToolRequestIdentity(command.SessionId, null),
-            Credentials = new AgentToolCredentials(command.AccessToken, null, null),
-            Caller = new AgentToolCallerContext(command.ScopeId, command.ScopeId, command.SessionId),
-            Channel = new AgentToolChannelContext("nyxid-chat", null, command.ScopeId, null, null),
-            SkillRecovery = skillRecovery,
-        };
-        return effectiveControl.ToToolContext(toolContext);
     }
 
     private static void AppendMetadata(

@@ -340,10 +340,9 @@ jobs:
         with:
           files: ./artifacts/coverage/**/report/Cobertura.xml
           disable_search: true
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           flags: ci
           name: coverage-quality
-          skip_validation: true
           verbose: true
         env:
           CODECOV_TOKEN: ${{ env.CODECOV_TOKEN }}

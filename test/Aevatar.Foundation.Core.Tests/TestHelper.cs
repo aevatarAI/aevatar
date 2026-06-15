@@ -1,6 +1,5 @@
 // TestHelper - testing utilities.
 
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -21,7 +20,6 @@ public static class TestHelper
 
 // Shared test agents
 
-[GAgent("tests.counter-agent")]
 public class CounterAgent : TestGAgentBase<CounterState>
 {
     public int HandleCount { get; private set; }
@@ -43,10 +41,8 @@ public class CounterAgent : TestGAgentBase<CounterState>
     }
 }
 
-[GAgent("tests.empty-agent")]
 public class EmptyAgent : TestGAgentBase<CounterState>;
 
-[GAgent("tests.collector-agent")]
 public class CollectorAgent : TestGAgentBase<CounterState>
 {
     private readonly object _gate = new();
@@ -96,5 +92,4 @@ public class CollectorAgent : TestGAgentBase<CounterState>
     }
 }
 
-[GAgent("tests.echo-agent")]
 public class EchoAgent : TestGAgentBase<CounterState>;

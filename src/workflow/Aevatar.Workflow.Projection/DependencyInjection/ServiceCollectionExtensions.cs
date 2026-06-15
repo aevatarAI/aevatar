@@ -80,8 +80,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
         services.TryAddSingleton<WorkflowExecutionCurrentStateQueryPort>();
         services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
-        services.TryAddSingleton<WorkflowRunForkSeedReadModelMapper>();
-        services.TryAddSingleton<WorkflowRunForkSeedQueryPort>();
         services.TryAddSingleton<WorkflowExecutionProjectionPort>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
@@ -99,11 +97,9 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionProjectionPort>());
         services.TryAddSingleton<IWorkflowExecutionCurrentStateQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionCurrentStateQueryPort>());
-        services.TryAddSingleton<IWorkflowRunForkSeedQueryPort>(sp =>
-            sp.GetRequiredService<WorkflowRunForkSeedQueryPort>());
         services.TryAddSingleton<IWorkflowExecutionArtifactQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionArtifactQueryPort>());
-        services.TryAddSingleton<IWorkflowChatRunObservationScopeLeasePreparationPort, WorkflowChatRunObservationScopeLeasePreparationPort>();
+        services.TryAddSingleton<IWorkflowChatRunObservationScopeActivationPort, WorkflowChatRunObservationScopeActivationPort>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         services.AddProjectionArtifactMaterializer<
             WorkflowBindingProjectionContext,

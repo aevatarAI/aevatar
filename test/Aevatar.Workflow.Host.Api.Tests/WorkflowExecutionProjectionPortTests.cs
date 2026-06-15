@@ -127,16 +127,16 @@ public sealed class WorkflowExecutionProjectionPortTests
     }
 
     [Fact]
-    public async Task WorkflowChatRunObservationScopeLeasePreparationPort_ShouldPrepareWorkflowExecutionSession()
+    public async Task WorkflowChatRunObservationScopeActivationPort_ShouldActivateWorkflowExecutionSession()
     {
         var activation = new RecordingActivationService();
-        var port = new WorkflowChatRunObservationScopeLeasePreparationPort(
+        var port = new WorkflowChatRunObservationScopeActivationPort(
             activation,
             new RecordingReleaseService());
 
-        var result = await port.PrepareAsync("actor-1", "cmd-1", CancellationToken.None);
+        var result = await port.ActivateAsync("actor-1", "cmd-1", CancellationToken.None);
 
-        result.Should().Be(new WorkflowChatRunObservationScopeLeasePreparation("actor-1", "cmd-1"));
+        result.Should().Be(new WorkflowChatRunObservationScopeActivation("actor-1", "cmd-1"));
         activation.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(
             new ProjectionScopeStartRequest
             {
@@ -148,27 +148,27 @@ public sealed class WorkflowExecutionProjectionPortTests
     }
 
     [Fact]
-    public async Task WorkflowChatRunObservationScopeLeasePreparationPort_ShouldReturnNull_WhenPreparationFails()
+    public async Task WorkflowChatRunObservationScopeActivationPort_ShouldReturnNull_WhenActivationFails()
     {
-        var port = new WorkflowChatRunObservationScopeLeasePreparationPort(
+        var port = new WorkflowChatRunObservationScopeActivationPort(
             new RecordingActivationService { Exception = new InvalidOperationException("activation failed") },
             new RecordingReleaseService());
 
-        var result = await port.PrepareAsync("actor-1", "cmd-1", CancellationToken.None);
+        var result = await port.ActivateAsync("actor-1", "cmd-1", CancellationToken.None);
 
         result.Should().BeNull();
     }
 
     [Fact]
-    public async Task WorkflowChatRunObservationScopeLeasePreparationPort_ShouldReleaseWorkflowExecutionSession()
+    public async Task WorkflowChatRunObservationScopeActivationPort_ShouldReleaseWorkflowExecutionSession()
     {
         var release = new RecordingReleaseService();
-        var port = new WorkflowChatRunObservationScopeLeasePreparationPort(
+        var port = new WorkflowChatRunObservationScopeActivationPort(
             new RecordingActivationService(),
             release);
 
         await port.ReleaseAsync(
-            new WorkflowChatRunObservationScopeLeasePreparation("actor-1", "cmd-1"),
+            new WorkflowChatRunObservationScopeActivation("actor-1", "cmd-1"),
             CancellationToken.None);
 
         release.Leases.Should().ContainSingle();

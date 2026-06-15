@@ -17,6 +17,6 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="workflow_execution_messages.proto" GrpcServices="None" AdditionalImportDirs="..\..\Aevatar.Foundation.Abstractions" />
+    <Protobuf Include="workflow_execution_messages.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

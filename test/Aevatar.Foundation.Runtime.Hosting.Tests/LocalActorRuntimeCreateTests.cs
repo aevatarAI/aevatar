@@ -56,7 +56,7 @@ public sealed class LocalActorRuntimeCreateTests
 
         spawnActivities.Should().ContainSingle();
         spawnActivities[0].GetTagItem(AevatarActivitySource.AgentTypeTag)
-            .Should().Be("tests.sequential-agent");
+            .Should().Be(typeof(SequentialAgent).AssemblyQualifiedName);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public sealed class LocalActorRuntimeCreateTests
         var act = () => runtime.CreateAsync<AlternateSequentialAgent>("shared-id");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*expected kind 'tests.alternate-sequential-agent'*");
+            .WithMessage("*expected*AlternateSequentialAgent*");
     }
 
     [Fact]
@@ -311,14 +311,6 @@ public sealed class LocalActorRuntimeCreateTests
             NullLoggerFactory.Instance,
             registry);
         var servicesBuilder = new ServiceCollection();
-        servicesBuilder.AddAevatarAgentKindRegistry(builder => builder
-            .Register<SequentialAgent>()
-            .Register<AlternateSequentialAgent>()
-            .Register<ThrowingActivateAgent>()
-            .Register<ThrowingDeactivateAgent>()
-            .Register<BlockingSameTypeAgent>()
-            .Register<BlockingTypeAAgent>()
-            .Register<BlockingTypeBAgent>());
         configureServices?.Invoke(servicesBuilder);
         var services = servicesBuilder.BuildServiceProvider();
         return new LocalActorRuntime(streams, services, streams);
@@ -375,7 +367,6 @@ public sealed class LocalActorRuntimeCreateTests
         public static ConstructorGate? Current { get; set; }
     }
 
-    [GAgent("tests.sequential-agent")]
     private sealed class SequentialAgent : IAgent
     {
         public string Id => "sequential";
@@ -391,7 +382,6 @@ public sealed class LocalActorRuntimeCreateTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    [GAgent("tests.alternate-sequential-agent")]
     private sealed class AlternateSequentialAgent : IAgent
     {
         public string Id => "alternate";
@@ -407,7 +397,6 @@ public sealed class LocalActorRuntimeCreateTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    [GAgent("tests.throwing-activate-agent")]
     private sealed class ThrowingActivateAgent : IAgent
     {
         public string Id => "throwing-activate";
@@ -427,7 +416,6 @@ public sealed class LocalActorRuntimeCreateTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    [GAgent("tests.throwing-deactivate-agent")]
     private sealed class ThrowingDeactivateAgent : IAgent
     {
         public string Id => "throwing-deactivate";
@@ -447,7 +435,6 @@ public sealed class LocalActorRuntimeCreateTests
         }
     }
 
-    [GAgent("tests.blocking-same-type-agent")]
     private sealed class BlockingSameTypeAgent : IAgent
     {
         public BlockingSameTypeAgent()
@@ -468,7 +455,6 @@ public sealed class LocalActorRuntimeCreateTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    [GAgent("tests.blocking-type-a-agent")]
     private sealed class BlockingTypeAAgent : IAgent
     {
         public BlockingTypeAAgent()
@@ -489,7 +475,6 @@ public sealed class LocalActorRuntimeCreateTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    [GAgent("tests.blocking-type-b-agent")]
     private sealed class BlockingTypeBAgent : IAgent
     {
         public BlockingTypeBAgent()

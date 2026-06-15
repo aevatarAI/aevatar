@@ -8,11 +8,12 @@ using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,7 +30,6 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(StreamingProxyGAgent).Assembly));
         services.AddCqrsCore();
         services.TryAddSingleton<StreamingProxyNyxParticipantCoordinator>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, StreamingProxyChatLifecycleContinuationRunner>());
@@ -90,6 +90,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStreamingProxyRoomParticipantsQueryPort, StreamingProxyRoomParticipantsQueryPort>();
         services.TryAddSingleton<StreamingProxyChatDurableCompletionResolver>();
         AddStreamingProxyRoomInteraction(services);
+        AddStreamingProxyReadModelProvider(services, configuration);
 
         return services;
     }
@@ -119,6 +120,45 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError>>(),
                 sp.GetRequiredService<ICommandReceiptFactory<StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt>>()));
+    }
+
+    private static void AddStreamingProxyReadModelProvider(
+        IServiceCollection services,
+        IConfiguration? configuration)
+    {
+        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<StreamingProxyChatSessionTerminalSnapshot, string>)) &&
+            services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<StreamingProxyRoomParticipantsSnapshot, string>)))
+            return;
+
+        var documentProvider = ProjectionDocumentProviderConfiguration.Resolve(configuration, "StreamingProxy");
+
+        if (documentProvider.ElasticsearchEnabled)
+        {
+            services.AddElasticsearchDocumentProjectionStore<StreamingProxyChatSessionTerminalSnapshot, string>(
+                optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp
+                    .GetRequiredService<IProjectionDocumentMetadataProvider<StreamingProxyChatSessionTerminalSnapshot>>()
+                    .Metadata,
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
+            services.AddElasticsearchDocumentProjectionStore<StreamingProxyRoomParticipantsSnapshot, string>(
+                optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp
+                    .GetRequiredService<IProjectionDocumentMetadataProvider<StreamingProxyRoomParticipantsSnapshot>>()
+                    .Metadata,
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
+            return;
+        }
+
+        services.AddInMemoryDocumentProjectionStore<StreamingProxyChatSessionTerminalSnapshot, string>(
+            keySelector: readModel => readModel.Id,
+            keyFormatter: key => key,
+            defaultSortSelector: readModel => readModel.UpdatedAt.ToDateTimeOffset());
+        services.AddInMemoryDocumentProjectionStore<StreamingProxyRoomParticipantsSnapshot, string>(
+            keySelector: readModel => readModel.Id,
+            keyFormatter: key => key,
+            defaultSortSelector: readModel => readModel.UpdatedAt.ToDateTimeOffset());
     }
 
 }

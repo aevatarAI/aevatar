@@ -157,16 +157,6 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
         public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            ArgumentException.ThrowIfNullOrWhiteSpace(agentKind);
-            var actorId = id ?? Guid.NewGuid().ToString("N");
-            ExistingActorIds.Add(actorId);
-            CreatedActorIds.Add(actorId);
-            return Task.FromResult<IActor>(new RecordingActor(actorId));
-        }
-
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);

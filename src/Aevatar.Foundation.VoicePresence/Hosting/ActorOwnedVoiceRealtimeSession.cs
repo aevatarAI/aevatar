@@ -83,8 +83,7 @@ public sealed class ActorOwnedVoiceRealtimeSession
             HostOwnerId,
             _timeProvider.GetUtcNow().Add(DefaultLeaseTtl),
             capability.StateVersion,
-            capability.RemoteAudioSupport,
-            inbound.SessionOverrides?.Clone());
+            capability.RemoteAudioSupport);
 
         var leaseHandle = await _leasePort.AcquireAsync(leaseRequest, ct);
         var accepted = BuildAccepted(capability, leaseHandle);

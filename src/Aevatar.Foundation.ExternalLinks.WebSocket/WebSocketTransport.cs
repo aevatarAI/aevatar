@@ -64,28 +64,9 @@ internal sealed class WebSocketTransport : IExternalLinkTransport
             {
                 await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "closing", ct);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-            }
-            catch (WebSocketException ex)
-            {
-                _logger.LogDebug(ex, "WebSocket close handshake failed (best-effort)");
-            }
-            catch (IOException ex)
-            {
-                _logger.LogDebug(ex, "WebSocket close handshake failed (best-effort)");
-            }
-            catch (ObjectDisposedException ex)
-            {
-                _logger.LogDebug(ex, "WebSocket close handshake failed (best-effort)");
-            }
-            catch (InvalidOperationException ex)
-            {
-                _logger.LogDebug(ex, "WebSocket close handshake failed (best-effort)");
-            }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Unexpected WebSocket close handshake failure");
+                _logger.LogDebug(ex, "WebSocket close handshake failed (best-effort)");
             }
         }
 
@@ -105,11 +86,7 @@ internal sealed class WebSocketTransport : IExternalLinkTransport
         if (_receiveLoop != null)
         {
             try { await _receiveLoop; }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Unexpected WebSocket receive loop failure during dispose");
-            }
+            catch { /* best-effort */ }
             _receiveLoop = null;
         }
 
@@ -198,5 +175,4 @@ internal sealed class WebSocketTransport : IExternalLinkTransport
             ExternalLinkStateChange.Closed => ExternalLinkTransportStateSignalKind.Closed,
             _ => ExternalLinkTransportStateSignalKind.Unspecified,
         };
-
 }

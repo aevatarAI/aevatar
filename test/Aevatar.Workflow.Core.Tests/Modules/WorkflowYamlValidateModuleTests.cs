@@ -199,6 +199,15 @@ public sealed class WorkflowYamlValidateModuleTests
             CancellationToken ct = default) =>
             Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 1, RuntimeCallbackBackend.InMemory));
 
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            TimeSpan period,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 2, RuntimeCallbackBackend.InMemory));
+
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
             Task.CompletedTask;
     }

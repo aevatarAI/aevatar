@@ -161,35 +161,9 @@ public sealed class ServiceRunGAgentTests
         {
             RunId = "run-1",
             Status = ServiceRunStatus.Completed,
-            LastOutput = "done",
         });
 
         actor.State.Record!.Status.Should().Be(ServiceRunStatus.Completed);
-        actor.State.Record.LastOutput.Should().Be("done");
-        actor.State.LastAppliedEventVersion.Should().Be(2);
-    }
-
-    [Fact]
-    public async Task HandleUpdateStatusAsync_ShouldPersistTerminalError()
-    {
-        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
-            new InMemoryEventStore(),
-            "service-run:run-1",
-            static () => new ServiceRunGAgent());
-        await actor.HandleRegisterAsync(new RegisterServiceRunRequested
-        {
-            Record = BuildRecord("run-1"),
-        });
-
-        await actor.HandleUpdateStatusAsync(new UpdateServiceRunStatusRequested
-        {
-            RunId = "run-1",
-            Status = ServiceRunStatus.Failed,
-            LastError = "failed",
-        });
-
-        actor.State.Record!.Status.Should().Be(ServiceRunStatus.Failed);
-        actor.State.Record.LastError.Should().Be("failed");
         actor.State.LastAppliedEventVersion.Should().Be(2);
     }
 

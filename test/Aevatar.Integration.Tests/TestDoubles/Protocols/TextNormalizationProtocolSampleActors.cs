@@ -4,7 +4,6 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Integration.Tests.Protocols;
@@ -93,7 +92,6 @@ internal static class TextNormalizationProtocolSampleActors
     }
 }
 
-[GAgent("tests.text-normalization-static")]
 public sealed class TextNormalizationStaticGAgent : GAgentBase<TextNormalizationReadModel>
 {
     [EventHandler]
@@ -112,7 +110,6 @@ public sealed class TextNormalizationStaticGAgent : GAgentBase<TextNormalization
             .OrCurrent();
 }
 
-[GAgent("tests.text-normalization-workflow-protocol")]
 public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNormalizationReadModel>
 {
     private const string WorkflowName = "text_normalization_protocol";
@@ -239,7 +236,6 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
         };
 }
 
-[GAgent("tests.text-normalization-scripting-protocol")]
 public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNormalizationReadModel>
 {
     private const string ScriptId = "text-normalization-protocol-script";

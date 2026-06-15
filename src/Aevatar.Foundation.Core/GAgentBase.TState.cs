@@ -159,23 +159,9 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         ArgumentNullException.ThrowIfNull(evt);
         ArgumentNullException.ThrowIfNull(onOptimisticConcurrencyConflict);
 
-        await PersistDomainEventsAsync([evt], onOptimisticConcurrencyConflict, ct).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Persist domain events with framework-mediated OCC absorption.
-    /// </summary>
-    protected async Task PersistDomainEventsAsync(
-        IEnumerable<IMessage> events,
-        Func<EventStoreOptimisticConcurrencyException, Task<bool>> onOptimisticConcurrencyConflict,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(events);
-        ArgumentNullException.ThrowIfNull(onOptimisticConcurrencyConflict);
-
         try
         {
-            await PersistDomainEventsAsync(events, ct).ConfigureAwait(false);
+            await PersistDomainEventsAsync([evt], ct).ConfigureAwait(false);
         }
         catch (EventStoreOptimisticConcurrencyException conflict)
         {
@@ -190,8 +176,6 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
             {
                 _state = replayed ?? new TState();
             }
-
-            await OnStateChangedAsync(_state, ct).ConfigureAwait(false);
 
             var absorbed = await onOptimisticConcurrencyConflict(conflict).ConfigureAwait(false);
             if (!absorbed)

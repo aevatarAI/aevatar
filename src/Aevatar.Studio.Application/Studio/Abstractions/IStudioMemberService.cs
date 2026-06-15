@@ -111,13 +111,13 @@ public interface IStudioMemberService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Patches a member's properties. Merge Patch semantics: absent fields mean
-    /// "no change"; explicit null is accepted only for nullable fields such as
-    /// <c>teamId</c>. The returned receipt means the command intent was
-    /// accepted for asynchronous actor-owned execution; callers should use the
-    /// member query resource to observe read-model materialization.
+    /// Patches a member's properties — currently the team assignment
+    /// (ADR-0017 §Q6). Merge Patch semantics: <c>request.TeamId</c> absent
+    /// means "no change", <c>request.TeamId.Value == null</c> means
+    /// "unassign", and a non-empty value means "assign / reassign".
+    /// Returns the updated member detail.
     /// </summary>
-    Task<StudioMemberCommandResponse> UpdateAsync(
+    Task<StudioMemberDetailResponse> UpdateAsync(
         string scopeId,
         string memberId,
         UpdateStudioMemberRequest request,

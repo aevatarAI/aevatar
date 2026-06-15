@@ -18,8 +18,8 @@ public sealed class EditorController : ControllerBase
     }
 
     [HttpPost("parse-yaml")]
-    public ActionResult<ParseYamlHttpResponse> ParseYaml([FromBody] ParseYamlRequest request) =>
-        Ok(ParseYamlHttpResponse.FromApplicationResponse(_editorService.ParseYaml(request)));
+    public ActionResult<ParseYamlResponse> ParseYaml([FromBody] ParseYamlRequest request) =>
+        Ok(_editorService.ParseYaml(request));
 
     [HttpPost("serialize-yaml")]
     public ActionResult<SerializeYamlResponse> SerializeYaml([FromBody] SerializeYamlHttpRequest request) =>

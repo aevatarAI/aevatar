@@ -34,10 +34,11 @@
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Runtime\Aevatar.CQRS.Projection.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.Studio.Application.Abstractions\Aevatar.Studio.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Studio.Infrastructure\Aevatar.Studio.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>

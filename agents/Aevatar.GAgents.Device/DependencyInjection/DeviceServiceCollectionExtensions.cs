@@ -3,10 +3,11 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.EventSourcing;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,17 +22,24 @@ public static class DeviceServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the Device Registration projection pipeline (materialization runtime,
-    /// projector, query port, document metadata, and startup service).
+    /// projector, query port, document metadata, startup service, and projection store).
+    /// Pass <paramref name="configuration"/> so the document projection store matches the
+    /// host environment (Elasticsearch in prod, InMemory for local dev / tests).
     /// </summary>
     public static IServiceCollection AddDeviceRegistration(
         this IServiceCollection services, IConfiguration? configuration = null)
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // The helper logs a misconfiguration warning (Console.Error during SCE
+        // composition; structured log when a real logger is wired in tests) when
+        // configuration is present but Endpoints/Enabled are both empty, so
+        // operators see the InMemory fallback at startup.
+        var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
+            configuration,
+            storeName: "DeviceRegistration");
+
         // ─── Retired-actor cleanup contribution ───
-        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(
-            typeof(DeviceRegistrationGAgent).Assembly,
-            typeof(Aevatar.GAgents.Household.HouseholdEntity).Assembly));
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IRetiredActorSpec, DeviceRetiredActorSpec>());
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
@@ -90,6 +98,20 @@ public static class DeviceServiceCollectionExtensions
         services.TryAddSingleton<ICommandDispatchService<DeviceRegisterCommand, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>, DefaultCommandDispatchService<DeviceRegisterCommand, DeviceRegistrationCommandTarget, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<DeviceUnregisterCommand, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>, DefaultCommandDispatchService<DeviceUnregisterCommand, DeviceRegistrationCommandTarget, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<DeviceCallbackDispatchCommand, DeviceCommandAcceptedReceipt, DeviceCallbackCommandStartError>, DefaultCommandDispatchService<DeviceCallbackDispatchCommand, DeviceCallbackCommandTarget, DeviceCommandAcceptedReceipt, DeviceCallbackCommandStartError>>();
+
+        if (useElasticsearch)
+        {
+            services.AddElasticsearchDocumentProjectionStore<DeviceRegistrationDocument, string>(
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<DeviceRegistrationDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<DeviceRegistrationDocument, string>(
+                static doc => doc.Id, static key => key);
+        }
 
         return services;
     }

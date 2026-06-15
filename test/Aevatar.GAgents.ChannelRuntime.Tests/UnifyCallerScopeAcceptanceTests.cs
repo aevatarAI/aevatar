@@ -76,50 +76,15 @@ public sealed class UnifyCallerScopeAcceptanceTests
     }
 
     [Fact]
-    public void OwnerScope_MatchesStrictly_ChannelIdentityIsPlatformScopeSenderTriple()
+    public void OwnerScope_MatchesStrictly_FullTupleEquality()
     {
         var a = OwnerScope.ForChannel("user-1", "lark", "scope-1", "sender-1");
         var b = OwnerScope.ForChannel("user-1", "lark", "scope-1", "sender-1");
         var differentSender = OwnerScope.ForChannel("user-1", "lark", "scope-1", "sender-2");
-        var differentScope = OwnerScope.ForChannel("user-1", "lark", "scope-2", "sender-1");
 
         a.MatchesStrictly(b).Should().BeTrue();
         a.MatchesStrictly(differentSender).Should().BeFalse();
-        a.MatchesStrictly(differentScope).Should().BeFalse();
         a.MatchesStrictly(null).Should().BeFalse();
-    }
-
-    [Fact]
-    public void OwnerScope_MatchesStrictly_ChannelIgnoresNyxUserIdDrift()
-    {
-        // Shared-bot regression (prod 2026-06-10): the same Lark sender resolves to the
-        // bot owner's NyxID account on slash-command turns (relay token) but to their own
-        // account on LLM tool turns (sender binding token promoted by route preference).
-        // The channel identity is the relay-authenticated triple; nyx_user_id drift must
-        // not hide the caller's own agents.
-        var writtenViaSenderToken = OwnerScope.ForChannel("sender-nyx-user", "lark", "scope-1", "sender-1");
-        var queriedViaOwnerToken = OwnerScope.ForChannel("bot-owner-nyx-user", "lark", "scope-1", "sender-1");
-
-        queriedViaOwnerToken.MatchesStrictly(writtenViaSenderToken).Should().BeTrue();
-    }
-
-    [Fact]
-    public void OwnerScope_MatchesStrictly_NyxIdNativeStillRequiresNyxUserId()
-    {
-        OwnerScope.ForNyxIdNative("user-A").MatchesStrictly(OwnerScope.ForNyxIdNative("user-B"))
-            .Should().BeFalse();
-        OwnerScope.ForNyxIdNative("user-A").MatchesStrictly(OwnerScope.ForNyxIdNative("user-A"))
-            .Should().BeTrue();
-    }
-
-    [Fact]
-    public void OwnerScope_MatchesStrictly_NativeAndChannelNeverMatch()
-    {
-        var native = OwnerScope.ForNyxIdNative("user-1");
-        var channel = OwnerScope.ForChannel("user-1", "lark", "scope-1", "sender-1");
-
-        native.MatchesStrictly(channel).Should().BeFalse();
-        channel.MatchesStrictly(native).Should().BeFalse();
     }
 
     [Fact]
@@ -198,46 +163,6 @@ public sealed class UnifyCallerScopeAcceptanceTests
         asBob.Select(e => e.AgentId).Should().BeEquivalentTo(new[] { "bob-agent" });
         asBob.Should().NotContain(e => e.AgentId == "alice-agent",
             "Bob must not see Alice's agent even though both share the same bot scope");
-    }
-
-    // ─── Shared-bot nyx_user_id drift (prod regression 2026-06-10) ───
-
-    [Fact]
-    public async Task QueryByCallerAsync_SharedBot_NyxUserIdDrift_StillReturnsOwnAgents()
-    {
-        // Document written on an LLM tool turn carrying the sender's binding token;
-        // query arrives on a slash-command turn carrying the bot owner's relay token.
-        var reader = new RecordingDocumentReader(new List<UserAgentCatalogDocument>
-        {
-            BuildDocument("my-agent", OwnerScope.ForChannel("sender-nyx-user", "lark", "bot-1", "me")),
-        });
-
-        var port = new UserAgentCatalogQueryPort(reader);
-
-        var viaOwnerToken = await port.QueryByCallerAsync(
-            OwnerScope.ForChannel("bot-owner-nyx-user", "lark", "bot-1", "me"),
-            CancellationToken.None);
-
-        viaOwnerToken.Select(e => e.AgentId).Should().BeEquivalentTo(new[] { "my-agent" });
-    }
-
-    [Fact]
-    public async Task GetForCallerAsync_SharedBot_NyxUserIdDrift_StillResolvesOwnAgent()
-    {
-        var reader = new RecordingDocumentReader(new List<UserAgentCatalogDocument>
-        {
-            BuildDocument("my-agent", OwnerScope.ForChannel("sender-nyx-user", "lark", "bot-1", "me")),
-        });
-
-        var port = new UserAgentCatalogQueryPort(reader);
-
-        var entry = await port.GetForCallerAsync(
-            "my-agent",
-            OwnerScope.ForChannel("bot-owner-nyx-user", "lark", "bot-1", "me"),
-            CancellationToken.None);
-
-        entry.Should().NotBeNull();
-        entry!.AgentId.Should().Be("my-agent");
     }
 
     // ─── Per-id ops on non-owned agent return "not found" (no existence disclosure) ───

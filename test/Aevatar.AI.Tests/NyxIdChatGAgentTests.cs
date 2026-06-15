@@ -22,7 +22,7 @@ public class NyxIdChatGAgentTests
     [Fact]
     public async Task ActivateAsync_ShouldPinNyxIdProviderOnFirstInitialization()
     {
-        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        using var provider = BuildServiceProvider();
         var agent = CreateAgent(provider, "nyxid-chat-init");
 
         await agent.ActivateAsync();
@@ -36,7 +36,7 @@ public class NyxIdChatGAgentTests
     [Fact]
     public async Task ActivateAsync_ShouldMigrateLegacyBlankProviderToNyxId()
     {
-        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        using var provider = BuildServiceProvider();
         var actorId = "nyxid-chat-migration";
 
         var legacyAgent = CreateAgent(provider, actorId);
@@ -76,7 +76,7 @@ public class NyxIdChatGAgentTests
         const string toolArgs = """{"action":"show","slug":"telegram-bot"}""";
         const string toolResult = """{"slug":"telegram-bot","provider_type":"api_key"}""";
 
-        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        using var provider = BuildServiceProvider();
         var llmProviderFactory = new StreamingToolLoopProviderFactory(
             [
                 [
@@ -168,7 +168,7 @@ public class NyxIdChatGAgentTests
     [Fact]
     public async Task ActivateAsync_ShouldUseConfiguredRelayCallbackUrlInSystemPrompt()
     {
-        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        using var provider = BuildServiceProvider();
         var llmProviderFactory = new StreamingToolLoopProviderFactory(
             [
                 [
@@ -201,96 +201,6 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_ShouldSaveDirectChatTurnToHistory()
-    {
-        var history = new RecordingChatHistoryCommandPort();
-        var now = DateTimeOffset.Parse("2026-06-11T01:02:03Z", null, System.Globalization.DateTimeStyles.AssumeUniversal);
-        using var provider = BuildServiceProvider(historyCommandPort: history);
-        var llmProviderFactory = new StreamingToolLoopProviderFactory(
-            [
-                [
-                    new LLMStreamChunk
-                    {
-                        DeltaContent = "direct answer",
-                        Usage = new TokenUsage(3, 5, 8),
-                    },
-                ],
-            ]);
-        var agent = CreateAgent(
-            provider,
-            "nyxid-chat-history",
-            llmProviderFactory,
-            timeProvider: new FixedTimeProvider(now));
-
-        await agent.ActivateAsync();
-        await agent.HandleChatRequest(new ChatRequestEvent
-        {
-            ScopeId = "scope-a",
-            Prompt = "How do I connect a bot?",
-            SessionId = "session-history",
-        });
-
-        history.Saved.Should().ContainSingle();
-        var saved = history.Saved.Single();
-        saved.ScopeId.Should().Be("scope-a");
-        saved.ConversationId.Should().Be("nyxid-chat-history");
-        saved.Meta.Should().BeEquivalentTo(new ConversationMeta(
-            "nyxid-chat-history",
-            "How do I connect a bot?",
-            "nyxid-chat-history",
-            NyxIdChatServiceDefaults.GAgentKind,
-            now,
-            now,
-            2,
-            NyxIdChatServiceDefaults.ProviderName,
-            null));
-        saved.Messages.Should().HaveCount(2);
-        saved.Messages[0].Should().BeEquivalentTo(new StoredChatMessage(
-            "session-history-user",
-            "user",
-            "How do I connect a bot?",
-            now.ToUnixTimeMilliseconds(),
-            "completed",
-            null,
-            null,
-            null,
-            null));
-        saved.Messages[1].Should().BeEquivalentTo(new StoredChatMessage(
-            "session-history-assistant",
-            "assistant",
-            "direct answer",
-            now.ToUnixTimeMilliseconds(),
-            "completed",
-            null,
-            null,
-            null,
-            null));
-    }
-
-    [Fact]
-    public async Task HandleChatRequest_ShouldNotSaveHistoryWithoutScopeId()
-    {
-        var history = new RecordingChatHistoryCommandPort();
-        using var provider = BuildServiceProvider(historyCommandPort: history);
-        var llmProviderFactory = new StreamingToolLoopProviderFactory(
-            [
-                [
-                    new LLMStreamChunk { DeltaContent = "direct answer" },
-                ],
-            ]);
-        var agent = CreateAgent(provider, "nyxid-chat-no-scope", llmProviderFactory);
-
-        await agent.ActivateAsync();
-        await agent.HandleChatRequest(new ChatRequestEvent
-        {
-            Prompt = "hello",
-            SessionId = "session-no-scope",
-        });
-
-        history.Saved.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task HandleCreateConversationAsync_WhenForwardedPrefixedActorRegistrationUnavailable_ShouldNotDestroyActor()
     {
         var registry = new RecordingGAgentActorRegistryCommandPort
@@ -310,7 +220,7 @@ public class NyxIdChatGAgentTests
 
         registry.UnregisteredActors.Should().ContainSingle().Which.Should().Be(new GAgentActorRegistration(
             "scope-a",
-            NyxIdChatServiceDefaults.GAgentKind,
+            NyxIdChatServiceDefaults.GAgentTypeName,
             actorId));
         runtime.DestroyedActors.Should().BeEmpty();
     }
@@ -335,7 +245,7 @@ public class NyxIdChatGAgentTests
 
         registry.UnregisteredActors.Should().ContainSingle().Which.Should().Be(new GAgentActorRegistration(
             "scope-a",
-            NyxIdChatServiceDefaults.GAgentKind,
+            NyxIdChatServiceDefaults.GAgentTypeName,
             actorId));
         runtime.DestroyedActors.Should().ContainSingle().Which.Should().Be(actorId);
     }
@@ -358,14 +268,13 @@ public class NyxIdChatGAgentTests
 
         registry.RegisteredActors.Should().ContainSingle().Which.Should().Be(new GAgentActorRegistration(
             "scope-a",
-            NyxIdChatServiceDefaults.GAgentKind,
+            NyxIdChatServiceDefaults.GAgentTypeName,
             actorId));
     }
 
     private static ServiceProvider BuildServiceProvider(
         IGAgentActorRegistryCommandPort? registryCommandPort = null,
-        IActorRuntime? actorRuntime = null,
-        IChatHistoryCommandPort? historyCommandPort = null)
+        IActorRuntime? actorRuntime = null)
     {
         var services = new ServiceCollection()
             .AddSingleton<IEventStore, InMemoryEventStoreForTests>()
@@ -379,9 +288,6 @@ public class NyxIdChatGAgentTests
         if (actorRuntime is not null)
             services.AddSingleton(actorRuntime);
 
-        if (historyCommandPort is not null)
-            services.AddSingleton(historyCommandPort);
-
         return services.BuildServiceProvider();
     }
 
@@ -390,14 +296,9 @@ public class NyxIdChatGAgentTests
         string actorId,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
-        NyxIdRelayOptions? relayOptions = null,
-        TimeProvider? timeProvider = null)
+        NyxIdRelayOptions? relayOptions = null)
     {
-        var agent = new NyxIdChatGAgent(
-            llmProviderFactory,
-            toolSources: toolSources,
-            relayOptions: relayOptions,
-            timeProvider: timeProvider)
+        var agent = new NyxIdChatGAgent(llmProviderFactory, toolSources: toolSources, relayOptions: relayOptions)
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -443,40 +344,6 @@ public class NyxIdChatGAgentTests
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionRemoved));
         }
-    }
-
-    private sealed class RecordingChatHistoryCommandPort : IChatHistoryCommandPort
-    {
-        public List<SavedChatHistory> Saved { get; } = [];
-        public List<(string ScopeId, string ConversationId)> Deleted { get; } = [];
-
-        public Task SaveMessagesAsync(
-            string scopeId,
-            string conversationId,
-            ConversationMeta meta,
-            IReadOnlyList<StoredChatMessage> messages,
-            CancellationToken ct = default)
-        {
-            Saved.Add(new SavedChatHistory(scopeId, conversationId, meta, messages.ToArray()));
-            return Task.CompletedTask;
-        }
-
-        public Task DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default)
-        {
-            Deleted.Add((scopeId, conversationId));
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed record SavedChatHistory(
-        string ScopeId,
-        string ConversationId,
-        ConversationMeta Meta,
-        IReadOnlyList<StoredChatMessage> Messages);
-
-    private sealed class FixedTimeProvider(DateTimeOffset value) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => value;
     }
 
     private sealed class NoopRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler

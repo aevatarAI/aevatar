@@ -3,7 +3,6 @@ using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using Aevatar.Workflow.Extensions.Schedules;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
@@ -28,7 +27,6 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             configuration.GetSection("WorkflowExecutionProjection").Bind(options));
         services.AddWorkflowExecutionAGUIAdapter();
         services.TryAddSingleton<IHumanInteractionPort, NullHumanInteractionPort>();
-        services.TryAddSingleton<IChannelInteractionNotificationPort, NullChannelInteractionNotificationPort>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<WorkflowExecutionProjectionContext>,
             WorkflowExecutionRunEventProjector>());
@@ -38,24 +36,7 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<WorkflowExecutionProjectionContext>,
             WorkflowHumanApprovalResolutionProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<WorkflowExecutionProjectionContext>,
-            WorkflowInteractionNotificationProjector>());
         services.AddWorkflowApplication();
-        services.AddWorkflowScheduleExtensions();
-        services.AddOptions<WorkflowWebhookIngressOptions>()
-            .Bind(configuration.GetSection(WorkflowWebhookIngressOptions.SectionName));
-        services.TryAddSingleton<WorkflowWebhookIngressRequestBuilder>();
-        var webhookReplayRedisConnectionString = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:RedisConnectionString"];
-        if (!string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
-        {
-            services.TryAddSingleton<WorkflowWebhookReplayRedisConnection>();
-            services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayStore, RedisWorkflowWebhookReplayStore>();
-        }
-        else if (configuration.GetValue<bool>($"{WorkflowWebhookIngressOptions.SectionName}:UseInMemoryReplayStore"))
-        {
-            services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayStore, InMemoryWorkflowWebhookReplayStore>();
-        }
         services.AddWorkflowDefinitionFileSource(options =>
         {
             options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));

@@ -17,7 +17,6 @@ namespace Aevatar.GAgentService.Tests.TestSupport;
 internal static class GAgentServiceTestKit
 {
     public const string TestStaticServiceAgentKind = "tests.static-service-agent";
-    public static IActorDispatchPort NoOpDispatchPort { get; } = new NoOpActorDispatchPort();
 
     private static readonly MethodInfo SetIdMethod = typeof(GAgentBase)
         .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -149,29 +148,6 @@ internal static class GAgentServiceTestKit
         ArgumentNullException.ThrowIfNull(agent);
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         SetIdMethod.Invoke(agent, [actorId]);
-    }
-
-    private sealed class NoOpActorDispatchPort : IActorDispatchPort
-    {
-        public Task<DispatchAdmission> DispatchAsync(
-            string actorId,
-            EventEnvelope envelope,
-            CancellationToken ct = default) =>
-            Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
-    }
-}
-
-internal sealed class RecordingActorDispatchPort : IActorDispatchPort
-{
-    public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
-
-    public Task<DispatchAdmission> DispatchAsync(
-        string actorId,
-        EventEnvelope envelope,
-        CancellationToken ct = default)
-    {
-        Calls.Add((actorId, envelope));
-        return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
     }
 }
 

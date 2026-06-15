@@ -2,6 +2,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -121,13 +122,19 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
             throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
 
         using var scope = _scopeFactory.CreateScope();
-        var preferencePort = scope.ServiceProvider.GetService<IChannelUserLlmPreferencePort>();
-        if (preferencePort is null)
+        var queryPort = scope.ServiceProvider.GetService<IUserConfigQueryPort>();
+        var commandService = scope.ServiceProvider.GetService<IUserConfigCommandService>();
+        if (queryPort is null || commandService is null)
             throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
+
+        var writer = new UserLlmPreferenceWriter(
+            queryPort,
+            commandService,
+            new ChannelUserLlmCatalogPort(_catalogClient, ToQuery(context), context));
 
         try
         {
-            await preferencePort
+            await writer
                 .SaveAsync(RequireBindingId(context), bearerToken, command, ct)
                 .ConfigureAwait(false);
         }
@@ -156,13 +163,19 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
             throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
 
         using var scope = _scopeFactory.CreateScope();
-        var preferencePort = scope.ServiceProvider.GetService<IChannelUserLlmPreferencePort>();
-        if (preferencePort is null)
+        var queryPort = scope.ServiceProvider.GetService<IUserConfigQueryPort>();
+        var commandService = scope.ServiceProvider.GetService<IUserConfigCommandService>();
+        if (queryPort is null || commandService is null)
             throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
+
+        var writer = new UserLlmPreferenceWriter(
+            queryPort,
+            commandService,
+            new ChannelUserLlmCatalogPort(_catalogClient, ToQuery(context), context));
 
         try
         {
-            await preferencePort
+            await writer
                 .SaveSelectedOptionAsync(
                     RequireBindingId(context),
                     option,
@@ -201,6 +214,18 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
         if (string.IsNullOrWhiteSpace(bindingId))
             throw new BindingNotFoundException(context.Subject);
         return bindingId;
+    }
+
+    private sealed class ChannelUserLlmCatalogPort(
+        INyxIdLlmServiceCatalogClient catalogClient,
+        UserLlmOptionsQuery query,
+        UserLlmSelectionContext context) : IUserLlmCatalogPort
+    {
+        public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct) =>
+            catalogClient.GetServicesAsync(query, bearerToken, ct);
+
+        public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct) =>
+            catalogClient.ProvisionAsync(context, bearerToken, provisionEndpointId, ct);
     }
 
 }

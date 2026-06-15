@@ -476,11 +476,11 @@ jest.mock("@/shared/api/runtimeGAgentApi", () => ({
   runtimeGAgentApi: {
     listActors: jest.fn(async () => [
       {
-        agentKind: "IntakeAgent",
+        gAgentType: "IntakeAgent",
         actorIds: ["actor-intake"],
       },
       {
-        agentKind: "RiskReviewAgent",
+        gAgentType: "RiskReviewAgent",
         actorIds: ["actor-risk"],
       },
     ]),

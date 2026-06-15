@@ -5,10 +5,8 @@ using System.Threading.Channels;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
@@ -56,7 +54,7 @@ public sealed class OrleansKafkaProviderRuntimeIntegrationTests
         {
             var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-            var initialized = await grain.InitializeAgentByKindAsync("tests.recording-kafka-provider");
+            var initialized = await grain.InitializeAgentAsync(typeof(RecordingKafkaProviderIntegrationAgent).AssemblyQualifiedName!);
             initialized.Should().BeTrue();
 
             var transport = host.Services.GetRequiredService<KafkaProviderProducer>();
@@ -273,7 +271,7 @@ public sealed class OrleansKafkaProviderRuntimeIntegrationTests
         {
             var targetGrainFactory = host2.Services.GetRequiredService<IGrainFactory>();
             var targetGrain = targetGrainFactory.GetGrain<IRuntimeActorGrain>(targetActorId);
-            (await targetGrain.InitializeAgentByKindAsync("tests.forwarded-committed-observation"))
+            (await targetGrain.InitializeAgentAsync(typeof(ForwardedCommittedObservationIntegrationAgent).AssemblyQualifiedName!))
                 .Should().BeTrue();
 
             var streams = host2.Services.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
@@ -290,7 +288,7 @@ public sealed class OrleansKafkaProviderRuntimeIntegrationTests
 
             var sourceGrainFactory = host1.Services.GetRequiredService<IGrainFactory>();
             var sourceGrain = sourceGrainFactory.GetGrain<IRuntimeActorGrain>(sourceActorId);
-            (await sourceGrain.InitializeAgentByKindAsync("tests.committed-observation"))
+            (await sourceGrain.InitializeAgentAsync(typeof(CommittedObservationIntegrationAgent).AssemblyQualifiedName!))
                 .Should().BeTrue();
 
             await sourceGrain.HandleEnvelopeAsync(CreateDirectEnvelope(sourceActorId, "commit-me"));
@@ -341,7 +339,7 @@ public sealed class OrleansKafkaProviderRuntimeIntegrationTests
             var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
 
             var targetGrain = grainFactory.GetGrain<IRuntimeActorGrain>(targetActorId);
-            (await targetGrain.InitializeAgentByKindAsync("tests.forwarded-committed-observation"))
+            (await targetGrain.InitializeAgentAsync(typeof(ForwardedCommittedObservationIntegrationAgent).AssemblyQualifiedName!))
                 .Should().BeTrue();
 
             var streams = host.Services.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
@@ -357,7 +355,7 @@ public sealed class OrleansKafkaProviderRuntimeIntegrationTests
             });
 
             var sourceGrain = grainFactory.GetGrain<IRuntimeActorGrain>(sourceActorId);
-            (await sourceGrain.InitializeAgentByKindAsync("tests.committed-observation"))
+            (await sourceGrain.InitializeAgentAsync(typeof(CommittedObservationIntegrationAgent).AssemblyQualifiedName!))
                 .Should().BeTrue();
 
             await sourceGrain.HandleEnvelopeAsync(CreateDirectEnvelope(sourceActorId, "same-silo"));
@@ -415,10 +413,6 @@ public sealed class OrleansKafkaProviderRuntimeIntegrationTests
             })
             .ConfigureServices(services =>
             {
-                services.AddAevatarAgentKindRegistry(builder => builder
-                    .Register<RecordingKafkaProviderIntegrationAgent>()
-                    .Register<CommittedObservationIntegrationAgent>()
-                    .Register<ForwardedCommittedObservationIntegrationAgent>());
                 services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
                 {
                     options.BootstrapServers = bootstrapServers;
@@ -440,7 +434,7 @@ public sealed class OrleansKafkaProviderRuntimeIntegrationTests
         foreach (var actorId in actorIds)
         {
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-            var initialized = await grain.InitializeAgentByKindAsync("tests.recording-kafka-provider");
+            var initialized = await grain.InitializeAgentAsync(typeof(RecordingKafkaProviderIntegrationAgent).AssemblyQualifiedName!);
             initialized.Should().BeTrue();
         }
     }
@@ -492,7 +486,6 @@ public sealed class OrleansKafkaProviderRuntimeIntegrationTests
         return actorIds!;
     }
 
-    [GAgent("tests.recording-kafka-provider")]
     public sealed class RecordingKafkaProviderIntegrationAgent : IAgent
     {
         private static readonly Lock SyncLock = new();
@@ -600,7 +593,6 @@ public sealed class OrleansKafkaProviderRuntimeIntegrationTests
             });
     }
 
-    [GAgent("tests.committed-observation")]
     public sealed class CommittedObservationIntegrationAgent : GAgentBase<Empty>
     {
         private static readonly Lock SyncLock = new();
@@ -682,7 +674,6 @@ public sealed class OrleansKafkaProviderRuntimeIntegrationTests
             });
     }
 
-    [GAgent("tests.forwarded-committed-observation")]
     public sealed class ForwardedCommittedObservationIntegrationAgent : GAgentBase<Empty>
     {
         private static readonly Lock SyncLock = new();

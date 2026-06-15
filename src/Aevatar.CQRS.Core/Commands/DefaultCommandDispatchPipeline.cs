@@ -8,8 +8,7 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
 {
     private readonly ICommandTargetResolver<TCommand, TTarget, TError> _targetResolver;
     private readonly ICommandContextPolicy _contextPolicy;
-    private readonly ICommandEnvelopeFactory<TCommand>? _envelopeFactory;
-    private readonly ICommandTargetEnvelopeFactory<TCommand, TTarget>? _targetEnvelopeFactory;
+    private readonly ICommandEnvelopeFactory<TCommand> _envelopeFactory;
     private readonly ICommandTargetDispatcher<TTarget> _targetDispatcher;
     private readonly ICommandReceiptFactory<TTarget, TReceipt> _receiptFactory;
 
@@ -19,32 +18,10 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
         ICommandEnvelopeFactory<TCommand> envelopeFactory,
         ICommandTargetDispatcher<TTarget> targetDispatcher,
         ICommandReceiptFactory<TTarget, TReceipt> receiptFactory)
-        : this(targetResolver, contextPolicy, envelopeFactory, null, targetDispatcher, receiptFactory)
-    {
-    }
-
-    public DefaultCommandDispatchPipeline(
-        ICommandTargetResolver<TCommand, TTarget, TError> targetResolver,
-        ICommandContextPolicy contextPolicy,
-        ICommandTargetEnvelopeFactory<TCommand, TTarget> targetEnvelopeFactory,
-        ICommandTargetDispatcher<TTarget> targetDispatcher,
-        ICommandReceiptFactory<TTarget, TReceipt> receiptFactory)
-        : this(targetResolver, contextPolicy, null, targetEnvelopeFactory, targetDispatcher, receiptFactory)
-    {
-    }
-
-    private DefaultCommandDispatchPipeline(
-        ICommandTargetResolver<TCommand, TTarget, TError> targetResolver,
-        ICommandContextPolicy contextPolicy,
-        ICommandEnvelopeFactory<TCommand>? envelopeFactory,
-        ICommandTargetEnvelopeFactory<TCommand, TTarget>? targetEnvelopeFactory,
-        ICommandTargetDispatcher<TTarget> targetDispatcher,
-        ICommandReceiptFactory<TTarget, TReceipt> receiptFactory)
     {
         _targetResolver = targetResolver;
         _contextPolicy = contextPolicy;
         _envelopeFactory = envelopeFactory;
-        _targetEnvelopeFactory = targetEnvelopeFactory;
         _targetDispatcher = targetDispatcher;
         _receiptFactory = receiptFactory;
     }
@@ -86,9 +63,7 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
             seed?.Headers,
             seed?.CommandId,
             seed?.CorrelationId);
-        var envelope = _targetEnvelopeFactory != null
-            ? _targetEnvelopeFactory.CreateEnvelope(command, target, context)
-            : _envelopeFactory!.CreateEnvelope(command, context);
+        var envelope = _envelopeFactory.CreateEnvelope(command, context);
         var receipt = _receiptFactory.Create(target, context);
         return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Success(
             new CommandDispatchExecution<TTarget, TReceipt>

@@ -1,5 +1,4 @@
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Modules;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -33,21 +32,19 @@ internal static class WorkflowRunExecutionContextStateAccess
         return stateHost.ClearExecutionContextAsync(ct);
     }
 
-    public static WorkflowRunExecutionContextDelta BuildCallerCredentialDelta(WorkflowCallerCredential? credential)
+    public static WorkflowRunExecutionContextDelta BuildConnectorAuthorizationDelta(string? authorization)
     {
         var delta = new WorkflowRunExecutionContextDelta
         {
-            ClearCallerCredential = true,
+            ClearConnector = true,
         };
-        var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
-        if (parsed.IsInvalid)
-            throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
-        if (parsed.IsMissing)
+        var normalized = Normalize(authorization);
+        if (string.IsNullOrWhiteSpace(normalized))
             return delta;
 
-        delta.CallerCredential = new WorkflowCallerCredential
+        delta.Connector = new WorkflowRunConnectorExecutionContextDelta
         {
-            BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
+            HttpAuthorization = normalized,
         };
 
         return delta;
@@ -76,14 +73,12 @@ internal static class WorkflowRunExecutionContextStateAccess
         {
             ModelOverride = Normalize(llmControl.ModelOverride),
             UserMemoryPrompt = Normalize(llmControl.UserMemoryPrompt),
-            RoutePreference = Normalize(llmControl.RoutePreference),
         };
         if (llmControl.HasMaxToolRoundsOverride)
             llm.MaxToolRoundsOverride = llmControl.MaxToolRoundsOverride;
 
         if (string.IsNullOrWhiteSpace(llm.ModelOverride) &&
             string.IsNullOrWhiteSpace(llm.UserMemoryPrompt) &&
-            string.IsNullOrWhiteSpace(llm.RoutePreference) &&
             !llm.HasMaxToolRoundsOverride)
         {
             return delta;
@@ -93,22 +88,18 @@ internal static class WorkflowRunExecutionContextStateAccess
         return delta;
     }
 
-    public static bool TryGetCallerCredential(
+    public static bool TryGetConnectorAuthorization(
         IWorkflowExecutionContext ctx,
-        out WorkflowCallerCredential credential)
+        out string authorization)
     {
-        var callerCredential = Get(ctx).CallerCredential;
-        var parsed = WorkflowCallerCredentialTokens.ParseOptional(callerCredential?.BearerToken);
-        if (parsed.IsValid)
+        var connector = Get(ctx).Connector;
+        if (!string.IsNullOrWhiteSpace(connector?.HttpAuthorization))
         {
-            credential = new WorkflowCallerCredential
-            {
-                BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
-            };
+            authorization = connector.HttpAuthorization.Trim();
             return true;
         }
 
-        credential = new WorkflowCallerCredential();
+        authorization = string.Empty;
         return false;
     }
 
@@ -119,80 +110,14 @@ internal static class WorkflowRunExecutionContextStateAccess
         llm = Get(ctx).Llm ?? new WorkflowLlmExecutionContextState();
         return !string.IsNullOrWhiteSpace(llm.ModelOverride) ||
                !string.IsNullOrWhiteSpace(llm.UserMemoryPrompt) ||
-               !string.IsNullOrWhiteSpace(llm.RoutePreference) ||
                llm.HasMaxToolRoundsOverride;
-    }
-
-    public static WorkflowRunExecutionContextDelta ClearWorkflowRuntimeDelta() =>
-        new()
-        {
-            ClearWorkflowRuntime = true,
-        };
-
-    public static WorkflowRunExecutionContextDelta BuildWorkflowRuntimeDelta(WorkflowToolRuntimeContextPayload? runtimeContext)
-    {
-        var delta = ClearWorkflowRuntimeDelta();
-        if (runtimeContext == null)
-            return delta;
-
-        var parentActorId = Normalize(runtimeContext.ParentActorId);
-        var parentRunId = Normalize(runtimeContext.ParentRunId);
-        var parentStepId = Normalize(runtimeContext.ParentStepId);
-        if (string.IsNullOrWhiteSpace(parentActorId) ||
-            string.IsNullOrWhiteSpace(parentRunId) ||
-            string.IsNullOrWhiteSpace(parentStepId))
-        {
-            return delta;
-        }
-
-        var normalizedParentRunId = WorkflowRunIdNormalizer.Normalize(parentRunId);
-        delta.WorkflowRuntime = new WorkflowToolRuntimeContextPayload
-        {
-            ParentActorId = parentActorId,
-            ParentRunId = normalizedParentRunId,
-            ParentStepId = parentStepId,
-            RootRunId = string.IsNullOrWhiteSpace(runtimeContext.RootRunId)
-                ? normalizedParentRunId
-                : WorkflowRunIdNormalizer.Normalize(runtimeContext.RootRunId),
-            Depth = Math.Max(0, runtimeContext.Depth),
-        };
-        return delta;
-    }
-
-    public static WorkflowToolRuntimeContext GetWorkflowRuntimeContext(
-        IWorkflowExecutionContext ctx,
-        string parentActorId,
-        string runId,
-        string stepId)
-    {
-        var runtime = Get(ctx).WorkflowRuntime;
-        if (runtime == null ||
-            string.IsNullOrWhiteSpace(runtime.ParentActorId) ||
-            string.IsNullOrWhiteSpace(runtime.ParentRunId) ||
-            string.IsNullOrWhiteSpace(runtime.ParentStepId))
-        {
-            var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
-            return new WorkflowToolRuntimeContext(
-                parentActorId?.Trim() ?? string.Empty,
-                normalizedRunId,
-                stepId?.Trim() ?? string.Empty,
-                normalizedRunId,
-                0);
-        }
-
-        return new WorkflowToolRuntimeContext(
-            parentActorId?.Trim() ?? string.Empty,
-            WorkflowRunIdNormalizer.Normalize(runId),
-            stepId?.Trim() ?? string.Empty,
-            WorkflowRunIdNormalizer.Normalize(runtime.RootRunId),
-            Math.Max(0, runtime.Depth));
     }
 
     public static WorkflowRunExecutionContextState RedactedClone(WorkflowRunExecutionContextState? source)
     {
         var clone = source?.Clone() ?? new WorkflowRunExecutionContextState();
-        if (!string.IsNullOrWhiteSpace(clone.CallerCredential?.BearerToken))
-            clone.CallerCredential.BearerToken = string.Empty;
+        if (!string.IsNullOrWhiteSpace(clone.Connector?.HttpAuthorization))
+            clone.Connector.HttpAuthorization = string.Empty;
         return clone;
     }
 

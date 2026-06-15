@@ -12,26 +12,11 @@ public static class SkillRunnerDefaults
     public const string StatusRunning = "running";
     public const string StatusError = "error";
     public const string StatusDisabled = "disabled";
-    public const string StatusCompleted = "completed";
     public const string RejectionReasonRunnerDisabled = "runner_disabled";
-    public const string ExternalTriggerReason = "external_trigger";
-    public const string OneShotTriggerReason = "one_shot";
-    public const string OneShotSkillName = "one-shot-reminder";
-    public const string OneShotRetirementReasonCompleted = "one_shot_completed";
-    public const string OneShotRetirementReasonFailed = "one_shot_failed";
-    public const string OneShotRetirementReasonRejected = "one_shot_rejected";
-    public const string ExternalTriggerRejectedReasonUnknownSource = "unknown";
-    public const string ExternalTriggerRejectedReasonDisabledSource = "disabled";
-    public const string ExternalTriggerRejectedReasonMalformedDelivery = "malformed_delivery";
-    public const string ExternalTriggerRejectedReasonDispatchAttemptsExhausted = "dispatch_attempts_exhausted";
-    public const string ExternalTriggerDuplicateReasonAlreadyAdmitted = "duplicate_delivery";
     public const string TriggerCallbackId = "skill-runner-next-fire";
     public const string RetryCallbackId = "skill-runner-retry";
     public const int MaxRetryAttempts = 1;
-    public const int ExternalTriggerMaxDispatchAttempts = 3;
-    public const int ExternalTriggerTerminalDeliveryRetention = 1000;
     public static readonly TimeSpan RetryBackoff = TimeSpan.FromSeconds(30);
-    public static readonly TimeSpan ExternalTriggerTerminalDeliveryRetentionAge = TimeSpan.FromDays(30);
 
     /// <summary>
     /// Throttle for streaming-edit (Lark <c>PUT /open-apis/im/v1/messages/{id}</c>) deltas.

@@ -13,8 +13,7 @@ public static class ChatRouteActionTargets
     public static ChatRouteAction ForwardToVoiceAttachTarget(
         string actorId,
         string voiceModuleName = "",
-        string toolSetName = DefaultToolSetName,
-        Aevatar.Foundation.VoicePresence.Abstractions.VoiceSessionOverrides? sessionOverrides = null)
+        string toolSetName = DefaultToolSetName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
 
@@ -29,7 +28,6 @@ public static class ChatRouteActionTargets
                     {
                         ActorId = actorId.Trim(),
                         VoiceModuleName = voiceModuleName.Trim(),
-                        SessionOverrides = sessionOverrides?.Clone(),
                     },
                 },
             },

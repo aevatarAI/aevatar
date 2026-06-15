@@ -8,16 +8,6 @@ namespace Aevatar.GAgents.Channel.Abstractions;
 public sealed partial class ScheduleState
 {
     /// <summary>
-    /// Recurring cron schedule mode.
-    /// </summary>
-    public const string ModeCron = "cron";
-
-    /// <summary>
-    /// Single fixed-UTC trigger schedule mode.
-    /// </summary>
-    public const string ModeOneShot = "one_shot";
-
-    /// <summary>
     /// Gets or sets the next scheduled execution timestamp in UTC.
     /// </summary>
     public DateTimeOffset? NextRunAtUtc
@@ -33,23 +23,5 @@ public sealed partial class ScheduleState
     {
         get => LastRunAt == null ? null : LastRunAt.ToDateTimeOffset();
         set => LastRunAt = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
-    }
-
-    /// <summary>
-    /// Gets or sets the fixed one-shot execution timestamp in UTC.
-    /// </summary>
-    public DateTimeOffset? RunAtUtc
-    {
-        get => RunAt == null ? null : RunAt.ToDateTimeOffset();
-        set => RunAt = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
-    }
-
-    /// <summary>
-    /// Gets or sets the terminal one-shot retirement timestamp in UTC.
-    /// </summary>
-    public DateTimeOffset? RetiredAtUtc
-    {
-        get => RetiredAt == null ? null : RetiredAt.ToDateTimeOffset();
-        set => RetiredAt = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
     }
 }

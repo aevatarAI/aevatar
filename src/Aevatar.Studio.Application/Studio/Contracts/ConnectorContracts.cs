@@ -75,7 +75,4 @@ public sealed record ConnectorAuthDefinitionDto(
     string TokenUrl,
     string ClientId,
     string ClientSecret,
-    string Scope,
-    string SecretRef,
-    string HeaderName,
-    string HeaderValuePrefix);
+    string Scope);

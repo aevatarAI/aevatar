@@ -151,10 +151,7 @@ internal sealed class ConnectorCatalogImportParser : IConnectorCatalogImportPars
                 TokenUrl: ReadString(node, "tokenUrl"),
                 ClientId: ReadString(node, "clientId"),
                 ClientSecret: ReadString(node, "clientSecret"),
-                Scope: ReadString(node, "scope"),
-                SecretRef: ReadString(node, "secretRef"),
-                HeaderName: ReadString(node, "headerName"),
-                HeaderValuePrefix: ReadString(node, "headerValuePrefix"));
+                Scope: ReadString(node, "scope"));
 
     private static StoredHttpConnectorConfig EmptyHttpConfig() =>
         new(string.Empty, [], [], [], new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), EmptyAuthConfig());
@@ -176,7 +173,7 @@ internal sealed class ConnectorCatalogImportParser : IConnectorCatalogImportPars
             []);
 
     private static StoredConnectorAuthConfig EmptyAuthConfig() =>
-        new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
+        new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
 
     private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
     {

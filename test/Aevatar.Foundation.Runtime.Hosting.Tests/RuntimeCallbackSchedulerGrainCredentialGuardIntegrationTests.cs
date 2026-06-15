@@ -134,10 +134,10 @@ public sealed class RuntimeCallbackSchedulerGrainCredentialGuardIntegrationTests
                 });
                 siloBuilder.ConfigureServices(services =>
                 {
-                    services.RemoveAllKeyed<IGrainStorage>(OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName);
+                    services.RemoveAllKeyed<IGrainStorage>(OrleansRuntimeConstants.GrainStateStorageName);
                     services.AddSingleton<TestRuntimeCallbackSchedulerStateStorage>();
                     services.AddGrainStorage<TestRuntimeCallbackSchedulerStateStorage>(
-                        OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName,
+                        OrleansRuntimeConstants.GrainStateStorageName,
                         (sp, _) => sp.GetRequiredService<TestRuntimeCallbackSchedulerStateStorage>());
                 });
             })

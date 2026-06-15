@@ -62,22 +62,6 @@ public sealed class KafkaProviderProducer :
             ct);
     }
 
-    internal static ProducerConfig BuildProducerConfig(KafkaProviderTransportOptions options) =>
-        new()
-        {
-            BootstrapServers = options.BootstrapServers,
-            Acks = Acks.All,
-            EnableIdempotence = true,
-            // Actor event envelopes can legitimately carry large payloads (e.g. aggregated tool-call
-            // results from a skill run). Without compression those envelopes exceed Kafka's ~1 MB
-            // default max.message.bytes and the broker rejects the produce ("Broker: Message size too
-            // large"), silently failing the run. Gzip needs no broker-side change and compresses
-            // JSON/proto payloads well under the limit; the raised MessageMaxBytes keeps the producer
-            // from rejecting the (uncompressed) message locally before compression is applied.
-            CompressionType = options.ProducerCompressionType,
-            MessageMaxBytes = options.ProducerMaxMessageBytes,
-        };
-
     public async Task StartAsync(CancellationToken ct = default)
     {
         await _lifecycleGate.WaitAsync(ct);
@@ -88,7 +72,12 @@ public sealed class KafkaProviderProducer :
 
             await EnsureTopicExistsAsync(ct);
 
-            _producer = new ProducerBuilder<Null, byte[]>(BuildProducerConfig(_transportOptions)).Build();
+            _producer = new ProducerBuilder<Null, byte[]>(new ProducerConfig
+            {
+                BootstrapServers = _transportOptions.BootstrapServers,
+                Acks = Acks.All,
+                EnableIdempotence = true,
+            }).Build();
 
             _started = true;
         }

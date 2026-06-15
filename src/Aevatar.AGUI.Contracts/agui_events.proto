@@ -25,7 +25,6 @@ message AGUIEvent {
     HumanInputRequestEvent human_input_request = 13;
     HumanInputResponseEvent human_input_response = 14;
     CustomEvent custom = 15;
-    UsageEvent usage = 16;
   }
 }
 
@@ -101,16 +100,6 @@ message HumanInputResponseEvent {
   string run_id = 2;
   bool approved = 3;
   google.protobuf.StringValue user_input = 4;
-}
-
-message UsageEvent {
-  bool available = 1;
-  int32 prompt_tokens = 2;
-  int32 completion_tokens = 3;
-  int32 total_tokens = 4;
-  google.protobuf.StringValue model = 5;
-  google.protobuf.DoubleValue cost = 6;
-  google.protobuf.Int64Value latency_ms = 7;
 }
 
 message CustomEvent {

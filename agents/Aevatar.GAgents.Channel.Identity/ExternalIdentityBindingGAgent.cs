@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -17,7 +16,6 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// external subject (ADR-0018 §Implementation Notes #2). State holds no
 /// refresh_token or any user secret material (ADR-0018 §Storage Boundary).
 /// </summary>
-[GAgent("channel.identity.external-identity-binding")]
 public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalIdentityBindingState>
 {
     // Refactor (iter71/cluster-071-identity-projection-rebuild-events):

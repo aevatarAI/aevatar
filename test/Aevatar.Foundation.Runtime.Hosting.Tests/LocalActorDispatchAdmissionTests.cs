@@ -1,8 +1,6 @@
 using System.Threading.Channels;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Abstractions.TypeSystem;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
@@ -21,10 +19,7 @@ public sealed class LocalActorDispatchAdmissionTests
             new InMemoryStreamOptions(),
             NullLoggerFactory.Instance,
             new InMemoryStreamForwardingRegistry());
-        var services = new ServiceCollection()
-            .AddAevatarAgentKindRegistry(builder => builder.Register<GateAgent>())
-            .BuildServiceProvider();
-        var runtime = new LocalActorRuntime(streams, services, streams);
+        var runtime = new LocalActorRuntime(streams, new ServiceCollection().BuildServiceProvider(), streams);
         await runtime.CreateAsync<GateAgent>("admission-actor");
         var dispatchPort = new LocalActorDispatchPort(runtime);
         var envelope = new EventEnvelope
@@ -58,10 +53,7 @@ public sealed class LocalActorDispatchAdmissionTests
             new InMemoryStreamOptions(),
             NullLoggerFactory.Instance,
             new InMemoryStreamForwardingRegistry());
-        var services = new ServiceCollection()
-            .AddAevatarAgentKindRegistry(builder => builder.Register<OrderedAgent>())
-            .BuildServiceProvider();
-        var runtime = new LocalActorRuntime(streams, services, streams);
+        var runtime = new LocalActorRuntime(streams, new ServiceCollection().BuildServiceProvider(), streams);
         await runtime.CreateAsync<OrderedAgent>("ordered-actor");
         var dispatchPort = new LocalActorDispatchPort(runtime);
 
@@ -108,7 +100,6 @@ public sealed class LocalActorDispatchAdmissionTests
             Propagation = new EnvelopePropagation { CorrelationId = $"corr-{id}" },
         };
 
-    [GAgent("tests.ordered-agent")]
     private sealed class OrderedAgent : IAgent
     {
         public static Channel<string> Handled { get; private set; } = Channel.CreateUnbounded<string>();
@@ -134,7 +125,6 @@ public sealed class LocalActorDispatchAdmissionTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    [GAgent("tests.gate-agent")]
     private sealed class GateAgent : IAgent
     {
         public static TaskCompletionSource Release { get; private set; } =

@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Core.Ports;
@@ -8,7 +7,6 @@ using Google.Protobuf;
 
 namespace Aevatar.Scripting.Core;
 
-[GAgent("scripting.catalog")]
 public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
 {
     public ScriptCatalogGAgent()

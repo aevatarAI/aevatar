@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-dotnet test test/Aevatar.Capabilities.Tests/Aevatar.Capabilities.Tests.csproj \
+dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj \
   --nologo \
   --tl:off \
   -p:UseSharedCompilation=false \

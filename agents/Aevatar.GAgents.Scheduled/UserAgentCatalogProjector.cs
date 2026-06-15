@@ -100,7 +100,6 @@ public sealed class UserAgentCatalogProjector
         document.LarkReceiveIdType = entry.LarkReceiveIdType ?? string.Empty;
         document.LarkReceiveIdFallback = entry.LarkReceiveIdFallback ?? string.Empty;
         document.LarkReceiveIdTypeFallback = entry.LarkReceiveIdTypeFallback ?? string.Empty;
-        document.OutputFormat = entry.OutputFormat;
 
         // Project owner_scope verbatim from the upserted entry. Per issue #466 the entry
         // is the authoritative source for ownership; the projector materializes it for

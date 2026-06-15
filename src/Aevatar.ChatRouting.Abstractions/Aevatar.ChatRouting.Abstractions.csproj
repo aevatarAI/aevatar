@@ -18,11 +18,10 @@
 
     <ItemGroup>
         <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
-        <ProjectReference Include="..\Aevatar.Foundation.VoicePresence.Abstractions\Aevatar.Foundation.VoicePresence.Abstractions.csproj" />
     </ItemGroup>
 
     <ItemGroup>
-        <Protobuf Include="chat_route_policy.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Foundation.Abstractions;..\Aevatar.Foundation.VoicePresence.Abstractions" />
+        <Protobuf Include="chat_route_policy.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Foundation.Abstractions" />
     </ItemGroup>
 
 </Project>

@@ -110,28 +110,6 @@ public class CommandDispatchPipelineTests
     }
 
     [Fact]
-    public async Task PrepareAsync_ShouldUseTargetAwareEnvelopeFactory_WhenRegistered()
-    {
-        var order = new List<string>();
-        var target = new FakeCommandTarget("actor-1");
-        var targetEnvelopeFactory = new RecordingTargetEnvelopeFactory(new EventEnvelope { Id = "evt-1" }, order);
-        var pipeline = new DefaultCommandDispatchPipeline<string, FakeCommandTarget, string, FakeError>(
-            new RecordingResolver(target, order),
-            new DefaultCommandContextPolicy(),
-            targetEnvelopeFactory,
-            new RecordingTargetDispatcher(order),
-            new RecordingReceiptFactory("receipt-1", order));
-
-        var result = await pipeline.PrepareAsync("hello");
-
-        result.Succeeded.Should().BeTrue();
-        targetEnvelopeFactory.Calls.Should().ContainSingle()
-            .Which.Should().Be(("hello", target, result.Target!.Context));
-        result.Target.Envelope.Id.Should().Be("evt-1");
-        order.Should().Equal("resolve", "target-envelope", "receipt");
-    }
-
-    [Fact]
     public async Task DispatchAsync_ShouldCleanupTarget_WhenDispatcherFails()
     {
         var target = new FakeCommandTarget("actor-1");
@@ -392,30 +370,6 @@ internal sealed class RecordingEnvelopeFactory : ICommandEnvelopeFactory<string>
     {
         _order?.Add("envelope");
         Calls.Add((command, context));
-        return _envelope;
-    }
-}
-
-internal sealed class RecordingTargetEnvelopeFactory : ICommandTargetEnvelopeFactory<string, FakeCommandTarget>
-{
-    private readonly EventEnvelope _envelope;
-    private readonly List<string>? _order;
-
-    public RecordingTargetEnvelopeFactory(EventEnvelope envelope, List<string>? order = null)
-    {
-        _envelope = envelope;
-        _order = order;
-    }
-
-    public List<(string Command, FakeCommandTarget Target, CommandContext Context)> Calls { get; } = [];
-
-    public EventEnvelope CreateEnvelope(
-        string command,
-        FakeCommandTarget target,
-        CommandContext context)
-    {
-        _order?.Add("target-envelope");
-        Calls.Add((command, target, context));
         return _envelope;
     }
 }

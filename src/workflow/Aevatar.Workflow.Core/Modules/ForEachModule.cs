@@ -79,12 +79,9 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 Expected = items.Length,
             };
 
-            var maxConcurrent = BackpressureHelper.ResolveMaxConcurrent(evt.Parameters);
-            var minConcurrent = BackpressureHelper.ResolveMinConcurrent(evt.Parameters, maxConcurrent);
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
-                maxConcurrent,
-                minConcurrent);
+                BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
 
             ctx.Logger.LogInformation(
                 "ForEach {StepId}: {Count} items, sub_step_type={SubType}",
@@ -121,11 +118,8 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     }, TopologyAudience.Self, ct);
                 }
             }
-            var topUpEntries = BackpressureHelper.TopUpToTarget(state.Backpressure);
             // Always save after loop — TryAdmit mutates ActiveWorkers even when no items are queued
             await SaveStateAsync(state, ctx, ct);
-            foreach (var topUpEntry in topUpEntries)
-                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(topUpEntry), TopologyAudience.Self, ct);
         }
         else
         {
@@ -149,7 +143,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
                 BackpressureHelper.DefaultMaxConcurrentWorkers);
-            var drained = BackpressureHelper.CompleteAndTopUp(state.Backpressure);
+            var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
 
             if (parentState.Collected.Count >= parentState.Expected)
             {
@@ -176,8 +170,8 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 await SaveStateAsync(state, ctx, ct);
             }
 
-            foreach (var drainedEntry in drained)
-                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drainedEntry), TopologyAudience.Self, ct);
+            if (drained != null)
+                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
         }
     }
 

@@ -65,7 +65,6 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
             LarkReceiveIdType: document.LarkReceiveIdType ?? string.Empty,
             LarkReceiveIdFallback: document.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback: document.LarkReceiveIdTypeFallback ?? string.Empty,
-            OutputFormat: document.OutputFormat,
             TemplateName: document.TemplateName ?? string.Empty,
             AgentType: document.AgentType ?? string.Empty);
     }

@@ -82,7 +82,7 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    _logger.LogWarning(
+                    _logger.LogDebug(
                         "ConnectedServiceSpecCache: spec fetch for '{Slug}' returned {Status}",
                         slug, (int)response.StatusCode);
                     return null;
@@ -105,12 +105,12 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            _logger.LogWarning("ConnectedServiceSpecCache: spec fetch for '{Slug}' timed out", slug);
+            _logger.LogDebug("ConnectedServiceSpecCache: spec fetch for '{Slug}' timed out", slug);
             return null;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "ConnectedServiceSpecCache: spec fetch for '{Slug}' failed", slug);
+            _logger.LogDebug(ex, "ConnectedServiceSpecCache: spec fetch for '{Slug}' failed", slug);
             return null;
         }
     }

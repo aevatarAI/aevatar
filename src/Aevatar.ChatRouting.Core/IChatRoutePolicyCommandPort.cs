@@ -16,11 +16,6 @@ public interface IChatRoutePolicyCommandPort
         UpsertChatRoutePolicyRequested command,
         CancellationToken ct = default);
 
-    Task<ChatRoutePolicyCommandAcceptedReceipt> UpsertRuleAsync(
-        string scopeId,
-        UpsertChatRouteRuleRequested command,
-        CancellationToken ct = default);
-
     Task<ChatRoutePolicyCommandAcceptedReceipt> RemoveRuleAsync(
         string scopeId,
         RemoveChatRouteRuleRequested command,

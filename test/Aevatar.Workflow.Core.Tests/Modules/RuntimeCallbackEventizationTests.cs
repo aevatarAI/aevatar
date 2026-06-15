@@ -1385,8 +1385,17 @@ public class RuntimeCallbackEventizationTests
             TimeSpan period,
             IMessage evt,
             EventEnvelopePublishOptions? options = null,
-            CancellationToken ct = default) =>
-            ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, options, ct);
+            CancellationToken ct = default)
+        {
+            _ = dueTime;
+            _ = period;
+            _ = options;
+            _ = ct;
+            var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
+            _generations[callbackId] = generation;
+            Scheduled.Add(new ScheduledCallback(callbackId, generation, evt));
+            return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
+        }
 
         public Task CancelDurableCallbackAsync(
             RuntimeCallbackLease lease,
@@ -1421,7 +1430,7 @@ public class RuntimeCallbackEventizationTests
         public Task ClearExecutionContextAsync(CancellationToken ct = default)
         {
             ExecutionContextState.Llm = null;
-            ExecutionContextState.CallerCredential = null;
+            ExecutionContextState.Connector = null;
             return Task.CompletedTask;
         }
 
@@ -1468,25 +1477,24 @@ public class RuntimeCallbackEventizationTests
     {
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearCallerCredential)
-            state.CallerCredential = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
         if (delta.Llm != null)
         {
             state.Llm = new WorkflowLlmExecutionContextState
             {
                 ModelOverride = delta.Llm.ModelOverride,
                 UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
-                RoutePreference = delta.Llm.RoutePreference,
             };
             if (delta.Llm.HasMaxToolRoundsOverride)
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.CallerCredential != null)
+        if (delta.Connector != null)
         {
-            state.CallerCredential = new WorkflowCallerCredentialState
+            state.Connector = new WorkflowConnectorExecutionContextState
             {
-                BearerToken = delta.CallerCredential.BearerToken,
+                HttpAuthorization = delta.Connector.HttpAuthorization,
             };
         }
     }

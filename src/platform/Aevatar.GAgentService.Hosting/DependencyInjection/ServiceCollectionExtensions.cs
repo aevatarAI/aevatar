@@ -3,7 +3,6 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -23,7 +22,6 @@ using Aevatar.GAgentService.Core.Services;
 using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
-using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgentService.Hosting.Demo;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
@@ -32,11 +30,8 @@ using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.ReadModels;
-using Aevatar.Capabilities.ExecutionActivity;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Scripting.Core.Ports;
-using Aevatar.Foundation.Abstractions.EventSourcing;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Foundation.Abstractions;
@@ -66,33 +61,27 @@ public static class ServiceCollectionExtensions
         if (!services.Any(x => x.ServiceType == typeof(WorkflowCapabilityServiceCollectionExtensions.WorkflowCapabilityRegistrationsMarker)))
             services.AddWorkflowCapability(configuration);
 
-        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(Aevatar.GAgentService.Core.GAgents.ServiceDefinitionGAgent).Assembly));
         services.AddOptions<GAgentServiceDemoOptions>()
             .Bind(configuration.GetSection("GAgentService:Demo"));
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
         services.AddGAgentServiceGovernanceCapability(configuration);
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
-        services.TryAddSingleton<ServiceInvokeReadinessEvaluator>();
         services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
         services.TryAddSingleton<IServiceCommandTargetProvisioner, DefaultServiceCommandTargetProvisioner>();
         services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, ScriptingServiceRevisionRepublishHook>());
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
-        services.TryAddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
+        services.TryAddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         services.AddToolSetRegistry();
         services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
-        services.TryAddSingleton<IExecutionActivityScopeResolver, ExecutionActivityScopeResolver>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<Aevatar.Foundation.Abstractions.Hooks.IGAgentExecutionHook, ExecutionActivityPublisherHook>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, StaticServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, WorkflowServiceImplementationAdapter>());
         services.TryAddSingleton<ServiceInvocationResolutionService>();
-        services.TryAddSingleton<ServiceInvokeReadinessErrorMapper>();
         services.TryAddSingleton<IServiceCommandPort, ServiceCommandApplicationService>();
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
@@ -111,7 +100,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();
         services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
-        services.TryAddSingleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>();
         services.TryAddSingleton<IScopeBindingCommandPort, ScopeBindingCommandApplicationService>();
         services.TryAddSingleton<IScopeBindingReadinessQueryPort, ScopeBindingReadinessQueryService>();
         services.TryAddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
@@ -132,14 +120,12 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        services.AddAevatarAgentKindRegistry(builder => builder.Register<ScheduledDispatchGAgent>());
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
         services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ServiceInvocationResolutionService>();
-        services.TryAddSingleton<ServiceInvokeReadinessErrorMapper>();
         services.TryAddSingleton<IInvokeAdmissionAuthorizer, ScheduledDispatchInvokeAdmissionAuthorizer>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
@@ -184,7 +170,6 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<ServiceRolloutReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceRolloutCommandObservationReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceTrafficViewReadModel>(services, configuration, static readModel => readModel.Id);
-            TryAddElasticsearchDocumentProjectionStore<ServiceInvocationCatalogReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceRunCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<GAgentRunTerminalReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
@@ -202,7 +187,6 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<ServiceRolloutReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceRolloutCommandObservationReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceTrafficViewReadModel>(services, static readModel => readModel.Id);
-            TryAddInMemoryDocumentProjectionStore<ServiceInvocationCatalogReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceRunCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<GAgentRunTerminalReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, static readModel => readModel.Id);
@@ -226,7 +210,6 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<ServiceRolloutReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceRolloutCommandObservationReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceTrafficViewReadModel>(services, providerKind)
-               && HasProjectionDocumentReaderForProvider<ServiceInvocationCatalogReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceRunCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<GAgentRunTerminalReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<LlmSessionCurrentStateReadModel>(services, providerKind)

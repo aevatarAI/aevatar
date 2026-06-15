@@ -17,7 +17,7 @@ namespace Aevatar.AI.ToolProviders.AgentCatalog;
 /// and are not surfaced through any LLM tool. Issue #466 §D.
 ///
 /// Upsert is rebind-only: rejects when no existing entry exists for the caller. Real
-/// agent creation (which mints credentials) lives in <c>scheduled_agent_creator</c>.
+/// agent creation (which mints credentials) lives in <c>AgentBuilderTool</c>.
 /// </summary>
 public sealed class AgentDeliveryTargetTool : IAgentTool
 {
@@ -44,7 +44,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         "Manage agent delivery targets for workflow human interaction cards and outbound channel delivery. " +
         "Actions: list, upsert (rebind existing only), delete. " +
         "Use this to rebind an agent_id/delivery_target_id to a different Lark conversation or Nyx provider slug; " +
-        "creating new delivery targets (which mints credentials) is the scheduled_agent_creator tool's job. " +
+        "creating new delivery targets (which mints credentials) is the agent_builder tool's job. " +
         "Operations are scoped to the caller's own delivery targets.";
 
     // Note (issue #466): no `owner_nyx_user_id` and no `nyx_api_key` parameters. Owner
@@ -212,7 +212,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             return JsonSerializer.Serialize(new
             {
                 error = "delivery_target_not_found_for_caller",
-                hint = "agent_delivery_targets.upsert is a rebind operation only — it preserves the existing API key. To create a new agent (which mints credentials), use the scheduled_agent_creator tool instead.",
+                hint = "agent_delivery_targets.upsert is a rebind operation only — it preserves the existing API key. To create a new agent (which mints credentials), use the agent_builder tool instead.",
             });
         }
 

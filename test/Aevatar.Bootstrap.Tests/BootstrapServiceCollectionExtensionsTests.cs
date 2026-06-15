@@ -3,7 +3,7 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Capabilities;
+using Aevatar.Hosting;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -34,7 +34,6 @@ public class BootstrapServiceCollectionExtensionsTests
         var connectorBuilders = provider.GetServices<IConnectorBuilder>().ToList();
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HttpConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(CliConnectorBuilder));
-        connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HostCallbackConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(TelegramUserConnectorBuilder));
     }
 
@@ -106,7 +105,6 @@ public class BootstrapServiceCollectionExtensionsTests
         var connectorBuilders = provider.GetServices<IConnectorBuilder>().ToList();
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HttpConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(CliConnectorBuilder));
-        connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HostCallbackConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(TelegramUserConnectorBuilder));
     }
 

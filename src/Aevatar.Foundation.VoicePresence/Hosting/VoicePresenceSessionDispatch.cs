@@ -90,8 +90,8 @@ internal static class VoicePresenceSessionDispatch
             case VoiceProviderEventReceived providerReceived:
                 signal.ProviderEventReceived = providerReceived.Clone();
                 break;
-            case VoiceInputImageReceived inputImageReceived:
-                signal.InputImageReceived = inputImageReceived.Clone();
+            case VoiceTransportAudioFrameReceived audioReceived:
+                signal.TransportAudioFrameReceived = audioReceived.Clone();
                 break;
             default:
                 throw new InvalidOperationException(

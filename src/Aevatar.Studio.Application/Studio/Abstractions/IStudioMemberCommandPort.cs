@@ -33,17 +33,6 @@ public interface IStudioMemberCommandPort
         CancellationToken ct = default);
 
     /// <summary>
-    /// Renames an existing member through the member actor's authoritative
-    /// rename event. Identity fields and implementation references are left
-    /// unchanged by the actor state transition.
-    /// </summary>
-    Task RenameAsync(
-        string scopeId,
-        string memberId,
-        string displayName,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Starts an asynchronous binding run. Implementations dispatch a
     /// <c>StudioMemberBindingRunRequested</c> message to a run actor and
     /// return after the message is accepted for dispatch; they do not wait

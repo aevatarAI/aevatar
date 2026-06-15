@@ -10,22 +10,11 @@ namespace Aevatar.AI.Tests;
 public sealed class SkillRecoveryPlannerTests
 {
     [Fact]
-    public async Task Orchestrator_ApplyInitialDirectivesAsync_WhenStructuredSearchFindsSkill_ShouldExecuteSearchThenUseSkill()
+    public async Task Orchestrator_ApplyInitialDirectivesAsync_WhenSearchFindsSkill_ShouldExecuteSearchThenUseSkill()
     {
         var tools = new ToolManager();
-        tools.Register(new DelegateTool("ornn_search_skills", _ => SearchResult(
-            status: "success",
-            text: "display text changed",
-            matches:
-            [
-                new { skill_name = "project-summary", description = "summary plan", is_private = false, category = "ops", tags = Array.Empty<string>() },
-            ])));
-        tools.Register(new DelegateTool("use_skill", args => LoadResult(
-            status: "success",
-            skillName: "project-summary",
-            loaded: true,
-            error: null,
-            text: "loaded:" + args)));
+        tools.Register(new DelegateTool("ornn_search_skills", _ => "Found 1 skill\n- **project-summary**: summary plan"));
+        tools.Register(new DelegateTool("use_skill", args => "loaded:" + args));
         var orchestrator = new SkillRecoveryOrchestrator(
             Recovery(primarySkillName: null),
             _ => new StreamingToolExecutor(tools));
@@ -40,86 +29,69 @@ public sealed class SkillRecoveryPlannerTests
             CancellationToken.None);
 
         applied.Should().BeTrue();
-        var searchMessage = messages.Single(message =>
+        messages.Count(message => message.Role == "assistant" && message.ToolCalls is { Count: 1 }).Should().Be(2);
+        messages
+            .Where(message => message.Role == "assistant" && message.ToolCalls is { Count: 1 })
+            .Should()
+            .OnlyContain(message => !string.IsNullOrWhiteSpace(message.ReasoningContent));
+        messages.Should().Contain(message =>
             message.Role == "tool" &&
-            message.ToolCallId == "req-orchestrator:skill-recovery:ornn-search-skills:recovery:1");
-        searchMessage.ToolResultView!.SkillSearch!.Matches[0].SkillName.Should().Be("project-summary");
-
-        var loadMessage = messages.Single(message =>
+            message.ToolCallId == "req-orchestrator:skill-recovery:ornn-search-skills:recovery:1" &&
+            message.Content != null &&
+            message.Content.Contains("Found 1 skill", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
             message.Role == "tool" &&
-            message.ToolCallId == "req-orchestrator:skill-recovery:use-skill:recovery:2");
-        loadMessage.ToolResultView!.SkillLoad!.Loaded.Should().BeTrue();
+            message.ToolCallId == "req-orchestrator:skill-recovery:use-skill:recovery:2" &&
+            message.Content != null &&
+            message.Content.Contains("project-summary", StringComparison.Ordinal));
+        messages
+            .Where(message => message.Role == "assistant" && message.ToolCalls is { Count: > 0 })
+            .SelectMany(message => message.ToolCalls!)
+            .Select(call => call.Id)
+            .Should()
+            .OnlyHaveUniqueItems();
+        pending.Should().HaveSameCount(messages);
     }
 
     [Fact]
-    public async Task Orchestrator_ApplyInitialDirectivesAsync_WhenCallIdPrefixIsLong_ShouldKeepSyntheticCallIdsWithinOpenAiLimit()
+    public async Task Orchestrator_TryRecoverFinalAnswerAsync_WhenNoDirective_ShouldNotCreateExecutor()
     {
-        var tools = new ToolManager();
-        tools.Register(new DelegateTool("ornn_search_skills", _ => SearchResult(
-            status: "success",
-            text: "display text changed",
-            matches:
-            [
-                new { skill_name = "project-summary", description = "summary plan", is_private = false, category = "ops", tags = Array.Empty<string>() },
-            ])));
-        tools.Register(new DelegateTool("use_skill", _ => LoadResult(
-            status: "success",
-            skillName: "project-summary",
-            loaded: true,
-            error: null,
-            text: "# project-summary\n\nInstructions")));
+        var executorFactoryCalls = 0;
         var orchestrator = new SkillRecoveryOrchestrator(
-            Recovery(primarySkillName: null),
-            _ => new StreamingToolExecutor(tools));
+            Recovery(requireInitialSearch: false, primarySkillName: null),
+            _ =>
+            {
+                executorFactoryCalls++;
+                return new StreamingToolExecutor(new ToolManager());
+            });
         var messages = new List<ChatMessage> { ChatMessage.User("/goal ship") };
         var pending = new List<ChatMessage> { messages[0] };
-        var longPrefix = "req-" + new string('a', 50);
 
-        var applied = await orchestrator.ApplyInitialDirectivesAsync(
+        var recovered = await orchestrator.TryRecoverFinalAnswerAsync(
             toolContext: null,
             messages,
             pending,
-            longPrefix,
+            finalContent: "done",
+            callIdPrefix: "req-noop",
             CancellationToken.None);
 
-        applied.Should().BeTrue();
-        var toolCallIds = messages
-            .Where(message => message.Role == "tool")
-            .Select(message => message.ToolCallId)
-            .ToArray();
-        toolCallIds.Should().HaveCount(2);
-        toolCallIds.Should().OnlyContain(callId =>
-            callId != null && callId.Length <= SkillRecoveryPlanner.MaxCallIdLength);
-        toolCallIds.Should().OnlyHaveUniqueItems();
-        toolCallIds[0].Should().Contain("ornn-search-skills:recovery:1");
-        toolCallIds[1].Should().Contain("use-skill:recovery:2");
-        $"{longPrefix}:skill-recovery:ornn-search-skills:recovery:1".Length.Should().BeGreaterThan(71);
+        recovered.Should().BeFalse();
+        executorFactoryCalls.Should().Be(0);
+        messages.Should().ContainSingle();
+        pending.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task Orchestrator_TryRecoverFinalAnswerAsync_WhenTypedSearchHasMatchesButNoLoad_ShouldExecuteUseSkill()
+    public async Task Orchestrator_TryRecoverFinalAnswerAsync_WhenPlannerReturnsNudge_ShouldAppendNudge()
     {
-        var tools = new ToolManager();
-        tools.Register(new DelegateTool("use_skill", _ => LoadResult(
-            status: "success",
-            skillName: "project-summary",
-            loaded: true,
-            error: null,
-            text: "# project-summary\n\nInstructions")));
         var orchestrator = new SkillRecoveryOrchestrator(
             Recovery(primarySkillName: null, maxAttempts: 1),
-            _ => new StreamingToolExecutor(tools));
+            _ => new StreamingToolExecutor(new ToolManager()));
         var messages = new List<ChatMessage>
         {
             ChatMessage.User("/goal ship"),
             AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
-            ToolResult("search-1", "ornn_search_skills", SearchResult(
-                status: "success",
-                text: "ornn text changed again",
-                matches:
-                [
-                    new { skill_name = "project-summary", description = "summary plan", is_private = false, category = "ops", tags = Array.Empty<string>() },
-                ])),
+            ChatMessage.Tool("search-1", "Found 1 skill in the catalog, see result payload"),
         };
         var pending = new List<ChatMessage>(messages);
 
@@ -132,8 +104,9 @@ public sealed class SkillRecoveryPlannerTests
             CancellationToken.None);
 
         recovered.Should().BeTrue();
-        messages.Last().Role.Should().Be("tool");
-        messages.Last().ToolResultView!.SkillLoad!.Loaded.Should().BeTrue();
+        messages.Last().Role.Should().Be("user");
+        messages.Last().Content.Should().Contain("Ornn skill search returned matching skills");
+        pending.Last().Should().BeSameAs(messages.Last());
     }
 
     [Fact]
@@ -150,6 +123,7 @@ public sealed class SkillRecoveryPlannerTests
         forced.Should().BeFalse();
         directive.ToolCall.Should().BeNull();
         directive.Nudge.Should().BeNull();
+        directive.ConsumesOrnnSearchAttempt.Should().BeFalse();
     }
 
     [Fact]
@@ -164,58 +138,30 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
-        directive.ToolCall!.Name.Should().Be("use_skill");
+        directive.ConsumesOrnnSearchAttempt.Should().BeTrue();
+        directive.Nudge.Should().BeNull();
+        directive.ToolCall.Should().NotBeNull();
+        directive.ToolCall!.Id.Should().Be("req-1:skill-recovery:ornn-search-skills");
+        directive.ToolCall.Name.Should().Be("ornn_search_skills");
+        directive.ToolCall.ArgumentsJson.Should().Contain("\"query\":\"project-summary\"");
+        directive.ToolCall.ArgumentsJson.Should().Contain("\"scope\":\"mixed\"");
     }
 
     [Fact]
-    public void TryPlanNextDirective_WhenLongPrefixesDiffer_ShouldKeepUseSkillCallIdsBoundedAndDistinct()
-    {
-        var first = SkillRecoveryPlanner.TryPlanNextDirective(
-            Recovery(primarySkillName: "project-summary"),
-            [ChatMessage.User("/goal ship")],
-            finalContent: null,
-            recoveryAttempts: 0,
-            callIdPrefix: "req-" + new string('a', 50),
-            out var firstDirective);
-        var second = SkillRecoveryPlanner.TryPlanNextDirective(
-            Recovery(primarySkillName: "project-summary"),
-            [ChatMessage.User("/goal ship")],
-            finalContent: null,
-            recoveryAttempts: 0,
-            callIdPrefix: "req-" + new string('b', 50),
-            out var secondDirective);
-
-        first.Should().BeTrue();
-        second.Should().BeTrue();
-        firstDirective.ToolCall!.Id.Length.Should().BeLessThanOrEqualTo(SkillRecoveryPlanner.MaxCallIdLength);
-        secondDirective.ToolCall!.Id.Length.Should().BeLessThanOrEqualTo(SkillRecoveryPlanner.MaxCallIdLength);
-        firstDirective.ToolCall.Id.Should().NotBe(secondDirective.ToolCall.Id);
-        firstDirective.ToolCall.Id.Should().Contain("use-skill");
-    }
-
-    [Fact]
-    public void TryPlanNextDirective_WhenDiscoveryRequested_ShouldBuildSearchWithoutFakeSkill()
+    public void TryPlanNextDirective_WhenInitialSearchAttemptsExhausted_ShouldReturnFalse()
     {
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
-            new AgentSkillRecoveryContext(
-                RequireInitialOrnnSearch: true,
-                RequireOrnnSearchOnBlocker: false,
-                CommandName: null,
-                OriginalCommand: "::",
-                PrimarySkillName: null,
-                MaxOrnnSearchAttempts: 1,
-                CommandArguments: null,
-                DiscoveryRequested: true),
-            [ChatMessage.User("::")],
+            Recovery(primarySkillName: "project-summary", maxAttempts: 1),
+            [ChatMessage.User("/goal ship")],
             finalContent: null,
-            recoveryAttempts: 0,
-            callIdPrefix: "req-discovery",
+            recoveryAttempts: 1,
+            callIdPrefix: null,
             out var directive);
 
-        forced.Should().BeTrue();
-        directive.ToolCall!.Name.Should().Be("ornn_search_skills");
-        directive.ToolCall.ArgumentsJson.Should().Contain("skill discovery");
-        directive.ToolCall.ArgumentsJson.Should().NotContain("\"skill\"");
+        forced.Should().BeFalse();
+        directive.ToolCall.Should().BeNull();
+        directive.Nudge.Should().BeNull();
+        directive.ConsumesOrnnSearchAttempt.Should().BeFalse();
     }
 
     [Fact]
@@ -225,17 +171,11 @@ public sealed class SkillRecoveryPlannerTests
         {
             ChatMessage.User("/goal ship today"),
             AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
-            ToolResult("search-1", "ornn_search_skills", SearchResult(
-                status: "success",
-                text: "display text one",
-                matches:
-                [
-                    new { skill_name = "project-summary", description = "summary planning", is_private = false, category = "ops", tags = Array.Empty<string>() },
-                ])),
+            ChatMessage.Tool("search-1", "Found 1 skill\n- **project-summary**: summary planning"),
         };
 
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
-            Recovery(originalCommand: "/goal ship today", primarySkillName: "project-summary", commandArguments: "typed args"),
+            Recovery(originalCommand: "/goal ship today", primarySkillName: "project-summary"),
             messages,
             finalContent: "done",
             recoveryAttempts: 1,
@@ -243,9 +183,13 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
-        using var document = JsonDocument.Parse(directive.ToolCall!.ArgumentsJson);
+        directive.ConsumesOrnnSearchAttempt.Should().BeFalse();
+        directive.ToolCall.Should().NotBeNull();
+        directive.ToolCall!.Name.Should().Be("use_skill");
+        directive.ToolCall.Id.Should().Be("req-2:skill-recovery:use-skill");
+        using var document = JsonDocument.Parse(directive.ToolCall.ArgumentsJson);
         document.RootElement.GetProperty("skill").GetString().Should().Be("project-summary");
-        document.RootElement.GetProperty("args").GetString().Should().Be("typed args");
+        document.RootElement.GetProperty("args").GetString().Should().Be("ship today");
     }
 
     [Fact]
@@ -255,14 +199,9 @@ public sealed class SkillRecoveryPlannerTests
         {
             ChatMessage.User("/goal ship"),
             AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
-            ToolResult("search-1", "ornn_search_skills", SearchResult(status: "no_match", text: "No skills found", matches: Array.Empty<object>())),
+            ChatMessage.Tool("search-1", "No skills found"),
             AssistantToolCall("use-1", "use_skill", "skill: project-summary"),
-            ToolResult("use-1", "use_skill", LoadResult(
-                status: "success",
-                skillName: "project-summary",
-                loaded: true,
-                error: null,
-                text: "# project-summary\n\nInstructions")),
+            ChatMessage.Tool("use-1", "loaded"),
         };
 
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
@@ -275,23 +214,18 @@ public sealed class SkillRecoveryPlannerTests
 
         forced.Should().BeFalse();
         directive.ToolCall.Should().BeNull();
+        directive.Nudge.Should().BeNull();
+        directive.ConsumesOrnnSearchAttempt.Should().BeFalse();
     }
 
     [Fact]
-    public void TryPlanNextDirective_WhenStructuredSearchHasMatch_ShouldUseFirstDiscoveredSkill()
+    public void TryPlanNextDirective_WhenLatestSearchHasMarkdownMatch_ShouldUseFirstDiscoveredSkill()
     {
         var messages = new List<ChatMessage>
         {
             ChatMessage.User("/goal ship"),
             AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
-            ToolResult("search-1", "ornn_search_skills", SearchResult(
-                status: "success",
-                text: "display text changed completely",
-                matches:
-                [
-                    new { skill_name = "project-summary", description = "summary plan", is_private = false, category = "ops", tags = Array.Empty<string>() },
-                    new { skill_name = "other-skill", description = "other", is_private = true, category = "misc", tags = new[] { "a" } },
-                ])),
+            ChatMessage.Tool("search-1", "Found 2 skills\n- **project-summary**: summary plan\n- other"),
         };
 
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
@@ -303,46 +237,43 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
-        directive.ToolCall!.ArgumentsJson.Should().Contain("\"skill\":\"project-summary\"");
+        directive.ToolCall.Should().NotBeNull();
+        directive.ToolCall!.Id.Should().Be("skill-recovery:use-skill");
+        directive.ToolCall.Name.Should().Be("use_skill");
+        directive.ToolCall.ArgumentsJson.Should().Contain("\"skill\":\"project-summary\"");
     }
 
     [Fact]
-    public void TryPlanNextDirective_WhenLegacyDisplayTextChangesButTypedResultStable_ShouldKeepSameDecision()
+    public void TryPlanNextDirective_WhenLatestSearchHasPlainMatch_ShouldTrimBeforeParenthesis()
     {
         var messages = new List<ChatMessage>
         {
             ChatMessage.User("/goal ship"),
             AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
-            ToolResult("search-1", "ornn_search_skills", SearchResult(
-                status: "success",
-                text: "this text no longer says Found 1 skill or markdown bullets",
-                matches:
-                [
-                    new { skill_name = "project-summary", description = "summary plan", is_private = false, category = "ops", tags = Array.Empty<string>() },
-                ])),
+            ChatMessage.Tool("search-1", "Found 1 skill\n- project-summary (remote): summary plan"),
         };
 
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
             Recovery(primarySkillName: null),
             messages,
-            finalContent: "done",
+            finalContent: "I cannot answer yet",
             recoveryAttempts: 1,
-            callIdPrefix: "req-stable",
+            callIdPrefix: "req-4",
             out var directive);
 
         forced.Should().BeTrue();
-        directive.ToolCall!.Name.Should().Be("use_skill");
-        directive.ToolCall.ArgumentsJson.Should().Contain("\"skill\":\"project-summary\"");
+        directive.ToolCall.Should().NotBeNull();
+        directive.ToolCall!.ArgumentsJson.Should().Contain("\"skill\":\"project-summary\"");
     }
 
     [Fact]
-    public void TryPlanNextDirective_WhenLegacyTextImpliesMatchButBoundaryCannotExtractTypedSkill_ShouldNudge()
+    public void TryPlanNextDirective_WhenSearchHasMatchButNoExtractableSkillAndAttemptsRemain_ShouldNudge()
     {
         var messages = new List<ChatMessage>
         {
             ChatMessage.User("/goal ship"),
             AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
-            ToolResult("search-1", "ornn_search_skills", "Found 1 skill in the catalog, see result payload"),
+            ChatMessage.Tool("search-1", "Found 1 skill in the catalog, see result payload"),
         };
 
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
@@ -350,22 +281,48 @@ public sealed class SkillRecoveryPlannerTests
             messages,
             finalContent: "I cannot answer yet",
             recoveryAttempts: 1,
-            callIdPrefix: "req-legacy-nudge",
+            callIdPrefix: "req-5",
             out var directive);
 
         forced.Should().BeTrue();
         directive.ToolCall.Should().BeNull();
+        directive.ConsumesOrnnSearchAttempt.Should().BeTrue();
         directive.Nudge.Should().Contain("Ornn skill search returned matching skills");
+        directive.Nudge.Should().Contain("/goal ship");
     }
 
     [Fact]
-    public void TryPlanNextDirective_WhenStructuredSearchHasNoMatch_ShouldNotTreatAsDiscoveredSkill()
+    public void TryPlanNextDirective_WhenSearchHasMatchButNoExtractableSkillAndAttemptsExhausted_ShouldNotNudge()
     {
         var messages = new List<ChatMessage>
         {
             ChatMessage.User("/goal ship"),
             AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
-            ToolResult("search-1", "ornn_search_skills", SearchResult(status: "no_match", text: "Nothing here", matches: Array.Empty<object>())),
+            ChatMessage.Tool("search-1", "Found 1 skill in the catalog, see result payload"),
+        };
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(primarySkillName: null, maxAttempts: 1),
+            messages,
+            finalContent: "I cannot answer yet",
+            recoveryAttempts: 1,
+            callIdPrefix: "req-5",
+            out var directive);
+
+        forced.Should().BeFalse();
+        directive.ToolCall.Should().BeNull();
+        directive.ConsumesOrnnSearchAttempt.Should().BeFalse();
+        directive.Nudge.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenSearchHasNoMatchPhrase_ShouldNotTreatAsDiscoveredSkill()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("/goal ship"),
+            AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
+            ChatMessage.Tool("search-1", "Search failed: Found 1 skill but backend unavailable"),
         };
 
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
@@ -378,45 +335,20 @@ public sealed class SkillRecoveryPlannerTests
 
         forced.Should().BeFalse();
         directive.ToolCall.Should().BeNull();
+        directive.Nudge.Should().BeNull();
+        directive.ConsumesOrnnSearchAttempt.Should().BeFalse();
     }
 
     [Fact]
-    public void TryPlanNextDirective_WhenSearchToolErrors_ShouldNotTreatAsMatch()
+    public void TryPlanNextDirective_WhenBlockerAppearsAfterUseSkill_ShouldBuildBlockerSearch()
     {
         var messages = new List<ChatMessage>
         {
             ChatMessage.User("/goal ship"),
             AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
-            ToolResult("search-1", "ornn_search_skills", SearchResult(status: "error", text: "Search failed", matches: Array.Empty<object>(), error: "backend unavailable")),
-        };
-
-        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
-            Recovery(primarySkillName: null),
-            messages,
-            finalContent: "done",
-            recoveryAttempts: 1,
-            callIdPrefix: "req-err",
-            out var directive);
-
-        forced.Should().BeFalse();
-        directive.ToolCall.Should().BeNull();
-    }
-
-    [Fact]
-    public void TryPlanNextDirective_WhenUseSkillFails_ShouldBuildBlockerSearchFromTypedError()
-    {
-        var messages = new List<ChatMessage>
-        {
-            ChatMessage.User("/goal ship"),
-            AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
-            ToolResult("search-1", "ornn_search_skills", SearchResult(status: "no_match", text: "No skills found", matches: Array.Empty<object>())),
+            ChatMessage.Tool("search-1", "No skills found"),
             AssistantToolCall("use-1", "use_skill", """{"skill":"project-summary"}"""),
-            ToolResult("use-1", "use_skill", LoadResult(
-                status: "error",
-                skillName: "project-summary",
-                loaded: false,
-                error: "backend unavailable while executing skill",
-                text: "Some display text")),
+            ChatMessage.Tool("use-1", "{\"error\":\"backend unavailable while executing skill\"}"),
         };
 
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
@@ -428,6 +360,8 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
+        directive.ConsumesOrnnSearchAttempt.Should().BeTrue();
+        directive.ToolCall.Should().NotBeNull();
         directive.ToolCall!.Name.Should().Be("ornn_search_skills");
         directive.ToolCall.ArgumentsJson.Should().Contain("backend unavailable");
     }
@@ -441,12 +375,7 @@ public sealed class SkillRecoveryPlannerTests
         {
             ChatMessage.User("/goal ship"),
             AssistantToolCall("use-1", "use_skill", """{"skill":"project-summary"}"""),
-            ToolResult("use-1", "use_skill", LoadResult(
-                status: "success",
-                skillName: "project-summary",
-                loaded: true,
-                error: null,
-                text: "# project-summary\n\nInstructions")),
+            ChatMessage.Tool("use-1", "loaded"),
         };
 
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
@@ -458,46 +387,101 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
+        directive.ToolCall.Should().NotBeNull();
         directive.ToolCall!.Name.Should().Be("ornn_search_skills");
     }
 
     [Theory]
     [InlineData("{\"error\":true,\"status\":404,\"body\":\"...\"}")]
-    [InlineData("Search failed: NyxID proxy returned status=403.")]
-    public void TryPlanNextDirective_WhenLegacySearchOutputStillParsesInBoundary_ShouldUseTypedError(string rawResult)
+    [InlineData("NyxID API request failed: GET https://nyx-api.example/api/v1/skills/project-summary/files -> 404")]
+    [InlineData("Upstream returned 403 forbidden while listing repository contents")]
+    [InlineData("Unauthorized: token missing required scope")]
+    [InlineData("Bad Request: parameter team_id was rejected")]
+    public void TryPlanNextDirective_WhenToolResultCarriesHttpStatusBlocker_ShouldBuildBlockerSearch(string toolResult)
     {
-        var message = ToolResult("search-1", "ornn_search_skills", rawResult);
+        // /summary wandering after use_skill is the actual prod symptom we are guarding
+        // against: nyxid_proxy tool results come back as 404/401/403/500 envelopes and
+        // the LLM keeps trying alternate paths instead of re-searching Ornn. The planner
+        // should treat these envelopes as blockers so the next recovery directive fires
+        // a fresh ornn_search_skills with the upstream failure as the query.
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("/summary alice"),
+            AssistantToolCall("search-1", "ornn_search_skills", """{"query":"project-summary"}"""),
+            ChatMessage.Tool("search-1", "Found 1 skill\n- **project-summary**: summary plan"),
+            AssistantToolCall("use-1", "use_skill", """{"skill":"project-summary"}"""),
+            ChatMessage.Tool("use-1", "loaded"),
+            AssistantToolCall("proxy-1", "nyxid_proxy", """{"slug":"ornn-api","path":"/api/v1/skills/project-summary/files"}"""),
+            ChatMessage.Tool("proxy-1", toolResult),
+        };
 
-        message.ToolResultView.Should().NotBeNull();
-        message.ToolResultView!.SkillSearch!.Status.Should().Be(ToolResultViewStatus.Error);
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(primarySkillName: "project-summary", maxAttempts: 2),
+            messages,
+            finalContent: "Following the loaded skill, but proxy call failed.",
+            recoveryAttempts: 1,
+            callIdPrefix: "req-http-blocker",
+            out var directive);
+
+        forced.Should().BeTrue();
+        directive.ConsumesOrnnSearchAttempt.Should().BeTrue();
+        directive.ToolCall.Should().NotBeNull();
+        directive.ToolCall!.Name.Should().Be("ornn_search_skills");
     }
 
-    [Theory]
-    [InlineData("# project-summary\n\nInstructions")]
-    [InlineData("Skill 'project-summary' not found.")]
-    public void TryPlanNextDirective_WhenLegacyUseSkillOutputStillParsesInBoundary_ShouldRecoverTypedLoadState(string rawResult)
+    [Fact]
+    public void TryPlanNextDirective_WhenBlockerSearchAttemptsExhausted_ShouldReturnFalse()
     {
-        var message = ToolResult("use-1", "use_skill", rawResult);
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("/goal ship"),
+            AssistantToolCall("use-1", "use_skill", """{"skill":"project-summary"}"""),
+            ChatMessage.Tool("use-1", "loaded"),
+        };
 
-        message.ToolResultView.Should().NotBeNull();
-        message.ToolResultView!.SkillLoad.Should().NotBeNull();
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(requireInitialSearch: false, primarySkillName: null, maxAttempts: 1),
+            messages,
+            finalContent: "cannot complete",
+            recoveryAttempts: 1,
+            callIdPrefix: "req-9",
+            out var directive);
+
+        forced.Should().BeFalse();
+        directive.ToolCall.Should().BeNull();
+        directive.Nudge.Should().BeNull();
+        directive.ConsumesOrnnSearchAttempt.Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenNoUseSkillCallExistsForBlockerOnlyRecovery_ShouldReturnFalse()
+    {
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(requireInitialSearch: false, primarySkillName: null),
+            [ChatMessage.User("/goal ship")],
+            finalContent: "cannot complete",
+            recoveryAttempts: 0,
+            callIdPrefix: "req-10",
+            out var directive);
+
+        forced.Should().BeFalse();
+        directive.ToolCall.Should().BeNull();
+        directive.Nudge.Should().BeNull();
+        directive.ConsumesOrnnSearchAttempt.Should().BeFalse();
     }
 
     private static AgentSkillRecoveryContext Recovery(
         bool requireInitialSearch = true,
         string originalCommand = "/goal ship",
         string? primarySkillName = "project-summary",
-        int maxAttempts = 2,
-        string? commandArguments = null) =>
+        int maxAttempts = 2) =>
         new(
             RequireInitialOrnnSearch: requireInitialSearch,
             RequireOrnnSearchOnBlocker: true,
             CommandName: "goal",
             OriginalCommand: originalCommand,
             PrimarySkillName: primarySkillName,
-            MaxOrnnSearchAttempts: maxAttempts,
-            CommandArguments: commandArguments,
-            DiscoveryRequested: false);
+            MaxOrnnSearchAttempts: maxAttempts);
 
     private static ChatMessage AssistantToolCall(string id, string name, string argumentsJson) =>
         new()
@@ -513,41 +497,6 @@ public sealed class SkillRecoveryPlannerTests
                 },
             ],
         };
-
-    private static ChatMessage ToolResult(string callId, string toolName, string rawResult) =>
-        ToolCallLoop.BuildToolResultMessage(callId, toolName, rawResult);
-
-    private static string SearchResult(
-        string status,
-        string text,
-        IEnumerable<object> matches,
-        string? error = null) =>
-        JsonSerializer.Serialize(new
-        {
-            result_type = "skill_search",
-            status,
-            error,
-            http_status = (int?)null,
-            matches,
-            text,
-        });
-
-    private static string LoadResult(
-        string status,
-        string? skillName,
-        bool loaded,
-        string? error,
-        string text) =>
-        JsonSerializer.Serialize(new
-        {
-            result_type = "skill_load",
-            status,
-            skill_name = skillName,
-            loaded,
-            error,
-            http_status = (int?)null,
-            text,
-        });
 
     private sealed class DelegateTool(string name, Func<string, string> execute) : IAgentTool
     {

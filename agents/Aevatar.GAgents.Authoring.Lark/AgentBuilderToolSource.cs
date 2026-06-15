@@ -17,22 +17,16 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
-    private readonly ScheduledAgentCreateRequestMapper _scheduledAgentMapper;
-    private readonly ScheduledAgentApiKeyIssuer _scheduledAgentApiKeyIssuer;
     private readonly ILogger<AgentBuilderTool>? _toolLogger;
-    private readonly ILogger<ScheduledAgentCreatorTool>? _creatorToolLogger;
 
-    internal AgentBuilderToolSource(
+    public AgentBuilderToolSource(
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerExecutionQueryPort executionQueryPort,
         INyxIdApiClientFactory nyxClientFactory,
         ISkillRunnerCommandPort skillRunnerPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
         ICallerScopeResolver callerScopeResolver,
-        ScheduledAgentCreateRequestMapper scheduledAgentMapper,
-        ScheduledAgentApiKeyIssuer scheduledAgentApiKeyIssuer,
-        ILogger<AgentBuilderTool>? toolLogger = null,
-        ILogger<ScheduledAgentCreatorTool>? creatorToolLogger = null)
+        ILogger<AgentBuilderTool>? toolLogger = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
@@ -40,10 +34,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
-        _scheduledAgentMapper = scheduledAgentMapper ?? throw new ArgumentNullException(nameof(scheduledAgentMapper));
-        _scheduledAgentApiKeyIssuer = scheduledAgentApiKeyIssuer ?? throw new ArgumentNullException(nameof(scheduledAgentApiKeyIssuer));
         _toolLogger = toolLogger;
-        _creatorToolLogger = creatorToolLogger;
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
@@ -59,12 +50,6 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
                 _catalogCommandPort,
                 _callerScopeResolver,
                 _toolLogger),
-            new ScheduledAgentCreatorTool(
-                _skillRunnerPort,
-                _callerScopeResolver,
-                _scheduledAgentMapper,
-                _scheduledAgentApiKeyIssuer,
-                _creatorToolLogger),
         ];
         return Task.FromResult(tools);
     }

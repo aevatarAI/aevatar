@@ -2,7 +2,6 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -18,9 +17,6 @@ public static class ProjectionScopeStatusRuntimeRegistration
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddAevatarAgentKindRegistry(builder =>
-            builder.Register(ProjectionScopeAgentRegistration
-                .Create<ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>>()));
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>,
             ProjectionScopeStatusDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, ProjectionScopeStatusQueryPort>();
@@ -56,8 +52,7 @@ public static class ProjectionScopeStatusRuntimeRegistration
                     RootActorId = request.RootActorId,
                 },
                 (_, context) => new ProjectionScopeStatusRuntimeLease(context),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindVerifier>(),
-                sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
                 sp.GetService<ILoggerFactory>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<ProjectionScopeStatusRuntimeLease>>(sp =>
@@ -70,8 +65,7 @@ public static class ProjectionScopeStatusRuntimeRegistration
                     lease.Context.RootActorId,
                     lease.Context.ProjectionKind,
                     ProjectionRuntimeMode.DurableMaterialization),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindVerifier>(),
-                sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>()));
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
         return services;
     }
 

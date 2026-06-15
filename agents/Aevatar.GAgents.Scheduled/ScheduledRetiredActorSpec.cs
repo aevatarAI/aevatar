@@ -11,8 +11,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
-/// Retired-actor declaration for the user-agent catalog and generated
-/// skill-runner / workflow-agent actors.
+/// Retired-actor declaration for the user-agent catalog and the generated
+/// skill-runner / workflow-agent actors previously hosted by the deleted
+/// <c>Aevatar.GAgents.ChannelRuntime</c> assembly.
 ///
 /// Dynamic discovery is gated on the catalog itself matching a retired
 /// runtime-type token. On a fully-migrated cluster this gate keeps the catalog
@@ -24,29 +25,49 @@ namespace Aevatar.GAgents.Scheduled;
 /// </summary>
 public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
 {
-    private const string RetiredSkillRunnerKind = "channel-runtime.skill-runner";
-    private const string RetiredWorkflowAgentKind = "channel-runtime.workflow-agent";
-    private const string RetiredWorkflowAgentType = "workflow_agent";
+    private const string RetiredSkillRunnerType = "Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgent";
+    // Retained as a string literal so legacy clusters still clean up workflow_agent
+    // event streams persisted before the social_media template was removed (issue #598).
+    // Delete once all legacy actors have been retired from production clusters.
+    private const string RetiredWorkflowAgentType = "Aevatar.GAgents.ChannelRuntime.WorkflowAgentGAgent";
+    // Mirror of the deleted WorkflowAgentDefaults — kept here so retired-actor discovery
+    // can still recognize legacy workflow_agent rows persisted in the catalog read model
+    // and drive their cleanup. New agents never carry these tokens; delete with the
+    // retired workflow_agent constants once all legacy actors are gone.
+    private const string LegacyWorkflowAgentType = "workflow_agent";
     private const int ReadModelPageSize = 500;
 
     public override string SpecId => "scheduled";
 
-    // Retire only the legacy catalog actor body left by the deleted
-    // Aevatar.GAgents.ChannelRuntime assembly. The durable materialization scopes MUST NOT
-    // be retired targets: a scope's runtime kind is derived from the context's simple type
-    // name, so the legacy and current UserAgentCatalog/AgentRegistry materialization contexts
-    // collapse to the same "projection.materialization-scope.*" kinds. Retiring them would
-    // destroy the live projection scope on every startup cleanup pass and leave the
-    // user-agent-catalog / agent-registry read models un-materialized (#1763 regression).
     public override IReadOnlyList<RetiredActorTarget> Targets { get; } =
     [
         new(
             UserAgentCatalogGAgent.WellKnownId,
             [
-                "channel-runtime.user-agent-catalog",
-                "channel-runtime.agent-registry",
+                "Aevatar.GAgents.ChannelRuntime.UserAgentCatalogGAgent",
+                "Aevatar.GAgents.ChannelRuntime.AgentRegistryGAgent",
             ],
             CleanupReadModels: true),
+        new(
+            $"projection.durable.scope:{UserAgentCatalogStorageContracts.LegacyDurableProjectionKind}:{UserAgentCatalogGAgent.WellKnownId}",
+            [
+                "Aevatar.GAgents.ChannelRuntime.UserAgentCatalogMaterializationContext",
+                "Aevatar.GAgents.ChannelRuntime.AgentRegistryMaterializationContext",
+            ],
+            SourceStreamId: UserAgentCatalogGAgent.WellKnownId),
+        // Mid-migration deploys may have created the durable projection scope at
+        // the new scope key (DurableProjectionKind) while still bound to the old
+        // ChannelRuntime materialization context type, leaving the new
+        // Aevatar.GAgents.Scheduled scope unable to recreate. Cover that case
+        // explicitly so retired cleanup wipes the actor + its stream pub/sub
+        // rendezvous state on next startup.
+        new(
+            $"projection.durable.scope:{UserAgentCatalogStorageContracts.DurableProjectionKind}:{UserAgentCatalogGAgent.WellKnownId}",
+            [
+                "Aevatar.GAgents.ChannelRuntime.UserAgentCatalogMaterializationContext",
+                "Aevatar.GAgents.ChannelRuntime.AgentRegistryMaterializationContext",
+            ],
+            SourceStreamId: UserAgentCatalogGAgent.WellKnownId),
     ];
 
     public override async IAsyncEnumerable<RetiredActorTarget> DiscoverDynamicTargetsAsync(
@@ -56,19 +77,19 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
         // Refactor (iter22/cluster-003):
         //   Old pattern: dynamic cleanup replayed catalog event streams and inferred actor type from actorId text.
         //   New principle: cleanup enumerates typed catalog read-model rows and treats actorId as an opaque address.
-        var kindProbe = services.GetRequiredService<IActorKindProbe>();
+        var typeProbe = services.GetRequiredService<IActorTypeProbe>();
         var logger = services.GetService<ILogger<ScheduledRetiredActorSpec>>()
                      ?? NullLogger<ScheduledRetiredActorSpec>.Instance;
 
-        if (!await ShouldDiscoverFromCatalogAsync(kindProbe, ct).ConfigureAwait(false))
+        if (!await ShouldDiscoverFromCatalogAsync(typeProbe, ct).ConfigureAwait(false))
             yield break;
 
         foreach (var actorId in await DiscoverFromReadModelBestEffortAsync(services, logger, ct).ConfigureAwait(false))
         {
             yield return new RetiredActorTarget(
                 actorId,
-                [RetiredSkillRunnerKind, RetiredWorkflowAgentKind],
-                ResetWhenRuntimeKindUnavailable: true);
+                [RetiredSkillRunnerType, RetiredWorkflowAgentType],
+                ResetWhenRuntimeTypeUnavailable: true);
         }
     }
 
@@ -89,17 +110,17 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
     }
 
     private async Task<bool> ShouldDiscoverFromCatalogAsync(
-        IActorKindProbe kindProbe,
+        IActorTypeProbe typeProbe,
         CancellationToken ct)
     {
         var catalogTarget = Targets.First(static target =>
             target.ActorId == UserAgentCatalogGAgent.WellKnownId);
 
-        var runtimeKind = await kindProbe
-            .GetRuntimeAgentKindAsync(UserAgentCatalogGAgent.WellKnownId, ct)
+        var runtimeTypeName = await typeProbe
+            .GetRuntimeAgentTypeNameAsync(UserAgentCatalogGAgent.WellKnownId, ct)
             .ConfigureAwait(false);
 
-        if (catalogTarget.MatchesRuntimeKind(runtimeKind))
+        if (catalogTarget.MatchesRuntimeType(runtimeTypeName))
             return true;
 
         return false;
@@ -178,7 +199,7 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
             return false;
 
         if (string.Equals(agentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) ||
-            string.Equals(agentType, RetiredWorkflowAgentType, StringComparison.Ordinal))
+            string.Equals(agentType, LegacyWorkflowAgentType, StringComparison.Ordinal))
         {
             return true;
         }

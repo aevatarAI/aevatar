@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aevatar Mainnet Voice Demo</title>
+  <link rel="stylesheet" href="/demo/voice/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Aevatar Mainnet Host</p>
+        <h1>Voice to Agent Demo</h1>
+        <p class="lede">
+          浏览器采集麦克风音频，按 PCM16 24kHz 发送到当前主网 Host 的 voice endpoint。
+          页面只连接当前 Host 的 bootstrap 与 `/ws/voice`，不会接触 provider credential。
+        </p>
+      </div>
+      <div class="status-strip" aria-live="polite">
+        <span id="connectionState" class="pill pill-idle">未连接</span>
+        <span id="micState" class="pill">麦克风未启动</span>
+        <span id="sampleRateLabel" class="pill">采样率待检测</span>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="panel control-panel">
+        <div class="panel-heading">
+          <h2>连接</h2>
+          <p>建议从同一个 Mainnet Host origin 打开本页；如果 URL 或本地会话里有 NyxID access token，demo 会先自动准备 agent 和路由，再连接 `/ws/voice`。</p>
+        </div>
+
+        <label class="field">
+          <span>入口</span>
+          <select id="endpointMode">
+            <option value="policy" selected>策略路由 /ws/voice</option>
+            <option value="bypass">直连调试 /ws/voice/{actorId}</option>
+          </select>
+        </label>
+
+        <label id="actorField" class="field is-hidden">
+          <span>Actor ID</span>
+          <input id="actorId" autocomplete="off" placeholder="例如 role-agent-xxx">
+        </label>
+
+        <label class="field">
+          <span>Voice module</span>
+          <input id="moduleName" autocomplete="off" value="voice_presence_openai">
+        </label>
+
+        <label class="field">
+          <span>Channel</span>
+          <input id="channelName" autocomplete="off" value="web">
+        </label>
+
+        <label class="field">
+          <span>采样率</span>
+          <input id="sampleRate" inputmode="numeric" value="24000">
+        </label>
+
+        <label class="field">
+          <span>WS URL</span>
+          <input id="wsUrl" readonly>
+        </label>
+
+        <div class="button-row">
+          <button id="connectBtn" class="primary" type="button">开始说话</button>
+          <button id="muteBtn" type="button" disabled>静音</button>
+          <button id="disconnectBtn" type="button" disabled>断开</button>
+        </div>
+
+        <div class="meters" aria-label="音频状态">
+          <div>
+            <span>输入音量</span>
+            <meter id="inputMeter" min="0" max="1" value="0"></meter>
+          </div>
+          <div>
+            <span>发送帧</span>
+            <strong id="sentFrames">0</strong>
+          </div>
+          <div>
+            <span>接收帧</span>
+            <strong id="receivedFrames">0</strong>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel log-panel">
+        <div class="panel-heading">
+          <h2>运行日志</h2>
+          <p>连接失败时先看这里的 HTTP/WS close reason，再核对下方配置。</p>
+        </div>
+        <pre id="log" class="log" aria-live="polite">等待连接...</pre>
+      </section>
+    </section>
+
+    <section class="setup-grid">
+      <article class="panel">
+        <h2>1. Host 负责 provider 配置</h2>
+        <p>这个 demo 只连接当前 Mainnet Host。Voice provider 是否可用由 Host 配置和 voice readmodel 决定，页面不会声明固定上游 endpoint。</p>
+      </article>
+
+      <article class="panel">
+        <h2>2. Agent 要有 voice module</h2>
+        <p>点击“开始说话”时，demo 会自动创建或复用当前用户的 voice demo agent，并挂上 `voice_presence_openai` 模块。请求里的 NyxID bearer 只用于当前 Host 的身份认证，不会作为 provider credential 暴露给浏览器。</p>
+        <p>普通 `/ws/voice` 只从 typed `voice_attach_target` 读取目标 agent；`/ws/voice/{actorId}` 是调试直连入口，需要登录用户具备 `voice:bypass` scope 或 admin/owner 角色。</p>
+      </article>
+
+      <article class="panel wide">
+        <h2>3. 调试直连</h2>
+        <p>demo 会调用 `POST /api/demo/voice/bootstrap`，在当前 NyxID scope 下登记 demo agent，并把 voice route 写成 typed `voice_attach_target`。返回的 `actor_id` 与 `voice_module_name` 可用于调试直连；临时换目标 agent 时使用显式 bypass 路径。</p>
+        <pre><code>wss://MAINNET_HOST/ws/voice/YOUR_AGENT_ACTOR_ID?voice_module_name=voice_presence_openai</code></pre>
+      </article>
+
+      <article class="panel">
+        <h2>4. 打开 demo</h2>
+        <p>线上部署后访问当前 Mainnet Host 的：</p>
+        <pre><code>/demo/voice</code></pre>
+        <p>本地调试启动 Mainnet Host 后访问：</p>
+        <pre><code>http://127.0.0.1:5080/demo/voice</code></pre>
+        <p>浏览器会请求麦克风权限。连接成功后直接说话，agent 的音频回复会从当前页面播放。</p>
+      </article>
+    </section>
+  </main>
+
+  <script type="module" src="/demo/voice/app.js"></script>
+</body>
+</html>

@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -9,7 +8,6 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -19,7 +17,6 @@ namespace Aevatar.GAgentService.Core.GAgents;
 //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 // Refactor (iter355/issue1438-first): Old pattern: durable LlmSession tool runtime contracts persisted arguments, schemas, hints, and results as *_json strings New principle: typed Struct/Value fields are authoritative for new writes; legacy *_json fields are read fallback only
-[GAgent("gagent.service.llm-session")]
 public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));
@@ -730,37 +727,8 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         foreach (var provider in providers)
         {
             ct.ThrowIfCancellationRequested();
-            try
-            {
-                substituteTools.AddRange(await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(
-                    ex,
-                    "Responses substitute tool discovery failed for provider {ProviderType}; continuing without that provider.",
-                    provider.GetType().Name);
-            }
-
-            try
-            {
-                additiveTools.AddRange(await provider.GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(
-                    ex,
-                    "Responses additive tool discovery failed for provider {ProviderType}; continuing without that provider.",
-                    provider.GetType().Name);
-            }
+            substituteTools.AddRange(await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
+            additiveTools.AddRange(await provider.GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
         }
 
         var substitutedNames = (command.ToolSelection?.SubstitutedToolNames ?? [])
@@ -825,8 +793,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                     ? "{}"
                     : toolCall.ArgumentsJson;
                 var result = toolsByName.TryGetValue(toolCall.Name, out var tool)
-                    ? await ResponsesSafeToolExecutor.ExecuteAsync(
-                        tool,
+                    ? await tool.ExecuteAsync(
                         argumentsJson,
                         ct)
                     : System.Text.Json.JsonSerializer.Serialize(new

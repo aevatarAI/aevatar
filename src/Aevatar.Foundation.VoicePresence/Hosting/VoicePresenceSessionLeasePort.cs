@@ -35,7 +35,6 @@ public sealed class VoicePresenceSessionLeasePort : IVoicePresenceSessionLeasePo
                     SessionId = request.SessionId,
                     OwnerId = request.OwnerId,
                     ExpiresAt = Timestamp.FromDateTimeOffset(expiresAtUtc),
-                    SessionOverrides = request.SessionOverrides?.Clone(),
                 }),
             ct);
 

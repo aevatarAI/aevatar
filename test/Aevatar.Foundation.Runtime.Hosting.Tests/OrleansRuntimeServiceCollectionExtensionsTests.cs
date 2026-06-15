@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
@@ -9,11 +8,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
-using Orleans.Configuration;
 using Orleans.Hosting;
-using Orleans.Persistence;
-using Orleans.Runtime;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -149,69 +144,5 @@ public sealed class OrleansRuntimeServiceCollectionExtensionsTests
         };
 
         act.Should().NotThrow();
-    }
-
-    [Fact]
-    public void AddAevatarFoundationRuntimeOrleans_SiloBuilder_WhenPersistenceBackendIsGarnet_ShouldIsolateCallbackSchedulerStorage()
-    {
-        using var host = new HostBuilder()
-            .UseOrleans(siloBuilder =>
-            {
-                siloBuilder.UseLocalhostClustering(
-                    siloPort: 11113,
-                    gatewayPort: 30013,
-                    serviceId: "aevatar-runtime-callback-storage-options-service",
-                    clusterId: "aevatar-runtime-callback-storage-options-cluster");
-                siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
-                {
-                    options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
-                    options.GarnetConnectionString = "localhost:6379";
-                });
-            })
-            .Build();
-        var options = host.Services.GetRequiredService<IOptionsMonitor<RedisStorageOptions>>();
-
-        var schedulerOptions = options.Get(OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName);
-        var sharedOptions = options.Get(OrleansRuntimeConstants.GrainStateStorageName);
-
-        schedulerOptions.GrainStorageSerializer.Should()
-            .BeOfType<RuntimeCallbackSchedulerStateGrainStorageSerializer>();
-        sharedOptions.GrainStorageSerializer.Should()
-            .NotBeOfType<RuntimeCallbackSchedulerStateGrainStorageSerializer>();
-        schedulerOptions.GetStorageKey.Should().NotBeNull();
-
-        var schedulerKey = schedulerOptions
-            .GetStorageKey!("aevatar-service", GrainId.Create("runtimecallbackscheduler", "actor-1"))
-            .ToString();
-        schedulerKey.Should().StartWith($"{OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName}/");
-        schedulerKey.Should().EndWith("/aevatar-service");
-    }
-
-    [Fact]
-    public void AddAevatarFoundationRuntimeOrleans_SiloBuilder_WhenPersistenceBackendIsInMemory_ShouldIsolateCallbackSchedulerStorage()
-    {
-        using var host = new HostBuilder()
-            .UseOrleans(siloBuilder =>
-            {
-                siloBuilder.UseLocalhostClustering(
-                    siloPort: 11114,
-                    gatewayPort: 30014,
-                    serviceId: "aevatar-runtime-callback-memory-options-service",
-                    clusterId: "aevatar-runtime-callback-memory-options-cluster");
-                siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
-                {
-                    options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendInMemory;
-                });
-            })
-            .Build();
-        var options = host.Services.GetRequiredService<IOptionsMonitor<MemoryGrainStorageOptions>>();
-
-        var schedulerOptions = options.Get(OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName);
-        var sharedOptions = options.Get(OrleansRuntimeConstants.GrainStateStorageName);
-
-        schedulerOptions.GrainStorageSerializer.Should()
-            .BeOfType<RuntimeCallbackSchedulerStateGrainStorageSerializer>();
-        sharedOptions.GrainStorageSerializer.Should()
-            .NotBeOfType<RuntimeCallbackSchedulerStateGrainStorageSerializer>();
     }
 }

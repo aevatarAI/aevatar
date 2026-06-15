@@ -2,7 +2,6 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
-using Aevatar.Foundation.Core.TypeSystem;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -16,13 +15,11 @@ public sealed class ProjectionScopeActorRuntimeTests
         var operationLog = new List<string>();
         var runtime = new RecordingRuntime(operationLog);
         var dispatchPort = new NoopDispatchPort();
-        var registry = BuildRegistry();
-        var verifier = new StubAgentKindVerifier(_ => true);
+        var verifier = new StubAgentTypeVerifier(_ => true);
         var sut = new ProjectionScopeActorRuntime<DummyAgent>(
             runtime,
             dispatchPort,
             verifier,
-            registry,
             streamPubSubMaintenance: null,
             logger: NullLogger<ProjectionScopeActorRuntime<DummyAgent>>.Instance);
 
@@ -35,7 +32,6 @@ public sealed class ProjectionScopeActorRuntimeTests
 
         var actorId = ProjectionScopeActorId.Build(scopeKey);
         runtime.CreatedActorIds.Should().Equal(actorId);
-        runtime.CreatedByKind.Should().Equal(("test.projection-scope", actorId));
         runtime.DestroyedActorIds.Should().BeEmpty();
     }
 
@@ -49,13 +45,11 @@ public sealed class ProjectionScopeActorRuntimeTests
         var operationLog = new List<string>();
         var runtime = new RecordingRuntime(operationLog);
         runtime.SeedExisting(actorId);
-        var registry = BuildRegistry();
-        var verifier = new StubAgentKindVerifier(_ => true);
+        var verifier = new StubAgentTypeVerifier(_ => true);
         var sut = new ProjectionScopeActorRuntime<DummyAgent>(
             runtime,
             new NoopDispatchPort(),
             verifier,
-            registry,
             streamPubSubMaintenance: null,
             logger: NullLogger<ProjectionScopeActorRuntime<DummyAgent>>.Instance);
 
@@ -86,14 +80,12 @@ public sealed class ProjectionScopeActorRuntimeTests
         var operationLog = new List<string>();
         var runtime = new RecordingRuntime(operationLog);
         runtime.SeedExisting(actorId);
-        var registry = BuildRegistry();
-        var verifier = new StubAgentKindVerifier(_ => false);
+        var verifier = new StubAgentTypeVerifier(_ => false);
         var pubSub = new RecordingPubSubMaintenance(operationLog);
         var sut = new ProjectionScopeActorRuntime<DummyAgent>(
             runtime,
             new NoopDispatchPort(),
             verifier,
-            registry,
             pubSub,
             NullLogger<ProjectionScopeActorRuntime<DummyAgent>>.Instance);
 
@@ -107,7 +99,6 @@ public sealed class ProjectionScopeActorRuntimeTests
             "destroy:" + actorId,
             "pubsub-reset:" + actorId,
             "create:" + actorId);
-        runtime.CreatedByKind.Should().Equal(("test.projection-scope", actorId));
     }
 
     [Fact]
@@ -125,14 +116,12 @@ public sealed class ProjectionScopeActorRuntimeTests
         var operationLog = new List<string>();
         var runtime = new RecordingRuntime(operationLog);
         runtime.SeedExisting(actorId);
-        var registry = BuildRegistry();
-        var verifier = new StubAgentKindVerifier(_ => false);
+        var verifier = new StubAgentTypeVerifier(_ => false);
         var pubSub = new ThrowingPubSubMaintenance();
         var sut = new ProjectionScopeActorRuntime<DummyAgent>(
             runtime,
             new NoopDispatchPort(),
             verifier,
-            registry,
             pubSub,
             NullLogger<ProjectionScopeActorRuntime<DummyAgent>>.Instance);
 
@@ -152,13 +141,11 @@ public sealed class ProjectionScopeActorRuntimeTests
         var operationLog = new List<string>();
         var runtime = new RecordingRuntime(operationLog);
         runtime.SeedExisting(actorId);
-        var registry = BuildRegistry();
-        var verifier = new StubAgentKindVerifier(_ => false);
+        var verifier = new StubAgentTypeVerifier(_ => false);
         var sut = new ProjectionScopeActorRuntime<DummyAgent>(
             runtime,
             new NoopDispatchPort(),
             verifier,
-            registry,
             streamPubSubMaintenance: null,
             logger: NullLogger<ProjectionScopeActorRuntime<DummyAgent>>.Instance);
 
@@ -167,16 +154,6 @@ public sealed class ProjectionScopeActorRuntimeTests
         operationLog.Should().Equal("destroy:" + actorId, "create:" + actorId);
     }
 
-    private static IAgentKindRegistry BuildRegistry() =>
-        new AgentKindRegistry(
-            [
-                new AgentRegistration(
-                    Kind: "test.projection-scope",
-                    ImplementationType: typeof(DummyAgent),
-                    StateContractType: typeof(object)),
-            ]);
-
-    [GAgent("test.projection-scope")]
     private sealed class DummyAgent : IAgent
     {
         public string Id => "dummy";
@@ -195,7 +172,6 @@ public sealed class ProjectionScopeActorRuntimeTests
 
         public List<string> CreatedActorIds { get; } = [];
         public List<string> DestroyedActorIds { get; } = [];
-        public List<(string agentKind, string actorId)> CreatedByKind { get; } = [];
 
         public void SeedExisting(string actorId) => _existing.Add(actorId);
 
@@ -211,18 +187,6 @@ public sealed class ProjectionScopeActorRuntimeTests
 
         public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
             CreateAsync<DummyAgent>(id, ct);
-
-        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            ArgumentException.ThrowIfNullOrWhiteSpace(agentKind);
-            ArgumentNullException.ThrowIfNull(id);
-            CreatedActorIds.Add(id);
-            CreatedByKind.Add((agentKind, id));
-            _operationLog.Add("create:" + id);
-            _existing.Add(id);
-            return Task.FromResult<IActor>(new StubActor(id));
-        }
 
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
@@ -250,9 +214,9 @@ public sealed class ProjectionScopeActorRuntimeTests
         }
     }
 
-    private sealed class StubAgentKindVerifier(Func<string, bool> matcher) : IAgentKindVerifier
+    private sealed class StubAgentTypeVerifier(Func<string, bool> matcher) : IAgentTypeVerifier
     {
-        public Task<bool> IsExpectedKindAsync(string actorId, string expectedKind, CancellationToken ct = default) =>
+        public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default) =>
             Task.FromResult(matcher(actorId));
     }
 

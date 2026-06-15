@@ -22,9 +22,6 @@ public sealed record ScriptCompilationRequest
 
     /// <summary>Optional protobuf files keyed by filename.</summary>
     public IReadOnlyDictionary<string, string>? ProtoFiles { get; init; }
-
-    /// <summary>Optional behavior type name used to select the script package entry behavior.</summary>
-    public string? EntryBehaviorTypeName { get; init; }
 }
 
 /// <summary>Result of a script compilation.</summary>

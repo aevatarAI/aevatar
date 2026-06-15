@@ -403,7 +403,7 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Failed to cancel reconnect callback for link '{LinkId}'", link.Descriptor.LinkId);
+            _logger.LogDebug(ex, "Failed to cancel reconnect callback for link '{LinkId}'", link.Descriptor.LinkId);
         }
         finally
         {

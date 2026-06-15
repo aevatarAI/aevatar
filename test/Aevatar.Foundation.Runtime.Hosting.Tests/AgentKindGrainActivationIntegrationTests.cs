@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Compatibility;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
@@ -19,13 +20,15 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 /// runs in a representative environment (not just unit-tested helpers).
 ///
 /// Covers the activation paths surfaced in PR review: <c>InitializeAgentByKindAsync</c>
-/// binds via the registry, persists canonical kind, and the row reactivates
-/// correctly on a second grain look-up.
+/// binds via the registry, persists canonical kind + AgentTypeName mirror,
+/// and the row reactivates correctly on a second grain look-up. The legacy
+/// CLR-name → kind lazy-tag path is exercised via <c>InitializeAgentAsync</c>
+/// with a class registered through <c>[GAgent]</c>.
 /// </summary>
 public sealed class AgentKindGrainActivationIntegrationTests
 {
     [Fact]
-    public async Task InitializeAgentByKindAsync_PersistsCanonicalKind()
+    public async Task InitializeAgentByKindAsync_PersistsCanonicalKindAndMirrorsAgentTypeName()
     {
         var actorId = $"actor-{Guid.NewGuid():N}";
         var host = await StartSiloHostAsync();
@@ -39,6 +42,37 @@ public sealed class AgentKindGrainActivationIntegrationTests
             initialized.Should().BeTrue();
 
             (await grain.IsInitializedAsync()).Should().BeTrue();
+            (await grain.GetAgentKindAsync()).Should().Be("integrationtests.canonical");
+            // The AgentTypeName mirror must be populated so older runtime
+            // pods on the same cluster can still resolve the row through
+            // their CLR-name lookup during the Phase 1/2 mixed-version window.
+            (await grain.GetAgentTypeNameAsync())
+                .Should().Be(typeof(IntegrationFixtureCanonicalAgent).FullName);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task InitializeAgentByKindAsync_WithLegacyAlias_PersistsCanonicalKind()
+    {
+        // P2: the caller passes a legacy alias; the persisted Identity.Kind
+        // must be the canonical kind from the registry, not the deprecated
+        // token. Otherwise removing the alias later would orphan the row.
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var host = await StartSiloHostAsync();
+
+        try
+        {
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+
+            var initialized = await grain.InitializeAgentByKindAsync("integrationtests.deprecated-alias");
+            initialized.Should().BeTrue();
+
             (await grain.GetAgentKindAsync()).Should().Be("integrationtests.canonical");
         }
         finally
@@ -74,6 +108,36 @@ public sealed class AgentKindGrainActivationIntegrationTests
             // makes the test exercise the actual resume → bind path, not
             // just the persisted state slots.
             (await second.GetDescriptionAsync()).Should().Be(nameof(IntegrationFixtureCanonicalAgent));
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task InitializeAgentAsync_WithLegacyClrName_LazyTagsIdentityKind()
+    {
+        // Older callers still pass a CLR full name. The grain must resolve
+        // via the registry's [GAgent] / [LegacyClrTypeName] lookup, lazy-tag
+        // Identity.Kind on the row, and preserve AgentTypeName so older
+        // pods reading the row continue to function.
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var host = await StartSiloHostAsync();
+
+        try
+        {
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+
+            var initialized = await grain.InitializeAgentAsync(
+                typeof(IntegrationFixtureCanonicalAgent).AssemblyQualifiedName!);
+            initialized.Should().BeTrue();
+
+            (await grain.GetAgentKindAsync()).Should().Be("integrationtests.canonical");
+            (await grain.GetAgentTypeNameAsync())
+                .Should().Be(typeof(IntegrationFixtureCanonicalAgent).AssemblyQualifiedName);
         }
         finally
         {
@@ -131,6 +195,7 @@ public sealed class AgentKindGrainActivationIntegrationTests
 }
 
 [GAgent("integrationtests.canonical")]
+[LegacyAgentKind("integrationtests.deprecated-alias")]
 public sealed class IntegrationFixtureCanonicalAgent : IAgent
 {
     public string Id { get; } = "integration-fixture";

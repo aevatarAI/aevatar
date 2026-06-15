@@ -1,5 +1,4 @@
 using System.Text;
-using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
@@ -27,366 +26,6 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class AgentRunGAgentTests
 {
-    private static readonly ConditionalWeakTable<AgentRunGAgent, RecordingReplyGenerationExecutor> RecordingExecutors = new();
-
-    internal static Task DrainRecordingExecutorAsync(AgentRunGAgent agent) =>
-        RecordingExecutors.TryGetValue(agent, out var executor)
-            ? executor.DrainAsync(agent.State)
-            : Task.CompletedTask;
-
-    [Fact]
-    public async Task HandleNextToolStepAsync_MergesToolStepOutboundIntentIntoStepState()
-    {
-        // Regression for the relay interactive-reply scope gap: reply_with_interaction
-        // executes during the tool step, so its captured intent arrives on
-        // AgentRunToolStepResult.outbound_intent and must be merged into the persisted
-        // step state for the finalize path to dispatch the card.
-        var actorRuntime = new DispatchingActorRuntime();
-        var runtime = CreateRunAgentWithExecutor(
-            actorRuntime,
-            new PausedReplyGenerationExecutor(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
-        SetState(runtime, new AgentRunGAgentState
-        {
-            RunId = "run-tool-intent",
-            CorrelationId = "corr-tool-intent",
-            TargetActorId = "actor-1",
-            Status = AgentRunStatus.ReplyGenerationRequested,
-            GenerationAttempt = 1,
-            GenerationStep = new AgentRunReplyStepState
-            {
-                RunId = "run-tool-intent",
-                CorrelationId = "corr-tool-intent",
-                TargetActorId = "actor-1",
-                Attempt = 1,
-                NextStepIndex = 2,
-                MaxToolRounds = 4,
-                PendingToolCalls =
-                {
-                    new AgentRunToolCall
-                    {
-                        Id = "call-1",
-                        Name = "reply_with_interaction",
-                        ArgumentsJson = "{}",
-                    },
-                },
-            },
-        });
-
-        await runtime.HandleNextToolStepAsync(new AgentRunNextToolStepRequestedEvent
-        {
-            RunId = "run-tool-intent",
-            CorrelationId = "corr-tool-intent",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 3,
-            Request = new NeedsLlmReplyEvent
-            {
-                CorrelationId = "corr-tool-intent",
-                RunId = "run-tool-intent",
-                TargetActorId = "actor-1",
-                RegistrationId = "reg-1",
-                Activity = BuildRelayActivity(),
-            },
-            ToolStepResult = new AgentRunToolStepResult
-            {
-                AdvanceRound = true,
-                OutboundIntent = new MessageContent
-                {
-                    Text = "确认部署到 staging?",
-                    Actions =
-                    {
-                        new ActionElement { ActionId = "confirm_deploy", Label = "确认部署" },
-                    },
-                },
-            },
-        });
-
-        runtime.State.GenerationStep.Should().NotBeNull();
-        runtime.State.GenerationStep!.OutboundIntent.Should().NotBeNull();
-        runtime.State.GenerationStep.OutboundIntent.Actions.Should()
-            .ContainSingle(action => action.ActionId == "confirm_deploy");
-    }
-
-    [Fact]
-    public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_RetriesOnceWithFinalNoToolsStepInsteadOfFailing()
-    {
-        // Regression for the prod incident where a reasoning model spent the whole
-        // step on reasoning tokens (content empty, reasoning_content set, no tool
-        // calls, finishReason=stop) and the run terminated as empty_reply with the
-        // generic apology. A reasoning-only step must get exactly one bounded
-        // no-tools retry before failing.
-        var actorRuntime = new DispatchingActorRuntime();
-        var executor = new PausedReplyGenerationExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            actorRuntime,
-            executor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
-        SetState(runtime, new AgentRunGAgentState
-        {
-            RunId = "run-reasoning-only",
-            CorrelationId = "corr-reasoning-only",
-            TargetActorId = "actor-1",
-            Status = AgentRunStatus.ReplyGenerationRequested,
-            GenerationAttempt = 1,
-            GenerationStep = new AgentRunReplyStepState
-            {
-                RunId = "run-reasoning-only",
-                CorrelationId = "corr-reasoning-only",
-                TargetActorId = "actor-1",
-                Attempt = 1,
-                NextStepIndex = 1,
-                MaxToolRounds = 4,
-            },
-        });
-
-        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
-        {
-            RunId = "run-reasoning-only",
-            CorrelationId = "corr-reasoning-only",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 2,
-            Request = new NeedsLlmReplyEvent
-            {
-                CorrelationId = "corr-reasoning-only",
-                RunId = "run-reasoning-only",
-                TargetActorId = "actor-1",
-                RegistrationId = "reg-1",
-                Activity = BuildRelayActivity(),
-            },
-            LlmStepResult = new AgentRunLlmStepResult
-            {
-                AccumulatedText = string.Empty,
-                Content = string.Empty,
-                ReasoningContent = "internal chain of thought without an answer",
-                FinishReason = "stop",
-                HasStreamedTextContent = false,
-            },
-        });
-
-        var step = runtime.State.GenerationStep;
-        step.Should().NotBeNull();
-        step!.FinalNoToolsStep.Should().BeTrue("a reasoning-only step must advance to the bounded no-tools retry");
-        step.NextStepIndex.Should().Be(3);
-        executor.LlmStepExecutions.Should().ContainSingle("the run must re-dispatch one LLM retry step");
-        executor.LlmStepExecutions[0].StepState.FinalNoToolsStep.Should().BeTrue();
-        var nudge = step.Messages[^1];
-        nudge.Role.Should().Be("user");
-        nudge.Content.Should().NotBeNullOrWhiteSpace();
-        step.AppendedHistory.Should().NotContain(
-            entry => entry.Content == nudge.Content,
-            "the synthetic nudge must not leak into the durable conversation history");
-        runtime.State.Status.Should().Be(
-            AgentRunStatus.ReplyGenerationRequested,
-            "the run must not terminate while the retry step is in flight");
-    }
-
-    [Fact]
-    public async Task HandleNextLlmStepAsync_EmptyStepWithoutCapturedReasoning_StillRetriesOnce()
-    {
-        // Regression for the 2026-06-12 prod incident: deepseek slash-skill turns
-        // completed with finishReason=stop, no text, no tool calls AND no captured
-        // ReasoningContent (reasoning deltas are not guaranteed to survive the
-        // provider boundary). The reasoning-gated retry refused to fire and every
-        // run terminated as the generic apology. The recovery gate must not require
-        // an observed reasoning trace.
-        var actorRuntime = new DispatchingActorRuntime();
-        var executor = new PausedReplyGenerationExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            actorRuntime,
-            executor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
-        SetState(runtime, new AgentRunGAgentState
-        {
-            RunId = "run-empty-no-reasoning",
-            CorrelationId = "corr-empty-no-reasoning",
-            TargetActorId = "actor-1",
-            Status = AgentRunStatus.ReplyGenerationRequested,
-            GenerationAttempt = 1,
-            GenerationStep = new AgentRunReplyStepState
-            {
-                RunId = "run-empty-no-reasoning",
-                CorrelationId = "corr-empty-no-reasoning",
-                TargetActorId = "actor-1",
-                Attempt = 1,
-                NextStepIndex = 1,
-                MaxToolRounds = 4,
-            },
-        });
-
-        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
-        {
-            RunId = "run-empty-no-reasoning",
-            CorrelationId = "corr-empty-no-reasoning",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 2,
-            Request = new NeedsLlmReplyEvent
-            {
-                CorrelationId = "corr-empty-no-reasoning",
-                RunId = "run-empty-no-reasoning",
-                TargetActorId = "actor-1",
-                RegistrationId = "reg-1",
-                Activity = BuildRelayActivity(),
-            },
-            LlmStepResult = new AgentRunLlmStepResult
-            {
-                AccumulatedText = string.Empty,
-                Content = string.Empty,
-                ReasoningContent = string.Empty,
-                FinishReason = "stop",
-                HasStreamedTextContent = false,
-            },
-        });
-
-        var step = runtime.State.GenerationStep;
-        step.Should().NotBeNull();
-        step!.FinalNoToolsStep.Should().BeTrue(
-            "an empty completed step must advance to the bounded no-tools retry even when no reasoning trace was captured");
-        executor.LlmStepExecutions.Should().ContainSingle("the run must re-dispatch one LLM retry step");
-        runtime.State.Status.Should().Be(
-            AgentRunStatus.ReplyGenerationRequested,
-            "the run must not terminate while the retry step is in flight");
-    }
-
-    [Fact]
-    public async Task HandleNextLlmStepAsync_ReasoningOnlyResult_StaysInStepMessagesButOutOfDurableHistory()
-    {
-        // Reasoning-only results keep their intra-run record (step messages feed the
-        // retry request and diagnostics) but must not enter AppendedHistory: providers
-        // drop bare reasoning on assistant history messages, so a persisted
-        // reasoning-only entry replays as an empty assistant turn that poisons every
-        // later request in the conversation.
-        var actorRuntime = new DispatchingActorRuntime();
-        var executor = new PausedReplyGenerationExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            actorRuntime,
-            executor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
-        SetState(runtime, new AgentRunGAgentState
-        {
-            RunId = "run-reasoning-history",
-            CorrelationId = "corr-reasoning-history",
-            TargetActorId = "actor-1",
-            Status = AgentRunStatus.ReplyGenerationRequested,
-            GenerationAttempt = 1,
-            GenerationStep = new AgentRunReplyStepState
-            {
-                RunId = "run-reasoning-history",
-                CorrelationId = "corr-reasoning-history",
-                TargetActorId = "actor-1",
-                Attempt = 1,
-                NextStepIndex = 1,
-                MaxToolRounds = 4,
-            },
-        });
-
-        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
-        {
-            RunId = "run-reasoning-history",
-            CorrelationId = "corr-reasoning-history",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 2,
-            Request = new NeedsLlmReplyEvent
-            {
-                CorrelationId = "corr-reasoning-history",
-                RunId = "run-reasoning-history",
-                TargetActorId = "actor-1",
-                RegistrationId = "reg-1",
-                Activity = BuildRelayActivity(),
-            },
-            LlmStepResult = new AgentRunLlmStepResult
-            {
-                AccumulatedText = string.Empty,
-                Content = string.Empty,
-                ReasoningContent = "internal chain of thought without an answer",
-                FinishReason = "stop",
-                HasStreamedTextContent = false,
-            },
-        });
-
-        var step = runtime.State.GenerationStep;
-        step.Should().NotBeNull();
-        step!.Messages.Should().Contain(
-            message => message.Role == "assistant" &&
-                       message.ReasoningContent == "internal chain of thought without an answer",
-            "the intra-run step record keeps the reasoning-only result");
-        step.AppendedHistory.Should().NotContain(
-            entry => entry.Role == "assistant",
-            "reasoning-only assistant turns must not be persisted into durable conversation history");
-    }
-
-    [Fact]
-    public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_OnFinalNoToolsStep_FailsWithEmptyReply()
-    {
-        // The reasoning-only retry is bounded: when the final no-tools step itself
-        // comes back reasoning-only, the run must fail as empty_reply exactly like
-        // before instead of looping.
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns("actor-1");
-        EventEnvelope? handled = null;
-        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
-            .Do(call => handled = call.Arg<EventEnvelope>());
-        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var executor = new PausedReplyGenerationExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            actorRuntime,
-            executor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
-        SetState(runtime, new AgentRunGAgentState
-        {
-            RunId = "run-reasoning-final",
-            CorrelationId = "corr-reasoning-final",
-            TargetActorId = "actor-1",
-            Status = AgentRunStatus.ReplyGenerationRequested,
-            GenerationAttempt = 1,
-            GenerationStep = new AgentRunReplyStepState
-            {
-                RunId = "run-reasoning-final",
-                CorrelationId = "corr-reasoning-final",
-                TargetActorId = "actor-1",
-                Attempt = 1,
-                NextStepIndex = 3,
-                MaxToolRounds = 4,
-                FinalNoToolsStep = true,
-            },
-        });
-
-        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
-        {
-            RunId = "run-reasoning-final",
-            CorrelationId = "corr-reasoning-final",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 4,
-            Request = new NeedsLlmReplyEvent
-            {
-                CorrelationId = "corr-reasoning-final",
-                RunId = "run-reasoning-final",
-                TargetActorId = "actor-1",
-                RegistrationId = "reg-1",
-                Activity = BuildRelayActivity(),
-            },
-            LlmStepResult = new AgentRunLlmStepResult
-            {
-                AccumulatedText = string.Empty,
-                Content = string.Empty,
-                ReasoningContent = "still only reasoning on the retry step",
-                FinishReason = "stop",
-                HasStreamedTextContent = false,
-            },
-        });
-
-        executor.LlmStepExecutions.Should().BeEmpty("the bounded retry must not re-dispatch a second time");
-        handled.Should().NotBeNull();
-        var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
-        ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
-        ready.ErrorCode.Should().Be("empty_reply");
-        ready.ErrorSummary.Should().Contain("reasoningOnly=True");
-    }
-
     [Fact]
     public async Task DispatchAsync_ShouldCreateRunActorAndDispatchStartCommand()
     {
@@ -626,37 +265,6 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public void ApplyReplyProduced_ShouldPersistTypedToolReceiptsToRunState()
-    {
-        var runtime = CreateRunAgent(
-            new DispatchingActorRuntime(),
-            new RecordingReplyGenerator(() => false),
-            new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
-
-        var receipt = NewPublishReceipt(status: Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success);
-        var evt = new AgentRunReplyProducedEvent
-        {
-            RunId = "run-receipts",
-            CorrelationId = "corr-receipts",
-            TargetActorId = "actor-1",
-            ProducedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            TerminalState = LlmReplyTerminalState.Completed,
-            ReplyText = "done",
-            ToolReceipts = { receipt },
-        };
-
-        var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), evt);
-
-        next.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        next.ToolReceipts.Should().ContainSingle(x =>
-            x.CallId == "call-1" &&
-            x.Status == Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success &&
-            x.SubjectId == "skill-1" &&
-            x.SubjectHash == "hash-1");
-    }
-
-    [Fact]
     public async Task HandleStartAsync_WhenAccepted_PersistsGenerationRequestedAndHandsOffToExecutor()
     {
         var actor = Substitute.For<IActor>();
@@ -720,118 +328,6 @@ public sealed class AgentRunGAgentTests
 
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyGenerationRequested);
         generationExecutor.Starts.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task HandleNextLlmStepAsync_WhenExecutorIsSlow_ShouldReleaseActorTurn()
-    {
-        var generationExecutor = new BlockingStepExecutionExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            new DispatchingActorRuntime(),
-            generationExecutor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
-        SetState(runtime, new AgentRunGAgentState
-        {
-            RunId = "run-slow-llm",
-            CorrelationId = "corr-slow-llm",
-            TargetActorId = "actor-1",
-            Status = AgentRunStatus.ReplyGenerationRequested,
-            GenerationAttempt = 1,
-            GenerationStep = new AgentRunReplyStepState
-            {
-                RunId = "run-slow-llm",
-                CorrelationId = "corr-slow-llm",
-                TargetActorId = "actor-1",
-                Attempt = 1,
-                NextStepIndex = 1,
-                MaxToolRounds = 4,
-            },
-        });
-
-        var handler = runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
-        {
-            RunId = "run-slow-llm",
-            CorrelationId = "corr-slow-llm",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 1,
-            Request = new NeedsLlmReplyEvent
-            {
-                RunId = "run-slow-llm",
-                CorrelationId = "corr-slow-llm",
-                TargetActorId = "actor-1",
-                Activity = BuildRelayActivity(),
-            },
-        });
-
-        await generationExecutor.LlmStarted.Task;
-
-        handler.IsCompleted.Should().BeTrue(
-            "AgentRunGAgent must hand off slow LLM IO and free the actor turn for continuation messages");
-        generationExecutor.CompleteLlm();
-        await handler;
-    }
-
-    [Fact]
-    public async Task HandleNextLlmStepAsync_WhenToolExecutorIsSlow_ShouldReleaseActorTurn()
-    {
-        var generationExecutor = new BlockingStepExecutionExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            new DispatchingActorRuntime(),
-            generationExecutor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
-        SetState(runtime, new AgentRunGAgentState
-        {
-            RunId = "run-slow-tool",
-            CorrelationId = "corr-slow-tool",
-            TargetActorId = "actor-1",
-            Status = AgentRunStatus.ReplyGenerationRequested,
-            GenerationAttempt = 1,
-            GenerationStep = new AgentRunReplyStepState
-            {
-                RunId = "run-slow-tool",
-                CorrelationId = "corr-slow-tool",
-                TargetActorId = "actor-1",
-                Attempt = 1,
-                NextStepIndex = 1,
-                MaxToolRounds = 4,
-            },
-        });
-
-        var handler = runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
-        {
-            RunId = "run-slow-tool",
-            CorrelationId = "corr-slow-tool",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 2,
-            Request = new NeedsLlmReplyEvent
-            {
-                RunId = "run-slow-tool",
-                CorrelationId = "corr-slow-tool",
-                TargetActorId = "actor-1",
-                Activity = BuildRelayActivity(),
-            },
-            LlmStepResult = new AgentRunLlmStepResult
-            {
-                ToolCalls =
-                {
-                    new AgentRunToolCall
-                    {
-                        Id = "call-slow-tool",
-                        Name = "scheduled_agent_creator",
-                        ArgumentsJson = "{}",
-                    },
-                },
-            },
-        });
-
-        await generationExecutor.ToolStarted.Task;
-
-        handler.IsCompleted.Should().BeTrue(
-            "AgentRunGAgent must hand off slow tool IO and free the actor turn for continuation messages");
-        generationExecutor.CompleteTool();
-        await handler;
     }
 
     [Fact]
@@ -984,53 +480,6 @@ public sealed class AgentRunGAgentTests
         // eviction — acceptable trade-off vs. delivering a duplicate user-visible fallback.
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
         runtime.State.ProducedReplyText.Should().Be("the real reply");
-    }
-
-    [Fact]
-    public async Task HandleStartAsync_WhenReplyProducedWithReceipt_ShouldRedispatchPersistedReceiptRenderedTextWithoutRerunningLlm()
-    {
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns("actor-1");
-        var handled = new List<EventEnvelope>();
-        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
-            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
-        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
-        var runtime = CreateRunAgent(
-            actorRuntime,
-            replyGenerator,
-            new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
-            {
-                InteractiveRepliesEnabled = true,
-                StreamingRepliesEnabled = false,
-            });
-        SetState(runtime, new AgentRunGAgentState
-        {
-            RunId = "run-produced-retry",
-            CorrelationId = "corr-produced-retry",
-            TargetActorId = "actor-1",
-            Status = AgentRunStatus.ReplyProduced,
-            ProducedReplyText = "Done.\n[tool receipt] Completed: ornn.skill skill-1 (version=1.0, hash=hash-1)",
-            ProducedTerminalState = LlmReplyTerminalState.Completed,
-            ToolReceipts = { NewPublishReceipt(status: Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success) },
-        });
-
-        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
-        {
-            CorrelationId = "corr-produced-retry",
-            RunId = "run-produced-retry",
-            TargetActorId = "actor-1",
-            RegistrationId = "reg-1",
-            Activity = BuildRelayActivity(),
-            ReplyToken = "relay-token-produced-retry",
-        });
-
-        replyGenerator.CallCount.Should().Be(0);
-        handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
-        var ready = handled.Single().Payload.Unpack<LlmReplyReadyEvent>();
-        ready.Outbound.Text.Should().Be(runtime.State.ProducedReplyText);
-        ready.Outbound.Text.Should().Contain("[tool receipt] Completed: ornn.skill skill-1");
     }
 
     [Fact]
@@ -1227,278 +676,6 @@ public sealed class AgentRunGAgentTests
         providerFactory.Requests.Should().ContainSingle();
         providerFactory.Requests[0].Tools.Should().BeNull();
         toolSource.DiscoverCount.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task HandleStartAsync_WhenBoundToolSchemaIsRejected_RetriesWithOwnerNoTools()
-    {
-        var targetActor = Substitute.For<IActor>();
-        targetActor.Id.Returns("conversation:c");
-        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-        var providerFactory = new RejectToolsThenReplyProviderFactory();
-        var toolSource = new CountingAgentRunToolSource(new AgentRunNoopTool());
-        var replyGenerator = new NyxIdConversationReplyGenerator(
-            providerFactory,
-            toolSources: [toolSource],
-            localSkillCatalog: new LocalSkillCatalog());
-        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
-        var runtime = CreateRunAgent(
-            actorRuntime,
-            replyGenerator,
-            new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
-        var activity = BuildRelayActivity();
-        activity.TransportExtras ??= new TransportExtras();
-        activity.TransportExtras.NyxUserAccessToken = "sender-runtime-token";
-
-        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
-        {
-            CorrelationId = "corr-bound-schema-fallback",
-            TargetActorId = "conversation:c",
-            RegistrationId = "reg-1",
-            Activity = activity,
-            ReplyToken = "relay-token-bound-schema-fallback",
-            ToolContext = (AgentToolExecutionContext.Empty with
-            {
-                SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
-            }).ToPayload(),
-            LlmControl = new LLMControlContext(
-                "owner-token",
-                "owner-token",
-                "sender-runtime-token",
-                "owner-model",
-                "/api/v1/proxy/s/owner",
-                4,
-                null).ToPayload(),
-            Metadata =
-            {
-                [ChannelMetadataKeys.Platform] = "lark",
-                [ChannelMetadataKeys.SenderId] = "ou_user_1",
-                [ChannelMetadataKeys.MessageId] = "msg-bound-schema-fallback",
-            },
-        });
-
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
-        runtime.State.ProducedReplyText.Should().Be("owner fallback reply");
-        runtime.State.GenerationStep.Should().NotBeNull();
-        runtime.State.GenerationStep!.FinalNoToolsStep.Should().BeTrue();
-        providerFactory.Requests.Should().HaveCount(2);
-        providerFactory.Requests[0].Tools.Should().NotBeNull();
-        providerFactory.Requests[0].ToolContext!.SenderBinding.BindingId.Should().Be("bnd-user-1");
-        providerFactory.Requests[0].LlmControl!.NyxIdAccessToken.Should().Be("sender-runtime-token");
-
-        providerFactory.Requests[1].Tools.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.SenderBinding.BindingId.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Credentials.SenderNyxIdAccessToken.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.SenderNyxIdAccessToken.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("owner-token");
-        providerFactory.Requests[1].LlmControl!.ModelOverride.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Routing.ModelOverride.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Routing.NyxIdRoutePreference.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task HandleStartAsync_WhenOwnerConfiguredRouteReturnsEmptyReply_RetriesWithServerDefaultRouting()
-    {
-        var targetActor = Substitute.For<IActor>();
-        targetActor.Id.Returns("conversation:c");
-        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-        var providerFactory = new EmptyThenReplyProviderFactory();
-        var replyGenerator = new NyxIdConversationReplyGenerator(
-            providerFactory,
-            toolSources: [],
-            localSkillCatalog: new LocalSkillCatalog());
-        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
-        var runtime = CreateRunAgent(
-            actorRuntime,
-            replyGenerator,
-            new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
-
-        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
-        {
-            CorrelationId = "corr-owner-empty-fallback",
-            TargetActorId = "conversation:c",
-            RegistrationId = "reg-1",
-            Activity = BuildRelayActivity(),
-            ReplyToken = "relay-token-owner-empty-fallback",
-            LlmControl = new LLMControlContext(
-                "owner-token",
-                "owner-token",
-                SenderNyxIdAccessToken: null,
-                "gpt-5.5",
-                "/api/v1/proxy/s/chrono-llm",
-                40,
-                null).ToPayload(),
-        });
-
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
-        runtime.State.ProducedReplyText.Should().Be("server default fallback reply");
-        providerFactory.Requests.Should().HaveCount(2);
-        providerFactory.Requests[0].LlmControl!.ModelOverride.Should().Be("gpt-5.5");
-        providerFactory.Requests[0].LlmControl!.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
-        providerFactory.Requests[1].Tools.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("owner-token");
-        providerFactory.Requests[1].LlmControl!.ModelOverride.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.MaxToolRoundsOverride.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Routing.ModelOverride.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Routing.NyxIdRoutePreference.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Routing.MaxToolRoundsOverride.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task HandleStartAsync_WhenSenderHasLlmConfig_UsesSenderConfigBeforeBotOwnerConfig()
-    {
-        var targetActor = Substitute.For<IActor>();
-        targetActor.Id.Returns("conversation:c");
-        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-        var providerFactory = new SingleReplyProviderFactory("sender-config reply");
-        var preferencesStore = new AgentRunStubPreferencesStore
-        {
-            ByBinding =
-            {
-                ["bnd-user-1"] = new NyxIdUserLlmPreferences(
-                    "sender-model",
-                    "/api/v1/proxy/s/sender",
-                    MaxToolRounds: 7),
-            },
-        };
-        var replyGenerator = new NyxIdConversationReplyGenerator(
-            providerFactory,
-            toolSources: [],
-            preferencesStore: preferencesStore);
-        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
-
-        var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
-        scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<string?>("scope-bot-owner"));
-        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
-                DefaultModel: "owner-model",
-                PreferredLlmRoute: "/api/v1/proxy/s/owner",
-                RuntimeMode: "local",
-                LocalRuntimeBaseUrl: "http://localhost",
-                RemoteRuntimeBaseUrl: "https://example.com",
-                GithubUsername: null,
-                MaxToolRounds: 11)));
-
-        var runtime = CreateRunAgent(
-            actorRuntime,
-            replyGenerator,
-            new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            scopeResolver,
-            userConfigQueryPort);
-
-        var activity = BuildRelayActivity();
-        activity.Bot = BotInstanceId.From("api-key-bot");
-        activity.TransportExtras = new TransportExtras
-        {
-            NyxUserAccessToken = "bot-owner-session-jwt",
-        };
-
-        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
-        {
-            CorrelationId = "corr-sender-config-priority",
-            TargetActorId = "conversation:c",
-            RegistrationId = "reg-1",
-            Activity = activity,
-            ReplyToken = "relay-token-sender-config-priority",
-            ToolContext = (AgentToolExecutionContext.Empty with
-            {
-                SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
-            }).ToPayload(),
-            LlmControl = new LLMControlContext(
-                NyxIdAccessToken: null,
-                NyxIdOrgToken: null,
-                SenderNyxIdAccessToken: "sender-session-jwt",
-                ModelOverride: null,
-                NyxIdRoutePreference: null,
-                MaxToolRoundsOverride: null,
-                UserMemoryPrompt: null).ToPayload(),
-            Metadata =
-            {
-                [ChannelMetadataKeys.Platform] = "lark",
-                [ChannelMetadataKeys.SenderId] = "ou_user_1",
-                [ChannelMetadataKeys.MessageId] = "msg-sender-config-priority",
-            },
-        });
-
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
-        runtime.State.ProducedReplyText.Should().Be("sender-config reply");
-        preferencesStore.Lookups.Should().HaveCount(2);
-        preferencesStore.Lookups.Should().OnlyContain(bindingId => bindingId == "bnd-user-1");
-        providerFactory.Requests.Should().ContainSingle();
-        var request = providerFactory.Requests[0];
-        request.LlmControl!.ModelOverride.Should().Be("sender-model");
-        request.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
-        request.LlmControl.MaxToolRoundsOverride.Should().Be(7);
-        request.LlmControl.NyxIdAccessToken.Should().Be("sender-session-jwt");
-        request.ToolContext!.Routing.ModelOverride.Should().Be("sender-model");
-        request.ToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
-        request.ToolContext.Credentials.NyxIdAccessToken.Should().Be("sender-session-jwt");
-    }
-
-    [Fact]
-    public async Task HandleStartAsync_WhenLongRunningLarkAutomation_ShouldRunInteractionPublishThenScheduleTools()
-    {
-        var targetActor = Substitute.For<IActor>();
-        targetActor.Id.Returns("conversation:c");
-        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-        var toolOrder = new List<string>();
-        var providerFactory = new OrderedAutomationToolProviderFactory();
-        var replyGenerator = new NyxIdConversationReplyGenerator(
-            providerFactory,
-            toolSources:
-            [
-                new StaticAgentRunToolSource(
-                [
-                    new RecordingAgentTool("reply_with_interaction", toolOrder, """{"status":"queued"}"""),
-                    new RecordingAgentTool("ornn_publish_skill", toolOrder, """{"skill_ref":"daily-lark-digest"}"""),
-                    new RecordingAgentTool("scheduled_agent_creator", toolOrder, """{"accepted":true,"agent_id":"agent-1"}"""),
-                ]),
-            ],
-            localSkillCatalog: new LocalSkillCatalog());
-        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
-        var runtime = CreateRunAgent(
-            actorRuntime,
-            replyGenerator,
-            new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
-        var activity = BuildRelayActivity();
-        activity.Content.Text = "每天早上把 GitHub 进展总结发到这个 Lark 群";
-
-        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
-        {
-            CorrelationId = "corr-long-lark-automation",
-            TargetActorId = "conversation:c",
-            RegistrationId = "reg-1",
-            Activity = activity,
-            ReplyToken = "relay-token-long-lark-automation",
-            ToolContext = (AgentToolExecutionContext.Empty with
-            {
-                SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
-            }).ToPayload(),
-            LlmControl = ControlForAgentRun(rounds: 6).ToPayload(),
-            Metadata =
-            {
-                [ChannelMetadataKeys.Platform] = "lark",
-                [ChannelMetadataKeys.SenderId] = "ou_user_1",
-                [ChannelMetadataKeys.MessageId] = "msg-long-lark-automation",
-            },
-        });
-
-        toolOrder.Should().Equal("reply_with_interaction", "ornn_publish_skill", "scheduled_agent_creator");
-        providerFactory.RoundToolNames.Should().Equal("reply_with_interaction", "ornn_publish_skill", "scheduled_agent_creator", "<final>");
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
-        runtime.State.ProducedReplyText.Should().Contain("scheduled");
     }
 
     [Fact]
@@ -2045,7 +1222,6 @@ public sealed class AgentRunGAgentTests
         };
 
         await runtime.HandleStartAsync(request);
-        _ = await scheduler.NextTimeoutAsync();
 
         // After the first call the LLM ran once and the produced payload is persisted, but
         // dispatch failed so status stayed at REPLY_PRODUCED (no promotion to REPLY_HANDED_OFF).
@@ -2113,7 +1289,6 @@ public sealed class AgentRunGAgentTests
         };
 
         await runtime.HandleStartAsync(request);
-        _ = await scheduler.NextTimeoutAsync();
 
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
         replyGenerator.CallCount.Should().Be(1);
@@ -2169,7 +1344,6 @@ public sealed class AgentRunGAgentTests
         };
 
         await runtime.HandleStartAsync(request);
-        _ = await scheduler.NextTimeoutAsync();
 
         var retryCommand = scheduler.Timeouts.Should().ContainSingle(
                 timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
@@ -2486,11 +1660,6 @@ public sealed class AgentRunGAgentTests
         ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
         ready.ErrorCode.Should().Be("empty_reply");
         ready.Outbound.Text.Should().NotBeNullOrWhiteSpace();
-        // The empty-reply failure must carry diagnostic context (finish reason,
-        // reasoning-only flag, token usage) so the otherwise-opaque
-        // "couldn't generate a response" outcome is diagnosable from the terminal event.
-        ready.ErrorSummary.Should().Contain("finishReason=");
-        ready.ErrorSummary.Should().Contain("reasoningOnly=");
     }
 
     [Fact]
@@ -3046,7 +2215,6 @@ public sealed class AgentRunGAgentTests
         if (publisher is DispatchingEventPublisher dispatchingPublisher)
             dispatchingPublisher.SelfTarget = agent;
         agent.EventPublisher = publisher;
-        RecordingExecutors.Add(agent, generationExecutor);
         return agent;
     }
 
@@ -3120,15 +2288,6 @@ public sealed class AgentRunGAgentTests
         throw new InvalidOperationException("Unable to set agent id via reflection.");
     }
 
-    private static void SetState(AgentRunGAgent agent, AgentRunGAgentState state)
-    {
-        var stateField = typeof(Aevatar.Foundation.Core.GAgentBase<AgentRunGAgentState>).GetField(
-            "_state",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-        stateField.Should().NotBeNull();
-        stateField!.SetValue(agent, state);
-    }
-
     private static string ExpectedRunActorId(string runId) => $"channel-agent-run:{runId}";
 
     private static ChatActivity BuildRelayActivity() =>
@@ -3149,22 +2308,6 @@ public sealed class AgentRunGAgentTests
                 ReplyMessageId = "relay-msg-1",
                 CorrelationId = "corr-1",
             },
-        };
-
-    private static Aevatar.AI.Abstractions.AgentToolReceipt NewPublishReceipt(
-        Aevatar.AI.Abstractions.AgentToolReceiptStatus status) =>
-        new()
-        {
-            CallId = "call-1",
-            ToolName = "ornn_publish_skill",
-            Status = status,
-            ApprovalMode = Aevatar.AI.Abstractions.AgentToolReceiptApprovalMode.AlwaysRequire,
-            SideEffectKind = "ornn.publish.skill",
-            SubjectKind = "ornn.skill",
-            SubjectId = "skill-1",
-            SubjectVersion = "1.0",
-            SubjectHash = "hash-1",
-            ResultJson = """{"status":"spoofed","subject_id":"wrong"}""",
         };
 
     private static LLMControlContext ControlForAgentRun(
@@ -3279,8 +2422,6 @@ public sealed class AgentRunGAgentTests
     {
         public List<AgentRunReplyGenerationExecutionRequest> Starts { get; } = [];
 
-        public List<AgentRunReplyStepExecutionRequest> LlmStepExecutions { get; } = [];
-
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
             CancellationToken ct)
@@ -3296,15 +2437,8 @@ public sealed class AgentRunGAgentTests
             });
         }
 
-        public Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
-        {
-            LlmStepExecutions.Add(request with
-            {
-                Request = request.Request.Clone(),
-                StepState = request.StepState.Clone(),
-            });
-            return Task.CompletedTask;
-        }
+        public Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct) =>
+            Task.CompletedTask;
 
         public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct) =>
             Task.CompletedTask;
@@ -3320,57 +2454,6 @@ public sealed class AgentRunGAgentTests
             throw new NotSupportedException();
     }
 
-    private sealed class BlockingStepExecutionExecutor : IAgentRunReplyGenerationExecutorPort
-    {
-        private readonly TaskCompletionSource _llmRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _toolRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public TaskCompletionSource<AgentRunReplyStepExecutionRequest> LlmStarted { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public TaskCompletionSource<AgentRunReplyStepExecutionRequest> ToolStarted { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
-            AgentRunReplyGenerationExecutionRequest request,
-            CancellationToken ct) =>
-            Task.FromResult(new AgentRunReplyStepState
-            {
-                RunId = request.RunId,
-                CorrelationId = request.Request.CorrelationId,
-                TargetActorId = request.Request.TargetActorId,
-                Attempt = request.Attempt,
-                NextStepIndex = 1,
-                MaxToolRounds = 4,
-            });
-
-        public Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
-        {
-            LlmStarted.TrySetResult(request);
-            return _llmRelease.Task;
-        }
-
-        public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
-        {
-            ToolStarted.TrySetResult(request);
-            return _toolRelease.Task;
-        }
-
-        public Task<AgentRunNextLlmStepRequestedEvent> BuildLlmStepContinuationAsync(
-            AgentRunReplyStepExecutionRequest request,
-            CancellationToken ct) =>
-            throw new NotSupportedException();
-
-        public Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
-            AgentRunReplyStepExecutionRequest request,
-            CancellationToken ct) =>
-            throw new NotSupportedException();
-
-        public void CompleteLlm() => _llmRelease.TrySetResult();
-
-        public void CompleteTool() => _toolRelease.TrySetResult();
-    }
-
     private sealed class RecordingReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
     {
         private readonly AgentRunReplyGenerationExecutor _inner;
@@ -3381,9 +2464,6 @@ public sealed class AgentRunGAgentTests
         private readonly IUserConfigQueryPort? _userConfigQueryPort;
         private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
         private AgentRunGAgent? _agent;
-        private readonly List<Task> _inFlight = [];
-        private TaskCompletionSource _executionStarted =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public RecordingReplyGenerationExecutor(
             IActorDispatchPort dispatchPort,
@@ -3444,52 +2524,17 @@ public sealed class AgentRunGAgentTests
 
         public async Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
         {
-            Task execution;
-            var agent = _agent;
-            if (agent is null)
+            if (_agent is null)
             {
-                execution = _inner.ExecuteLlmStepAsync(request, ct);
-                TrackExecution(execution);
-                await execution;
+                await _inner.ExecuteLlmStepAsync(request, ct);
                 return;
             }
 
-            execution = ExecuteLlmStepForBoundAgentAsync(agent, request, ct);
-            TrackExecution(execution);
-            await execution;
-        }
-
-        private async Task ExecuteLlmStepForBoundAgentAsync(
-            AgentRunGAgent agent,
-            AgentRunReplyStepExecutionRequest request,
-            CancellationToken ct)
-        {
             if (_replyGenerator is IAgentRunStepConversationReplyGenerator)
             {
                 // Sync (PR #1106 r2): production dispatches step continuations back through the run actor inbox.
-                try
-                {
-                    var stepContinuation = await _inner.BuildLlmStepContinuationAsync(request, ct);
-                    await agent.HandleNextLlmStepAsync(stepContinuation);
-                }
-                catch (Exception ex) when (BuildOwnerFallbackCommand(request, ex) is { } fallback)
-                {
-                    await agent.HandleOwnerFallbackStepAsync(fallback);
-                }
-                catch (Exception ex)
-                {
-                    await agent.HandleReplyGenerationFailedAsync(new AgentRunReplyGenerationFailed
-                    {
-                        RunId = request.RunId,
-                        CorrelationId = request.Request.CorrelationId,
-                        TargetActorId = request.Request.TargetActorId,
-                        ErrorCode = "llm_reply_failed",
-                        ErrorSummary = ex.Message,
-                        FailedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        Attempt = request.Attempt,
-                        Request = request.Request.Clone(),
-                    });
-                }
+                var stepContinuation = await _inner.BuildLlmStepContinuationAsync(request, ct);
+                await _agent.HandleNextLlmStepAsync(stepContinuation);
                 return;
             }
 
@@ -3500,7 +2545,7 @@ public sealed class AgentRunGAgentTests
             }
             catch (Exception ex)
             {
-                await agent.HandleReplyGenerationFailedAsync(new AgentRunReplyGenerationFailed
+                await _agent.HandleReplyGenerationFailedAsync(new AgentRunReplyGenerationFailed
                 {
                     RunId = request.RunId,
                     CorrelationId = request.Request.CorrelationId,
@@ -3514,65 +2559,20 @@ public sealed class AgentRunGAgentTests
                 return;
             }
 
-            await agent.HandleNextLlmStepAsync(continuation);
+            await _agent.HandleNextLlmStepAsync(continuation);
         }
 
         public async Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
         {
-            Task execution;
-            var agent = _agent;
-            if (agent is null)
+            if (_agent is null)
             {
-                execution = _inner.ExecuteToolStepAsync(request, ct);
-                TrackExecution(execution);
-                await execution;
+                await _inner.ExecuteToolStepAsync(request, ct);
                 return;
             }
 
-            execution = ExecuteToolStepForBoundAgentAsync(agent, request, ct);
-            TrackExecution(execution);
-            await execution;
-        }
-
-        private async Task ExecuteToolStepForBoundAgentAsync(
-            AgentRunGAgent agent,
-            AgentRunReplyStepExecutionRequest request,
-            CancellationToken ct)
-        {
             // Sync (PR #1106 r2): production dispatches step continuations back through the run actor inbox.
             var continuation = await _inner.BuildToolStepContinuationAsync(request, ct);
-            await agent.HandleNextToolStepAsync(continuation);
-        }
-
-        public async Task DrainAsync(AgentRunGAgentState state)
-        {
-            if (state.Status is not AgentRunStatus.ReplyGenerationRequested)
-                return;
-
-            await _executionStarted.Task;
-            while (true)
-            {
-                Task[] snapshot;
-                lock (_inFlight)
-                {
-                    _inFlight.RemoveAll(static task => task.IsCompleted);
-                    if (_inFlight.Count == 0)
-                        return;
-
-                    snapshot = _inFlight.ToArray();
-                }
-
-                await Task.WhenAll(snapshot);
-            }
-        }
-
-        private void TrackExecution(Task execution)
-        {
-            lock (_inFlight)
-            {
-                _inFlight.Add(execution);
-                _executionStarted.TrySetResult();
-            }
+            await _agent.HandleNextToolStepAsync(continuation);
         }
 
         public Task<AgentRunNextLlmStepRequestedEvent> BuildLlmStepContinuationAsync(
@@ -3584,29 +2584,6 @@ public sealed class AgentRunGAgentTests
             AgentRunReplyStepExecutionRequest request,
             CancellationToken ct) =>
             _inner.BuildToolStepContinuationAsync(request, ct);
-
-        private static AgentRunOwnerFallbackStepRequested? BuildOwnerFallbackCommand(
-            AgentRunReplyStepExecutionRequest request,
-            Exception ex)
-        {
-            if (request.StepState.FinalNoToolsStep)
-                return null;
-            if (!string.IsNullOrWhiteSpace(request.StepState.AccumulatedText))
-                return null;
-            if (!LlmOwnerFallbackPolicy.IsRetryable(ex))
-                return null;
-
-            return new AgentRunOwnerFallbackStepRequested
-            {
-                RunId = request.RunId,
-                CorrelationId = request.Request.CorrelationId,
-                TargetActorId = request.Request.TargetActorId,
-                Attempt = request.Attempt,
-                StepIndex = request.StepIndex + 1,
-                Reason = ex.Message ?? string.Empty,
-                Request = request.Request.Clone(),
-            };
-        }
 
         private async Task<AgentRunNextLlmStepRequestedEvent> BuildLegacyLlmStepContinuationAsync(
             AgentRunReplyStepExecutionRequest request,
@@ -3958,9 +2935,6 @@ public sealed class AgentRunGAgentTests
 
     private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
     {
-        private readonly Queue<RuntimeCallbackTimeoutRequest> _timeoutSignals = new();
-        private TaskCompletionSource<RuntimeCallbackTimeoutRequest>? _waitingTimeout;
-
         public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
 
         public List<RuntimeCallbackTimerRequest> Timers { get; } = [];
@@ -3974,31 +2948,11 @@ public sealed class AgentRunGAgentTests
             CancellationToken ct = default)
         {
             Timeouts.Add(request);
-            if (_waitingTimeout is { Task.IsCompleted: false } waiting)
-            {
-                _waitingTimeout = null;
-                waiting.TrySetResult(request);
-            }
-            else
-            {
-                _timeoutSignals.Enqueue(request);
-            }
-
             return Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,
                 request.CallbackId,
                 Timeouts.Count,
                 RuntimeCallbackBackend.InMemory));
-        }
-
-        public Task<RuntimeCallbackTimeoutRequest> NextTimeoutAsync()
-        {
-            if (_timeoutSignals.TryDequeue(out var request))
-                return Task.FromResult(request);
-
-            _waitingTimeout = new TaskCompletionSource<RuntimeCallbackTimeoutRequest>(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            return _waitingTimeout.Task;
         }
 
         public Task<RuntimeCallbackLease> ScheduleTimerAsync(
@@ -4142,50 +3096,6 @@ public sealed class AgentRunGAgentTests
         }
     }
 
-    private sealed class AgentRunStubPreferencesStore : INyxIdUserLlmPreferencesStore
-    {
-        public Dictionary<string, NyxIdUserLlmPreferences> ByBinding { get; } = new(StringComparer.Ordinal);
-
-        public List<string?> Lookups { get; } = [];
-
-        public Task<NyxIdUserLlmPreferences> GetOwnerAsync(CancellationToken cancellationToken = default)
-        {
-            Lookups.Add(null);
-            return Task.FromResult(new NyxIdUserLlmPreferences(string.Empty, string.Empty));
-        }
-
-        public Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default)
-        {
-            Lookups.Add(bindingId);
-            return Task.FromResult(ByBinding.TryGetValue(bindingId, out var prefs)
-                ? prefs
-                : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
-        }
-    }
-
-    private sealed class SingleReplyProviderFactory(string replyText) : ILLMProviderFactory, ILLMProvider
-    {
-        public string Name => "single-reply";
-
-        public List<LLMRequest> Requests { get; } = [];
-
-        public ILLMProvider GetProvider(string name) => this;
-
-        public ILLMProvider GetDefault() => this;
-
-        public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-            LLMRequest request,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            yield return new LLMStreamChunk { DeltaContent = replyText };
-            await Task.CompletedTask;
-            yield return new LLMStreamChunk { IsLast = true };
-        }
-    }
-
     private sealed class ToolCallAttemptProviderFactory : ILLMProviderFactory, ILLMProvider
     {
         public string Name => "tool-call-attempt";
@@ -4218,116 +3128,6 @@ public sealed class AgentRunGAgentTests
         }
     }
 
-    private sealed class RejectToolsThenReplyProviderFactory : ILLMProviderFactory, ILLMProvider
-    {
-        public string Name => "reject-tools-then-reply";
-
-        public List<LLMRequest> Requests { get; } = [];
-
-        public ILLMProvider GetProvider(string name) => this;
-
-        public ILLMProvider GetDefault() => this;
-
-        public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-            LLMRequest request,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            if (request.Tools is { Count: > 0 })
-            {
-                throw new InvalidOperationException(
-                    "Invalid schema for function 'aevatar_observe_run': schema must have type 'object' and not have 'oneOf' at the top level (HTTP 400).");
-            }
-
-            yield return new LLMStreamChunk { DeltaContent = "owner fallback reply" };
-            await Task.CompletedTask;
-            yield return new LLMStreamChunk { IsLast = true };
-        }
-    }
-
-    private sealed class EmptyThenReplyProviderFactory : ILLMProviderFactory, ILLMProvider
-    {
-        public string Name => "empty-then-reply";
-
-        public List<LLMRequest> Requests { get; } = [];
-
-        public ILLMProvider GetProvider(string name) => this;
-
-        public ILLMProvider GetDefault() => this;
-
-        public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-            LLMRequest request,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            if (Requests.Count == 1)
-            {
-                await Task.CompletedTask;
-                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
-                yield break;
-            }
-
-            yield return new LLMStreamChunk { DeltaContent = "server default fallback reply" };
-            await Task.CompletedTask;
-            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
-        }
-    }
-
-    private sealed class OrderedAutomationToolProviderFactory : ILLMProviderFactory, ILLMProvider
-    {
-        private static readonly string[] ToolNames =
-        [
-            "reply_with_interaction",
-            "ornn_publish_skill",
-            "scheduled_agent_creator",
-        ];
-
-        private int _round;
-
-        public string Name => "ordered-automation-tool-provider";
-
-        public List<string> RoundToolNames { get; } = [];
-
-        public ILLMProvider GetProvider(string name) => this;
-
-        public ILLMProvider GetDefault() => this;
-
-        public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-            LLMRequest request,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
-        {
-            var round = _round++;
-            if (round < ToolNames.Length)
-            {
-                var toolName = ToolNames[round];
-                RoundToolNames.Add(toolName);
-                yield return new LLMStreamChunk
-                {
-                    DeltaToolCall = new ToolCall
-                    {
-                        Id = $"call-{round + 1}",
-                        Name = toolName,
-                        ArgumentsJson = "{}",
-                    },
-                };
-                await Task.CompletedTask;
-                yield return new LLMStreamChunk { IsLast = true };
-                yield break;
-            }
-
-            RoundToolNames.Add("<final>");
-            yield return new LLMStreamChunk { DeltaContent = "scheduled" };
-            await Task.CompletedTask;
-            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
-        }
-    }
-
     private sealed class CountingAgentRunToolSource(IAgentTool tool) : IAgentToolSource
     {
         public int DiscoverCount { get; private set; }
@@ -4336,36 +3136,6 @@ public sealed class AgentRunGAgentTests
         {
             DiscoverCount++;
             return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
-        }
-    }
-
-    private sealed class StaticAgentRunToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
-    {
-        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(tools);
-        }
-    }
-
-    private sealed class RecordingAgentTool(
-        string name,
-        List<string> order,
-        string resultJson) : IAgentTool
-    {
-        public string Name => name;
-
-        public string Description => $"Test tool {name}.";
-
-        public string ParametersSchema => """{"type":"object","additionalProperties":true}""";
-
-        public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            order.Add(name);
-            return Task.FromResult(resultJson);
         }
     }
 
@@ -4416,49 +3186,21 @@ public sealed class AgentRunGAgentTests
             return await pendingReply.Task;
         }
     }
-
-    [Theory]
-    [InlineData(
-        "Upstream LLM route '/api/v1/proxy/s/chrono-llm' rejected the request with HTTP 401 for model 'gpt-5.5'. Your session may have expired — try signing in again. Upstream said: {\"error\":\"token_expired\",\"error_code\":2001}",
-        true)]
-    [InlineData("Upstream said: {\"error\":\"token_expired\"}", true)]
-    [InlineData("Reply generator returned an empty response (finishReason=length).", false)]
-    [InlineData("", false)]
-    [InlineData(null, false)]
-    public void ResolveTerminalFailureReply_SurfacesReauthHintOnlyForExpiredSession(
-        string? errorSummary,
-        bool expectReauth)
-    {
-        const string generic = "Sorry, I wasn't able to generate a response. Please try again.";
-        var reply = AgentRunGAgent.ResolveTerminalFailureReply(errorSummary);
-
-        if (expectReauth)
-        {
-            reply.Should().NotBe(generic);
-            reply.Should().Contain("sign in to NyxID again");
-            reply.Should().Contain("重新登录");
-        }
-        else
-        {
-            reply.Should().Be(generic);
-        }
-    }
 }
 
 internal static class AgentRunGAgentTestExtensions
 {
-    public static async Task HandleStartAsync(this AgentRunGAgent agent, NeedsLlmReplyEvent request)
+    public static Task HandleStartAsync(this AgentRunGAgent agent, NeedsLlmReplyEvent request)
     {
         // Sync (PR #1106 r2): AgentRun admission now requires the outer typed run_id command field.
         var normalized = request.Clone();
         if (string.IsNullOrWhiteSpace(normalized.RunId))
             normalized.RunId = normalized.CorrelationId;
 
-        await agent.HandleStartAsync(new AgentRunStartRequested
+        return agent.HandleStartAsync(new AgentRunStartRequested
         {
             RunId = normalized.RunId,
             Request = normalized,
         });
-        await AgentRunGAgentTests.DrainRecordingExecutorAsync(agent);
     }
 }

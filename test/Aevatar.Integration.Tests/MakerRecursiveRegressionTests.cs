@@ -90,7 +90,12 @@ public class MakerRecursiveRegressionTests
     }
 
     private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
-        builder.Register<WorkflowRoleGAgent>();
+        builder.Register(new AgentRegistration(
+            "workflow.assistant-role",
+            typeof(WorkflowRoleGAgent),
+            typeof(RoleGAgentState),
+            [],
+            []));
 
     private static async Task<WorkflowRunResult> RunWorkflowAsync(
         ServiceProvider provider,
@@ -172,22 +177,22 @@ public class MakerRecursiveRegressionTests
         roles:
           - id: coordinator
             name: Coordinator
-            agent_kind: workflow.role-agent
+            agent_kind: workflow.assistant-role
             system_prompt: "coordinator"
             provider: mock-maker
           - id: worker_a
             name: WorkerA
-            agent_kind: workflow.role-agent
+            agent_kind: workflow.assistant-role
             system_prompt: "worker"
             provider: mock-maker
           - id: worker_b
             name: WorkerB
-            agent_kind: workflow.role-agent
+            agent_kind: workflow.assistant-role
             system_prompt: "worker"
             provider: mock-maker
           - id: worker_c
             name: WorkerC
-            agent_kind: workflow.role-agent
+            agent_kind: workflow.assistant-role
             system_prompt: "worker"
             provider: mock-maker
         steps:

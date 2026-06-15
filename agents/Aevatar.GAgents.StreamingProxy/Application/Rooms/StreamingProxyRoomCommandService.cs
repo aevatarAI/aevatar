@@ -51,7 +51,7 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
             await DispatchRoomEnvelopeAsync(actor.Id, envelope, cancellationToken);
 
             var receipt = await _registryCommandPort.RegisterActorAsync(
-                new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentKind, roomId),
+                new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId),
                 cancellationToken);
             if (!receipt.IsAdmissionVisible)
             {
@@ -322,7 +322,7 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
             await _registryCommandPort.UnregisterActorAsync(
                 new GAgentActorRegistration(
                     scopeId,
-                    StreamingProxyDefaults.GAgentKind,
+                    StreamingProxyDefaults.GAgentTypeName,
                     roomId),
                 cancellationToken);
         }

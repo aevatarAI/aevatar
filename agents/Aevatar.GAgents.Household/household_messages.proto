@@ -149,21 +149,6 @@ message SpeechDeviceInboundPayload {
   string text = 1;
 }
 
-enum DeviceEventSeverity {
-  DEVICE_EVENT_SEVERITY_UNSPECIFIED = 0;
-  DEVICE_EVENT_SEVERITY_INFO = 1;
-  DEVICE_EVENT_SEVERITY_WARNING = 2;
-  DEVICE_EVENT_SEVERITY_CRITICAL = 3;
-}
-
-message HomeAlertDeviceInboundPayload {
-  DeviceEventSeverity severity = 1;
-  string area = 2;
-  string entity_id = 3;
-  string correlation_key = 4;
-  string summary = 5;
-}
-
 // V1 normalized device event from NyxID relay's CallbackPayload.
 // Defined in Household domain because it's the inbound contract for
 // HouseholdEntity; DeviceEventEndpoints (boundary layer) references
@@ -187,6 +172,5 @@ message DeviceInbound {
     CameraDeviceInboundPayload camera = 8;
     MotionDeviceInboundPayload motion = 9;
     SpeechDeviceInboundPayload speech = 10;
-    HomeAlertDeviceInboundPayload home_alert = 11;
   }
 }

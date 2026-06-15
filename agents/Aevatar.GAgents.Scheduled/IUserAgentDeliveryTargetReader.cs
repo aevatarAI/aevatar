@@ -33,6 +33,5 @@ public sealed record UserAgentDeliveryTarget(
     string LarkReceiveIdType,
     string LarkReceiveIdFallback,
     string LarkReceiveIdTypeFallback,
-    SkillRunnerOutputFormat OutputFormat,
     string TemplateName,
     string AgentType);

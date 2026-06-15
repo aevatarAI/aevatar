@@ -75,49 +75,6 @@ public sealed class ChatJsonPayloadsTests
         payload.GetProperty("success").GetBoolean().Should().BeTrue();
     }
 
-    [Fact]
-    public void Format_ShouldSerializeInitializeRoleAgentEvent_WhenCustomPayloadCarriesAiMessage()
-    {
-        var json = ChatJsonPayloads.Format(new WorkflowRunEventEnvelope
-        {
-            Custom = new WorkflowCustomEventPayload
-            {
-                Name = "aevatar.raw.observed",
-                Payload = Any.Pack(new InitializeRoleAgentEvent
-                {
-                    RoleId = "reviewer",
-                    RoleName = "Reviewer",
-                    ProviderName = "openai",
-                    Model = "gpt-4.1",
-                    SystemPrompt = "Review the plan.",
-                    MaxTokens = 2048,
-                    MaxToolRounds = 4,
-                    MaxHistoryMessages = 12,
-                    EventModules = "module-a",
-                    EventRoutes = "route-a",
-                }),
-            },
-        });
-
-        using var document = JsonDocument.Parse(json);
-        var payload = document.RootElement
-            .GetProperty("custom")
-            .GetProperty("payload");
-
-        payload.GetProperty("@type").GetString()
-            .Should().Be("type.googleapis.com/aevatar.ai.InitializeRoleAgentEvent");
-        payload.GetProperty("roleId").GetString().Should().Be("reviewer");
-        payload.GetProperty("roleName").GetString().Should().Be("Reviewer");
-        payload.GetProperty("providerName").GetString().Should().Be("openai");
-        payload.GetProperty("model").GetString().Should().Be("gpt-4.1");
-        payload.GetProperty("systemPrompt").GetString().Should().Be("Review the plan.");
-        payload.GetProperty("maxTokens").GetInt32().Should().Be(2048);
-        payload.GetProperty("maxToolRounds").GetInt32().Should().Be(4);
-        payload.GetProperty("maxHistoryMessages").GetInt32().Should().Be(12);
-        payload.GetProperty("eventModules").GetString().Should().Be("module-a");
-        payload.GetProperty("eventRoutes").GetString().Should().Be("route-a");
-    }
-
     private static WorkflowRunEventEnvelope BuildFrame() =>
         new()
         {

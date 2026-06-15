@@ -31,7 +31,6 @@ public static class ServiceCollectionExtensions
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, HttpConnectorBuilder>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, CliConnectorBuilder>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, HostCallbackConnectorBuilder>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, TelegramUserConnectorBuilder>());
     }
 }

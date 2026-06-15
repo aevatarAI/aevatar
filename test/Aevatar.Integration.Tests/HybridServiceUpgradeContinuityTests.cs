@@ -1,9 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Integration.Tests.TestDoubles.Protocols;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
@@ -26,11 +24,6 @@ public sealed class HybridServiceUpgradeContinuityTests
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
         services.AddScriptCapability();
-        services.AddAevatarAgentKindRegistry(builder => builder
-            .Register<TextNormalizationStaticGAgent>()
-            .Register<TextNormalizationWorkflowProtocolGAgent>()
-            .Register<TextNormalizationScriptingProtocolGAgent>()
-            .Register<HybridServiceStateGAgent>());
 
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
@@ -154,7 +147,6 @@ public sealed class HybridServiceUpgradeContinuityTests
             },
         };
 
-    [GAgent("tests.hybrid-service-state")]
     private sealed class HybridServiceStateGAgent(
         IActorRuntime runtime)
         : GAgentBase<HybridServiceSnapshot>

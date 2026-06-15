@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Aevatar.Capabilities;
+using Aevatar.Hosting;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Microsoft.AspNetCore.Builder;
@@ -318,7 +318,6 @@ internal static class StudioMemberEndpoints
     /// </summary>
     public sealed class StudioMemberPatchBody
     {
-        public JsonElement? DisplayName { get; set; }
         public JsonElement? TeamId { get; set; }
         public JsonElement? ImplementationRef { get; set; }
     }
@@ -336,24 +335,6 @@ internal static class StudioMemberEndpoints
 
         if (body == null)
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", "request body is required.");
-
-        PatchValue<string> displayNamePatch;
-        if (!body.DisplayName.HasValue)
-        {
-            displayNamePatch = PatchValue<string>.Absent;
-        }
-        else
-        {
-            var jsonValue = body.DisplayName.Value;
-            if (jsonValue.ValueKind != JsonValueKind.String)
-            {
-                return BadRequest(
-                    "INVALID_STUDIO_MEMBER_REQUEST",
-                    "displayName must be a string or absent.");
-            }
-
-            displayNamePatch = PatchValue<string>.Of(jsonValue.GetString());
-        }
 
         // Translate the wire body into the application contract. JsonElement
         // semantics:
@@ -419,12 +400,12 @@ internal static class StudioMemberEndpoints
 
         try
         {
-            var receipt = await memberService.UpdateAsync(
+            var detail = await memberService.UpdateAsync(
                 scopeId,
                 memberId,
-                new UpdateStudioMemberRequest(displayNamePatch, teamIdPatch, implementationRefPatch),
+                new UpdateStudioMemberRequest(teamIdPatch, implementationRefPatch),
                 ct);
-            return Results.Accepted(BuildMemberLocation(scopeId, memberId), receipt);
+            return Results.Ok(detail);
         }
         catch (StudioMemberNotFoundException ex)
         {
@@ -435,9 +416,6 @@ internal static class StudioMemberEndpoints
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
         }
     }
-
-    private static string BuildMemberLocation(string scopeId, string memberId) =>
-        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
 
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });

@@ -7,7 +7,6 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Extensions.Maker;
-using Aevatar.Workflow.Extensions.Schedules;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -53,12 +52,6 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         provider.GetService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>().Should().NotBeNull();
         provider.GetService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
         provider.GetServices<IWorkflowModulePack>().Should().ContainSingle(x => x is MakerModulePack);
-        var schedulePack = provider.GetServices<IWorkflowModulePack>()
-            .Should()
-            .ContainSingle(x => x is WorkflowScheduleModulePack)
-            .Which;
-        schedulePack.Modules.Should().ContainSingle()
-            .Which.Names.Should().BeEquivalentTo(["self_reschedule", "schedule_workflow"]);
     }
 
     [Fact]
@@ -404,4 +397,5 @@ public sealed class WorkflowHostingExtensionsCoverageTests
             throw ex.InnerException;
         }
     }
+
 }

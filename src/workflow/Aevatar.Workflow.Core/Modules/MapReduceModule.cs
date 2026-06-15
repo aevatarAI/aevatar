@@ -84,12 +84,9 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
             };
             state.Parents[parentKey.StepId] = parentState;
 
-            var maxConcurrent = BackpressureHelper.ResolveMaxConcurrent(request.Parameters);
-            var minConcurrent = BackpressureHelper.ResolveMinConcurrent(request.Parameters, maxConcurrent);
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
-                maxConcurrent,
-                minConcurrent);
+                BackpressureHelper.ResolveMaxConcurrent(request.Parameters));
 
             ctx.Logger.LogInformation("MapReduce {StepId}: map {Count} items via {Type}", request.StepId, items.Length, mapType);
 
@@ -115,11 +112,8 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                     }, TopologyAudience.Self, ct);
                 }
             }
-            var topUpEntries = BackpressureHelper.TopUpToTarget(state.Backpressure);
             // Always save after loop — TryAdmit mutates ActiveWorkers even when no items are queued
             await SaveStateAsync(state, ctx, ct);
-            foreach (var topUpEntry in topUpEntries)
-                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(topUpEntry), TopologyAudience.Self, ct);
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
@@ -154,13 +148,13 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
                 BackpressureHelper.DefaultMaxConcurrentWorkers);
-            var drained = BackpressureHelper.CompleteAndTopUp(state.Backpressure);
+            var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
 
             if (parentState.Results.Count < parentState.MapCount)
             {
                 await SaveStateAsync(state, ctx, ct);
-                foreach (var drainedEntry in drained)
-                    await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drainedEntry), TopologyAudience.Self, ct);
+                if (drained != null)
+                    await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
                 return;
             }
 
@@ -176,8 +170,8 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                     StepId = parent, RunId = runId, Success = allSuccess, Output = merged,
                     Error = allSuccess ? "" : "one or more map steps failed",
                 }, TopologyAudience.Self, ct);
-                foreach (var drainedEntry in drained)
-                    await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drainedEntry), TopologyAudience.Self, ct);
+                if (drained != null)
+                    await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
                 return;
             }
 
@@ -200,8 +194,8 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 TargetRole = parentState.ReduceRole,
             }, TopologyAudience.Self, ct);
 
-            foreach (var drainedEntry in drained)
-                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drainedEntry), TopologyAudience.Self, ct);
+            if (drained != null)
+                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
         }
     }
 

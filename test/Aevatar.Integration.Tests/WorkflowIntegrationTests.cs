@@ -42,15 +42,15 @@ public class WorkflowIntegrationTests
         roles:
           - id: researcher
             name: Researcher
-            agent_kind: workflow.role-agent
+            agent_kind: workflow.assistant-role
             system_prompt: "你是一个 researcher，负责调研主题并输出调研结果"
           - id: reviewer
             name: Reviewer
-            agent_kind: workflow.role-agent
+            agent_kind: workflow.assistant-role
             system_prompt: "你是一个 reviewer，负责审查研究结果并给出改进建议"
           - id: writer
             name: Writer
-            agent_kind: workflow.role-agent
+            agent_kind: workflow.assistant-role
             system_prompt: "你是一个 writer，负责将研究结果和审查意见整合为最终报告"
         steps:
           - id: research
@@ -88,9 +88,12 @@ public class WorkflowIntegrationTests
     }
 
     private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
-        builder
-            .Register<WorkflowRoleGAgent>()
-            .Register<RoleGAgent>();
+        builder.Register(new AgentRegistration(
+            "workflow.assistant-role",
+            typeof(WorkflowRoleGAgent),
+            typeof(RoleGAgentState),
+            [],
+            []));
 
     // ═══════════════════════════════════════════════════════════
     //  Scenario 1: YAML 解析 + 验证
@@ -140,7 +143,7 @@ public class WorkflowIntegrationTests
             roles:
               - id: r1
                 name: Role1
-                agent_kind: workflow.role-agent
+                agent_kind: workflow.assistant-role
             steps:
               - id: step1
                 type: llm_call
@@ -163,7 +166,7 @@ public class WorkflowIntegrationTests
             roles:
               - id: r1
                 name: Role1
-                agent_kind: workflow.role-agent
+                agent_kind: workflow.assistant-role
             steps:
               - id: root
                 type: parallel
@@ -286,80 +289,17 @@ public class WorkflowIntegrationTests
         children.Should().Contain(reviewerActorId);
         children.Should().Contain(writerActorId);
 
-        var researcherActor = await runtime.GetAsync(researcherActorId);
-        researcherActor!.Agent.Should().BeOfType<WorkflowRoleGAgent>();
-    }
-
-    [Fact(DisplayName = "给定 public role agent kind alias，WorkflowRunGAgent 应通过 registry 创建 RoleGAgent")]
-    [Trait("Feature", "AgentTree")]
-    public async Task Scenario2b_PublicRoleAgentKindAliasCreatesRoleActor()
-    {
-        var (sp, runtime, _) = BuildTestEnvironment();
-        await using var _ = sp;
-        var suffix = Guid.NewGuid().ToString("N")[..8];
-        var definitionActorId = $"wf-public-alias-{suffix}";
-        var runActorId = $"{definitionActorId}-run";
-        var roleActorId = $"{runActorId}:assistant";
-        const string workflowYaml = """
-            name: public_alias_workflow
-            roles:
-              - id: assistant
-                name: Assistant
-                agent_kind: workflow.role-agent
-                system_prompt: "You are an assistant"
-            steps:
-              - id: answer
-                type: llm_call
-                target_role: assistant
-            """;
-
-        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>(definitionActorId);
-        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>(runActorId);
-        await definitionActor.HandleEventAsync(new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new BindWorkflowDefinitionEvent
+        // 验证每个 RoleGAgent 的配置
+        var researcher = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            async _ =>
             {
-                WorkflowYaml = workflowYaml,
-                WorkflowName = "public_alias_workflow",
-            }),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
-            Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
-        });
-        await runActor.HandleEventAsync(new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new BindWorkflowRunDefinitionEvent
-            {
-                DefinitionActorId = definitionActor.Id,
-                WorkflowYaml = workflowYaml,
-                WorkflowName = "public_alias_workflow",
-                RunId = runActorId,
-            }),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
-            Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
-        });
-
-        await runActor.HandleEventAsync(new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new WorkflowChatRequestEvent
-            {
-                Prompt = "hello",
-                SessionId = "public-alias-session",
-            }),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
-            Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
-        });
-
-        (await runtime.ExistsAsync(roleActorId)).Should().BeTrue();
-        var children = await runActor.GetChildrenIdsAsync();
-        children.Should().ContainSingle().Which.Should().Be(roleActorId);
-        var roleActor = await runtime.GetAsync(roleActorId);
-        roleActor!.Agent.Should().BeOfType<WorkflowRoleGAgent>();
+                var researcherActor = await runtime.GetAsync(researcherActorId);
+                return researcherActor?.Agent as RoleGAgent;
+            },
+            agent => agent?.RoleName == "Researcher",
+            $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
+            CancellationToken.None);
+        researcher!.RoleName.Should().Be("Researcher");
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -508,19 +448,19 @@ public class WorkflowIntegrationTests
             roles:
               - id: planner
                 name: Planner
-                agent_kind: workflow.role-agent
+                agent_kind: workflow.assistant-role
                 system_prompt: "你是规划者"
               - id: analyst_a
                 name: AnalystA
-                agent_kind: workflow.role-agent
+                agent_kind: workflow.assistant-role
                 system_prompt: "你是分析师A"
               - id: analyst_b
                 name: AnalystB
-                agent_kind: workflow.role-agent
+                agent_kind: workflow.assistant-role
                 system_prompt: "你是分析师B"
               - id: synthesizer
                 name: Synthesizer
-                agent_kind: workflow.role-agent
+                agent_kind: workflow.assistant-role
                 system_prompt: "你是综合者"
             steps:
               - id: plan
@@ -583,7 +523,7 @@ public class WorkflowIntegrationTests
 
         // ─── 并行 / 共识 ───
         factory.TryCreate("parallel_fanout", out m).Should().BeTrue(); m!.Name.Should().Be("parallel_fanout");
-        factory.TryCreate("vote_consensus", out m).Should().BeTrue(); m!.Name.Should().Be("vote");
+        factory.TryCreate("vote_consensus", out m).Should().BeTrue(); m!.Name.Should().Be("vote_consensus");
 
         // ─── 执行 ───
         factory.TryCreate("llm_call", out m).Should().BeTrue(); m!.Name.Should().Be("llm_call");

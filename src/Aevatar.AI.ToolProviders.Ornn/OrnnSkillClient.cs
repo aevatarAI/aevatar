@@ -1,8 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.AI.ToolProviders.Ornn.Publishing;
-using Aevatar.AI.ToolProviders.Skills;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -12,7 +10,7 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 /// Ornn skill API client. Routes through NyxID's proxy so the Ornn upstream URL stays a
 /// runtime concern (resolved by NyxID from the user's bound <c>ornn-api</c> service) rather
 /// than a hardcoded constant. The public Ornn frontend URL only serves the SPA shell, so
-/// direct calls return HTML for any path; the NyxID-routed path is the canonical surface
+/// direct calls return HTML for any path — the NyxID-routed path is the canonical surface
 /// (issue #530 follow-up).
 /// </summary>
 public sealed class OrnnSkillClient
@@ -62,7 +60,7 @@ public sealed class OrnnSkillClient
         _logger = logger ?? NullLogger<OrnnSkillClient>.Instance;
     }
 
-    /// <summary>Search skills.</summary>
+    /// <summary>搜索技能。</summary>
     public async Task<OrnnSearchResult> SearchSkillsAsync(
         string accessToken,
         string query = "",
@@ -98,14 +96,14 @@ public sealed class OrnnSkillClient
                 ct: linkedCts.Token);
 
             if (TryUnwrapNyxIdProxyError(response, out var proxyError))
-                return new OrnnSearchResult { Items = [], Error = proxyError.Detail };
+                return new OrnnSearchResult { Items = [], Error = proxyError };
 
             var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSearchResult>>(response, JsonOptions);
             return envelope?.Data ?? new OrnnSearchResult { Items = [] };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Caller cancellation is a control-flow signal; let it propagate so the outer LLM
+            // Caller cancellation is a control-flow signal — let it propagate so the outer LLM
             // run can react instead of seeing a synthetic "no skills" result.
             throw;
         }
@@ -130,7 +128,7 @@ public sealed class OrnnSkillClient
         }
     }
 
-    /// <summary>Fetch skill JSON including file contents.</summary>
+    /// <summary>获取技能 JSON（含文件内容）。</summary>
     public async Task<OrnnSkillJson?> GetSkillJsonAsync(
         string accessToken,
         string idOrName,
@@ -152,20 +150,15 @@ public sealed class OrnnSkillClient
                 extraHeaders: null,
                 ct: linkedCts.Token);
 
-            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
-            {
-                if (proxyError.Status == 403)
-                    throw RemoteSkillFetchException.AccessDenied(idOrName, proxyError.Detail, proxyError.Status);
-
+            if (TryUnwrapNyxIdProxyError(response, out _))
                 return null;
-            }
 
             var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSkillJson>>(response, JsonOptions);
             return envelope?.Data;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Caller cancellation is a control-flow signal; let it propagate so the outer LLM
+            // Caller cancellation is a control-flow signal — let it propagate so the outer LLM
             // run can react instead of seeing a synthetic "skill not found" result.
             throw;
         }
@@ -179,60 +172,10 @@ public sealed class OrnnSkillClient
                 idOrName);
             return null;
         }
-        catch (RemoteSkillFetchException)
-        {
-            throw;
-        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ornn get skill failed for '{IdOrName}'", idOrName);
             return null;
-        }
-    }
-
-    public async Task<OrnnSkillPublishResponse> PublishSkillAsync(
-        string accessToken,
-        byte[] zipBytes,
-        CancellationToken ct = default)
-    {
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-
-        try
-        {
-            var response = await _nyxApi.ProxyRequestBinaryAsync(
-                token: accessToken,
-                slug: _options.NyxIdSlug,
-                path: "/api/v1/skills",
-                method: "POST",
-                body: zipBytes,
-                contentType: "application/zip",
-                extraHeaders: null,
-                ct: linkedCts.Token);
-
-            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
-                return new OrnnSkillPublishResponse(false, response, proxyError.Detail);
-
-            return new OrnnSkillPublishResponse(true, response);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
-        {
-            _logger.LogWarning(
-                "Ornn skill publish exceeded {TimeoutSeconds}s per-call budget",
-                (int)_perCallTimeout.TotalSeconds);
-            return new OrnnSkillPublishResponse(
-                false,
-                string.Empty,
-                $"Ornn skill publish exceeded {(int)_perCallTimeout.TotalSeconds}s budget.");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Ornn skill publish failed");
-            return new OrnnSkillPublishResponse(false, string.Empty, ex.Message);
         }
     }
 
@@ -241,9 +184,9 @@ public sealed class OrnnSkillClient
     /// returns non-2xx (<c>{"error": true, "status": N, "body": "..."}</c>) so callers see a
     /// concise actionable message instead of a JsonException about the wrapper shape.
     /// </summary>
-    private bool TryUnwrapNyxIdProxyError(string response, out NyxIdProxyError error)
+    private bool TryUnwrapNyxIdProxyError(string response, out string detail)
     {
-        error = new NyxIdProxyError(0, string.Empty);
+        detail = string.Empty;
         if (string.IsNullOrWhiteSpace(response))
             return false;
 
@@ -263,22 +206,16 @@ public sealed class OrnnSkillClient
                 ? statusProp.GetInt32()
                 : 0;
 
-            // 404 here means NyxID could not resolve `_options.NyxIdSlug` to an upstream: either
+            // 404 here means NyxID could not resolve `_options.NyxIdSlug` to an upstream — either
             // the user has not bound an Ornn service to this slug, or the deployment's NyxID
             // catalog uses a different slug name. The LLM can recover by guiding the user to
             // bind the service or by retrying with a different slug; surface that hint instead
             // of a bare "status=404".
-            var detail = status switch
-            {
-                403 => $"Ornn skill API access denied through NyxID proxy slug '{_options.NyxIdSlug}'. " +
-                       "The API key is missing proxy scope or service authorization for the Ornn UserService. " +
-                       "Reconnect the Ornn service in NyxID and recreate or rotate the scheduled agent key.",
-                404 => $"Ornn skill API not reachable: NyxID has no service bound to slug '{_options.NyxIdSlug}'. " +
-                       "The user may need to connect their Ornn account via NyxID (nyxid_services action=create), " +
-                       "or the deployment may need to override Aevatar:Ornn:NyxIdSlug.",
-                _ => $"NyxID proxy returned status={status}.",
-            };
-            error = new NyxIdProxyError(status, detail);
+            detail = status == 404
+                ? $"Ornn skill API not reachable: NyxID has no service bound to slug '{_options.NyxIdSlug}'. " +
+                  "The user may need to connect their Ornn account via NyxID (nyxid_services action=create), " +
+                  "or the deployment may need to override Aevatar:Ornn:NyxIdSlug."
+                : $"NyxID proxy returned status={status}.";
             return true;
         }
         catch (JsonException)
@@ -286,11 +223,9 @@ public sealed class OrnnSkillClient
             return false;
         }
     }
-
-    private sealed record NyxIdProxyError(int Status, string Detail);
 }
 
-// DTOs
+// ─── DTOs ───
 
 public sealed class OrnnApiResponse<T>
 {

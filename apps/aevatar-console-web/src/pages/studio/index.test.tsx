@@ -194,7 +194,7 @@ function mockBuildServiceRevisionCatalog(
         scriptRevision: "",
         scriptDefinitionActorId: "",
         scriptSourceHash: "",
-        staticAgentKind: "",
+        staticActorTypeName: "",
       },
     ],
   };
@@ -242,11 +242,11 @@ function mockBuildGAgentServiceRevisionCatalog(
     scopeId: string;
     serviceId: string;
     displayName: string;
-    agentKind: string;
+    actorTypeName: string;
     revisionId: string;
   }>
 ) {
-  const agentKind = overrides?.agentKind ?? "Tests.OrdersGAgent";
+  const actorTypeName = overrides?.actorTypeName ?? "Tests.OrdersGAgent, Tests";
   const revisionId = overrides?.revisionId ?? "rev-gagent-1";
   const catalog = mockBuildServiceRevisionCatalog({
     scopeId: overrides?.scopeId,
@@ -269,7 +269,7 @@ function mockBuildGAgentServiceRevisionCatalog(
         scriptRevision: "",
         scriptDefinitionActorId: "",
         scriptSourceHash: "",
-        staticAgentKind: agentKind,
+        staticActorTypeName: actorTypeName,
       },
     ],
   };
@@ -638,17 +638,16 @@ jest.mock("@/shared/api/runtimeQueryApi", () => ({
 
 jest.mock("@/shared/api/runtimeGAgentApi", () => ({
   runtimeGAgentApi: {
-    listKinds: jest.fn(async () => [
+    listTypes: jest.fn(async () => [
       {
-        agentKind: "Tests.OrdersGAgent",
-        displayName: "Orders Assistant",
-        diagnosticClrTypeName: "Tests.OrdersGAgent, Tests",
-        endpoints: [],
+        typeName: "OrdersGAgent",
+        fullName: "Tests.OrdersGAgent",
+        assemblyName: "Tests",
       },
     ]),
     listActors: jest.fn(async () => [
       {
-        agentKind: "Tests.OrdersGAgent",
+        gAgentType: "Tests.OrdersGAgent",
         actorIds: ["orders-gagent"],
       },
     ]),
@@ -729,7 +728,7 @@ const mockRuntimeQueryApi = runtimeQueryApi as unknown as {
   listPrimitives: jest.Mock;
 };
 const mockRuntimeGAgentApi = runtimeGAgentApi as unknown as {
-  listKinds: jest.Mock;
+  listTypes: jest.Mock;
   listActors: jest.Mock;
 };
 const mockScopeRuntimeApi = scopeRuntimeApi as unknown as {
@@ -871,7 +870,7 @@ jest.mock("@/shared/studio/api", () => ({
                 }
               : {
                   implementationKind: "gagent",
-                  agentKind: matchedMember?.displayName || "",
+                  actorTypeName: matchedMember?.displayName || "",
                 },
         lastBinding: matchedMember?.lastBoundRevisionId
           ? {
@@ -1299,7 +1298,7 @@ jest.mock("@/shared/studio/api", () => ({
       scopeId: string;
       memberId: string;
       displayName?: string;
-      agentKind: string;
+      actorTypeName: string;
       endpoints: Array<{
         endpointId: string;
         displayName?: string;
@@ -1343,7 +1342,7 @@ jest.mock("@/shared/studio/api", () => ({
     bindScopeGAgent: jest.fn(async (input: {
       scopeId: string;
       displayName?: string;
-      agentKind: string;
+      actorTypeName: string;
       endpoints: Array<{
         endpointId: string;
         displayName?: string;
@@ -1356,7 +1355,7 @@ jest.mock("@/shared/studio/api", () => ({
       scopeId: input.scopeId,
       displayName: input.displayName || "orders-gagent",
       targetKind: "gagent",
-      targetName: input.agentKind || input.displayName || "orders-gagent",
+      targetName: input.actorTypeName || input.displayName || "orders-gagent",
       revisionId: "rev-gagent-1",
       expectedActorId: "scope-gagent:scope-1:default:dep-1",
     })),
@@ -1397,7 +1396,7 @@ jest.mock("@/shared/studio/api", () => ({
           scriptRevision: "",
           scriptDefinitionActorId: "",
           scriptSourceHash: "",
-          staticAgentKind: "",
+          staticActorTypeName: "",
         },
         {
           revisionId: "rev-1",
@@ -1423,7 +1422,7 @@ jest.mock("@/shared/studio/api", () => ({
           scriptRevision: "",
           scriptDefinitionActorId: "",
           scriptSourceHash: "",
-          staticAgentKind: "",
+          staticActorTypeName: "",
         },
       ],
     })),
@@ -1464,7 +1463,7 @@ jest.mock("@/shared/studio/api", () => ({
           scriptRevision: "",
           scriptDefinitionActorId: "",
           scriptSourceHash: "",
-          staticAgentKind: "",
+          staticActorTypeName: "",
         },
       ],
     })),
@@ -2016,7 +2015,7 @@ jest.mock("./components/StudioBuildPanels", () => {
           type: "button",
           onClick: () =>
             props.onContinueToBind?.({
-              agentKind: props.selectedAgentKind || "Tests.OrdersGAgent",
+              actorTypeName: props.selectedGAgentTypeName || "Tests.OrdersGAgent, Tests",
               displayName: props.currentMemberLabel || "orders-gagent",
               initialPrompt: "You are the team member gagent.",
               persistenceMode: "grain",
@@ -2130,14 +2129,14 @@ jest.mock("./components/StudioBuildPanels", () => {
   const StudioGAgentBuildPanel = (props: any) => {
     mockReact.useEffect(() => {
       props.onBuildStateChange?.({
-        agentKind: props.selectedAgentKind || "Tests.OrdersGAgent",
+        actorTypeName: props.selectedGAgentTypeName || "Tests.OrdersGAgent, Tests",
         displayName: props.currentMemberLabel || "orders-gagent",
         initialPrompt: "You are the team member gagent.",
         persistenceMode: "grain",
         role: "intake-classifier",
         tools: ["classify_intent", "detect_language"],
       });
-    }, [props.currentMemberLabel, props.onBuildStateChange, props.selectedAgentKind]);
+    }, [props.currentMemberLabel, props.onBuildStateChange, props.selectedGAgentTypeName]);
 
     return mockReact.createElement("div", { "data-testid": "studio-gagent-build-panel" }, [
       mockReact.createElement("div", { key: "title" }, "GAgent definition"),
@@ -2145,9 +2144,9 @@ jest.mock("./components/StudioBuildPanels", () => {
       mockReact.createElement("input", {
         key: "type",
         "aria-label": "GAgent type",
-        value: props.selectedAgentKind || "",
+        value: props.selectedGAgentTypeName || "",
         onChange: (event: MockValueEvent) =>
-          props.onSelectAgentKind?.(event.target.value),
+          props.onSelectGAgentTypeName?.(event.target.value),
       }),
       mockReact.createElement("input", {
         key: "display-name",
@@ -2857,7 +2856,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
             onClick: () =>
               props.onBindGAgent?.({
                 displayName: "orders-gagent",
-                agentKind: "Tests.OrdersGAgent",
+                actorTypeName: "Tests.OrdersGAgent, Tests",
                 endpointId: "run",
                 endpointDisplayName: "Run",
                 requestTypeUrl:
@@ -2879,7 +2878,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
               props.onBindGAgent?.(
                 {
                   displayName: "orders-gagent",
-                  agentKind: "Tests.OrdersGAgent",
+                  actorTypeName: "Tests.OrdersGAgent, Tests",
                   endpointId: "run",
                   endpointDisplayName: "Run",
                   requestTypeUrl:
@@ -2903,7 +2902,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
               props.onBindGAgent?.(
                 {
                   displayName: "orders-gagent",
-                  agentKind: "Tests.OrdersGAgent",
+                  actorTypeName: "Tests.OrdersGAgent, Tests",
                   endpoints: [
                     {
                       endpointId: "run",
@@ -3185,17 +3184,16 @@ describe("StudioPage", () => {
         exampleWorkflows: ["demo_template"],
       },
     ]);
-    mockRuntimeGAgentApi.listKinds.mockResolvedValue([
+    mockRuntimeGAgentApi.listTypes.mockResolvedValue([
       {
-        agentKind: "Tests.OrdersGAgent",
-        displayName: "Orders Assistant",
-        diagnosticClrTypeName: "Tests.OrdersGAgent, Tests",
-        endpoints: [],
+        typeName: "OrdersGAgent",
+        fullName: "Tests.OrdersGAgent",
+        assemblyName: "Tests",
       },
     ]);
     mockRuntimeGAgentApi.listActors.mockResolvedValue([
       {
-        agentKind: "Tests.OrdersGAgent",
+        gAgentType: "Tests.OrdersGAgent",
         actorIds: ["orders-gagent"],
       },
     ]);
@@ -3343,7 +3341,7 @@ describe("StudioPage", () => {
                   }
                 : {
                     implementationKind: "gagent",
-                    agentKind: matchedMember?.displayName || "",
+                    actorTypeName: matchedMember?.displayName || "",
                   },
           lastBinding: matchedMember?.lastBoundRevisionId
             ? {
@@ -4007,7 +4005,7 @@ describe("StudioPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^GAgent/ }));
 
     await waitFor(() => {
-      expect(mockRuntimeGAgentApi.listKinds).toHaveBeenCalled();
+      expect(mockRuntimeGAgentApi.listTypes).toHaveBeenCalled();
     });
 
     expect(await screen.findByLabelText("GAgent type")).toBeTruthy();
@@ -5065,7 +5063,7 @@ describe("StudioPage", () => {
           scopeId: "scope-1",
           memberId: "orders-worker",
           displayName: "Orders Worker",
-          agentKind: "Tests.OrdersGAgent",
+          actorTypeName: "Tests.OrdersGAgent, Tests",
           endpoints: expect.arrayContaining([
             expect.objectContaining({
               endpointId: "run",
@@ -8146,7 +8144,7 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
 
     await waitFor(() => {
-      expect(mockRuntimeGAgentApi.listKinds).toHaveBeenCalled();
+      expect(mockRuntimeGAgentApi.listTypes).toHaveBeenCalled();
     });
     await waitFor(() => {
       expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledWith(

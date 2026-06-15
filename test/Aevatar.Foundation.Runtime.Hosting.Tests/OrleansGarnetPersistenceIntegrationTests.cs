@@ -1,8 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -39,7 +37,7 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
         {
             var grainFactory = firstHost.Services.GetRequiredService<IGrainFactory>();
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-            var initialized = await grain.InitializeAgentByKindAsync("tests.recording-garnet-persistence");
+            var initialized = await grain.InitializeAgentAsync(typeof(RecordingGarnetPersistenceAgent).AssemblyQualifiedName!);
             initialized.Should().BeTrue();
 
             await grain.SetParentAsync("parent-garnet");
@@ -87,6 +85,7 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
         var actorId = $"stateful-actor-{Guid.NewGuid():N}";
         var serviceId = $"aevatar-orleans-garnet-stateful-service-{Guid.NewGuid():N}";
         var clusterId = $"aevatar-orleans-garnet-stateful-cluster-{Guid.NewGuid():N}";
+        var agentTypeName = typeof(RecordingGarnetStatefulAgent).AssemblyQualifiedName!;
 
         var firstHost = await StartSiloHostAsync(
             garnetConnectionString,
@@ -98,7 +97,7 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
             var grainFactory = firstHost.Services.GetRequiredService<IGrainFactory>();
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
 
-            (await grain.InitializeAgentByKindAsync("tests.recording-garnet-stateful")).Should().BeTrue();
+            (await grain.InitializeAgentAsync(agentTypeName)).Should().BeTrue();
             (await grain.GetDescriptionAsync()).Should().Be("activation-count:0");
             await grain.HandleEnvelopeAsync(CreateDirectEnvelope(actorId, "activated"));
             (await grain.GetDescriptionAsync()).Should().Be("activation-count:1");
@@ -154,12 +153,6 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
                     options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
                     options.GarnetConnectionString = garnetConnectionString;
                 });
-                siloBuilder.ConfigureServices(services =>
-                {
-                    services.AddAevatarAgentKindRegistry(builder => builder
-                        .Register<RecordingGarnetPersistenceAgent>()
-                        .Register<RecordingGarnetStatefulAgent>());
-                });
             })
             .Build(), HostLifecycleTimeout);
 
@@ -175,7 +168,6 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
         Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
         ?? throw new InvalidOperationException("Missing AEVATAR_TEST_GARNET_CONNECTION_STRING.");
 
-    [GAgent("tests.recording-garnet-persistence")]
     private sealed class RecordingGarnetPersistenceAgent : IAgent
     {
         public string Id => "recording-garnet-persistence-agent";
@@ -206,7 +198,6 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
         }
     }
 
-    [GAgent("tests.recording-garnet-stateful")]
     private sealed class RecordingGarnetStatefulAgent : GAgentBase<Int32Value>
     {
         [EventHandler]

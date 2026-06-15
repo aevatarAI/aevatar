@@ -84,7 +84,7 @@ public sealed record StudioMemberImplementationRefResponse(
     string? WorkflowRevision = null,
     string? ScriptId = null,
     string? ScriptRevision = null,
-    string? DiagnosticActorTypeName = null);
+    string? ActorTypeName = null);
 
 public sealed record StudioMemberSummaryResponse(
     string MemberId,
@@ -181,8 +181,7 @@ public sealed record CreateStudioMemberRequest(
     string? MemberId = null,
     // Optional initial team assignment (ADR-0017). Empty string is rejected
     // at the application boundary; null / absent means "do not assign".
-    string? TeamId = null,
-    StudioMemberImplementationRefResponse? ImplementationRef = null);
+    string? TeamId = null);
 
 /// <summary>
 /// Wire body for <c>PATCH /api/scopes/{scopeId}/members/{memberId}</c> when
@@ -192,21 +191,8 @@ public sealed record CreateStudioMemberRequest(
 /// empty-string value reaching the actor.
 /// </summary>
 public sealed record UpdateStudioMemberRequest(
-    PatchValue<string> DisplayName = default,
     PatchValue<string> TeamId = default,
     PatchValue<StudioMemberImplementationRefResponse> ImplementationRef = default);
-
-public static class StudioMemberCommandStatusNames
-{
-    public const string Accepted = "accepted";
-    public const string NoChange = "no_change";
-}
-
-public sealed record StudioMemberCommandResponse(
-    string Status,
-    string ScopeId,
-    string MemberId,
-    DateTimeOffset? AckedAt = null);
 
 /// <summary>
 /// Centralized input bounds applied at the create boundary so a single
@@ -265,7 +251,7 @@ public sealed record StudioMemberGAgentEndpointSpec(
     string? Description = null);
 
 public sealed record StudioMemberGAgentBindingSpec(
-    string AgentKind,
+    string ActorTypeName,
     IReadOnlyList<StudioMemberGAgentEndpointSpec>? Endpoints = null);
 
 public sealed record StudioMemberBindingAcceptedResponse(

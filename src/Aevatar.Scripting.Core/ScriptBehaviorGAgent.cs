@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Abstractions;
@@ -12,7 +11,6 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core;
 
-[GAgent("scripting.behavior")]
 public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
 {
     // Refactor (iter149/cluster-1133): Old pattern: script run completion was inferred from domain fact/readmodel side effects.  New principle: script run completion is an actor-owned committed outcome event observed through the projection session channel.

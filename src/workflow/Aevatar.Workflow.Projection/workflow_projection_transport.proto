@@ -30,7 +30,6 @@ message WorkflowRunInsightReportDocument {
   repeated WorkflowExecutionRoleReply role_reply_entries = 22;
   repeated WorkflowExecutionTimelineEvent timeline_entries = 23;
   WorkflowExecutionSummary summary_value = 24;
-  WorkflowUsageMetricsReadModel usage_value = 25;
 }
 
 message WorkflowExecutionCurrentStateDocument {
@@ -51,29 +50,6 @@ message WorkflowExecutionCurrentStateDocument {
   string final_error = 15;
   int32 execution_state_count = 16;
   google.protobuf.BoolValue success_wrapper = 17;
-  string workflow_yaml = 18;
-  map<string, string> inline_workflow_yaml_entries = 19;
-  map<string, string> fork_seed_variable_entries = 20;
-  repeated string fork_seed_completed_step_id_entries = 21;
-  string fork_seed_last_failed_step_id = 22;
-  string scope_id = 23;
-  repeated WorkflowExecutionInputFileRefReadModel input_file_ref_entries = 24;
-}
-
-message WorkflowExecutionInputFileRefReadModel {
-  string file_id = 1;
-  string artifact_id = 2;
-  int32 source_kind_value = 3;
-  string source_message_id = 4;
-  string source_resource_key = 5;
-  string file_name = 6;
-  string media_type = 7;
-  int64 size_bytes = 8;
-  string sha256 = 9;
-  int64 created_at_unix_ms = 10;
-  int64 expires_at_unix_ms = 11;
-  string owner_run_id = 12;
-  string owner_scope_id = 13;
 }
 
 message WorkflowExecutionTopologyEdge {
@@ -101,16 +77,6 @@ message WorkflowExecutionStepTrace {
   string suspension_prompt = 17;
   int32 suspension_timeout_seconds_value = 18;
   string requested_variable_name = 19;
-  WorkflowUsageMetricsReadModel usage_value = 20;
-}
-
-message WorkflowUsageMetricsReadModel {
-  int32 prompt_tokens = 1;
-  int32 completion_tokens = 2;
-  int32 total_tokens = 3;
-  string model = 4;
-  double cost = 5;
-  int64 latency_ms = 6;
 }
 
 message WorkflowExecutionRoleReply {

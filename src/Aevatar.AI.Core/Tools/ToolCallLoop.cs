@@ -355,26 +355,18 @@ public sealed class ToolCallLoop
         }
     }
 
-    public static ChatMessage BuildToolResultMessage(string callId, string toolName, string toolResult)
+    public static ChatMessage BuildToolResultMessage(string callId, string toolResult)
     {
         if (!TryExtractToolContentParts(toolResult, out var text, out var parts))
-        {
-            return SkillRecoveryToolResultViews.Attach(
-                ChatMessage.Tool(callId, toolResult),
-                toolName,
-                toolResult);
-        }
+            return ChatMessage.Tool(callId, toolResult);
 
-        return SkillRecoveryToolResultViews.Attach(
-            new ChatMessage
-            {
-                Role = "tool",
-                ToolCallId = callId,
-                Content = text,
-                ContentParts = parts,
-            },
-            toolName,
-            toolResult);
+        return new ChatMessage
+        {
+            Role = "tool",
+            ToolCallId = callId,
+            Content = text,
+            ContentParts = parts,
+        };
     }
 
     private static bool TryExtractToolContentParts(
@@ -577,7 +569,7 @@ public sealed class ToolCallLoop
             executor.AddTool(executionState, call);
 
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, ct))
-            messages.Add(BuildToolResultMessage(result.CallId, result.ToolName, result.Result));
+            messages.Add(BuildToolResultMessage(result.CallId, result.Result));
     }
 
     private static ChatMessage BuildAssistantToolCallMessage(

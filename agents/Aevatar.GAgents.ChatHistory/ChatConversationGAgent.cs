@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -15,7 +14,6 @@ namespace Aevatar.GAgents.ChatHistory;
 /// the change to the <see cref="ChatHistoryIndexGAgent"/> via <c>SendToAsync</c>,
 /// ensuring transactional consistency between conversation and index actors.
 /// </summary>
-[GAgent("chat.history.conversation")]
 public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, IProjectedActor
 {
     private readonly IChatHistoryIndexTopologyPort _indexTopologyPort;

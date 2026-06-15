@@ -14,62 +14,6 @@ internal static class ProtoToolArguments
     private static readonly JsonParser IgnoreUnknownFieldsParser = new(
         JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
 
-    public static InvocationToolError? RejectForbiddenRootField(
-        string argumentsJson,
-        string field,
-        string replacement)
-    {
-        var normalized = string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson;
-        try
-        {
-            if (JsonNode.Parse(normalized) is not JsonObject obj || !obj.ContainsKey(field))
-                return null;
-
-            return new InvocationToolError
-            {
-                Code = "invalid_arguments",
-                Message = $"{field} is not accepted. Use {replacement}.",
-                Field = field,
-            };
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    public static InvocationToolError? RejectForbiddenRootFields(
-        string argumentsJson,
-        IReadOnlyCollection<string> fields,
-        string replacement)
-    {
-        var normalized = string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson;
-        try
-        {
-            if (JsonNode.Parse(normalized) is not JsonObject obj)
-                return null;
-
-            foreach (var field in fields)
-            {
-                if (!obj.ContainsKey(field))
-                    continue;
-
-                return new InvocationToolError
-                {
-                    Code = "invalid_arguments",
-                    Message = $"{field} is not accepted. Use {replacement}.",
-                    Field = field,
-                };
-            }
-
-            return null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
     public static ToolArgumentParseResult<T> Parse<T>(string argumentsJson)
         where T : class, IMessage<T>, new()
     {

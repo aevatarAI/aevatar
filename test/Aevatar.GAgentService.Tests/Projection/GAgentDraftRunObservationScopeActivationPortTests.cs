@@ -7,10 +7,10 @@ using FluentAssertions;
 
 namespace Aevatar.GAgentService.Tests.Projection;
 
-public sealed class GAgentDraftRunObservationScopeLeasePreparationPortTests
+public sealed class GAgentDraftRunObservationScopeActivationPortTests
 {
     [Fact]
-    public async Task PrepareAsync_ShouldStartDraftRunSessionAndTerminalMaterializationScopes()
+    public async Task ActivateAsync_ShouldStartDraftRunSessionAndTerminalMaterializationScopes()
     {
         var sessionActivation = new RecordingActivationService<GAgentDraftRunRuntimeLease>(
             request => new GAgentDraftRunRuntimeLease(new GAgentDraftRunProjectionContext
@@ -29,13 +29,13 @@ public sealed class GAgentDraftRunObservationScopeLeasePreparationPortTests
                     CorrelationId = request.SessionId,
                     InteractionKind = GAgentRunTerminalInteractionKind.DraftRun,
                 }));
-        var port = new GAgentDraftRunObservationScopeLeasePreparationPort(
+        var port = new GAgentDraftRunObservationScopeActivationPort(
             sessionActivation,
             new RecordingReleaseService<GAgentDraftRunRuntimeLease>(),
             terminalActivation,
             new RecordingReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>());
 
-        var activation = await port.PrepareAsync("actor-1", "cmd-1", "corr-1", CancellationToken.None);
+        var activation = await port.ActivateAsync("actor-1", "cmd-1", "corr-1", CancellationToken.None);
 
         activation.Should().NotBeNull();
         activation!.ActorId.Should().Be("actor-1");
@@ -58,7 +58,7 @@ public sealed class GAgentDraftRunObservationScopeLeasePreparationPortTests
     }
 
     [Fact]
-    public async Task PrepareAsync_ShouldCompensateSessionScope_WhenTerminalPreparationFails()
+    public async Task ActivateAsync_ShouldCompensateSessionScope_WhenTerminalActivationFails()
     {
         var sessionRelease = new RecordingReleaseService<GAgentDraftRunRuntimeLease>();
         var sessionActivation = new RecordingActivationService<GAgentDraftRunRuntimeLease>(
@@ -70,13 +70,13 @@ public sealed class GAgentDraftRunObservationScopeLeasePreparationPortTests
             }));
         var terminalActivation = new RecordingActivationService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(
             _ => throw new InvalidOperationException("terminal unavailable"));
-        var port = new GAgentDraftRunObservationScopeLeasePreparationPort(
+        var port = new GAgentDraftRunObservationScopeActivationPort(
             sessionActivation,
             sessionRelease,
             terminalActivation,
             new RecordingReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>());
 
-        var activation = await port.PrepareAsync("actor-1", "cmd-1", "corr-1", CancellationToken.None);
+        var activation = await port.ActivateAsync("actor-1", "cmd-1", "corr-1", CancellationToken.None);
 
         activation.Should().BeNull();
         sessionRelease.Leases.Should().ContainSingle();
@@ -92,7 +92,7 @@ public sealed class GAgentDraftRunObservationScopeLeasePreparationPortTests
         var terminalRelease = new RecordingReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(
             "terminal",
             operations);
-        var port = new GAgentDraftRunObservationScopeLeasePreparationPort(
+        var port = new GAgentDraftRunObservationScopeActivationPort(
             new RecordingActivationService<GAgentDraftRunRuntimeLease>(
                 request => new GAgentDraftRunRuntimeLease(new GAgentDraftRunProjectionContext
                 {
@@ -114,7 +114,7 @@ public sealed class GAgentDraftRunObservationScopeLeasePreparationPortTests
             terminalRelease);
 
         await port.ReleaseAsync(
-            new GAgentDraftRunObservationScopeLeasePreparation("actor-1", "cmd-1", "corr-1"),
+            new GAgentDraftRunObservationScopeActivation("actor-1", "cmd-1", "corr-1"),
             CancellationToken.None);
 
         terminalRelease.Leases.Should().ContainSingle();

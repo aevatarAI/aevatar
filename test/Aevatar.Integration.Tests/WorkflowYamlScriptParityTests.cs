@@ -127,7 +127,12 @@ public class WorkflowYamlScriptParityTests
     }
 
     private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
-        builder.Register<WorkflowRoleGAgent>();
+        builder.Register(new AgentRegistration(
+            "workflow.assistant-role",
+            typeof(WorkflowRoleGAgent),
+            typeof(RoleGAgentState),
+            [],
+            []));
 
     private static async Task<string> RunScriptUppercaseAsync(string prompt)
     {
@@ -192,7 +197,7 @@ public class WorkflowYamlScriptParityTests
         roles:
           - id: transformer
             name: Transformer
-            agent_kind: workflow.role-agent
+            agent_kind: workflow.assistant-role
             system_prompt: "deterministic transform only"
         steps:
           - id: to_upper

@@ -12,7 +12,6 @@ public sealed record RunSessionSnapshot
     public string? RunId { get; init; }
     public string? StepId { get; init; }
     public string? SuspensionType { get; init; }
-    public WorkflowToolApprovalResumeRequest? ToolApproval { get; init; }
     public string? LastSignalName { get; init; }
 
     public bool CanResume =>
@@ -26,15 +25,12 @@ public sealed record RunSessionSnapshot
 
 public sealed class RunSessionTracker
 {
-    private const string ToolApprovalPendingEventName = "aevatar.tool_approval.pending";
-
     private string? _actorId;
     private string? _workflowName;
     private string? _commandId;
     private string? _runId;
     private string? _stepId;
     private string? _suspensionType;
-    private WorkflowToolApprovalResumeRequest? _toolApproval;
     private string? _lastSignalName;
 
     public RunSessionSnapshot Snapshot => new()
@@ -45,7 +41,6 @@ public sealed class RunSessionTracker
         RunId = _runId,
         StepId = _stepId,
         SuspensionType = _suspensionType,
-        ToolApproval = _toolApproval,
         LastSignalName = _lastSignalName,
     };
 
@@ -102,7 +97,6 @@ public sealed class RunSessionTracker
             // Refactor (issue1326): Old pattern: Resume requests inherited the tracked start-run command id from the session. New principle: Resume control commands use a fresh server id unless the caller supplies an explicit id.
             CommandId = commandId,
             Metadata = metadata,
-            ToolApproval = _toolApproval,
         };
     }
 
@@ -169,56 +163,15 @@ public sealed class RunSessionTracker
             _runId = humanInput.RunId ?? _runId;
             _stepId = humanInput.StepId ?? _stepId;
             _suspensionType = humanInput.SuspensionType ?? _suspensionType;
-            _toolApproval = null;
             return;
         }
 
-        if (TryParseToolApprovalRequest(frame, out var toolApproval))
-        {
-            _runId = toolApproval.Payload.RunId ?? _runId;
-            _stepId = toolApproval.Payload.StepId ?? _stepId;
-            _suspensionType = "tool_approval";
-            _toolApproval = toolApproval.Resume;
-            return;
-        }
-
-        TrackSignalFrame(frame);
-    }
-
-    private static bool TryParseToolApprovalRequest(
-        WorkflowRunEventEnvelope frame,
-        out TrackedToolApprovalRequest toolApproval)
-    {
-        var custom = frame.Custom;
-        if (frame.EventCase != WorkflowRunEventEnvelope.EventOneofCase.Custom ||
-            custom == null ||
-            !string.Equals(custom.Name, ToolApprovalPendingEventName, StringComparison.Ordinal) ||
-            custom.Payload?.Is(WorkflowToolApprovalSuspensionCustomPayload.Descriptor) != true)
-        {
-            toolApproval = default!;
-            return false;
-        }
-
-        var payload = custom.Payload.Unpack<WorkflowToolApprovalSuspensionCustomPayload>();
-        toolApproval = new TrackedToolApprovalRequest(
-            payload,
-            new WorkflowToolApprovalResumeRequest
-            {
-                ExecutionId = payload.ExecutionId,
-                ToolCallId = payload.ToolCallId,
-                ApprovalRequestId = payload.ApprovalRequestId,
-            });
-        return true;
-    }
-
-    private bool TrackSignalFrame(WorkflowRunEventEnvelope frame)
-    {
         if (WorkflowCustomEventParser.TryParseWaitingSignal(frame, out var waitingSignal))
         {
             _runId = waitingSignal.RunId ?? _runId;
             _stepId = waitingSignal.StepId ?? _stepId;
             _lastSignalName = waitingSignal.SignalName ?? _lastSignalName;
-            return true;
+            return;
         }
 
         if (WorkflowCustomEventParser.TryParseSignalBuffered(frame, out var bufferedSignal))
@@ -226,10 +179,8 @@ public sealed class RunSessionTracker
             _runId = bufferedSignal.RunId ?? _runId;
             _stepId = bufferedSignal.StepId ?? _stepId;
             _lastSignalName = bufferedSignal.SignalName ?? _lastSignalName;
-            return true;
+            return;
         }
-
-        return false;
     }
 
     private void EnsureResumeContext()
@@ -252,8 +203,4 @@ public sealed class RunSessionTracker
         if (string.IsNullOrWhiteSpace(value))
             throw AevatarWorkflowException.InvalidRequest($"Run session is missing '{field}'.");
     }
-
-    private sealed record TrackedToolApprovalRequest(
-        WorkflowToolApprovalSuspensionCustomPayload Payload,
-        WorkflowToolApprovalResumeRequest Resume);
 }

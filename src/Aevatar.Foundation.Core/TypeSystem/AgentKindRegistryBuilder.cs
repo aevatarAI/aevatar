@@ -44,7 +44,9 @@ public sealed class AgentKindRegistryBuilder
 
     /// <summary>
     /// Adds a fully-built <see cref="AgentRegistration"/>. Useful when the
-    /// kind needs to be supplied externally for tests or dynamic loading.
+    /// agent class predates the <see cref="GAgentAttribute"/> decoration
+    /// and the kind needs to be supplied externally (test fixtures, dynamic
+    /// loading, etc.).
     /// </summary>
     public AgentKindRegistryBuilder Register(AgentRegistration registration)
     {

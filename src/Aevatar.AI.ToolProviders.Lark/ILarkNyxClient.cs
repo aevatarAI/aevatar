@@ -7,21 +7,12 @@ public interface ILarkNyxClient
     Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct);
     Task<string> ListMessageReactionsAsync(string token, LarkMessageReactionListRequest request, CancellationToken ct);
     Task<string> DeleteMessageReactionAsync(string token, LarkMessageReactionDeleteRequest request, CancellationToken ct);
+    Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct);
     Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct);
-    Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
-        string token,
-        LarkMessageResourceDownloadRequest request,
-        CancellationToken ct);
     Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct);
     Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct);
     Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct);
-    Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct);
     Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct);
-    Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct);
-    Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct);
-    Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct);
-    Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct);
-    Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct);
 }
 
 public sealed record LarkSendMessageRequest(
@@ -53,27 +44,22 @@ public sealed record LarkMessageReactionDeleteRequest(
     string MessageId,
     string ReactionId);
 
+public sealed record LarkMessageSearchRequest(
+    string Query,
+    IReadOnlyList<string>? ChatIds,
+    IReadOnlyList<string>? SenderIds,
+    string? IncludeAttachmentType,
+    string? ChatType,
+    string? SenderType,
+    string? ExcludeSenderType,
+    bool IsAtMe,
+    string? StartTime,
+    string? EndTime,
+    int PageSize,
+    string? PageToken);
+
 public sealed record LarkMessagesBatchGetRequest(
     IReadOnlyList<string> MessageIds);
-
-public enum LarkMessageResourceKind
-{
-    Image,
-    File,
-}
-
-public sealed record LarkMessageResourceDownloadRequest(
-    string MessageId,
-    string ResourceKey,
-    LarkMessageResourceKind Kind);
-
-public sealed record LarkMessageResourceDownloadResult(
-    bool Succeeded,
-    byte[] Content,
-    string? ContentType = null,
-    string? FileName = null,
-    string? Detail = null,
-    int HttpStatus = 0);
 
 public sealed record LarkChatSearchRequest(
     string? Query,
@@ -89,33 +75,16 @@ public sealed record LarkSheetAppendRowsRequest(
     string Range,
     IReadOnlyList<IReadOnlyList<string?>> Rows);
 
-/// <summary>
-/// Query for Lark <c>GET /open-apis/approval/v4/tasks/query</c>. The official contract
-/// requires both <paramref name="UserId"/> and <paramref name="Topic"/>; <paramref name="UserIdType"/>
-/// must describe the id type of <paramref name="UserId"/> (defaults to <c>open_id</c> on the Lark side).
-/// </summary>
 public sealed record LarkApprovalTaskQueryRequest(
     string Topic,
-    string UserId,
+    string? DefinitionCode,
+    string? Locale,
     int PageSize,
     string? PageToken,
     string? UserIdType);
 
-public sealed record LarkApprovalInstanceGetRequest(
-    string InstanceCode,
-    string? Locale,
-    string? UserIdType);
-
-/// <summary>
-/// Action against Lark <c>POST /open-apis/approval/v4/tasks/approve|reject|transfer</c>.
-/// All three endpoints require <paramref name="ApprovalCode"/> (the approval definition code)
-/// in addition to <paramref name="InstanceCode"/> + <paramref name="TaskId"/> + <paramref name="UserId"/>;
-/// <paramref name="UserIdType"/> rides as a query parameter and must match the id type of
-/// <paramref name="UserId"/> (and <paramref name="TransferUserId"/> for transfer).
-/// </summary>
 public sealed record LarkApprovalTaskActionRequest(
     string Action,
-    string ApprovalCode,
     string InstanceCode,
     string TaskId,
     string UserId,
@@ -123,39 +92,3 @@ public sealed record LarkApprovalTaskActionRequest(
     string? FormJson,
     string? TransferUserId,
     string? UserIdType);
-
-public enum LarkDocxVisibility
-{
-    Readable,
-    Editable,
-}
-
-public sealed record LarkDocxCreateRequest(
-    string Title);
-
-public sealed record LarkDocxAppendBlocksRequest(
-    string DocumentId,
-    string MarkdownText);
-
-public sealed record LarkDrivePermissionRequest(
-    string DocumentToken,
-    LarkDocxVisibility Visibility,
-    string? ReceiveId,
-    string? ReceiveIdType);
-
-public sealed record LarkDriveMediaUploadRequest(
-    string FileName,
-    string ParentType,
-    string ParentNode,
-    long Size,
-    string ContentType,
-    Stream Content,
-    string? Checksum = null,
-    string? Extra = null);
-
-public sealed record LarkApprovalFileUploadRequest(
-    string FileName,
-    string FileType,
-    long Size,
-    string ContentType,
-    Stream Content);

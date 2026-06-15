@@ -55,17 +55,78 @@ public sealed class LocalActorRuntime : IActorRuntime
     /// <summary>Creates actor by type and records local activation index.</summary>
     public async Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
     {
-        if (!typeof(IAgent).IsAssignableFrom(agentType))
-            throw new InvalidOperationException($"Type {agentType.FullName} does not implement IAgent.");
+        var actorId = id ?? AgentId.New(agentType);
+        if (_actors.TryGetValue(actorId, out var existing))
+        {
+            if (existing.Agent.GetType() != agentType)
+            {
+                throw new InvalidOperationException(
+                    $"Actor '{actorId}' already exists with agent type '{existing.Agent.GetType().FullName}', expected '{agentType.FullName}'.");
+            }
 
-        var registry = _services.GetRequiredService<IAgentKindRegistry>();
-        if (!registry.TryGetKindForAgentType(agentType, out var agentKind))
-            throw new InvalidOperationException($"Agent type {agentType.FullName} is not registered with a primary [GAgent] kind.");
+            return existing;
+        }
 
-        return await CreateByKindAsync(agentKind, id, ct);
+        var agent = CreateAgentInstance(agentType);
+        var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
+        var propagationPolicy = _services.GetService<IEnvelopePropagationPolicy>();
+        var deduplicator = _services.GetService<IEventDeduplicator>();
+        var actor = new LocalActor(
+            agent,
+            actorId,
+            _streams,
+            logger,
+            _deactivationHookDispatcher,
+            deduplicator);
+        var publisher = new LocalActorPublisher(
+            actorId,
+            () => actor.ParentId,
+            () => actor.ChildrenCount,
+            _streams,
+            propagationPolicy);
+
+        InjectDependencies(agent, publisher, actorId, logger);
+
+        if (!_actors.TryAdd(actorId, actor))
+        {
+            var authoritative = _actors.GetValueOrDefault(actorId);
+            if (authoritative != null)
+            {
+                if (authoritative.Agent.GetType() != agentType)
+                {
+                    throw new InvalidOperationException(
+                        $"Actor '{actorId}' already exists with agent type '{authoritative.Agent.GetType().FullName}', expected '{agentType.FullName}'.");
+                }
+
+                return authoritative;
+            }
+
+            throw new InvalidOperationException($"Actor '{actorId}' already exists.");
+        }
+
+        var agentTypeName = agentType.AssemblyQualifiedName ?? agentType.FullName ?? agentType.Name;
+        using var activity = AevatarActivitySource.StartAgentSpawn(actorId, agentTypeName);
+        try
+        {
+            await _activationIndexStore.UpsertAsync(actorId, agentTypeName, ct);
+
+            await actor.ActivateAsync(ct);
+            AgentMetrics.ActiveActors.Add(1);
+            AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
+            _logger.LogInformation("Actor {Id} ({Type}) created", actorId, agentType.Name);
+            return actor;
+        }
+        catch (Exception ex)
+        {
+            AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
     }
 
     /// <summary>Creates actor by stable agent kind and records local activation index.</summary>
+    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
     public async Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentKind);
@@ -131,7 +192,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         using var activity = AevatarActivitySource.StartAgentSpawn(actorId, implementation.Metadata.Kind);
         try
         {
-            await _activationIndexStore.UpsertAsync(actorId, implementation.Metadata.Kind, ct);
+            await _activationIndexStore.UpsertAsync(actorId, implementation.Metadata.ImplementationClrTypeName, ct);
             await actor.ActivateAsync(ct);
             AgentMetrics.ActiveActors.Add(1);
             AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
@@ -219,12 +280,11 @@ public sealed class LocalActorRuntime : IActorRuntime
         if (_actors.ContainsKey(id))
             return true;
 
-        var agentKind = await _activationIndexStore.GetAgentKindAsync(id);
-        if (string.IsNullOrWhiteSpace(agentKind))
+        var agentTypeName = await _activationIndexStore.GetAgentTypeNameAsync(id);
+        if (string.IsNullOrWhiteSpace(agentTypeName))
             return false;
 
-        var registry = _services.GetService<IAgentKindRegistry>();
-        return registry?.TryResolve(agentKind, out _) == true;
+        return ResolveAgentType(agentTypeName) != null;
     }
 
     /// <summary>Creates parent-child link and registers stream-layer forwarding binding.</summary>
@@ -279,20 +339,20 @@ public sealed class LocalActorRuntime : IActorRuntime
 
     private async Task EnsureActorMaterializedAsync(string actorId, CancellationToken ct = default)
     {
-        var agentKind = await _activationIndexStore.GetAgentKindAsync(actorId, ct);
-        if (string.IsNullOrWhiteSpace(agentKind))
+        var agentTypeName = await _activationIndexStore.GetAgentTypeNameAsync(actorId, ct);
+        if (string.IsNullOrWhiteSpace(agentTypeName))
             return;
 
-        var registry = _services.GetService<IAgentKindRegistry>();
-        if (registry == null || !registry.TryResolve(agentKind, out _))
+        var agentType = ResolveAgentType(agentTypeName);
+        if (agentType == null)
         {
-            _logger.LogWarning("Failed to resolve agent kind {Kind} for actor {ActorId}.", agentKind, actorId);
+            _logger.LogWarning("Failed to resolve agent type {Type} for actor {ActorId}.", agentTypeName, actorId);
             return;
         }
 
         try
         {
-            await CreateByKindAsync(agentKind, actorId, ct);
+            await CreateAsync(agentType, actorId, ct);
         }
         catch (InvalidOperationException) when (_actors.ContainsKey(actorId))
         {
@@ -312,6 +372,29 @@ public sealed class LocalActorRuntime : IActorRuntime
 
     private async Task<LocalActor> GetRequiredAsync(string id) =>
         await GetLocalActorAsync(id) ?? throw new InvalidOperationException($"Actor {id} does not exist");
+
+    private IAgent CreateAgentInstance(System.Type agentType)
+    {
+        var instance = ActivatorUtilities.CreateInstance(_services, agentType);
+        return instance as IAgent
+            ?? throw new InvalidOperationException($"Unable to create {agentType.Name}");
+    }
+
+    private static System.Type? ResolveAgentType(string agentTypeName)
+    {
+        var resolved = System.Type.GetType(agentTypeName, throwOnError: false);
+        if (resolved != null)
+            return resolved;
+
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            resolved = assembly.GetType(agentTypeName, throwOnError: false);
+            if (resolved != null)
+                return resolved;
+        }
+
+        return null;
+    }
 
     private void InjectDependencies(
         IAgent agent,

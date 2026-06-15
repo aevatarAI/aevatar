@@ -9,7 +9,6 @@ using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
-using Aevatar.Foundation.Abstractions.Interactions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -655,20 +654,11 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 StepType = "human_approval",
                 RunId = "run-1",
                 Input = "original",
-                StepParameters = new WorkflowStepParameters
-                {
-                    DeliveryTargetId = "agent-approval-1",
-                    InteractionSpec = new InteractionSpec
-                    {
-                        Title = "Approve release",
-                        Body = "Ship it?",
-                        Disposition = InteractionDisposition.Ephemeral,
-                    },
-                },
                 Parameters =
                 {
                     ["prompt"] = "approve?",
                     ["timeout"] = "90",
+                    ["delivery_target_id"] = "agent-approval-1",
                 },
             }),
             ctx,
@@ -679,9 +669,6 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         suspended.SuspensionType.Should().Be("human_approval");
         suspended.Content.Should().Be("original");
         suspended.DeliveryTargetId.Should().Be("agent-approval-1");
-        suspended.Interaction.Title.Should().Be("Approve release");
-        suspended.Interaction.Body.Should().Be("Ship it?");
-        suspended.Interaction.Disposition.Should().Be(InteractionDisposition.Ephemeral);
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -850,19 +837,11 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 StepType = "human_input",
                 RunId = "run-i1",
                 Input = "fallback",
-                StepParameters = new WorkflowStepParameters
-                {
-                    DeliveryTargetId = "agent-input-1",
-                    InteractionSpec = new InteractionSpec
-                    {
-                        Title = "Clarify source",
-                        Body = "Need a source note",
-                    },
-                },
                 Parameters =
                 {
                     ["prompt"] = "please type",
                     ["variable"] = "answer",
+                    ["deliveryTargetId"] = "agent-input-1",
                 },
             }),
             ctx,
@@ -872,8 +851,6 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         suspended.VariableName.Should().Be("answer");
         suspended.Content.Should().Be("fallback");
         suspended.DeliveryTargetId.Should().Be("agent-input-1");
-        suspended.Interaction.Title.Should().Be("Clarify source");
-        suspended.Interaction.Body.Should().Be("Need a source note");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1814,59 +1791,6 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task HumanModules_ShouldRejectInteractionTemplateForHitlSuspensions()
-    {
-        var approval = new HumanApprovalModule();
-        var input = new HumanInputModule();
-        var ctx = CreateContext();
-
-        await approval.HandleAsync(
-            Envelope(new StepRequestEvent
-            {
-                StepId = "approval-template",
-                StepType = "human_approval",
-                RunId = "run-template",
-                StepParameters = new WorkflowStepParameters
-                {
-                    InteractionTemplateSpec = new InteractionTemplateSpec
-                    {
-                        TemplateId = "tpl-approval",
-                    },
-                },
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var approvalCompleted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        approvalCompleted.Success.Should().BeFalse();
-        approvalCompleted.Error.Should().Contain("interaction_template");
-        ctx.Published.Should().NotContain(x => x.evt is WorkflowSuspendedEvent);
-        ctx.Published.Clear();
-
-        await input.HandleAsync(
-            Envelope(new StepRequestEvent
-            {
-                StepId = "input-template",
-                StepType = "human_input",
-                RunId = "run-template",
-                StepParameters = new WorkflowStepParameters
-                {
-                    InteractionTemplateSpec = new InteractionTemplateSpec
-                    {
-                        TemplateId = "tpl-input",
-                    },
-                },
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var inputCompleted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        inputCompleted.Success.Should().BeFalse();
-        inputCompleted.Error.Should().Contain("interaction_template");
-        ctx.Published.Should().NotContain(x => x.evt is WorkflowSuspendedEvent);
-    }
-
-    [Fact]
     public async Task MapReduceModule_ShouldCoverEmptyInputReduceAndMapFailurePaths()
     {
         var module = new MapReduceModule();
@@ -2117,12 +2041,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var connector = new RecordingConnector("runtime-auth");
         var module = new ConnectorCallModule(new FixedWorkflowConnectorResolver(connector));
         var ctx = CreateContext();
-        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
-            new WorkflowCallerCredential
-            {
-                BearerToken = " token-123 ",
-            });
+            " Bearer token-123 ");
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent

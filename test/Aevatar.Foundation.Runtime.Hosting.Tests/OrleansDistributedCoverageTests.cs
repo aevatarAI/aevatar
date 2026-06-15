@@ -1,7 +1,6 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
-using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -234,37 +233,37 @@ public sealed class OrleansDistributedCoverageTests
         };
 
     [Fact]
-    public async Task OrleansActorKindProbe_ShouldResolveAndNormalizeKind()
+    public async Task OrleansActorTypeProbe_ShouldResolveAndNormalizeTypeName()
     {
-        var grain = new RuntimeActorGrainStub { AgentKind = " " };
+        var grain = new RuntimeActorGrainStub { AgentTypeName = " " };
         var grainFactory = CreateGrainFactory((grainType, actorId) =>
         {
             grainType.Should().Be(typeof(IRuntimeActorGrain));
             actorId.Should().Be("actor-1");
             return grain;
         });
-        var probe = new OrleansActorKindProbe(grainFactory);
+        var probe = new OrleansActorTypeProbe(grainFactory);
 
-        var resolved = await probe.GetRuntimeAgentKindAsync("actor-1");
+        var resolved = await probe.GetRuntimeAgentTypeNameAsync("actor-1");
         resolved.Should().BeNull();
 
-        grain.AgentKind = "tests.recording-agent";
-        resolved = await probe.GetRuntimeAgentKindAsync("actor-1");
-        resolved.Should().Be("tests.recording-agent");
+        grain.AgentTypeName = "Namespace.Agent, Assembly";
+        resolved = await probe.GetRuntimeAgentTypeNameAsync("actor-1");
+        resolved.Should().Be("Namespace.Agent, Assembly");
     }
 
     [Fact]
-    public async Task OrleansActorKindProbe_ShouldValidateInputs()
+    public async Task OrleansActorTypeProbe_ShouldValidateInputs()
     {
         var grainFactory = CreateGrainFactory((_, _) => new RuntimeActorGrainStub());
-        var probe = new OrleansActorKindProbe(grainFactory);
+        var probe = new OrleansActorTypeProbe(grainFactory);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => probe.GetRuntimeAgentKindAsync(""));
+        await Assert.ThrowsAsync<ArgumentException>(() => probe.GetRuntimeAgentTypeNameAsync(""));
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            probe.GetRuntimeAgentKindAsync("actor-2", cts.Token));
+            probe.GetRuntimeAgentTypeNameAsync("actor-2", cts.Token));
     }
 
     [Fact]
@@ -591,9 +590,9 @@ public sealed class OrleansDistributedCoverageTests
         var grain = new RuntimeActorGrain(state);
 
         (await grain.IsInitializedAsync()).Should().BeFalse();
-        stateProxy.State.Identity = new RuntimeActorIdentity { Kind = "tests.known-kind" };
+        stateProxy.State.AgentTypeName = "Known.Type";
         (await grain.IsInitializedAsync()).Should().BeTrue();
-        (await grain.GetAgentKindAsync()).Should().Be("tests.known-kind");
+        (await grain.GetAgentTypeNameAsync()).Should().Be("Known.Type");
 
         await grain.AddChildAsync("child-1");
         await grain.AddChildAsync("child-1");
@@ -615,7 +614,7 @@ public sealed class OrleansDistributedCoverageTests
         stateProxy.State.AgentStateSnapshot = new EventEnvelope { Id = "snapshot" }.ToByteArray();
         await grain.PurgeAsync();
         stateProxy.State.AgentId.Should().BeEmpty();
-        stateProxy.State.Identity.Should().BeNull();
+        stateProxy.State.AgentTypeName.Should().BeNull();
         stateProxy.State.ParentId.Should().BeNull();
         stateProxy.State.Children.Should().BeEmpty();
         stateProxy.State.AgentStateTypeName.Should().BeNull();
@@ -629,7 +628,7 @@ public sealed class OrleansDistributedCoverageTests
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
         var grain = new RuntimeActorGrain(state);
 
-        var initialized = await grain.InitializeAgentByKindAsync("tests.never-registered");
+        var initialized = await grain.InitializeAgentAsync("Unknown.Agent.Type, Unknown.Assembly");
         initialized.Should().BeFalse();
     }
 
@@ -703,7 +702,14 @@ public sealed class OrleansDistributedCoverageTests
 
     private sealed class RuntimeActorGrainStub : IRuntimeActorGrain
     {
+        public string AgentTypeName { get; set; } = string.Empty;
         public string AgentKind { get; set; } = string.Empty;
+
+        public Task<bool> InitializeAgentAsync(string agentTypeName)
+        {
+            AgentTypeName = agentTypeName;
+            return Task.FromResult(true);
+        }
 
         public Task<bool> InitializeAgentByKindAsync(string kind)
         {
@@ -744,6 +750,8 @@ public sealed class OrleansDistributedCoverageTests
         public Task<string?> GetParentAsync() => Task.FromResult<string?>(null);
 
         public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
+
+        public Task<string> GetAgentTypeNameAsync() => Task.FromResult(AgentTypeName);
 
         public Task<string> GetAgentKindAsync() => Task.FromResult(AgentKind);
 

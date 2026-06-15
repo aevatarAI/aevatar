@@ -17,26 +17,23 @@ public sealed class UserConfigControllerSettingsTests
     [Fact]
     public async Task GetLlmSettings_ShouldReturnCanonicalSettingsView()
     {
-        var httpHandler = new RecordingHttpHandler(
-            (HttpStatusCode.OK, """
+        var httpHandler = new RecordingHttpHandler("""
+        {
+          "services": [
             {
-              "services": [
-                {
-                  "user_service_id": "svc-openai",
-                  "service_slug": "openai-work",
-                  "display_name": "OpenAI Work",
-                  "route_value": "/api/v1/proxy/s/openai-work",
-                  "default_model": "gpt-5.4",
-                  "models": ["gpt-5.4"],
-                  "status": "ready",
-                  "source": "user",
-                  "allowed": true
-                }
-              ]
+              "user_service_id": "svc-openai",
+              "service_slug": "openai-work",
+              "display_name": "OpenAI Work",
+              "route_value": "/api/v1/proxy/s/openai-work",
+              "default_model": "gpt-5.4",
+              "models": ["gpt-5.4"],
+              "status": "ready",
+              "source": "user",
+              "allowed": true
             }
-            """),
-            (HttpStatusCode.OK, """{"keys":[]}"""),
-            (HttpStatusCode.OK, """{"services":[]}"""));
+          ]
+        }
+        """);
         var controller = CreateController(
             current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
             httpHandler: httpHandler,
@@ -56,7 +53,7 @@ public sealed class UserConfigControllerSettingsTests
             .Contain(group => group.RouteValue == "/api/v1/proxy/s/openai-work" && group.Models.Contains("gpt-5.4"));
         httpHandler.Requests.Select(request => request.Path)
             .Should()
-            .Equal("/api/v1/llm/services", "/api/v1/keys", "/api/v1/proxy/services?per_page=100");
+            .Equal("/api/v1/llm/services", "/api/v1/proxy/services?per_page=100");
     }
 
     [Fact]
@@ -246,7 +243,6 @@ public sealed class UserConfigControllerSettingsTests
               "supported_models": ["gpt-5.4"]
             }
             """),
-            (HttpStatusCode.OK, """{"keys":[]}"""),
             (HttpStatusCode.OK, """{"services":[]}"""));
         var controller = CreateController(
             current: new UserConfig("gpt-5.4", "/api/v1/llm/openai/v1"),
@@ -273,115 +269,7 @@ public sealed class UserConfigControllerSettingsTests
         payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
         httpHandler.Requests.Select(request => request.Path)
             .Should()
-            .Equal("/api/v1/llm/services", "/api/v1/llm/status", "/api/v1/keys", "/api/v1/proxy/services?per_page=100");
-    }
-
-    [Fact]
-    public async Task GetLlmSettings_ShouldPreferActiveUserKeyOverMisleadingProxyServices()
-    {
-        var httpHandler = new RecordingHttpHandler(
-            (HttpStatusCode.OK, """{"services":[]}"""),
-            (HttpStatusCode.OK, """
-            {
-              "keys": [
-                {
-                  "id": "key-chrono",
-                  "label": "Chrono LLM",
-                  "slug": "chrono-llm-personal",
-                  "endpoint_url": "https://llm.test/v1",
-                  "status": "active",
-                  "catalog_service_slug": "chrono-llm",
-                  "catalog_service_name": "Chrono LLM",
-                  "service_type": "http",
-                  "is_active": true
-                }
-              ]
-            }
-            """),
-            (HttpStatusCode.OK, """
-            {
-              "services": [
-                {
-                  "id": "svc-chrono",
-                  "slug": "chrono-llm",
-                  "name": "Chrono LLM",
-                  "description": "Shared LLM route",
-                  "connected": false,
-                  "requires_connection": true,
-                  "proxy_url_slug": "https://nyxid.example/api/v1/proxy/s/chrono-llm/{path}"
-                }
-              ]
-            }
-            """));
-        var controller = CreateController(
-            current: new UserConfig("gpt-5.5", "/api/v1/proxy/s/chrono-llm"),
-            httpHandler: httpHandler,
-            bearerToken: "user-token-1");
-
-        var response = await controller.GetLlmSettings(CancellationToken.None);
-
-        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
-        var chrono = payload.RouteOptions.Should()
-            .ContainSingle(option => option.ServiceSlug == "chrono-llm")
-            .Subject;
-        chrono.ServiceId.Should().Be("key-chrono");
-        chrono.Source.Should().Be(UserLlmRouteSource.UserService);
-        chrono.Ready.Should().BeTrue();
-        payload.EffectiveRoute.Should().Be("/api/v1/proxy/s/chrono-llm");
-        httpHandler.Requests.Select(request => request.Path)
-            .Should()
-            .Equal("/api/v1/llm/services", "/api/v1/keys", "/api/v1/proxy/services?per_page=100");
-    }
-
-    [Fact]
-    public async Task GetLlmSettings_ShouldNotTreatOrgViewerKeyAsSelectable()
-    {
-        var httpHandler = new RecordingHttpHandler(
-            (HttpStatusCode.OK, """{"services":[]}"""),
-            (HttpStatusCode.OK, """
-            {
-              "keys": [
-                {
-                  "id": "key-chrono",
-                  "label": "Chrono LLM",
-                  "slug": "chrono-llm",
-                  "endpoint_url": "https://llm.test/v1",
-                  "status": "active",
-                  "catalog_service_slug": "chrono-llm",
-                  "catalog_service_name": "Chrono LLM",
-                  "service_type": "http",
-                  "is_active": true,
-                  "credential_source": {
-                    "type": "org",
-                    "org_id": "org-1",
-                    "org_name": "Org",
-                    "avatar_url": null,
-                    "role": "viewer",
-                    "allowed": false
-                  }
-                }
-              ]
-            }
-            """),
-            (HttpStatusCode.OK, """{"services":[]}"""));
-        var controller = CreateController(
-            current: new UserConfig("gpt-5.5", "/api/v1/proxy/s/chrono-llm"),
-            httpHandler: httpHandler,
-            bearerToken: "user-token-1");
-
-        var response = await controller.GetLlmSettings(CancellationToken.None);
-
-        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
-        payload.RouteOptions.Should()
-            .ContainSingle(option => option.ServiceSlug == "chrono-llm")
-            .Which.Should().Match<UserLlmRouteOptionResponse>(option =>
-                option.Source == UserLlmRouteSource.UserService &&
-                option.Status == UserLlmRouteStatus.Ready &&
-                !option.Allowed &&
-                !option.Ready);
-        payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+            .Equal("/api/v1/llm/services", "/api/v1/llm/status", "/api/v1/proxy/services?per_page=100");
     }
 
     [Fact]

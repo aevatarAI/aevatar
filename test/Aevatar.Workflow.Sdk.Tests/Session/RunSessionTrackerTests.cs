@@ -69,44 +69,6 @@ public sealed class RunSessionTrackerTests
     }
 
     [Fact]
-    public void Track_ShouldCaptureToolApprovalAndBuildNestedResumeRequest()
-    {
-        var tracker = new RunSessionTracker();
-
-        tracker.Track(CustomFrame("aevatar.run.context", new WorkflowRunContextPayload
-        {
-            ActorId = "actor-1",
-            WorkflowName = "auto",
-            CommandId = "cmd-1",
-        }));
-        tracker.Track(CustomFrame("aevatar.tool_approval.pending", new WorkflowToolApprovalSuspensionCustomPayload
-        {
-            RunId = "run-1",
-            StepId = "tool-step",
-            ExecutionId = "exec-1",
-            ToolName = "danger",
-            ToolCallId = "tool-call-1",
-            ApprovalRequestId = "approval-1",
-        }));
-
-        var snapshot = tracker.Snapshot;
-        snapshot.RunId.Should().Be("run-1");
-        snapshot.StepId.Should().Be("tool-step");
-        snapshot.SuspensionType.Should().Be("tool_approval");
-        snapshot.ToolApproval.Should().NotBeNull();
-        snapshot.ToolApproval!.ExecutionId.Should().Be("exec-1");
-        snapshot.ToolApproval.ToolCallId.Should().Be("tool-call-1");
-        snapshot.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
-
-        var resume = tracker.CreateResumeRequest("scope-a", approved: true, serviceId: "auto");
-
-        resume.ToolApproval.Should().NotBeNull();
-        resume.ToolApproval!.ExecutionId.Should().Be("exec-1");
-        resume.ToolApproval.ToolCallId.Should().Be("tool-call-1");
-        resume.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
-    }
-
-    [Fact]
     public void CreateResumeAndSignalRequest_ShouldUseExplicitCommandIdOnly()
     {
         var tracker = new RunSessionTracker();

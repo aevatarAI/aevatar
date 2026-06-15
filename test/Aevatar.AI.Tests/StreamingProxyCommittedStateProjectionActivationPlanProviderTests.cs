@@ -1,5 +1,4 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -58,54 +57,28 @@ public sealed class StreamingProxyCommittedStateProjectionActivationPlanProvider
     public async Task CommittedRoomParticipantStateEvent_ShouldActivateProjectionAndPopulateReadModelSnapshot()
     {
         var observingStore = new ObservingRoomParticipantsStore();
-        var published = BuildContext(
-            "room-e2e",
-            typeof(StreamingProxyGAgent),
-            new GroupChatParticipantJoinedEvent
-            {
-                AgentId = "agent-1",
-                DisplayName = "Alice",
-            },
-            new StreamingProxyGAgentState
-            {
-                Participants =
-                {
-                    new StreamingProxyParticipant
-                    {
-                        AgentId = "agent-1",
-                        DisplayName = "Alice",
-                        JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    },
-                },
-            }).Published;
-
         await using var provider = new ServiceCollection()
             .AddLogging()
             .AddAevatarRuntime()
             .AddStreamingProxy(new ConfigurationBuilder().Build())
             .AddSingleton<IProjectionDocumentWriter<StreamingProxyRoomParticipantsSnapshot>>(observingStore)
             .AddSingleton<IProjectionDocumentReader<StreamingProxyRoomParticipantsSnapshot, string>>(observingStore)
-            .AddSingleton<IProjectionWriteDispatcher<StreamingProxyRoomParticipantsSnapshot>>(
-                sp => new DirectProjectionDocumentWriteDispatcher<StreamingProxyRoomParticipantsSnapshot>(
-                    sp.GetRequiredService<IProjectionDocumentWriter<StreamingProxyRoomParticipantsSnapshot>>()))
-            .AddSingleton<IProjectionWriteDispatcher<StreamingProxyChatSessionTerminalSnapshot>,
-                NoopProjectionWriteDispatcher<StreamingProxyChatSessionTerminalSnapshot>>()
-            .AddSingleton<IProjectionScopeActivationService<StreamingProxyCurrentStateRuntimeLease>>(
-                sp => new InlineStreamingProxyProjectionActivationService(
-                    sp.GetRequiredService<IEnumerable<IProjectionMaterializer<StreamingProxyCurrentStateProjectionContext>>>(),
-                    published))
             .BuildServiceProvider();
 
-        var hook = provider.GetRequiredService<IEnumerable<ICommittedStatePublicationHook>>()
-            .OfType<CommittedStateProjectionActivationHook>()
-            .Single();
-        await hook.BeforePublishAsync(new CommittedStatePublicationContext
+        var runtime = provider.GetRequiredService<IActorRuntime>();
+        var room = await runtime.CreateAsync<StreamingProxyGAgent>("room-e2e");
+
+        await room.HandleEventAsync(new EventEnvelope
         {
-            ActorId = "room-e2e",
-            ActorType = typeof(StreamingProxyGAgent),
-            Published = published,
-            Audience = ObserverAudience.CommittedFacts,
-        }, CancellationToken.None);
+            Id = "join-command-1",
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(new GroupChatParticipantJoinedEvent
+            {
+                AgentId = "agent-1",
+                DisplayName = "Alice",
+            }),
+            Route = EnvelopeRouteSemantics.CreateDirect("test", "room-e2e"),
+        });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var snapshot = await observingStore.WaitForUpsertAsync(timeout.Token);
@@ -181,13 +154,6 @@ public sealed class StreamingProxyCommittedStateProjectionActivationPlanProvider
         string actorId,
         System.Type actorType,
         IMessage stateEvent) =>
-        BuildContext(actorId, actorType, stateEvent, new StreamingProxyGAgentState());
-
-    private static CommittedStatePublicationContext BuildContext(
-        string actorId,
-        System.Type actorType,
-        IMessage stateEvent,
-        StreamingProxyGAgentState state) =>
         new()
         {
             ActorId = actorId,
@@ -202,84 +168,9 @@ public sealed class StreamingProxyCommittedStateProjectionActivationPlanProvider
                     EventType = stateEvent.Descriptor.FullName,
                     EventData = Any.Pack(stateEvent),
                 },
-                StateRoot = Any.Pack(state),
+                StateRoot = Any.Pack(new StreamingProxyGAgentState()),
             },
         };
-
-    private sealed class InlineStreamingProxyProjectionActivationService
-        : IProjectionScopeActivationService<StreamingProxyCurrentStateRuntimeLease>
-    {
-        private readonly IEnumerable<IProjectionMaterializer<StreamingProxyCurrentStateProjectionContext>> _materializers;
-        private readonly CommittedStateEventPublished _published;
-
-        public InlineStreamingProxyProjectionActivationService(
-            IEnumerable<IProjectionMaterializer<StreamingProxyCurrentStateProjectionContext>> materializers,
-            CommittedStateEventPublished published)
-        {
-            _materializers = materializers;
-            _published = published;
-        }
-
-        public async Task<StreamingProxyCurrentStateRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            var context = new StreamingProxyCurrentStateProjectionContext
-            {
-                RootActorId = request.RootActorId,
-                ProjectionKind = request.ProjectionKind,
-            };
-            var envelope = new EventEnvelope
-            {
-                Id = "committed-room-participant-event",
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(_published),
-                Route = EnvelopeRouteSemantics.CreateObserverPublication(
-                    request.RootActorId,
-                    ObserverAudience.CommittedFacts),
-            };
-
-            foreach (var materializer in _materializers)
-                await materializer.ProjectAsync(context, envelope, ct);
-
-            return new StreamingProxyCurrentStateRuntimeLease(context);
-        }
-    }
-
-    private sealed class DirectProjectionDocumentWriteDispatcher<TReadModel>
-        : IProjectionWriteDispatcher<TReadModel>
-        where TReadModel : class, IProjectionReadModel
-    {
-        private readonly IProjectionDocumentWriter<TReadModel> _writer;
-
-        public DirectProjectionDocumentWriteDispatcher(IProjectionDocumentWriter<TReadModel> writer)
-        {
-            _writer = writer;
-        }
-
-        public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default) =>
-            _writer.UpsertAsync(readModel, ct);
-
-        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
-            _writer.DeleteAsync(id, ct);
-    }
-
-    private sealed class NoopProjectionWriteDispatcher<TReadModel>
-        : IProjectionWriteDispatcher<TReadModel>
-        where TReadModel : class, IProjectionReadModel
-    {
-        public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(ProjectionWriteResult.Applied());
-        }
-
-        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(ProjectionWriteResult.Applied());
-        }
-    }
 
     private sealed class ObservingRoomParticipantsStore :
         IProjectionDocumentWriter<StreamingProxyRoomParticipantsSnapshot>,

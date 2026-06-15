@@ -29,11 +29,6 @@ message ConversationGAgentState {
   // this snapshot as prior context and, after successful user-visible delivery,
   // appends the new turn entries through ConversationTurnCompletedEvent.
   repeated ConversationHistoryEntry retained_history = 12;
-  repeated NeedsWorkflowDraftRunEvent pending_workflow_draft_run_requests = 13;
-  // Conversation-owned recent accepted inbound activities that carried attachments.
-  // The chat LLM path uses this bounded window for "send image, ask later" without
-  // relying on NyxID history, which intentionally does not store message content.
-  repeated RecentConversationAttachmentActivity recent_attachment_activities = 14;
 }
 
 // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):

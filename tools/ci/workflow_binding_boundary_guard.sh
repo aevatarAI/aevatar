@@ -7,7 +7,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 workflow_src_root="src/workflow"
-workflow_port_file="src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunPorts.cs"
+workflow_port_file="src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/IWorkflowRunActorPort.cs"
 workflow_resolver_file="src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs"
 workflow_registry_file="src/workflow/Aevatar.Workflow.Application/Workflows/WorkflowDefinitionCatalog.cs"
 workflow_endpoint_file="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs"

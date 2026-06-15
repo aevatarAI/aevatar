@@ -19,7 +19,7 @@ public class ToolCallLoopMediaContentCoverageTests
     [Fact]
     public void BuildToolResultMessage_WhenPayloadIsInvalidJson_ShouldFallbackToPlainToolMessage()
     {
-        var message = InvokeBuildToolResultMessage("tc-invalid", "echo", "{oops");
+        var message = InvokeBuildToolResultMessage("tc-invalid", "{oops");
 
         message.Role.Should().Be("tool");
         message.ToolCallId.Should().Be("tc-invalid");
@@ -30,7 +30,7 @@ public class ToolCallLoopMediaContentCoverageTests
     [Fact]
     public void BuildToolResultMessage_WhenPayloadIsNotObject_ShouldFallbackToPlainToolMessage()
     {
-        var message = InvokeBuildToolResultMessage("tc-array", "echo", "[1,2,3]");
+        var message = InvokeBuildToolResultMessage("tc-array", "[1,2,3]");
 
         message.Role.Should().Be("tool");
         message.ToolCallId.Should().Be("tc-array");
@@ -43,7 +43,6 @@ public class ToolCallLoopMediaContentCoverageTests
     {
         var message = InvokeBuildToolResultMessage(
             "tc-audio",
-            "echo",
             """{"audio":{"base64":123}}""");
 
         message.Content.Should().Be("[tool audio output]");
@@ -60,7 +59,6 @@ public class ToolCallLoopMediaContentCoverageTests
     {
         var message = InvokeBuildToolResultMessage(
             "tc-video",
-            "echo",
             """{"video":{"data":"data:video/webm;base64,dmk="},"message":"clip ready"}""");
 
         message.Content.Should().Be("clip ready");
@@ -76,7 +74,6 @@ public class ToolCallLoopMediaContentCoverageTests
     {
         var message = InvokeBuildToolResultMessage(
             "tc-image",
-            "echo",
             """{"image":{"imageBase64":"aW1n","mimeType":"image/webp"},"summary":"snap"}""");
 
         message.Content.Should().Be("snap");
@@ -92,7 +89,7 @@ public class ToolCallLoopMediaContentCoverageTests
     {
         var payload = """{"image":{"mimeType":"image/png"},"text":"no-bytes"}""";
 
-        var message = InvokeBuildToolResultMessage("tc-missing", "echo", payload);
+        var message = InvokeBuildToolResultMessage("tc-missing", payload);
 
         message.Content.Should().Be(payload);
         message.ContentParts.Should().BeNull();
@@ -104,9 +101,9 @@ public class ToolCallLoopMediaContentCoverageTests
         return (string?)method!.Invoke(null, [requestId]);
     }
 
-    private static ChatMessage InvokeBuildToolResultMessage(string callId, string toolName, string toolResult)
+    private static ChatMessage InvokeBuildToolResultMessage(string callId, string toolResult)
     {
         var method = typeof(ToolCallLoop).GetMethod("BuildToolResultMessage", BindingFlags.Static | BindingFlags.Public);
-        return (ChatMessage)method!.Invoke(null, [callId, toolName, toolResult])!;
+        return (ChatMessage)method!.Invoke(null, [callId, toolResult])!;
     }
 }

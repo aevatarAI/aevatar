@@ -7,7 +7,6 @@
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Aevatar.AI.Abstractions;
 
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
@@ -44,12 +43,6 @@ public abstract class AgentToolBase<TParams> : IAgentTool where TParams : class
 
     /// <inheritdoc />
     public virtual bool IsDestructive => false;
-
-    /// <inheritdoc />
-    public virtual string SideEffectKind => "";
-
-    /// <inheritdoc />
-    public virtual AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson) => null;
 
     /// <inheritdoc />
     public virtual bool? RequiresApproval(string argumentsJson) => null;

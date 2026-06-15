@@ -3,13 +3,13 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowChatRunObservationScopeLeasePreparationPort
-    : IWorkflowChatRunObservationScopeLeasePreparationPort
+public sealed class WorkflowChatRunObservationScopeActivationPort
+    : IWorkflowChatRunObservationScopeActivationPort
 {
     private readonly IProjectionScopeActivationService<WorkflowExecutionRuntimeLease> _activationService;
     private readonly IProjectionScopeReleaseService<WorkflowExecutionRuntimeLease> _releaseService;
 
-    public WorkflowChatRunObservationScopeLeasePreparationPort(
+    public WorkflowChatRunObservationScopeActivationPort(
         IProjectionScopeActivationService<WorkflowExecutionRuntimeLease> activationService,
         IProjectionScopeReleaseService<WorkflowExecutionRuntimeLease> releaseService)
     {
@@ -17,7 +17,7 @@ public sealed class WorkflowChatRunObservationScopeLeasePreparationPort
         _releaseService = releaseService ?? throw new ArgumentNullException(nameof(releaseService));
     }
 
-    public async Task<WorkflowChatRunObservationScopeLeasePreparation?> PrepareAsync(
+    public async Task<WorkflowChatRunObservationScopeActivation?> ActivateAsync(
         string actorId,
         string commandId,
         CancellationToken ct = default)
@@ -39,7 +39,7 @@ public sealed class WorkflowChatRunObservationScopeLeasePreparationPort
                 },
                 ct).ConfigureAwait(false);
 
-            return new WorkflowChatRunObservationScopeLeasePreparation(
+            return new WorkflowChatRunObservationScopeActivation(
                 normalizedActorId,
                 normalizedCommandId);
         }
@@ -50,17 +50,17 @@ public sealed class WorkflowChatRunObservationScopeLeasePreparationPort
     }
 
     public Task ReleaseAsync(
-        WorkflowChatRunObservationScopeLeasePreparation preparation,
+        WorkflowChatRunObservationScopeActivation activation,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(preparation);
+        ArgumentNullException.ThrowIfNull(activation);
         ct.ThrowIfCancellationRequested();
 
         var lease = new WorkflowExecutionRuntimeLease(new WorkflowExecutionProjectionContext
         {
-            RootActorId = preparation.ActorId,
+            RootActorId = activation.ActorId,
             ProjectionKind = WorkflowProjectionKinds.ExecutionSession,
-            SessionId = preparation.CommandId,
+            SessionId = activation.CommandId,
         });
         return _releaseService.ReleaseIfIdleAsync(lease, ct);
     }

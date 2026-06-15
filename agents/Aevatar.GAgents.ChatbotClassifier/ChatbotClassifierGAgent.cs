@@ -7,7 +7,6 @@ using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChatbotClassifier;
@@ -21,7 +20,6 @@ namespace Aevatar.GAgents.ChatbotClassifier;
 /// Uses authoritative ChatStreamAsync plus offline aggregation for reliable JSON output parsing.
 /// No tools — pure LLM classification with MaxToolRounds=0.
 /// </summary>
-[GAgent("chatbot.classifier")]
 public sealed class ChatbotClassifierGAgent : RoleGAgent
 {
     public ChatbotClassifierGAgent(

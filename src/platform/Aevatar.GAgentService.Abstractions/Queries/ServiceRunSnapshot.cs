@@ -20,9 +20,7 @@ public sealed record ServiceRunSnapshot(
     long StateVersion,
     string LastEventId,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt,
-    string LastOutput,
-    string LastError);
+    DateTimeOffset UpdatedAt);
 
 public sealed record ServiceRunQuery(
     string ScopeId,

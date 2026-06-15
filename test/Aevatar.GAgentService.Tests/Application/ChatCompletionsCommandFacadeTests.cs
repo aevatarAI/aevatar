@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -8,7 +7,6 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -20,25 +18,21 @@ public sealed class ChatCompletionsCommandFacadeTests
     public async Task CreateAsync_ShouldRegisterSession_AndDispatchLlmRun()
     {
         var sessions = new RecordingSessionPort();
-        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_1")
-            .WithCompletedText("hello")
-            .Build();
-        var dispatch = new RecordingActorDispatchPort(observation);
-        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch, observationRuntime: observation);
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
         var result = await facade.CreateAsync(BuildRequest("chrono/gpt-4o-mini"), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
-        result.Completed.Should().NotBeNull();
-        result.Accepted.Should().BeNull();
-        result.Completed!.Completion.OutputText.Should().Be("hello");
+        result.Accepted.Should().NotBeNull();
+        result.Accepted!.Admission.Accepted.Should().BeTrue();
         sessions.Registered.Should().ContainSingle().Which.ScopeId.Should().Be("scope-1");
         sessions.RecordedCompletions.Should().BeEmpty();
         var call = dispatch.Calls.Should().ContainSingle().Subject;
-        call.ActorId.Should().Be(result.Completed.Normalized.CompletionId.Insert(0, "actor-"));
+        call.ActorId.Should().Be(result.Accepted.Session.ActorId);
         var command = call.Envelope.Payload.Unpack<LlmRunRequested>();
-        command.ResponseId.Should().Be(result.Completed.Normalized.CompletionId);
-        command.RunId.Should().Be($"{result.Completed.Normalized.CompletionId}:llm-run");
+        command.ResponseId.Should().Be(result.Accepted.Session.ResponseId);
+        command.RunId.Should().Be($"{result.Accepted.Session.ResponseId}:llm-run");
         command.Model.Should().Be("gpt-4o-mini");
         command.ScopeId.Should().Be("scope-1");
         command.BearerToken.Should().Be("token");
@@ -50,69 +44,6 @@ public sealed class ChatCompletionsCommandFacadeTests
         toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
         toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
-    }
-
-    [Fact]
-    public async Task CreateAsync_WhenNamedSkillTriggerProvided_ShouldRouteCommandAndCarryRecoveryContext()
-    {
-        var sessions = new RecordingSessionPort();
-        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_skill")
-            .WithCompletedText("ok")
-            .Build();
-        var dispatch = new RecordingActorDispatchPort(observation);
-        var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("chrono/gpt-5-chat"));
-        var facade = CreateFacade(
-            sessionPort: sessions,
-            dispatchPort: dispatch,
-            chatRouteDecisionPort: routeDecisionPort,
-            observationRuntime: observation);
-
-        var result = await facade.CreateAsync(
-            BuildRequest("gpt-4o-mini", chatMessages: [ChatMessage.User("::Goal ship today")]),
-            CallerScopeContext("token"));
-
-        result.Error.Should().BeNull();
-        routeDecisionPort.LastRequest.Should().NotBeNull();
-        routeDecisionPort.LastRequest!.CommandName.Should().Be("goal");
-        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
-        var recovery = AgentToolExecutionContextMapper.FromPayload(command.ToolContext).SkillRecovery;
-        recovery.RequireInitialOrnnSearch.Should().BeTrue();
-        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
-        recovery.CommandName.Should().Be("goal");
-        recovery.PrimarySkillName.Should().Be("goal");
-        recovery.CommandArguments.Should().Be("ship today");
-        recovery.OriginalCommand.Should().Be("::Goal ship today");
-        recovery.DiscoveryRequested.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task CreateAsync_WhenDiscoveryTriggerProvided_ShouldKeepRouteCommandEmptyAndRequestDiscovery()
-    {
-        var sessions = new RecordingSessionPort();
-        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_discovery")
-            .WithCompletedText("ok")
-            .Build();
-        var dispatch = new RecordingActorDispatchPort(observation);
-        var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("chrono/gpt-5-chat"));
-        var facade = CreateFacade(
-            sessionPort: sessions,
-            dispatchPort: dispatch,
-            chatRouteDecisionPort: routeDecisionPort,
-            observationRuntime: observation);
-
-        var result = await facade.CreateAsync(
-            BuildRequest("gpt-4o-mini", chatMessages: [ChatMessage.User("::")]),
-            CallerScopeContext("token"));
-
-        result.Error.Should().BeNull();
-        routeDecisionPort.LastRequest.Should().NotBeNull();
-        routeDecisionPort.LastRequest!.CommandName.Should().BeEmpty();
-        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
-        var recovery = AgentToolExecutionContextMapper.FromPayload(command.ToolContext).SkillRecovery;
-        recovery.DiscoveryRequested.Should().BeTrue();
-        recovery.CommandName.Should().BeNull();
-        recovery.PrimarySkillName.Should().BeNull();
-        recovery.OriginalCommand.Should().Be("::");
     }
 
     [Theory]
@@ -343,110 +274,25 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
-    public async Task StreamAsync_ShouldReturnCompletedObservation_AndReplayDeltas()
+    public async Task StreamAsync_ShouldReturnAcceptedDispatchReceipt()
     {
         var sessions = new RecordingSessionPort();
-        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_stream")
-            .WithChunkText("Hel")
-            .WithChunkText("lo")
-            .WithToolCallDelta("call_1", "get_weather", """{"city":"SF"}""")
-            .WithCompletedText("Hello")
-            .WithCompletedToolCall("call_1", "get_weather", """{"city":"SF"}""")
-            .WithUsage(4, 2, 6)
-            .Build();
-        var dispatch = new RecordingActorDispatchPort(observation);
-        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch, observationRuntime: observation);
-        var deltas = new List<LlmSessionRunObservedDelta>();
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
-        var result = await facade.StreamAsync(
-            BuildStreamPlan(),
-            (delta, _) =>
-            {
-                deltas.Add(delta);
-                return ValueTask.CompletedTask;
-        });
+        var result = await facade.StreamAsync(BuildStreamPlan());
 
         result.Error.Should().BeNull();
-        result.Completion.Should().NotBeNull();
-        result.Completion!.OutputText.Should().Be("Hello");
-        result.Completion.ToolCalls.Should().ContainSingle();
-        result.Completion.Usage.Should().Be(new TokenUsage(4, 2, 6));
-        deltas.Should().Contain(x => x.TextDelta == "Hel");
-        deltas.Should().Contain(x => x.TextDelta == "lo");
-        deltas.Should().Contain(x => x.ToolCallDelta != null && x.ToolCallDelta.Id == "call_1");
+        result.Accepted.Should().NotBeNull();
+        result.Completion.Should().BeNull();
         sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
         var call = dispatch.Calls.Should().ContainSingle().Subject;
         call.ActorId.Should().Be("actor-chatcmpl_stream");
         var command = call.Envelope.Payload.Unpack<LlmRunRequested>();
-        call.Envelope.Propagation!.CorrelationId.Should().Be("chatcmpl_stream");
         command.ResponseId.Should().Be("chatcmpl_stream");
         command.RunId.Should().Be("chatcmpl_stream:llm-run");
         command.Model.Should().Be("gpt-4o-mini");
-    }
-
-    [Fact]
-    public async Task CreateAsync_WhenObservedRunFails_ShouldReturnFailureError_AndMarkSessionFailed()
-    {
-        var sessions = new RecordingSessionPort();
-        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_fail")
-            .WithFailed("provider crashed")
-            .Build();
-        var dispatch = new RecordingActorDispatchPort(observation);
-        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch, observationRuntime: observation);
-
-        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            500,
-            "llm_run_failed",
-            "provider crashed"));
-        result.Completed.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
-    }
-
-    [Fact]
-    public async Task StreamAsync_WhenObservedRunIsCancelled_ShouldReturnCancelledError_AndMarkSessionCancelled()
-    {
-        var sessions = new RecordingSessionPort();
-        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_stream")
-            .WithCancelled()
-            .Build();
-        var dispatch = new RecordingActorDispatchPort(observation);
-        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch, observationRuntime: observation);
-
-        var result = await facade.StreamAsync(BuildStreamPlan(), static (_, _) => ValueTask.CompletedTask, CancellationToken.None);
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            409,
-            "run_cancelled",
-            "LLM run was cancelled."));
-        result.Completion.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
-    }
-
-    [Fact]
-    public async Task CreateAsync_WhenObservedRunDoesNotTerminate_ShouldReturnTimeout_AndMarkSessionFailed()
-    {
-        var sessions = new RecordingSessionPort();
-        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_timeout")
-            .WithoutTerminal()
-            .Build();
-        var dispatch = new RecordingActorDispatchPort(observation);
-        var facade = CreateFacade(
-            sessionPort: sessions,
-            dispatchPort: dispatch,
-            observationRuntime: observation,
-            observationTimeout: TimeSpan.FromMilliseconds(50));
-
-        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
-
-        result.Error.Should().NotBeNull();
-        result.Error!.StatusCode.Should().Be(504);
-        result.Error.Code.Should().Be("response_timeout");
-        result.Error.Message.Should().Contain("Timed out waiting");
-        result.Completed.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
     }
 
     [Fact]
@@ -454,12 +300,9 @@ public sealed class ChatCompletionsCommandFacadeTests
     {
         var sessions = new RecordingSessionPort();
         var dispatch = new RecordingActorDispatchPort(_ => new InvalidOperationException("dispatch failed"));
-        var facade = CreateFacade(
-            sessionPort: sessions,
-            dispatchPort: dispatch,
-            observationRuntime: ObservationScenarioBuilder.ForResponse("chatcmpl_stream").Build());
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
-        var result = await facade.StreamAsync(BuildStreamPlan(), static (_, _) => ValueTask.CompletedTask, CancellationToken.None);
+        var result = await facade.StreamAsync(BuildStreamPlan(), CancellationToken.None);
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
             500,
@@ -473,17 +316,15 @@ public sealed class ChatCompletionsCommandFacadeTests
     {
         var sessions = new RecordingSessionPort();
         var dispatch = new RecordingActorDispatchPort(_ => new NyxIdAuthenticationRequiredException("test-provider"));
-        var facade = CreateFacade(
-            sessionPort: sessions,
-            dispatchPort: dispatch,
-            observationRuntime: ObservationScenarioBuilder.ForResponse("chatcmpl_stream").Build());
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
-        var result = await facade.StreamAsync(BuildStreamPlan(), static (_, _) => ValueTask.CompletedTask, CancellationToken.None);
+        var result = await facade.StreamAsync(BuildStreamPlan(), CancellationToken.None);
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
             401,
             "authentication_required",
             "NyxID authentication required for provider 'test-provider'. Please sign in."));
+        result.Accepted.Should().BeNull();
         result.Completion.Should().BeNull();
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
     }
@@ -498,17 +339,15 @@ public sealed class ChatCompletionsCommandFacadeTests
             "route-a",
             "model-a",
             "rate limited"));
-        var facade = CreateFacade(
-            sessionPort: sessions,
-            dispatchPort: dispatch,
-            observationRuntime: ObservationScenarioBuilder.ForResponse("chatcmpl_stream").Build());
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
-        var result = await facade.StreamAsync(BuildStreamPlan(), static (_, _) => ValueTask.CompletedTask, CancellationToken.None);
+        var result = await facade.StreamAsync(BuildStreamPlan(), CancellationToken.None);
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
             429,
             "ratelimited",
             "rate limited"));
+        result.Accepted.Should().BeNull();
         result.Completion.Should().BeNull();
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
     }
@@ -518,19 +357,17 @@ public sealed class ChatCompletionsCommandFacadeTests
     {
         var sessions = new RecordingSessionPort();
         var dispatch = new RecordingActorDispatchPort(ct => new OperationCanceledException(ct));
-        var facade = CreateFacade(
-            sessionPort: sessions,
-            dispatchPort: dispatch,
-            observationRuntime: ObservationScenarioBuilder.ForResponse("chatcmpl_stream").Build());
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        var result = await facade.StreamAsync(BuildStreamPlan(), static (_, _) => ValueTask.CompletedTask, cts.Token);
+        var result = await facade.StreamAsync(BuildStreamPlan(), cts.Token);
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
             499,
             "client_closed_request",
             "Client closed request."));
+        result.Accepted.Should().BeNull();
         result.Completion.Should().BeNull();
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
     }
@@ -642,26 +479,18 @@ public sealed class ChatCompletionsCommandFacadeTests
         RecordingActorDispatchPort? dispatchPort = null,
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IResponsesToolClassificationService? toolClassificationService = null,
-        IResponsesDirectToolPlanService? directToolPlanService = null,
-        ObservationScenarioRuntime? observationRuntime = null,
-        TimeSpan? observationTimeout = null)
+        IResponsesDirectToolPlanService? directToolPlanService = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
-        var runtime = observationRuntime ?? ObservationScenarioBuilder.ForResponse("chatcmpl_default")
-            .WithCompletedText("ok")
-            .Build();
-        dispatchPort?.BindObservationRuntime(runtime);
         return new ChatCompletionsCommandFacade(
             callerScopeResolver ?? new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             new StaticResponsesRouteResolver("route-value"),
             effectiveSessionPort,
-            dispatchPort ?? new RecordingActorDispatchPort(runtime),
+            dispatchPort ?? new RecordingActorDispatchPort(),
             toolClassificationService ?? new StaticResponsesToolClassificationService(),
             directToolPlanService ?? new StaticResponsesDirectToolPlanService(),
-            new LlmSessionRunObservationService(runtime.ScopePreparationPort, runtime.ProjectionPort),
-            NullLogger<ChatCompletionsCommandFacade>.Instance,
-            observationTimeout);
+            NullLogger<ChatCompletionsCommandFacade>.Instance);
     }
 
     private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
@@ -749,19 +578,17 @@ public sealed class ChatCompletionsCommandFacadeTests
     private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
         : IResponsesChatRouteDecisionPort
     {
-        public ResponsesChatRouteDecisionRequest? LastRequest { get; private set; }
-
         public Task<ChatRouteDecision> ResolveAsync(
-            ResponsesChatRouteDecisionRequest request,
+            ResponsesCallerScope callerScope,
+            string model,
+            ToolMode toolMode,
+            string contentHint,
             CancellationToken ct = default)
-        {
-            LastRequest = request;
-            return Task.FromResult(new ChatRouteDecision
+            => Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
                 UsedFallback = false,
             });
-        }
     }
 
     private sealed class StaticResponsesToolClassificationService(
@@ -804,37 +631,18 @@ public sealed class ChatCompletionsCommandFacadeTests
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
         private readonly Func<CancellationToken, Exception?> _exceptionFactory;
-        private ObservationScenarioRuntime? _observationRuntime;
 
         public RecordingActorDispatchPort()
-            : this((ObservationScenarioRuntime?)null)
-        {
-        }
-
-        public RecordingActorDispatchPort(ObservationScenarioRuntime? observationRuntime)
-            : this(static _ => null, observationRuntime)
+            : this(static _ => null)
         {
         }
 
         public RecordingActorDispatchPort(Func<CancellationToken, Exception?> exceptionFactory)
-            : this(exceptionFactory, null)
-        {
-        }
-
-        public RecordingActorDispatchPort(
-            Func<CancellationToken, Exception?> exceptionFactory,
-            ObservationScenarioRuntime? observationRuntime)
         {
             _exceptionFactory = exceptionFactory;
-            _observationRuntime = observationRuntime;
         }
 
         public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
-
-        public void BindObservationRuntime(ObservationScenarioRuntime observationRuntime)
-        {
-            _observationRuntime ??= observationRuntime;
-        }
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
@@ -842,273 +650,8 @@ public sealed class ChatCompletionsCommandFacadeTests
                 return Task.FromException<DispatchAdmission>(exception);
 
             Calls.Add((actorId, envelope));
-            _observationRuntime?.PublishAll();
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
-    }
-
-    private sealed class ObservationScenarioRuntime
-    {
-        private readonly IReadOnlyList<EventEnvelope> _events;
-
-        public ObservationScenarioRuntime(
-            string actorId,
-            string responseId,
-            IReadOnlyList<EventEnvelope> events)
-        {
-            ActorId = actorId;
-            ResponseId = responseId;
-            _events = events;
-            ScopePreparationPort = new StubObservationScopeLeasePreparationPort(actorId, responseId);
-            ProjectionPort = new StubObservationProjectionPort(actorId, responseId);
-        }
-
-        public string ActorId { get; }
-
-        public string ResponseId { get; }
-
-        public StubObservationScopeLeasePreparationPort ScopePreparationPort { get; }
-
-        public StubObservationProjectionPort ProjectionPort { get; }
-
-        public void PublishAll()
-        {
-            foreach (var envelope in _events)
-                ProjectionPort.Sink?.Push(envelope);
-        }
-    }
-
-    private sealed class ObservationScenarioBuilder
-    {
-        private enum ObservationTerminalState
-        {
-            Completed,
-            Failed,
-            Cancelled,
-            None,
-        }
-
-        private readonly string _responseId;
-        private readonly List<EventEnvelope> _events = [];
-        private TokenUsage? _usage;
-        private string _outputText = string.Empty;
-        private readonly List<LlmSessionRuntimeToolCall> _completedToolCalls = [];
-        private ObservationTerminalState _terminalState = ObservationTerminalState.Completed;
-        private string? _failureMessage;
-
-        private ObservationScenarioBuilder(string responseId)
-        {
-            _responseId = responseId;
-        }
-
-        public static ObservationScenarioBuilder ForResponse(string responseId) => new(responseId);
-
-        public ObservationScenarioBuilder WithChunkText(string deltaText)
-        {
-            _events.Add(new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Payload = Any.Pack(new LlmStreamChunkObserved
-                {
-                    ResponseId = _responseId,
-                    RunId = $"{_responseId}:llm-run",
-                    DeltaText = deltaText,
-                }),
-            });
-            return this;
-        }
-
-        public ObservationScenarioBuilder WithToolCallDelta(string callId, string toolName, string argumentsJson)
-        {
-            _events.Add(new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Payload = Any.Pack(new LlmStreamChunkObserved
-                {
-                    ResponseId = _responseId,
-                    RunId = $"{_responseId}:llm-run",
-                    ToolCallDelta = new LlmSessionRuntimeToolCall
-                    {
-                        CallId = callId,
-                        ToolName = toolName,
-                        ArgumentsJson = argumentsJson,
-                    },
-                }),
-            });
-            return this;
-        }
-
-        public ObservationScenarioBuilder WithCompletedText(string outputText)
-        {
-            _outputText = outputText;
-            return this;
-        }
-
-        public ObservationScenarioBuilder WithFailed(string failureMessage)
-        {
-            _terminalState = ObservationTerminalState.Failed;
-            _failureMessage = failureMessage;
-            return this;
-        }
-
-        public ObservationScenarioBuilder WithCancelled()
-        {
-            _terminalState = ObservationTerminalState.Cancelled;
-            _failureMessage = null;
-            return this;
-        }
-
-        public ObservationScenarioBuilder WithoutTerminal()
-        {
-            _terminalState = ObservationTerminalState.None;
-            _failureMessage = null;
-            return this;
-        }
-
-        public ObservationScenarioBuilder WithCompletedToolCall(string callId, string toolName, string resultJson)
-        {
-            _completedToolCalls.Add(new LlmSessionRuntimeToolCall
-            {
-                CallId = callId,
-                ToolName = toolName,
-                ArgumentsJson = resultJson,
-            });
-            return this;
-        }
-
-        public ObservationScenarioBuilder WithUsage(int promptTokens, int completionTokens, int totalTokens)
-        {
-            _usage = new TokenUsage(promptTokens, completionTokens, totalTokens);
-            return this;
-        }
-
-        public ObservationScenarioRuntime Build()
-        {
-            switch (_terminalState)
-            {
-                case ObservationTerminalState.Completed:
-                    var completed = new LlmRunCompleted
-                    {
-                        ResponseId = _responseId,
-                        RunId = $"{_responseId}:llm-run",
-                        OutputText = _outputText,
-                        CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    };
-                    completed.ForwardedToolCalls.AddRange(_completedToolCalls.Select(static call => call.Clone()));
-                    if (_usage is not null)
-                    {
-                        completed.Usage = new LlmSessionTokenUsage
-                        {
-                            PromptTokens = _usage.PromptTokens,
-                            CompletionTokens = _usage.CompletionTokens,
-                            TotalTokens = _usage.TotalTokens,
-                        };
-                    }
-
-                    _events.Add(new EventEnvelope
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        Payload = Any.Pack(completed),
-                    });
-                    break;
-                case ObservationTerminalState.Failed:
-                    _events.Add(new EventEnvelope
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        Payload = Any.Pack(new LlmRunFailed
-                        {
-                            ResponseId = _responseId,
-                            RunId = $"{_responseId}:llm-run",
-                            FailureMessage = _failureMessage ?? "LLM run failed.",
-                            FailedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                        }),
-                    });
-                    break;
-                case ObservationTerminalState.Cancelled:
-                    _events.Add(new EventEnvelope
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        Payload = Any.Pack(new LlmRunCancelled
-                        {
-                            ResponseId = _responseId,
-                            RunId = $"{_responseId}:llm-run",
-                            CancelledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                        }),
-                    });
-                    break;
-                case ObservationTerminalState.None:
-                    break;
-                default:
-                    throw new InvalidOperationException($"Unsupported terminal state '{_terminalState}'.");
-            }
-
-            return new ObservationScenarioRuntime(
-                actorId: "actor-" + _responseId,
-                responseId: _responseId,
-                events: _events.ToArray());
-        }
-    }
-
-    private sealed class StubObservationScopeLeasePreparationPort(string actorId, string responseId)
-        : ILlmSessionObservationScopeLeasePreparationPort
-    {
-        public Task<LlmSessionObservationScopeLeasePreparation?> PrepareAsync(
-            string requestedActorId,
-            string requestedResponseId,
-            CancellationToken ct = default) =>
-            Task.FromResult<LlmSessionObservationScopeLeasePreparation?>(
-                new LlmSessionObservationScopeLeasePreparation(actorId, responseId));
-
-        public Task ReleaseAsync(
-            LlmSessionObservationScopeLeasePreparation preparation,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
-    }
-
-    private sealed class StubObservationProjectionPort(string actorId, string responseId)
-        : ILlmSessionObservationProjectionPort
-    {
-        public IEventSink<EventEnvelope>? Sink { get; private set; }
-
-        public bool ProjectionEnabled => true;
-
-        public Task<EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>?> AttachExistingResponseProjectionAsync(
-            string requestedActorId,
-            string requestedResponseId,
-            IEventSink<EventEnvelope> sink,
-            CancellationToken ct = default)
-        {
-            Sink = sink;
-            return Task.FromResult<EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>?>(
-                new EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>(
-                    new StubObservationProjectionLease(actorId, responseId),
-                    new NoOpAsyncDisposable()));
-        }
-
-        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
-            ILlmSessionObservationProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
-            CancellationToken ct = default) =>
-            Task.FromResult<IAsyncDisposable?>(new NoOpAsyncDisposable());
-
-        public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
-        {
-            Sink = null;
-            return Task.CompletedTask;
-        }
-
-        public Task ReleaseActorProjectionAsync(
-            ILlmSessionObservationProjectionLease lease,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
-    }
-
-    private sealed record StubObservationProjectionLease(string ActorId, string ResponseId)
-        : ILlmSessionObservationProjectionLease;
-
-    private sealed class NoOpAsyncDisposable : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RecordingSessionPort : ILlmSessionRegistrationPort

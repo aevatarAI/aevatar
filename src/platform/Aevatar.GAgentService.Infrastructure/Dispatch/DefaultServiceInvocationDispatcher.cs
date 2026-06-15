@@ -115,7 +115,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             SessionId = source.SessionId ?? string.Empty,
             TimeoutMs = source.TimeoutMs,
             ScopeId = source.ScopeId ?? string.Empty,
-            CallerCredential = BuildWorkflowCallerCredential(source.ConnectorHttpAuthorization),
+            ConnectorHttpAuthorization = source.ConnectorHttpAuthorization ?? string.Empty,
         };
         foreach (var part in source.InputParts)
         {
@@ -149,26 +149,6 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         if (source.LlmControl?.HasMaxToolRoundsOverride == true)
             request.LlmControl.MaxToolRoundsOverride = source.LlmControl.MaxToolRoundsOverride;
         return request;
-    }
-
-    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(string? connectorHttpAuthorization)
-    {
-        if (string.IsNullOrWhiteSpace(connectorHttpAuthorization))
-            return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential();
-
-        const string bearerPrefix = "Bearer ";
-        var authorization = connectorHttpAuthorization.Trim();
-        if (!authorization.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Connector HTTP authorization must use the Bearer scheme.", nameof(connectorHttpAuthorization));
-
-        var parsed = WorkflowCallerCredentialTokens.ParseOptional(authorization[bearerPrefix.Length..]);
-        if (parsed.IsInvalid)
-            throw new ArgumentException("Connector HTTP authorization bearer token is invalid.", nameof(connectorHttpAuthorization));
-
-        return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
-        {
-            BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
-        };
     }
 
     private async Task RegisterRunAsync(

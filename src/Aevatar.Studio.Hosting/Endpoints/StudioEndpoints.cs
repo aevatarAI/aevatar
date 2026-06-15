@@ -16,7 +16,7 @@ using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Capabilities;
+using Aevatar.Hosting;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;

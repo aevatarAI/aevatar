@@ -281,13 +281,12 @@ runtime 对下继续复用 `service binding`。
 1. `displayName`
 2. `description`
 3. `implementationKind`
-4. `implementationRef?`（可选 typed 初始实现引用，仅在与 `implementationKind` 匹配时接受）
 
 说明：
 
-1. 前端可以不传 `implementationRef`；此时 member 以 `created` 阶段存在。
-2. 若创建请求携带 `implementationRef`，该引用必须是 typed 字段并与 `implementationKind` 匹配，由 StudioMember actor 在创建事件中持久化为权威状态。
-3. 绑定仍走独立 `PUT /members/{memberId}/binding`，不得通过 `PATCH /members/{memberId}` 扩展 implementation binding 语义。
+1. 前端默认不传 raw `implementationRef`
+2. 若后端需要初始 implementation shell，应由后端按 `implementationKind` 自动生成
+3. `implementationRef` 只应作为返回事实或后续 build/update 结果出现，不应成为普通用户创建 member 的前置理解成本
 
 `POST /members` 输出至少返回：
 

@@ -148,39 +148,6 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
                     [exactMatchFieldPath] = ConvertScalarValue(filter.Value),
                 },
             },
-            ProjectionDocumentFilterOperator.EqOrMissing => new Dictionary<string, object?>
-            {
-                ["bool"] = new Dictionary<string, object?>
-                {
-                    ["should"] = new object[]
-                    {
-                        new Dictionary<string, object?>
-                        {
-                            ["term"] = new Dictionary<string, object?>
-                            {
-                                [exactMatchFieldPath] = ConvertScalarValue(filter.Value),
-                            },
-                        },
-                        new Dictionary<string, object?>
-                        {
-                            ["bool"] = new Dictionary<string, object?>
-                            {
-                                ["must_not"] = new object[]
-                                {
-                                    new Dictionary<string, object?>
-                                    {
-                                        ["exists"] = new Dictionary<string, object?>
-                                        {
-                                            ["field"] = resolvedFieldPath,
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                    ["minimum_should_match"] = 1,
-                },
-            },
             ProjectionDocumentFilterOperator.In => new Dictionary<string, object?>
             {
                 ["terms"] = new Dictionary<string, object?>

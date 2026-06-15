@@ -6,7 +6,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Workflow.Core.Agreement;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
@@ -88,38 +87,15 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
             var voteParams = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (key, value) in evt.Parameters)
             {
-                var voteParameterKey = VoteAgreementRuleConfigurationParser.StripVoteParameterPrefix(key);
-                if (voteParameterKey != null)
-                    voteParams[voteParameterKey] = value;
-            }
-            var voteRule = new VoteAgreementRule();
-            if (!string.IsNullOrWhiteSpace(voteStepType) &&
-                string.Equals(
-                    WorkflowPrimitiveCatalog.ToCanonicalType(voteStepType),
-                    "vote",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                if (!VoteAgreementRuleConfigurationParser.TryParse(voteParams, out voteRule, out var voteRuleError))
-                {
-                    state.Parents.Remove(evt.StepId);
-                    await SaveStateAsync(state, ctx, ct);
-                    await ctx.PublishAsync(new StepCompletedEvent
-                    {
-                        StepId = evt.StepId,
-                        RunId = runId,
-                        Success = false,
-                        Error = voteRuleError,
-                    }, TopologyAudience.Self, ct);
-                    return;
-                }
+                if (key.StartsWith("vote_param_", StringComparison.OrdinalIgnoreCase))
+                    voteParams[key["vote_param_".Length..]] = value;
             }
             var parentState = new ParallelParentState
             {
                 Expected = count,
                 VoteConfig = new VoteConfigState
                 {
-                    StepType = WorkflowPrimitiveCatalog.ToCanonicalType(voteStepType),
-                    VoteRule = voteRule,
+                    StepType = voteStepType,
                 },
             };
             foreach (var (key, value) in voteParams)
@@ -127,12 +103,9 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
 
             state.Parents[evt.StepId] = parentState;
 
-            var maxConcurrent = BackpressureHelper.ResolveMaxConcurrent(evt.Parameters);
-            var minConcurrent = BackpressureHelper.ResolveMinConcurrent(evt.Parameters, maxConcurrent);
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
-                maxConcurrent,
-                minConcurrent);
+                BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
 
             // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
             //   Old pattern: Information log included raw value/prompt/input preview
@@ -168,11 +141,8 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     }, TopologyAudience.Self, ct);
                 }
             }
-            var topUpEntries = BackpressureHelper.TopUpToTarget(state.Backpressure);
             // Always save after loop — TryAdmit mutates ActiveWorkers even when no items are queued
             await SaveStateAsync(state, ctx, ct);
-            foreach (var topUpEntry in topUpEntries)
-                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(topUpEntry), TopologyAudience.Self, ct);
         }
         else
         {
@@ -198,10 +168,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     Output = evt.Output,
                     Error = evt.Error,
                     WorkerId = evt.WorkerId,
-                    BranchKey = evt.BranchKey,
                 };
-                if (evt.VoteAgreementDecision != null)
-                    final.VoteAgreementDecision = evt.VoteAgreementDecision.Clone();
 
                 foreach (var (key, value) in evt.Annotations)
                     final.Annotations[key] = value;
@@ -225,7 +192,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
                 BackpressureHelper.DefaultMaxConcurrentWorkers);
-            var drained = BackpressureHelper.CompleteAndTopUp(state.Backpressure);
+            var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
             ctx.Logger.LogInformation("ParallelFanOut: collected {StepId} ({Count}/{Expected})",
                 evt.StepId, parentState.Collected.Count, parentState.Expected);
             if (parentState.Collected.Count >= parentState.Expected)
@@ -249,14 +216,9 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                         StepType = parentState.VoteConfig.StepType,
                         RunId = eventRunId,
                         Input = merged,
-                        StepParameters = new WorkflowStepParameters(),
                     };
                     foreach (var (key, value) in parentState.VoteConfig.Parameters)
                         voteReq.Parameters[key] = value;
-                    voteReq.StepParameters.VoteAgreementCandidates = BuildVoteAgreementCandidateSet(results);
-                    var voteRule = parentState.VoteConfig.VoteRule;
-                    if (voteRule is { Mode: not AgreementRuleMode.Unspecified })
-                        voteReq.StepParameters.VoteAgreementRule = voteRule.Clone();
 
                     ctx.Logger.LogInformation(
                         "ParallelFanOut: step={StepId} dispatch vote step={VoteStepId} type={VoteType}",
@@ -284,8 +246,8 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                 await SaveStateAsync(state, ctx, ct);
             }
 
-            foreach (var drainedEntry in drained)
-                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drainedEntry), TopologyAudience.Self, ct);
+            if (drained != null)
+                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
         }
     }
 
@@ -304,34 +266,4 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    private static VoteAgreementCandidateSet BuildVoteAgreementCandidateSet(
-        IEnumerable<ParallelItemResult> results)
-    {
-        var set = new VoteAgreementCandidateSet();
-        var index = 0;
-        foreach (var result in results)
-        {
-            var candidate = new VoteAgreementCandidate
-            {
-                CandidateId = string.IsNullOrWhiteSpace(result.WorkerId)
-                    ? $"candidate-{index}"
-                    : result.WorkerId,
-                Success = result.Success,
-                Output = result.Output,
-                Error = result.Error,
-                WorkerId = result.WorkerId,
-                BranchKey = result.BranchKey,
-                NextStepId = result.NextStepId,
-                AssignedVariable = result.AssignedVariable,
-                AssignedValue = result.AssignedValue,
-            };
-            foreach (var (key, value) in result.Annotations)
-                candidate.Annotations[key] = value;
-
-            set.Candidates.Add(candidate);
-            index++;
-        }
-
-        return set;
-    }
 }

@@ -80,32 +80,6 @@ public sealed record WorkflowRunBindingQuery(
     IReadOnlyList<string> DefinitionActorIds,
     int Take = 50);
 
-public sealed record WorkflowRunForkSeedView(
-    string SourceRunId,
-    string Status,
-    string WorkflowYaml,
-    IReadOnlyDictionary<string, string> InlineWorkflowYamls,
-    IReadOnlyDictionary<string, string> Variables,
-    IReadOnlyList<string> CompletedStepIds,
-    string LastFailedStepId,
-    string FinalError,
-    string ScopeId = "")
-{
-    public WorkflowRunForkSeedView()
-        : this(
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            new Dictionary<string, string>(StringComparer.Ordinal),
-            new Dictionary<string, string>(StringComparer.Ordinal),
-            [],
-            string.Empty,
-            string.Empty,
-            string.Empty)
-    {
-    }
-}
-
 /// <summary>
 /// Narrow read contract for resolving workflow actor bindings without exposing raw actor state.
 /// </summary>
@@ -126,13 +100,6 @@ public interface IWorkflowRunBindingReader
 
     Task<IReadOnlyList<WorkflowActorBinding>> QueryAsync(
         WorkflowRunBindingQuery query,
-        CancellationToken ct = default);
-}
-
-public interface IWorkflowRunForkSeedQueryPort
-{
-    Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
-        string runId,
         CancellationToken ct = default);
 }
 

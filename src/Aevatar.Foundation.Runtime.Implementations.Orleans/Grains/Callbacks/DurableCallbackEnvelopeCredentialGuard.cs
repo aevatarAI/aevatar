@@ -20,12 +20,6 @@ internal static class DurableCallbackEnvelopeCredentialGuard
         ThrowIfContainsRuntimeCredential(envelope, nameof(EventEnvelope));
     }
 
-    internal static bool TryFindRuntimeCredential(EventEnvelope envelope, out string violationPath)
-    {
-        ArgumentNullException.ThrowIfNull(envelope);
-        return TryFindRuntimeCredential(envelope, nameof(EventEnvelope), depth: 0, out violationPath);
-    }
-
     internal static void ThrowIfContainsRuntimeCredential(IMessage message, string rootPath)
     {
         ArgumentNullException.ThrowIfNull(message);

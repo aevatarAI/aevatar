@@ -16,16 +16,4 @@ public sealed partial class SkillRunnerExecutionDocument : IProjectionReadModel<
         get => CreatedAtUtc != null ? CreatedAtUtc.ToDateTimeOffset() : default;
         set => CreatedAtUtc = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
     }
-
-    public DateTimeOffset? RunAt
-    {
-        get => RunAtUtc != null ? RunAtUtc.ToDateTimeOffset() : null;
-        set => RunAtUtc = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
-    }
-
-    public DateTimeOffset? RetiredAt
-    {
-        get => RetiredAtUtc != null ? RetiredAtUtc.ToDateTimeOffset() : null;
-        set => RetiredAtUtc = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
-    }
 }

@@ -16,18 +16,15 @@ public sealed class SkillDiscovery
 {
     private readonly SkillFrontmatterParser _parser;
     private readonly SkillWorkflowExtractor _workflowExtractor;
-    private readonly SkillScriptExtractor _scriptExtractor;
     private readonly ILogger _logger;
 
     public SkillDiscovery(
         SkillFrontmatterParser? parser = null,
         SkillWorkflowExtractor? workflowExtractor = null,
-        SkillScriptExtractor? scriptExtractor = null,
         ILogger? logger = null)
     {
         _parser = parser ?? new SkillFrontmatterParser();
         _workflowExtractor = workflowExtractor ?? new SkillWorkflowExtractor();
-        _scriptExtractor = scriptExtractor ?? new SkillScriptExtractor();
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -98,9 +95,6 @@ public sealed class SkillDiscovery
         var workflows = string.IsNullOrEmpty(skillDir)
             ? []
             : _workflowExtractor.ExtractFromDirectory(skillDir);
-        var scripts = string.IsNullOrEmpty(skillDir)
-            ? []
-            : _scriptExtractor.ExtractFromDirectory(skillDir, name, parsed.ScriptEntry);
 
         return new SkillDefinition
         {
@@ -114,7 +108,6 @@ public sealed class SkillDiscovery
             IsModelInvocable = parsed.IsModelInvocable,
             IsUserInvocable = parsed.IsUserInvocable,
             Workflows = workflows,
-            Scripts = scripts,
         };
     }
 }

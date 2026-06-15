@@ -3,7 +3,6 @@ using System.Text;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Shouldly;
 
 namespace Aevatar.Foundation.VoicePresence.Tests;
@@ -67,104 +66,6 @@ public class WebSocketVoiceTransportTests
         frames[1].Control!.DrainAcknowledged.ResponseId.ShouldBe(9);
     }
 
-    [Theory]
-    [InlineData("image/jpeg")]
-    [InlineData("image/png")]
-    public async Task ReceiveFramesAsync_should_yield_valid_input_image_frames(string mediaType)
-    {
-        var imageBytes = new byte[] { 1, 2, 3, 4 };
-        var socket = new FakeWebSocket(WebSocketState.Open);
-        socket.EnqueueReceive(
-            WebSocketMessageType.Text,
-            Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(new VoiceControlFrame
-            {
-                InputImage = new VoiceInputImage
-                {
-                    MediaType = mediaType,
-                    Data = ByteString.CopyFrom(imageBytes),
-                },
-            })));
-
-        await using var transport = new WebSocketVoiceTransport(socket);
-        var frames = new List<VoiceTransportFrame>();
-
-        await foreach (var frame in transport.ReceiveFramesAsync(CancellationToken.None))
-            frames.Add(frame);
-
-        frames.Count.ShouldBe(1);
-        frames[0].IsAudio.ShouldBeFalse();
-        frames[0].Control.ShouldBeNull();
-        frames[0].InputImage.ShouldNotBeNull();
-        var inputImage = frames[0].InputImage!;
-        inputImage.MediaType.ShouldBe(mediaType);
-        inputImage.Data.ToByteArray().ShouldBe(imageBytes);
-    }
-
-    [Theory]
-    [InlineData("{\"inputImage\":{\"mediaType\":\"image/jpeg\",\"data\":\"not-base64\"}}", "Invalid voice input image frame.")]
-    [InlineData("{\"inputImage\":{\"mediaType\":\"text/plain\",\"data\":\"AQID\"}}", "Voice input image media type must be image/jpeg or image/png.")]
-    public async Task ReceiveFramesAsync_should_reject_invalid_input_image_text(
-        string json,
-        string expectedCloseReason)
-    {
-        var socket = new FakeWebSocket(WebSocketState.Open);
-        socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes(json));
-
-        await using var transport = new WebSocketVoiceTransport(socket);
-        var frames = new List<VoiceTransportFrame>();
-
-        await foreach (var frame in transport.ReceiveFramesAsync(CancellationToken.None))
-            frames.Add(frame);
-
-        frames.ShouldBeEmpty();
-        socket.CloseCalls.ShouldBe(1);
-        socket.LastCloseStatus.ShouldBe(WebSocketCloseStatus.PolicyViolation);
-        socket.LastCloseDescription.ShouldBe(expectedCloseReason);
-    }
-
-    [Fact]
-    public async Task ReceiveFramesAsync_should_reject_oversize_input_image_text()
-    {
-        var socket = new FakeWebSocket(WebSocketState.Open);
-        EnqueueTextMessage(
-            socket,
-            JsonFormatter.Default.Format(new VoiceControlFrame
-            {
-                InputImage = new VoiceInputImage
-                {
-                    MediaType = "image/jpeg",
-                    Data = ByteString.CopyFrom(new byte[(500 * 1024) + 1]),
-                },
-            }));
-
-        await using var transport = new WebSocketVoiceTransport(socket);
-        var frames = new List<VoiceTransportFrame>();
-
-        await foreach (var frame in transport.ReceiveFramesAsync(CancellationToken.None))
-            frames.Add(frame);
-
-        frames.ShouldBeEmpty();
-        socket.CloseCalls.ShouldBe(1);
-        socket.LastCloseStatus.ShouldBe(WebSocketCloseStatus.PolicyViolation);
-        socket.LastCloseDescription.ShouldBe("Voice input image exceeds the 500 KB size limit.");
-    }
-
-    private static void EnqueueTextMessage(FakeWebSocket socket, string text)
-    {
-        var bytes = Encoding.UTF8.GetBytes(text);
-        const int fragmentSize = 4096;
-        for (var offset = 0; offset < bytes.Length; offset += fragmentSize)
-        {
-            var count = Math.Min(fragmentSize, bytes.Length - offset);
-            var fragment = new byte[count];
-            Array.Copy(bytes, offset, fragment, 0, count);
-            socket.EnqueueReceive(
-                WebSocketMessageType.Text,
-                fragment,
-                endOfMessage: offset + count >= bytes.Length);
-        }
-    }
-
     [Fact]
     public async Task ReceiveFramesAsync_should_reassemble_fragmented_binary_messages()
     {
@@ -182,43 +83,6 @@ public class WebSocketVoiceTransportTests
         frames.Count.ShouldBe(1);
         frames[0].IsAudio.ShouldBeTrue();
         frames[0].AudioPcm16.ToArray().ShouldBe(bytes);
-    }
-
-    [Fact]
-    public async Task Send_methods_should_serialize_concurrent_audio_and_control_sends()
-    {
-        var firstSendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseFirstSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var sendCount = 0;
-        var socket = new FakeWebSocket(WebSocketState.Open)
-        {
-            BeforeSendAsync = async (_, ct) =>
-            {
-                if (Interlocked.Increment(ref sendCount) == 1)
-                {
-                    firstSendStarted.TrySetResult();
-                    await releaseFirstSend.Task.WaitAsync(ct);
-                }
-            },
-        };
-        await using var transport = new WebSocketVoiceTransport(socket);
-
-        var audioTask = transport.SendAudioAsync(new byte[] { 1, 2, 3 }, CancellationToken.None);
-        await firstSendStarted.Task;
-        var controlTask = transport.SendControlAsync(new VoiceControlFrame
-        {
-            DrainAcknowledged = new VoiceDrainAcknowledged
-            {
-                ResponseId = 7,
-            },
-        }, CancellationToken.None);
-
-        releaseFirstSend.SetResult();
-        await Task.WhenAll(audioTask, controlTask);
-
-        socket.MaxConcurrentSends.ShouldBe(1);
-        socket.SentBinaries.Count.ShouldBe(1);
-        socket.SentTexts.Count.ShouldBe(1);
     }
 
     [Fact]

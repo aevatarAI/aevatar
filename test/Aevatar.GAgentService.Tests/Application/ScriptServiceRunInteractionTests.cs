@@ -268,82 +268,6 @@ public sealed class ScriptServiceRunInteractionTests
     }
 
     [Fact]
-    public async Task RegistrationDecorator_ShouldPersistCompletedTerminalOutput()
-    {
-        var inner = new RecordingScriptServiceRunInteraction
-        {
-            Frames =
-            [
-                new AGUIEvent
-                {
-                    TextMessageContent = new TextMessageContentEvent
-                    {
-                        MessageId = "msg-1",
-                        Delta = "script output",
-                    },
-                },
-                new AGUIEvent
-                {
-                    TextMessageEnd = new TextMessageEndEvent
-                    {
-                        MessageId = "msg-1",
-                    },
-                },
-                new AGUIEvent
-                {
-                    RunFinished = new RunFinishedEvent(),
-                },
-            ],
-            Completion = ScriptServiceRunCompletionStatus.RunFinished,
-            Completed = true,
-        };
-        var registrationPort = new RecordingServiceRunRegistrationPort();
-        var decorator = new ScriptServiceRunRegistrationInteraction(inner, registrationPort);
-
-        var result = await decorator.ExecuteAsync(
-            CreateCommand(),
-            (_, _) => ValueTask.CompletedTask,
-            null,
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeTrue();
-        registrationPort.StatusUpdates.Should().ContainSingle()
-            .Which.Should().Be(("service-run:run-1", "run-1", ServiceRunStatus.Completed, "script output", string.Empty));
-    }
-
-    [Fact]
-    public async Task RegistrationDecorator_ShouldPersistFailedTerminalError()
-    {
-        var inner = new RecordingScriptServiceRunInteraction
-        {
-            Frames =
-            [
-                new AGUIEvent
-                {
-                    RunError = new RunErrorEvent
-                    {
-                        Message = "script failed",
-                    },
-                },
-            ],
-            Completion = ScriptServiceRunCompletionStatus.RunError,
-            Completed = true,
-        };
-        var registrationPort = new RecordingServiceRunRegistrationPort();
-        var decorator = new ScriptServiceRunRegistrationInteraction(inner, registrationPort);
-
-        var result = await decorator.ExecuteAsync(
-            CreateCommand(),
-            (_, _) => ValueTask.CompletedTask,
-            null,
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeTrue();
-        registrationPort.StatusUpdates.Should().ContainSingle()
-            .Which.Should().Be(("service-run:run-1", "run-1", ServiceRunStatus.Failed, string.Empty, "script failed"));
-    }
-
-    [Fact]
     public async Task AddScriptServiceRunInteraction_ShouldResolveDecoratedInteraction_AndExecute()
     {
         var projectionPort = new RecordingScriptServiceAguiProjectionPort
@@ -567,34 +491,20 @@ public sealed class ScriptServiceRunInteractionTests
     private sealed class RecordingScriptServiceRunInteraction
         : ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>
     {
-        public IReadOnlyList<AGUIEvent> Frames { get; init; } = [];
-
-        public ScriptServiceRunCompletionStatus Completion { get; init; } = ScriptServiceRunCompletionStatus.Incomplete;
-
-        public bool Completed { get; init; }
-
-        public async Task<CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>> ExecuteAsync(
+        public Task<CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>> ExecuteAsync(
             ScriptServiceRunCommand command,
             Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
             Func<ScriptServiceRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {
+            _ = emitAsync;
             ct.ThrowIfCancellationRequested();
             var receipt = new ScriptServiceRunAcceptedReceipt(
                 command.RuntimeActorId,
                 command.RunId,
                 command.CommandId,
                 command.CorrelationId);
-            if (onAcceptedAsync != null)
-                await onAcceptedAsync(receipt, ct);
-            foreach (var frame in Frames)
-                await emitAsync(frame, ct);
-
-            return CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>.Success(
-                receipt,
-                new CommandInteractionFinalizeResult<ScriptServiceRunCompletionStatus>(
-                    Completion,
-                    Completed));
+            return ExecuteAsync(receipt, onAcceptedAsync, ct);
         }
 
         async Task<RealtimeSessionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>>
@@ -606,12 +516,26 @@ public sealed class ScriptServiceRunInteractionTests
         {
             return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
         }
+
+        private static async Task<CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>> ExecuteAsync(
+            ScriptServiceRunAcceptedReceipt receipt,
+            Func<ScriptServiceRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+            CancellationToken ct)
+        {
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+
+            return CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>.Success(
+                receipt,
+                new CommandInteractionFinalizeResult<ScriptServiceRunCompletionStatus>(
+                    ScriptServiceRunCompletionStatus.Incomplete,
+                    false));
+        }
     }
 
     private sealed class RecordingServiceRunRegistrationPort : IServiceRunRegistrationPort
     {
         public List<ServiceRunRecord> Registered { get; } = [];
-        public List<(string RunActorId, string RunId, ServiceRunStatus Status, string LastOutput, string LastError)> StatusUpdates { get; } = [];
 
         public Action? OnRegister { get; init; }
 
@@ -627,18 +551,6 @@ public sealed class ScriptServiceRunInteractionTests
         }
 
         public Task UpdateStatusAsync(string runActorId, string runId, ServiceRunStatus status, CancellationToken ct = default) =>
-            UpdateStatusAsync(runActorId, runId, status, null, null, ct);
-
-        public Task UpdateStatusAsync(
-            string runActorId,
-            string runId,
-            ServiceRunStatus status,
-            string? lastOutput,
-            string? lastError,
-            CancellationToken ct = default)
-        {
-            StatusUpdates.Add((runActorId, runId, status, lastOutput ?? string.Empty, lastError ?? string.Empty));
-            return Task.CompletedTask;
-        }
+            Task.CompletedTask;
     }
 }

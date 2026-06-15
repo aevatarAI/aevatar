@@ -7,131 +7,75 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
 {
     public const string SelectServiceActionId = "ls";
     public const string ApplyPresetActionId = "lp";
-    public const string ListPageActionId = "llp";
     public const string LegacySelectServiceActionId = "llm_select_service";
     public const string LegacyApplyPresetActionId = "llm_apply_preset";
     public const string LlmActionArgument = "llm_action";
     public const string SelectServiceAction = "select_service";
     public const string ApplyPresetAction = "apply_preset";
-    public const string ListPageAction = "list_page";
     public const string ServiceIdArgument = "service_id";
     public const string PresetIdArgument = "preset_id";
-    public const string ModelArgument = "model";
-    public const string PageArgument = "page";
-    public const int DefaultPageSize = 5;
 
-    public MessageContent RenderCurrent(UserLlmOptionsView view, UserLlmSelectionDisplayMode mode)
+    public MessageContent RenderOptions(UserLlmOptionsView view)
     {
         ArgumentNullException.ThrowIfNull(view);
 
         if (view.Available.Count == 0 && view.SetupHint is not null)
             return RenderSetupGuide(view.SetupHint);
 
-        var command = CommandFor(mode);
-        var otherCommand = mode == UserLlmSelectionDisplayMode.Route ? "/model" : "/route";
         var lines = new List<string>
         {
-            mode == UserLlmSelectionDisplayMode.Route ? "**当前 route**" : "**当前 model**",
+            "**模型设置**",
+            RenderCurrent(view.Current),
             "",
+            "可用 services:",
         };
 
-        if (mode == UserLlmSelectionDisplayMode.Route)
+        for (var i = 0; i < view.Available.Count; i++)
         {
-            lines.Add($"- Route: {RenderCurrentRouteName(view)}");
-            lines.Add($"- Route value: `{RenderCurrentRouteValue(view)}`");
-            lines.Add($"- 当前 model: {RenderCurrentModel(view)}");
-        }
-        else
-        {
-            lines.Add($"- Model: {RenderCurrentModel(view)}");
-            lines.Add($"- Route: {RenderCurrentRouteName(view)}");
-            lines.Add($"- Route value: `{RenderCurrentRouteValue(view)}`");
+            var option = view.Available[i];
+            var marker = IsCurrent(option, view.Current) ? " ✓" : string.Empty;
+            var status = option.Allowed
+                ? option.Status
+                : $"{option.Status}, not allowed";
+            var model = string.IsNullOrWhiteSpace(option.DefaultModel)
+                ? string.Empty
+                : $" / {option.DefaultModel}";
+            lines.Add($"{i + 1}. {option.DisplayName}{model} [{option.Source}, {status}]{marker}");
         }
 
         lines.Add("");
-        lines.Add($"查看可配置选项: `{command} list`");
-        lines.Add($"切换 route: `/route use <编号|service-name> [model-name]`");
-        lines.Add($"只改 model: `/model use <model-name>`");
+        lines.Add("用法:");
+        lines.Add("- `/route use <编号|service-name> [model-name]` 切换 service,可同时指定 model");
+        lines.Add("- `/model use <model-name>` 只覆盖当前 route 下的 model");
+        lines.Add("- `/model preset <preset-id>` 使用 setup preset");
+        lines.Add("- `/model reset` 清空你的 service/model 偏好,回退到 bot 默认");
 
         var reply = new MessageContent { Text = string.Join('\n', lines) };
         reply.Cards.Add(new CardBlock
         {
             Kind = CardBlockKind.Section,
-            Title = mode == UserLlmSelectionDisplayMode.Route ? "当前 route" : "当前 model",
-            Text = $"发送 `{command} list` 查看可配置选项；发送 `{otherCommand}` 查看另一项当前设置。",
-            Fields =
-            {
-                new CardField { Title = "Route", Text = RenderCurrentRouteName(view), IsShort = true },
-                new CardField { Title = "Model", Text = RenderCurrentModel(view), IsShort = true },
-                new CardField { Title = "Route value", Text = RenderCurrentRouteValue(view) },
-            },
+            Title = "模型设置",
+            Text = RenderCurrent(view.Current),
         });
 
-        return reply;
-    }
-
-    public MessageContent RenderOptions(UserLlmOptionsView view, UserLlmSelectionDisplayMode mode, int page = 1)
-    {
-        ArgumentNullException.ThrowIfNull(view);
-
-        if (view.Available.Count == 0 && view.SetupHint is not null)
-            return RenderSetupGuide(view.SetupHint);
-
-        var pagination = ResolvePagination(view.Available.Count, page);
-        var pageItems = view.Available
-            .Skip((pagination.Page - 1) * pagination.PageSize)
-            .Take(pagination.PageSize)
-            .ToArray();
-        var command = CommandFor(mode);
-        var title = mode == UserLlmSelectionDisplayMode.Route ? "可选 route" : "可选 route / model";
-
-        var lines = new List<string>
+        for (var i = 0; i < view.Available.Count; i++)
         {
-            $"**{title}**",
-            RenderCurrentLine(view),
-            "",
-        };
-
-        if (pageItems.Length == 0)
-        {
-            lines.Add("当前没有可用 LLM route。");
-        }
-        else
-        {
-            lines.Add($"第 {pagination.Page}/{pagination.TotalPages} 页,共 {view.Available.Count} 个选项:");
-            foreach (var (option, absoluteIndex) in pageItems.Select((option, index) => (option, (pagination.Page - 1) * pagination.PageSize + index + 1)))
+            var option = view.Available[i];
+            var model = string.IsNullOrWhiteSpace(option.DefaultModel) ? "(service default)" : option.DefaultModel;
+            reply.Cards.Add(new CardBlock
             {
-                lines.Add($"{absoluteIndex}. {option.DisplayName}{RenderCurrentMarker(option, view.Current)}");
-                lines.Add($"   route: `{option.RouteValue}`");
-                lines.Add($"   default model: {RenderDefaultModel(option)}");
-                lines.Add($"   source/status: {option.Source} / {RenderStatus(option)}");
-            }
-        }
-
-        lines.Add("");
-        if (pagination.TotalPages > 1)
-            lines.Add($"翻页: `{command} list {PreviousPage(pagination)}` / `{command} list {NextPage(pagination)}`");
-        lines.Add("选择 route: `/route use <编号|service-name> [model-name]`");
-        lines.Add("只改 model: `/model use <model-name>`");
-
-        var reply = new MessageContent { Text = string.Join('\n', lines) };
-        reply.Cards.Add(new CardBlock
-        {
-            Kind = CardBlockKind.Section,
-            Title = title,
-            Text = $"{RenderCurrentLine(view)}\n第 {pagination.Page}/{pagination.TotalPages} 页,共 {view.Available.Count} 个选项。",
-        });
-
-        if (pageItems.Length > 0)
-        {
-            reply.Actions.Add(BuildServiceSelectAction(pageItems, view.Current));
-            reply.Actions.Add(BuildSubmitSelectedServiceAction());
-        }
-
-        if (pagination.TotalPages > 1)
-        {
-            reply.Actions.Add(BuildPageAction("上一页", PreviousPage(pagination), mode, isDisabled: pagination.Page <= 1));
-            reply.Actions.Add(BuildPageAction("下一页", NextPage(pagination), mode, isDisabled: pagination.Page >= pagination.TotalPages));
+                Kind = CardBlockKind.Section,
+                Title = $"{i + 1}. {option.DisplayName}",
+                Text = option.Description ?? string.Empty,
+                Fields =
+                {
+                    new CardField { Title = "Service", Text = option.ServiceSlug, IsShort = true },
+                    new CardField { Title = "Model", Text = model, IsShort = true },
+                    new CardField { Title = "Status", Text = option.Status, IsShort = true },
+                    new CardField { Title = "Source", Text = option.Source, IsShort = true },
+                },
+            });
+            reply.Actions.Add(BuildSelectServiceAction(option));
         }
 
         return reply;
@@ -144,22 +88,21 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         var resolvedModel = string.IsNullOrWhiteSpace(model)
             ? picked.DefaultModel
             : model.Trim();
-        var modelLine = string.IsNullOrWhiteSpace(resolvedModel)
-            ? "未覆盖,使用 route 默认"
-            : resolvedModel;
+        var suffix = string.IsNullOrWhiteSpace(resolvedModel)
+            ? string.Empty
+            : $" / {resolvedModel}";
         var reply = new MessageContent
         {
-            Text = $"已切换到 **{picked.DisplayName}**。\n- Route: `{picked.RouteValue}`\n- Model: {modelLine}\n下一条消息会用这个设置回复。",
+            Text = $"已切换到 **{picked.DisplayName}{suffix}**。下一条消息会用这个 service 回复。",
         };
         reply.Cards.Add(new CardBlock
         {
             Kind = CardBlockKind.Section,
-            Title = "模型设置已更新",
-            Text = $"已切换到 {picked.DisplayName}",
+            Title = "模型设置",
+            Text = $"已切换到 {picked.DisplayName}{suffix}",
             Fields =
             {
                 new CardField { Title = "Route", Text = picked.RouteValue },
-                new CardField { Title = "Model", Text = modelLine, IsShort = true },
                 new CardField { Title = "Status", Text = picked.Status, IsShort = true },
                 new CardField { Title = "Source", Text = picked.Source, IsShort = true },
             },
@@ -218,116 +161,34 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         return new MessageContent { Text = $"正在为你开通 {preset.Title}..." };
     }
 
-    private static string CommandFor(UserLlmSelectionDisplayMode mode) =>
-        mode == UserLlmSelectionDisplayMode.Route ? "/route" : "/model";
-
-    private static string RenderCurrentLine(UserLlmOptionsView view) =>
-        $"当前: route {RenderCurrentRouteName(view)} / model {RenderCurrentModel(view)}";
-
-    private static string RenderCurrentRouteName(UserLlmOptionsView view) =>
-        view.Current?.DisplayName ??
-        (string.IsNullOrWhiteSpace(view.CurrentRouteValue) ? "bot 默认 route" : "自定义 route");
-
-    private static string RenderCurrentRouteValue(UserLlmOptionsView view)
+    private static string RenderCurrent(UserLlmOption? current)
     {
-        if (!string.IsNullOrWhiteSpace(view.CurrentRouteValue))
-            return view.CurrentRouteValue.Trim();
-        return UserConfigLlmRouteDefaults.Gateway;
+        if (current is null)
+            return "- 当前:未选择 service";
+
+        var model = string.IsNullOrWhiteSpace(current.DefaultModel)
+            ? string.Empty
+            : $" / {current.DefaultModel}";
+        return $"- 当前:{current.DisplayName}{model}";
     }
-
-    private static string RenderCurrentModel(UserLlmOptionsView view)
-    {
-        if (!string.IsNullOrWhiteSpace(view.CurrentModel))
-            return view.CurrentModel.Trim();
-
-        if (!string.IsNullOrWhiteSpace(view.Current?.DefaultModel))
-            return $"{view.Current.DefaultModel} (route 默认)";
-
-        return "未覆盖,使用 route 默认";
-    }
-
-    private static string RenderDefaultModel(UserLlmOption option) =>
-        string.IsNullOrWhiteSpace(option.DefaultModel)
-            ? "service default"
-            : option.DefaultModel.Trim();
-
-    private static string RenderStatus(UserLlmOption option) =>
-        option.Allowed ? option.Status : $"{option.Status}, not allowed";
-
-    private static string RenderCurrentMarker(UserLlmOption option, UserLlmOption? current) =>
-        IsCurrent(option, current) ? " (当前)" : string.Empty;
 
     private static bool IsCurrent(UserLlmOption option, UserLlmOption? current) =>
         current is not null &&
         string.Equals(option.ServiceId, current.ServiceId, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(option.RouteValue, current.RouteValue, StringComparison.OrdinalIgnoreCase);
 
-    private static PageWindow ResolvePagination(int totalCount, int requestedPage)
+    private static ActionElement BuildSelectServiceAction(UserLlmOption option) => new()
     {
-        var totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)DefaultPageSize));
-        var page = Math.Clamp(requestedPage <= 0 ? 1 : requestedPage, 1, totalPages);
-        return new PageWindow(page, totalPages, DefaultPageSize);
-    }
-
-    private static int PreviousPage(PageWindow pagination) =>
-        Math.Max(1, pagination.Page - 1);
-
-    private static int NextPage(PageWindow pagination) =>
-        Math.Min(pagination.TotalPages, pagination.Page + 1);
-
-    private static ActionElement BuildServiceSelectAction(
-        IReadOnlyList<UserLlmOption> options,
-        UserLlmOption? current)
-    {
-        var action = new ActionElement
-        {
-            Kind = ActionElementKind.Select,
-            ActionId = ServiceIdArgument,
-            Label = "选择本页 route",
-            Placeholder = "选择一个 route",
-            Value = options.FirstOrDefault(option => IsCurrent(option, current))?.ServiceId ?? string.Empty,
-        };
-
-        foreach (var option in options)
-        {
-            action.Options.Add(new ActionOption
-            {
-                Label = $"{option.DisplayName}{RenderCurrentMarker(option, current)}",
-                Value = option.ServiceId,
-            });
-        }
-
-        return action;
-    }
-
-    private static ActionElement BuildSubmitSelectedServiceAction() => new()
-    {
-        Kind = ActionElementKind.FormSubmit,
+        Kind = ActionElementKind.Button,
         ActionId = SelectServiceActionId,
-        Label = "应用所选 route",
-        IsPrimary = true,
+        Label = $"选 {option.DisplayName}",
+        Value = option.ServiceId,
+        IsPrimary = option.Allowed && string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase),
+        IsDisabled = !option.Allowed || !string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase),
         LlmSelection = new LlmSelectionActionPayload
         {
             Action = SelectServiceAction,
-        },
-    };
-
-    private static ActionElement BuildPageAction(
-        string label,
-        int page,
-        UserLlmSelectionDisplayMode mode,
-        bool isDisabled) => new()
-    {
-        Kind = ActionElementKind.Button,
-        ActionId = ListPageActionId,
-        Label = label,
-        Value = page.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        IsDisabled = isDisabled,
-        LlmSelection = new LlmSelectionActionPayload
-        {
-            Action = ListPageAction,
-            Page = page,
-            DisplayMode = mode == UserLlmSelectionDisplayMode.Route ? "route" : "model",
+            ServiceId = option.ServiceId,
         },
     };
 
@@ -344,6 +205,4 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
             PresetId = preset.Id,
         },
     };
-
-    private readonly record struct PageWindow(int Page, int TotalPages, int PageSize);
 }

@@ -1,8 +1,6 @@
 using System.Text;
-using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.Studio.Infrastructure.Storage;
 using FluentAssertions;
-using Google.Protobuf;
 
 namespace Aevatar.Studio.Tests;
 
@@ -41,64 +39,6 @@ public sealed class StudioCatalogImportParserTests
         result.Should().ContainSingle();
         result[0].Name.Should().Be("github");
         result[0].Http.DefaultHeaders.Should().ContainKey("Accept");
-    }
-
-    [Fact]
-    public async Task Connector_import_parser_should_parse_secret_ref_header_auth()
-    {
-        const string json = """
-        {
-          "connectors": [
-            {
-              "name": "twitterapi",
-              "type": "http",
-              "http": {
-                "baseUrl": "https://api.twitterapi.io",
-                "auth": {
-                  "type": "secret_ref_header",
-                  "secretRef": "secrets://connectors/twitterapi",
-                  "headerName": "X-API-Key",
-                  "headerValuePrefix": "Bearer "
-                }
-              }
-            }
-          ]
-        }
-        """;
-
-        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
-        var parser = new ConnectorCatalogImportParser();
-
-        var result = await parser.ParseCatalogAsync(stream, CancellationToken.None);
-
-        var auth = result.Should().ContainSingle().Subject.Http.Auth;
-        auth.Type.Should().Be("secret_ref_header");
-        auth.SecretRef.Should().Be("secrets://connectors/twitterapi");
-        auth.HeaderName.Should().Be("X-API-Key");
-        auth.HeaderValuePrefix.Should().Be("Bearer ");
-    }
-
-    [Fact]
-    public void ConnectorAuthEntry_ShouldRoundTripSecretRefHeaderFields()
-    {
-        var entry = new ConnectorAuthEntry
-        {
-            Type = "secret_ref_header",
-            SecretRef = "secrets://connectors/twitterapi",
-            HeaderName = "X-API-Key",
-            HeaderValuePrefix = "Bearer ",
-        };
-
-        var parsed = ConnectorAuthEntry.Parser.ParseFrom(entry.ToByteArray());
-
-        parsed.Type.Should().Be("secret_ref_header");
-        parsed.SecretRef.Should().Be("secrets://connectors/twitterapi");
-        parsed.HeaderName.Should().Be("X-API-Key");
-        parsed.HeaderValuePrefix.Should().Be("Bearer ");
-        ConnectorAuthEntry.Descriptor.Fields.InDeclarationOrder()
-            .Should().Contain(field => field.FieldNumber == 6 && field.Name == "secret_ref")
-            .And.Contain(field => field.FieldNumber == 7 && field.Name == "header_name")
-            .And.Contain(field => field.FieldNumber == 8 && field.Name == "header_value_prefix");
     }
 
     [Fact]

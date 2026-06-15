@@ -1,5 +1,3 @@
-using Aevatar.Foundation.Abstractions.Interactions;
-
 namespace Aevatar.Foundation.Abstractions.HumanInteraction;
 
 public sealed record HumanInteractionRequest
@@ -17,8 +15,6 @@ public sealed record HumanInteractionRequest
     public string? Content { get; init; }
 
     public IReadOnlyList<string> Options { get; init; } = Array.Empty<string>();
-
-    public InteractionSpec? InteractionSpec { get; init; }
 
     public int TimeoutSeconds { get; init; }
 

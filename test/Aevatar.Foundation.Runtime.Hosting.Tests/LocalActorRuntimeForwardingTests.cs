@@ -1,8 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Abstractions.TypeSystem;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
@@ -44,7 +42,6 @@ public sealed class LocalActorRuntimeForwardingTests
             registry);
         scheduler = new RecordingCallbackScheduler();
         var services = new ServiceCollection()
-            .AddAevatarAgentKindRegistry(builder => builder.Register<LocalTestAgent>())
             .AddSingleton<IActorRuntimeCallbackScheduler>(scheduler)
             .BuildServiceProvider();
         return new LocalActorRuntime(
@@ -53,7 +50,6 @@ public sealed class LocalActorRuntimeForwardingTests
             streams);
     }
 
-    [GAgent("tests.local-forwarding-agent")]
     private sealed class LocalTestAgent : IAgent
     {
         public string Id => "local-test";

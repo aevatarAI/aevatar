@@ -19,27 +19,22 @@ public sealed class ServiceInfrastructureTests
         var definitionTarget = await provisioner.EnsureDefinitionTargetAsync(identity);
         var revisionTarget = await provisioner.EnsureRevisionCatalogTargetAsync(identity);
         var deploymentTarget = await provisioner.EnsureDeploymentTargetAsync(identity);
-        var invocationCatalogTarget = await provisioner.EnsureInvocationCatalogTargetAsync(identity);
 
         definitionTarget.Should().Be(ServiceActorIds.Definition(identity));
         revisionTarget.Should().Be(ServiceActorIds.RevisionCatalog(identity));
         deploymentTarget.Should().Be(ServiceActorIds.Deployment(identity));
-        invocationCatalogTarget.Should().Be(ServiceActorIds.InvocationCatalog(identity));
         runtime.CreateCalls.Should().Contain((typeof(ServiceDefinitionGAgent), ServiceActorIds.Definition(identity)));
         runtime.CreateCalls.Should().Contain((typeof(ServiceRevisionCatalogGAgent), ServiceActorIds.RevisionCatalog(identity)));
         runtime.CreateCalls.Should().Contain((typeof(ServiceDeploymentManagerGAgent), ServiceActorIds.Deployment(identity)));
-        runtime.CreateCalls.Should().Contain((typeof(ServiceInvocationCatalogGAgent), ServiceActorIds.InvocationCatalog(identity)));
 
         runtime.MarkExisting(ServiceActorIds.Definition(identity));
         runtime.MarkExisting(ServiceActorIds.RevisionCatalog(identity));
         runtime.MarkExisting(ServiceActorIds.Deployment(identity));
-        runtime.MarkExisting(ServiceActorIds.InvocationCatalog(identity));
         runtime.CreateCalls.Clear();
 
         await provisioner.EnsureDefinitionTargetAsync(identity);
         await provisioner.EnsureRevisionCatalogTargetAsync(identity);
         await provisioner.EnsureDeploymentTargetAsync(identity);
-        await provisioner.EnsureInvocationCatalogTargetAsync(identity);
 
         runtime.CreateCalls.Should().BeEmpty();
     }

@@ -110,12 +110,6 @@ public sealed class ChatMessage
     /// <summary>For the assistant role, the tool_call list returned by the LLM.</summary>
     public IReadOnlyList<ToolCall>? ToolCalls { get; init; }
 
-    /// <summary>
-    /// Process-local typed tool result view recovered at the adapter/core boundary.
-    /// Do not treat this as a durable transport contract.
-    /// </summary>
-    public ToolResultView? ToolResultView { get; init; }
-
     /// <summary>Creates a system-role message.</summary>
     public static ChatMessage System(string content) => new() { Role = "system", Content = content };
 

@@ -5,7 +5,7 @@ namespace Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 //   New principle: transports attach through an explicit lease handle so host code does not own actor/session facts.
 public interface IVoicePresenceTransportAttachmentPort
 {
-    Task<VoicePresenceSessionLeaseHandle> AttachAsync(
+    Task AttachAsync(
         VoicePresenceSessionLeaseHandle handle,
         IVoiceTransport transport,
         CancellationToken ct = default);

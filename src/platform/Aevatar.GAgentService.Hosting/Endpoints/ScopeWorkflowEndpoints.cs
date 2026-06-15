@@ -6,7 +6,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
-using Aevatar.Capabilities;
+using Aevatar.Hosting;
 using Aevatar.AGUI.Contracts;
 using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -439,14 +439,6 @@ public static class ScopeWorkflowEndpoints
         CancellationToken ct)
     {
         prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
-        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
-        if (!callerCredential.Succeeded)
-        {
-            var (statusCode, code, message) = MapRunStartError(callerCredential.Error);
-            await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
-            return;
-        }
-
         await HandleAguiStreamAsync(
             http,
             new WorkflowChatRunRequest(
@@ -455,7 +447,7 @@ public static class ScopeWorkflowEndpoints
                 sessionId,
                 Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
-                CallerCredential: callerCredential.Credential,
+                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
                 LlmControl: ToWorkflowLlmControl(llmControl),
                 Headers: headers),
             chatRunService,
@@ -566,6 +558,7 @@ public static class ScopeWorkflowEndpoints
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
         scopedHeaders.Remove(LegacyConnectorHttpAuthorizationBlockedKey);
+        // Refactor (iter169/cluster-issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses WorkflowChatRunRequest.ConnectorHttpAuthorization.
 
         return scopedHeaders;
     }
@@ -580,6 +573,8 @@ public static class ScopeWorkflowEndpoints
 
         return new ChatLlmControlInput
         {
+            NyxIdAccessToken = control.NyxIdAccessToken,
+            NyxIdOrgToken = control.NyxIdOrgToken,
             ModelOverride = control.ModelOverride,
             NyxIdRoutePreference = control.NyxIdRoutePreference,
             MaxToolRoundsOverride = control.MaxToolRoundsOverride,
@@ -594,18 +589,16 @@ public static class ScopeWorkflowEndpoints
 
         var model = NormalizeOptional(control.ModelOverride);
         var userMemoryPrompt = NormalizeOptional(control.UserMemoryPrompt);
-        var routePreference = NormalizeOptional(control.NyxIdRoutePreference);
         var maxToolRounds = control.MaxToolRoundsOverride is > 0
             ? control.MaxToolRoundsOverride
             : null;
-        if (model == null && userMemoryPrompt == null && routePreference == null && maxToolRounds == null)
+        if (model == null && userMemoryPrompt == null && maxToolRounds == null)
             return null;
 
         return new WorkflowLlmControl(
-            ModelOverride: model,
-            MaxToolRoundsOverride: maxToolRounds,
-            UserMemoryPrompt: userMemoryPrompt,
-            RoutePreference: routePreference);
+            model,
+            maxToolRounds,
+            userMemoryPrompt);
     }
 
     internal static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
@@ -615,9 +608,10 @@ public static class ScopeWorkflowEndpoints
         if (http == null)
             return null;
 
+        var bearerToken = ExtractBearerToken(http);
         var control = new LLMControlContext(
-            NyxIdAccessToken: null,
-            NyxIdOrgToken: null,
+            NyxIdAccessToken: bearerToken,
+            NyxIdOrgToken: bearerToken,
             SenderNyxIdAccessToken: null,
             ModelOverride: null,
             NyxIdRoutePreference: null,
@@ -658,6 +652,16 @@ public static class ScopeWorkflowEndpoints
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var auth = http.Request.Headers.Authorization.FirstOrDefault();
+        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var bearerToken = auth["Bearer ".Length..].Trim();
+        return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
+    }
+
     internal static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)
     {
         return error switch
@@ -672,7 +676,6 @@ public static class ScopeWorkflowEndpoints
             WorkflowChatRunStartError.InvalidWorkflowYaml => (StatusCodes.Status400BadRequest, "INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
             WorkflowChatRunStartError.WorkflowNameMismatch => (StatusCodes.Status400BadRequest, "WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             WorkflowChatRunStartError.PromptRequired => (StatusCodes.Status400BadRequest, "PROMPT_REQUIRED", "Prompt is required."),
-            WorkflowChatRunStartError.InvalidCallerCredential => (StatusCodes.Status400BadRequest, "INVALID_CALLER_CREDENTIAL", "Caller credential is invalid."),
             _ => (StatusCodes.Status400BadRequest, "RUN_START_FAILED", "Failed to resolve actor."),
         };
     }

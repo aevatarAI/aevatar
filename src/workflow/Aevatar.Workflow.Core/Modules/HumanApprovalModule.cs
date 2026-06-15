@@ -42,11 +42,6 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "human_approval") return;
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
-            if (StepPresentation.HasInteractionTemplateSpec(request.StepParameters?.InteractionTemplateSpec))
-            {
-                await PublishUnsupportedInteractionTemplateAsync(request, runId, ctx, ct);
-                return;
-            }
 
             var prompt = WorkflowParameterValueParser.GetString(
                 request.Parameters,
@@ -56,7 +51,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             var timeoutSeconds = WorkflowParameterValueParser.ResolveTimeoutSeconds(
                 request.Parameters,
                 defaultSeconds: 3600);
-            var deliveryTargetId = request.StepParameters?.DeliveryTargetId?.Trim();
+            var deliveryTargetId = WorkflowSuspensionRequestSupport.ResolveDeliveryTargetId(request);
 
             var state = WorkflowExecutionStateAccess.Load<HumanApprovalModuleState>(ctx, ModuleStateKey);
             state.Pending[BuildPendingKey(runId, request.StepId)] = new PendingApprovalState
@@ -85,8 +80,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 TimeoutSeconds = timeoutSeconds,
             };
             WorkflowSuspensionRequestSupport.ApplyContent(suspended, request.Input);
-            ApplyTypedInteraction(suspended, request);
-            ApplyTypedDeliveryTarget(suspended, deliveryTargetId);
+            WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
 
             await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
             return;
@@ -251,42 +245,6 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
 
     private static string BuildPendingKey(string runId, string stepId) =>
         $"{WorkflowRunIdNormalizer.Normalize(runId)}::{stepId}";
-
-    private static void ApplyTypedInteraction(
-        WorkflowSuspendedEvent suspended,
-        StepRequestEvent request)
-    {
-        var interaction = request.StepParameters?.InteractionSpec;
-        if (!StepPresentation.HasInteractionSpec(interaction))
-            return;
-
-        suspended.Interaction = interaction!.Clone();
-    }
-
-    private static void ApplyTypedDeliveryTarget(
-        WorkflowSuspendedEvent suspended,
-        string? deliveryTargetId)
-    {
-        if (!string.IsNullOrWhiteSpace(deliveryTargetId))
-            suspended.DeliveryTargetId = deliveryTargetId;
-    }
-
-    private static Task PublishUnsupportedInteractionTemplateAsync(
-        StepRequestEvent request,
-        string runId,
-        IWorkflowExecutionContext ctx,
-        CancellationToken ct) =>
-        ctx.PublishAsync(
-            new StepCompletedEvent
-            {
-                StepId = request.StepId,
-                RunId = runId,
-                Success = false,
-                Error = "human_approval does not support interaction_template; use interaction_spec.",
-                ExecutionId = request.ExecutionId,
-            },
-            TopologyAudience.Self,
-            ct);
 
     private static Task SaveStateAsync(
         HumanApprovalModuleState state,

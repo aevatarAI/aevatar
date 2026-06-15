@@ -2,7 +2,6 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -20,7 +19,6 @@ namespace Aevatar.GAgents.StreamingProxy;
 // Room effects from adapters enter as typed request payloads through the actor inbox.
 // This actor remains the only component that converts those requests into committed room domain events.
 // External Nyx streaming I/O stays outside actor turns.
-[GAgent(StreamingProxyDefaults.GAgentKind)]
 public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>, IProjectedActor
 {
     internal const string ChatLifecycleContinuationRunnerStreamId = "streaming-proxy:chat-lifecycle-continuation-runner";

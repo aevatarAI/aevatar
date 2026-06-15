@@ -390,7 +390,6 @@ public static class AgentBuilderCardFlow
         var status = ReadString(root, "status") ?? "unknown";
         var scheduleCron = ReadString(root, "schedule_cron") ?? "n/a";
         var scheduleTimezone = ReadString(root, "schedule_timezone") ?? "n/a";
-        var outputFormat = ReadString(root, "output_format") ?? "auto";
         var lastRunAt = ReadString(root, "last_run_at") ?? "n/a";
         var nextRunAt = ReadString(root, "next_scheduled_run") ?? "n/a";
         var errorCount = ReadString(root, "error_count") ?? "0";
@@ -402,7 +401,6 @@ public static class AgentBuilderCardFlow
         body.Append($"- Template: `{template}`\n");
         body.Append($"- Status: `{status}`\n");
         body.Append($"- Schedule: `{scheduleCron}` ({scheduleTimezone})\n");
-        body.Append($"- Output: `{outputFormat}`\n");
         body.Append($"- Last run: `{lastRunAt}`\n");
         body.Append($"- Next run: `{nextRunAt}`\n");
         body.Append($"- Error count: `{errorCount}`");

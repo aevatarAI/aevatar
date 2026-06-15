@@ -278,12 +278,25 @@ internal static class ScriptEvolutionIntegrationTestKit
         CancellationToken ct)
     {
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
-        return await ScriptReadModelVisibilityTestHelper.WaitForSnapshotAsync(
-            token => queryService.GetSnapshotAsync(runtimeActorId, token),
-            snapshot => snapshot.ReadModelPayload != null,
-            $"Script read model snapshot not found. actor_id={runtimeActorId}",
-            ct,
-            ObservationTimeout);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
+
+        ScriptReadModelSnapshot? last = null;
+        try
+        {
+            while (true)
+            {
+                last = await queryService.GetSnapshotAsync(runtimeActorId, timeoutCts.Token);
+                if (last != null && last.ReadModelPayload != null)
+                    return last;
+
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException($"Script read model snapshot not found. actor_id={runtimeActorId}");
+        }
     }
 
     public static async Task<T> WaitForAsync<T>(

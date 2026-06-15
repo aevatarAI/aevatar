@@ -8,17 +8,6 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdLLMProviderRoutingTests
 {
     [Fact]
-    public void Capabilities_ShouldExposeDelegateMultimodalInputs()
-    {
-        var provider = CreateProvider();
-
-        provider.Capabilities.SupportsInput(ContentPartKind.Text).Should().BeTrue();
-        provider.Capabilities.SupportsInput(ContentPartKind.Image).Should().BeTrue();
-        provider.Capabilities.SupportsToolCalls.Should().BeTrue();
-        provider.Capabilities.SupportsStreaming.Should().BeTrue();
-    }
-
-    [Fact]
     public async Task ResolveRouteAsync_ShouldUseDefaultGateway_WhenNoRoutePreference()
     {
         var provider = CreateProvider();

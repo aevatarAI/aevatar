@@ -1352,6 +1352,9 @@ const ScopeInvokePage: React.FC = () => {
                               actorId:
                                 currentDefaultRouteRevision.primaryActorId ||
                                 undefined,
+                              actorTypeName:
+                                currentDefaultRouteRevision.staticActorTypeName ||
+                                undefined,
                             }),
                           )
                         }

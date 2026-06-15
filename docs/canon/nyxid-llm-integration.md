@@ -54,16 +54,6 @@ llm-anthropic/claude-haiku-4-5
 
 ---
 
-## Workflow caller credential 边界
-
-Workflow 层只承载 provider-neutral 调用者凭据与路由偏好。`WorkflowCallerCredential.BearerToken` 保存的是已经规范化的 raw bearer token，不包含 HTTP `Authorization` scheme；`WorkflowLlmControl.RoutePreference` / workflow proto `route_preference` 表达的是 workflow 自身的路由偏好，不使用 NyxID 专有字段名。
-
-Host/Infrastructure 只负责从 HTTP header 提取 bearer scheme，并把 raw token 交给 workflow-owned `WorkflowCallerCredentialTokens.ParseOptional` 做一次规范化与 fail-closed 校验。进入 Workflow Application/Core 后，调用者凭据继续作为 typed workflow credential 在 command、actor state 与 LLM execution intent 中传递；不得在 workflow 中间层通过 headers、metadata 或 provider-specific 字段回填身份语义。
-
-NyxID 专有映射只发生在 `Workflow.Integration.AI` 边界：workflow raw token 分别映射到 LLM provider auth 与 tool execution credentials，workflow `RoutePreference` 在这里映射为 provider-specific `NyxIdRoutePreference`。NyxID provider 本身继续读取 typed provider auth，不从 tool context 或 workflow headers 兜底推断身份。
-
----
-
 ## Channel Route 选择
 
 Lark bot 等 channel surface 通过 `/model`、`/models`、`/llm`、`/route` 暴露同一组 LLM route 命令：

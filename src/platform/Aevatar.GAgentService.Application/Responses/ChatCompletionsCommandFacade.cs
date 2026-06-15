@@ -1,13 +1,11 @@
 using System.Security.Cryptography;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.SkillInvocations;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Application.Internal;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -25,12 +23,8 @@ public sealed class ChatCompletionsCommandFacade(
     IActorDispatchPort dispatchPort,
     IResponsesToolClassificationService toolClassificationService,
     IResponsesDirectToolPlanService directToolPlanService,
-    ILlmSessionRunObservationService observationService,
-    ILogger<ChatCompletionsCommandFacade> logger,
-    TimeSpan? observationTimeout = null) : IChatCompletionsCommandFacade
+    ILogger<ChatCompletionsCommandFacade> logger) : IChatCompletionsCommandFacade
 {
-    private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
-    private readonly TimeSpan _observationTimeout = observationTimeout ?? DefaultObservationTimeout;
     public async Task<ChatCompletionsCreateCommandResult> CreateAsync(
         ChatCompletionsCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -56,8 +50,7 @@ public sealed class ChatCompletionsCommandFacade(
                 callerScopeResult.Error.Code,
                 callerScopeResult.Error.Message);
 
-        var trigger = ParseSkillInvocationTrigger(BuildRouteContentHint(normalized));
-        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, trigger, ct);
+        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, ct);
         if (routedModelResult.Error is not null)
             return ChatCompletionsCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -77,7 +70,6 @@ public sealed class ChatCompletionsCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
-            trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
             createdAt,
@@ -95,35 +87,14 @@ public sealed class ChatCompletionsCommandFacade(
 
     public async Task<ResponsesStreamCommandResult> StreamAsync(
         ChatCompletionsCreateCommandPlan plan,
-        Func<LlmSessionRunObservedDelta, CancellationToken, ValueTask> onObservedDelta,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        ArgumentNullException.ThrowIfNull(onObservedDelta);
 
         try
         {
-            var observed = await ObserveRunAsync(plan, onObservedDelta, ct).ConfigureAwait(false);
-            if (observed.Error is not null)
-            {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
-                return ResponsesStreamCommandResult.FromError(
-                    observed.Error.StatusCode,
-                    observed.Error.Code,
-                    observed.Error.Message);
-            }
-
-            return observed.Completion is not null
-                ? ResponsesStreamCommandResult.FromCompleted(observed.Completion)
-                : ResponsesStreamCommandResult.FromError(
-                    503,
-                    "observation_unavailable",
-                    "LLM run observation ended without a terminal event.");
+            var admission = await DispatchRunAsync(plan, ct);
+            return ResponsesStreamCommandResult.FromAccepted(new ResponsesStreamAcceptedCommandResult(admission));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -202,16 +173,13 @@ public sealed class ChatCompletionsCommandFacade(
     private async Task<RouteTargetResult> ResolveRouteTargetAsync(
         NormalizedChatCompletionsCommand normalized,
         ResponsesCallerScope callerScope,
-        SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
         var routeDecision = await chatRouteDecisionPort.ResolveAsync(
-            new ResponsesChatRouteDecisionRequest(
-                callerScope,
-                normalized.Model,
-                normalized.DeclaredTools.Count > 0 ? ToolMode.Declared : ToolMode.None,
-                BuildRouteContentHint(normalized),
-                NormalizeRouteCommandName(trigger?.Name)),
+            callerScope,
+            normalized.Model,
+            normalized.DeclaredTools.Count > 0 ? ToolMode.Declared : ToolMode.None,
+            BuildRouteContentHint(normalized),
             ct);
 
         if (routeDecision.Action.Reject is not null)
@@ -270,7 +238,6 @@ public sealed class ChatCompletionsCommandFacade(
         ResponsesCallerScope callerScope,
         string routedModel,
         ChatRouteAction routeAction,
-        SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult session,
         DateTimeOffset createdAt,
@@ -293,7 +260,6 @@ public sealed class ChatCompletionsCommandFacade(
             {
                 NyxIdRoutePreference = resolvedRouteValue,
             },
-            SkillRecovery = AgentSkillRecoveryContextBuilder.FromTrigger(trigger),
         };
         var llmRequest = BuildLlmRequest(
             normalized,
@@ -322,35 +288,12 @@ public sealed class ChatCompletionsCommandFacade(
     {
         try
         {
-            var observed = await ObserveRunAsync(plan, null, ct).ConfigureAwait(false);
-            if (observed.Error is not null)
-            {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
-                return ChatCompletionsCreateCommandResult.FromError(
-                    observed.Error.StatusCode,
-                    observed.Error.Code,
-                    observed.Error.Message);
-            }
-
-            var completion = observed.Completion;
-            if (completion is null)
-            {
-                await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Failed, CancellationToken.None);
-                return ChatCompletionsCreateCommandResult.FromError(
-                    503,
-                    "observation_unavailable",
-                    "LLM run observation ended without a terminal event.");
-            }
-
-            return ChatCompletionsCreateCommandResult.FromCompleted(new ChatCompletionsCreateCompletedCommandResult(
+            var admission = await DispatchRunAsync(plan, ct);
+            return ChatCompletionsCreateCommandResult.FromAccepted(new ChatCompletionsCreateAcceptedCommandResult(
                 plan.Normalized,
                 plan.CreatedAt.ToUnixTimeSeconds(),
-                completion));
+                plan.Session,
+                admission));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -374,20 +317,6 @@ public sealed class ChatCompletionsCommandFacade(
             return ChatCompletionsCreateCommandResult.FromError(500, "api_error", "Internal server error.");
         }
     }
-
-    private Task<LlmSessionRunObservedResult> ObserveRunAsync(
-        ChatCompletionsCreateCommandPlan plan,
-        Func<LlmSessionRunObservedDelta, CancellationToken, ValueTask>? onObservedDelta,
-        CancellationToken ct) =>
-        observationService.ObserveAsync(
-            new LlmSessionRunObservationRequest(
-                plan.Session.ActorId,
-                plan.Session.ResponseId,
-                $"{plan.Session.ResponseId}:llm-run",
-                token => DispatchRunAsync(plan, token),
-                _observationTimeout),
-            onObservedDelta,
-            ct);
 
     // Refactor (iter344/cluster-001):
     //   Old pattern: Host parsed catalog route slugs while constructing provider metadata.
@@ -488,16 +417,6 @@ public sealed class ChatCompletionsCommandFacade(
         ?? normalized.ChatMessages.LastOrDefault()?.Content
         ?? string.Empty;
 
-    private static SkillInvocationTrigger? ParseSkillInvocationTrigger(string? text) =>
-        SkillInvocationTriggerParser.TryParse(text, platform: "cli", out var trigger)
-            ? trigger
-            : null;
-
-    private static string NormalizeRouteCommandName(string? commandName) =>
-        string.IsNullOrWhiteSpace(commandName)
-            ? string.Empty
-            : commandName.Trim().TrimStart('/').ToLowerInvariant();
-
     // Refactor (iter344/cluster-001):
     //   Old pattern: Host populated session records from endpoint locals.
     //   New principle: Application derives the authoritative session record from normalized command state and caller scope.
@@ -552,7 +471,7 @@ public sealed class ChatCompletionsCommandFacade(
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
             command,
-            plan.Session.ResponseId);
+            command.RunId);
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
     }
 
@@ -687,5 +606,4 @@ public sealed class ChatCompletionsCommandFacade(
 
         public static ExecutionPlanResult FromError(ResponsesCommandError error) => new(null, error);
     }
-
 }

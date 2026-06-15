@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -11,7 +10,6 @@ namespace Aevatar.GAgents.StudioMember;
 /// <summary>
 /// Short-lived actor for one StudioMember binding attempt.
 /// </summary>
-[GAgent("studio.member-binding-run")]
 public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindingRunState>, IProjectedActor
 {
     private static readonly TimeSpan PlatformBindingExecuteInitialDelay = TimeSpan.FromMilliseconds(100);

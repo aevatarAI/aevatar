@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -34,8 +33,6 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
                     FireIndex = 3,
                     DeliveryMode = RuntimeCallbackScheduleDeliveryMode.EnvelopeRedelivery,
                     TriggerEnvelope = CreateEnvelope("evt-1"),
-                    NextDueAtUnixTimeMs = 1_780_000_000_000,
-                    OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
                 },
             },
         };
@@ -55,8 +52,6 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         callback.DeliveryMode.Should().Be(RuntimeCallbackScheduleDeliveryMode.EnvelopeRedelivery);
         callback.TriggerEnvelope.Id.Should().Be("evt-1");
         callback.TriggerEnvelope.Payload.Unpack<StringValue>().Value.Should().Be("payload");
-        callback.NextDueAtUnixTimeMs.Should().Be(1_780_000_000_000);
-        callback.OverduePolicy.Should().Be(RuntimeCallbackOverduePolicy.Deliver);
     }
 
     [Fact]
@@ -66,42 +61,6 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             .Should().BeAssignableTo<IMessage<RuntimeCallbackSchedulerState>>();
         typeof(RuntimeScheduledCallback)
             .Should().BeAssignableTo<IMessage<RuntimeScheduledCallback>>();
-    }
-
-    [Fact]
-    public void RuntimeCallbackSchedulerStateStorageSerializer_ShouldRoundtripAnyValueBytes()
-    {
-        var state = new RuntimeCallbackSchedulerState
-        {
-            ReminderCallbacks =
-            {
-                ["cb-byte-string"] = new RuntimeScheduledCallback
-                {
-                    ActorId = "actor-byte-string",
-                    CallbackId = "cb-byte-string",
-                    Generation = 9,
-                    SlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
-                    DueTimeMillis = 1000,
-                    DeliveryMode = RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
-                    TriggerEnvelope = CreateEnvelopeWithAnyPayload("evt-byte-string", new Any
-                    {
-                        TypeUrl = "type.googleapis.com/aevatar.test.ByteStringPayload",
-                        Value = ByteString.CopyFrom(0x01, 0x02, 0x03, 0x7F),
-                    }),
-                    NextDueAtUnixTimeMs = 1_780_000_000_000,
-                    OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
-                },
-            },
-        };
-        var serializer = new RuntimeCallbackSchedulerStateGrainStorageSerializer();
-
-        var serialized = serializer.Serialize(state);
-        var roundTripped = serializer.Deserialize<RuntimeCallbackSchedulerState>(serialized);
-
-        var payload = roundTripped.ReminderCallbacks["cb-byte-string"].TriggerEnvelope.Payload;
-        payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.test.ByteStringPayload");
-        payload.Value.ToByteArray().Should().Equal(0x01, 0x02, 0x03, 0x7F);
-        payload.Value.Should().NotBeEmpty();
     }
 
     [Fact]
@@ -119,8 +78,6 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             DueTimeMillis = 1000,
             DeliveryMode = RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
             TriggerEnvelope = CreateEnvelope("evt-2"),
-            NextDueAtUnixTimeMs = 1_780_000_000_000,
-            OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
         };
         await persistentState.WriteStateAsync();
         await persistentState.ReadStateAsync();
@@ -129,8 +86,6 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         proxy.ReadCount.Should().Be(1);
         persistentState.State.ReminderCallbacks.Should().ContainKey("cb-2");
         persistentState.State.ReminderCallbacks["cb-2"].TriggerEnvelope.Id.Should().Be("evt-2");
-        persistentState.State.ReminderCallbacks["cb-2"].NextDueAtUnixTimeMs.Should().Be(1_780_000_000_000);
-        persistentState.State.ReminderCallbacks["cb-2"].OverduePolicy.Should().Be(RuntimeCallbackOverduePolicy.Deliver);
     }
 
     [Fact]
@@ -163,8 +118,6 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         var attribute = parameter.GetCustomAttribute<PersistentStateAttribute>();
         attribute.Should().NotBeNull();
         attribute!.StateName.Should().Be("runtime-callback-scheduler-v2");
-        attribute.StorageName.Should().Be(OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName);
-        attribute.StorageName.Should().NotBe(OrleansRuntimeConstants.GrainStateStorageName);
     }
 
     [Fact]
@@ -402,13 +355,6 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         Route = EnvelopeRouteSemantics.CreateDirect("actor-1", "actor-1"),
     };
 
-    private static EventEnvelope CreateEnvelopeWithAnyPayload(string id, Any payload) => new()
-    {
-        Id = id,
-        Payload = payload.Clone(),
-        Route = EnvelopeRouteSemantics.CreateDirect("actor-1", "actor-1"),
-    };
-
     private static RuntimeScheduledCallback CreateScheduledCallback(string callbackId, long generation) => new()
     {
         ActorId = "actor-1",
@@ -418,8 +364,6 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         DueTimeMillis = 1000,
         DeliveryMode = RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
         TriggerEnvelope = CreateEnvelope("evt-1"),
-        NextDueAtUnixTimeMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
-        OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
     };
 
     private class RuntimeCallbackPersistentStateProxy : DispatchProxy

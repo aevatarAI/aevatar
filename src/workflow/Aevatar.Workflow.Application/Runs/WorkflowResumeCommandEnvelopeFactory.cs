@@ -24,15 +24,6 @@ internal sealed class WorkflowResumeCommandEnvelopeFactory : ICommandEnvelopeFac
             Feedback = command.Feedback ?? string.Empty,
         };
         AppendMetadata(resumed.Metadata, command.Metadata);
-        if (command.ToolApproval != null)
-        {
-            resumed.ToolApproval = new WorkflowToolApprovalResume
-            {
-                ExecutionId = NormalizeRequired(command.ToolApproval.ExecutionId, nameof(command.ToolApproval.ExecutionId)),
-                ToolCallId = NormalizeRequired(command.ToolApproval.ToolCallId, nameof(command.ToolApproval.ToolCallId)),
-                ApprovalRequestId = NormalizeRequired(command.ToolApproval.ApprovalRequestId, nameof(command.ToolApproval.ApprovalRequestId)),
-            };
-        }
 
         return new EventEnvelope
         {

@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.Workflow.Core.Modules;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -21,7 +20,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILarkNyxClient, LarkNyxClient>();
         services.TryAddSingleton<ILarkCardKitClient, LarkCardKitClient>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, LarkAgentToolSource>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, LarkWorkflowFileSubmitToolSource>());
 
         return services;
     }

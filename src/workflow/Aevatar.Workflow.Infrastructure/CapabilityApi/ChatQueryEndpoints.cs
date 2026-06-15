@@ -1,4 +1,3 @@
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -12,8 +11,7 @@ public static class ChatQueryEndpoints
     {
         group.MapGet("/agents", ListAgents)
             // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
-            .Produces(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status503ServiceUnavailable);
+            .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/primitives", ListPrimitives)
             .Produces(StatusCodes.Status200OK);
@@ -59,18 +57,8 @@ public static class ChatQueryEndpoints
         IWorkflowExecutionQueryApplicationService queryService,
         CancellationToken ct = default)
     {
-        try
-        {
-            var agents = await queryService.ListAgentsAsync(ct);
-            return Results.Ok(agents);
-        }
-        catch (ProjectionIndexSchemaDriftException exception)
-        {
-            return ProjectionIndexDiagnostics.ToServiceUnavailableResult(
-                "workflow_execution_current_state_projection_index_drift",
-                "Workflow execution current-state projection index schema drift detected.",
-                exception);
-        }
+        var agents = await queryService.ListAgentsAsync(ct);
+        return Results.Ok(agents);
     }
 
     internal static async Task<IResult> ListPrimitives(

@@ -107,28 +107,27 @@ public class MiniCPMRealtimeProviderTests
 
         await using var provider = CreateProvider(handler);
         var events = new List<VoiceProviderEvent>();
-        var audioFrames = new List<VoiceProviderAudioFrame>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await ConnectAsync(provider, events, evt =>
         {
             if (evt.EventCase == VoiceProviderEvent.EventOneofCase.ResponseDone)
                 done.TrySetResult();
-        }, audioFrames);
+        });
         await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         events.Select(x => x.EventCase).ShouldBe(
         [
             VoiceProviderEvent.EventOneofCase.ResponseStarted,
+            VoiceProviderEvent.EventOneofCase.AudioReceived,
             VoiceProviderEvent.EventOneofCase.ResponseDone,
         ]);
         events[0].ResponseStarted.ResponseId.ShouldBe(0);
         events[0].ResponseStarted.ProviderResponseId.ShouldBe("1");
-        var audioFrame = audioFrames.ShouldHaveSingleItem();
-        audioFrame.SampleRateHz.ShouldBe(24000);
-        audioFrame.Pcm16.ToArray().ShouldBe([10, 20, 30, 40]);
-        audioFrame.ProviderResponseId.ShouldBe("1");
-        events[1].ResponseDone.ResponseId.ShouldBe(0);
-        events[1].ResponseDone.ProviderResponseId.ShouldBe("1");
+        events[1].AudioReceived.SampleRateHz.ShouldBe(24000);
+        events[1].AudioReceived.Pcm16.ToByteArray().ShouldBe([10, 20, 30, 40]);
+        events[1].AudioReceived.ProviderResponseId.ShouldBe("1");
+        events[2].ResponseDone.ResponseId.ShouldBe(0);
+        events[2].ResponseDone.ProviderResponseId.ShouldBe("1");
     }
 
     [Fact]
@@ -152,7 +151,6 @@ public class MiniCPMRealtimeProviderTests
             return Task.FromResult(CreateJsonResponse("{}"));
         }));
         var events = new List<VoiceProviderEvent>();
-        var audioFrames = new List<VoiceProviderAudioFrame>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var session = await provider.ConnectAsync(new VoiceProviderSessionKey("lease-1", "host-1", "transport-1", 1), CreateConfig(),
             (key, evt, ct) =>
@@ -164,13 +162,6 @@ public class MiniCPMRealtimeProviderTests
                     done.TrySetResult();
                 return Task.CompletedTask;
             },
-            (key, audio, ct) =>
-            {
-                _ = key;
-                _ = ct;
-                audioFrames.Add(audio);
-                return Task.CompletedTask;
-            },
             CancellationToken.None);
         await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await session.DisposeAsync();
@@ -178,15 +169,16 @@ public class MiniCPMRealtimeProviderTests
         events.Select(static x => x.EventCase).ShouldBe(
         [
             VoiceProviderEvent.EventOneofCase.ResponseStarted,
+            VoiceProviderEvent.EventOneofCase.AudioReceived,
             VoiceProviderEvent.EventOneofCase.ResponseDone,
         ]);
 
         var providerResponseId = events[0].ResponseStarted.ProviderResponseId;
         providerResponseId.ShouldNotBeNullOrWhiteSpace();
         events[0].ResponseStarted.ResponseId.ShouldBe(0);
-        events[1].ResponseDone.ResponseId.ShouldBe(0);
-        audioFrames.ShouldHaveSingleItem().ProviderResponseId.ShouldBe(providerResponseId);
-        events[1].ResponseDone.ProviderResponseId.ShouldBe(providerResponseId);
+        events[2].ResponseDone.ResponseId.ShouldBe(0);
+        events[1].AudioReceived.ProviderResponseId.ShouldBe(providerResponseId);
+        events[2].ResponseDone.ProviderResponseId.ShouldBe(providerResponseId);
     }
 
     [Fact]
@@ -342,13 +334,6 @@ public class MiniCPMRealtimeProviderTests
                     disconnected.TrySetResult();
                 return Task.CompletedTask;
             },
-            (key, audio, ct) =>
-            {
-                _ = key;
-                _ = audio;
-                _ = ct;
-                return Task.CompletedTask;
-            },
             CancellationToken.None);
         await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await session.DisposeAsync();
@@ -421,26 +406,6 @@ public class MiniCPMRealtimeProviderTests
     }
 
     [Fact]
-    public async Task SendInputImage_should_throw_not_supported()
-    {
-        await using var provider = CreateProvider(new StubHttpMessageHandler((request, ct) =>
-        {
-            _ = request;
-            _ = ct;
-            return Task.FromResult(CreateSseResponse(blockAfterPayload: true));
-        }));
-
-        var providerSession = await ConnectAsync(provider);
-
-        await Should.ThrowAsync<NotSupportedException>(() =>
-            providerSession.SendInputImageAsync(new VoiceInputImage
-            {
-                MediaType = "image/png",
-                Data = Google.Protobuf.ByteString.CopyFrom([1]),
-            }, CancellationToken.None));
-    }
-
-    [Fact]
     public async Task InjectEvent_should_throw_not_supported()
     {
         await using var provider = CreateProvider(new StubHttpMessageHandler((request, ct) =>
@@ -493,13 +458,12 @@ public class MiniCPMRealtimeProviderTests
         MiniCPMRealtimeProvider provider,
         VoiceProviderConfig? config = null,
         CancellationToken ct = default) =>
-        ConnectAsync(provider, [], onEvent: null, config: config, ct: ct);
+        ConnectAsync(provider, [], onEvent: null, config, ct);
 
     private static Task<RealtimeVoiceProviderSession> ConnectAsync(
         MiniCPMRealtimeProvider provider,
         List<VoiceProviderEvent> events,
         Action<VoiceProviderEvent>? onEvent = null,
-        List<VoiceProviderAudioFrame>? audioFrames = null,
         VoiceProviderConfig? config = null,
         CancellationToken ct = default) =>
         provider.ConnectAsync(
@@ -511,13 +475,6 @@ public class MiniCPMRealtimeProviderTests
                 _ = token;
                 events.Add(evt);
                 onEvent?.Invoke(evt);
-                return Task.CompletedTask;
-            },
-            (key, audioFrame, token) =>
-            {
-                _ = key;
-                _ = token;
-                audioFrames?.Add(audioFrame);
                 return Task.CompletedTask;
             },
             ct);

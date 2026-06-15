@@ -15,7 +15,7 @@ owner: eanzhao
 - **Role**：工作流里的「参与者」—— 有唯一 `id`、显示名、系统提示词、可选的 LLM 配置（provider/model）、以及**允许使用的 Connector 列表**。
 - **Workflow YAML** 里用 `roles:` 定义若干角色，用 `steps:` 定义步骤；步骤里通过 `role` / `target_role` 指定「这一步由谁干」。
 - 运行时：**每个 role 会对应一个 role actor**（子 Actor），由 `WorkflowRunGAgent` 在首次执行前按 YAML 创建并挂成子树。
-  - 未配置 `agent_kind` 时使用默认 `workflow.role-agent`；配置后通过任意已注册 primary `[GAgent]` kind 创建对应 role actor。
+  - 未配置 `agent_kind` 时使用默认 `RoleGAgent`；配置后通过 stable kind token 创建对应 role actor。
   - `llm_call` 步骤会把用户/上步内容发给**指定角色的 role actor**，由该角色背后的 LLM 或 bridge 能力生成回复。
   - `connector_call` 步骤会按名称调用已配置的 Connector；若步骤带了 `role`，且该角色配置了 `connectors` 列表，则**只允许调用列表里的 Connector**（按角色做能力授权）。
 
@@ -36,7 +36,7 @@ description: 可选描述
 roles:
   - id: assistant          # 唯一 ID，步骤里 role 填这个
     name: Assistant        # 显示名
-    agent_kind: workflow.role-agent  # 可选；省略时默认 workflow.role-agent
+    agent_kind: aevatar.role-agent  # 可选，稳定 agent kind token
     system_prompt: |       # 该角色 LLM 的系统提示
       You are a helpful assistant.
     provider: deepseek     # 可选，LLM 提供方，默认 deepseek
@@ -47,14 +47,14 @@ roles:
 ```
 
 - **id**：必填，步骤里 `role` / `target_role` 引用此值；也会用作该角色对应 role actor 的 Actor ID 后缀。
-- **agent_kind**：可选。绑定任意已注册 primary `[GAgent]` kind，由 `WorkflowRunGAgent` 通过 runtime 创建 role actor；不写则使用默认 `workflow.role-agent`。
+- **agent_kind**：可选。绑定 stable agent kind token，由 `WorkflowRunGAgent` 通过 runtime 创建 role actor；不写则使用默认 `RoleGAgent`。
 - **connectors**：字符串数组，名字须与 `~/.aevatar/connectors.json` 里配置的 `name` 一致；未写或空则表示该角色不授权任何 connector（若步骤仍用 `connector_call` 且指定该角色，会按实现做校验）。
 
 ### 2.2 步骤里指定角色：`role` / `target_role`
 
 步骤支持 `role` 或 `target_role`（二者等价），表示「这一步由哪个角色执行」：
 
-- **llm_call**：把输入发给该角色对应的 role actor，用该角色的 system_prompt + provider/model 调 LLM，或由 `agent_kind` 绑定的任意 GAgent 实现处理。
+- **llm_call**：把输入发给该角色对应的 role actor，用该角色的 system_prompt + provider/model 调 LLM，或由 `agent_kind` 绑定的 bridge actor 处理。
 - **connector_call**：用 `parameters.connector` 指定要调的 Connector；若本步写了 `role`，且该角色配置了 `connectors`，则**只允许调用列表中的 connector**，否则报错。
 
 示例：一问一答（单角色）

@@ -59,124 +59,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task PrepareAsync_ShouldPreserveDurableLlmControlAndStripCredentials()
-    {
-        var service = new ScheduledDispatchTargetPreparationService();
-        var configuration = new ScheduledDispatchConfiguration(
-            "schedule-llm",
-            "LLM",
-            new ScheduledDispatchTargetDescriptor(
-                ScheduledDispatchTargetKind.ServiceInvocation,
-                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
-                    new ServiceIdentity { ServiceId = "svc" },
-                    "chat",
-                    Any.Pack(new ChatRequestEvent
-                    {
-                        Prompt = "hello",
-                        ToolContext = new AgentToolExecutionContextPayload
-                        {
-                            Credentials = new AgentToolCredentialsPayload
-                            {
-                                NyxIdAccessToken = "tool-owner-secret",
-                                NyxIdOrgToken = "tool-org-secret",
-                                SenderNyxIdAccessToken = "tool-sender-secret",
-                            },
-                            Routing = new LLMRequestRoutingContextPayload
-                            {
-                                ModelOverride = "tool-model",
-                                NyxIdRoutePreference = "tool-route",
-                                MaxToolRoundsOverride = 5,
-                                UserMemoryPrompt = "tool memory",
-                            },
-                        },
-                        LlmControl = new LLMControlContextPayload
-                        {
-                            NyxIdAccessToken = "owner-secret",
-                            NyxIdOrgToken = "org-secret",
-                            SenderNyxIdAccessToken = "sender-secret",
-                            ModelOverride = "sonnet",
-                            NyxIdRoutePreference = "low-latency",
-                            MaxToolRoundsOverride = 3,
-                            UserMemoryPrompt = "remember preferences",
-                        },
-                    }))),
-            "0 9 * * *",
-            "UTC",
-            true,
-            new Dictionary<string, string>());
-
-        var prepared = await service.PrepareAsync(configuration, "cmd-llm", "corr-llm");
-
-        var request = prepared.TriggerEnvelope.Payload.Unpack<ServiceInvocationRequest>();
-        var persistedChat = request.Payload.Unpack<ChatRequestEvent>();
-        persistedChat.LlmControl.Should().NotBeNull();
-        persistedChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
-        persistedChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
-        persistedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
-        persistedChat.LlmControl.ModelOverride.Should().Be("sonnet");
-        persistedChat.LlmControl.NyxIdRoutePreference.Should().Be("low-latency");
-        persistedChat.LlmControl.MaxToolRoundsOverride.Should().Be(3);
-        persistedChat.LlmControl.UserMemoryPrompt.Should().Be("remember preferences");
-        persistedChat.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
-        persistedChat.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
-        persistedChat.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
-        persistedChat.ToolContext.Routing.ModelOverride.Should().Be("tool-model");
-        persistedChat.ToolContext.Routing.NyxIdRoutePreference.Should().Be("tool-route");
-        persistedChat.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
-        persistedChat.ToolContext.Routing.UserMemoryPrompt.Should().Be("tool memory");
-        var descriptorChat = prepared.Descriptor.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
-        descriptorChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
-        descriptorChat.LlmControl.ModelOverride.Should().Be("sonnet");
-        descriptorChat.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
-        descriptorChat.ToolContext.Routing.ModelOverride.Should().Be("tool-model");
-    }
-
-    [Fact]
-    public async Task PrepareAsync_ShouldStripToolContextCredentialsWhenLlmControlIsMissing()
-    {
-        var service = new ScheduledDispatchTargetPreparationService();
-        var configuration = new ScheduledDispatchConfiguration(
-            "schedule-tool-context",
-            "Tool context",
-            new ScheduledDispatchTargetDescriptor(
-                ScheduledDispatchTargetKind.ServiceInvocation,
-                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
-                    new ServiceIdentity { ServiceId = "svc" },
-                    "chat",
-                    Any.Pack(new ChatRequestEvent
-                    {
-                        Prompt = "hello",
-                        ToolContext = new AgentToolExecutionContextPayload
-                        {
-                            Credentials = new AgentToolCredentialsPayload
-                            {
-                                NyxIdAccessToken = "owner-secret",
-                                NyxIdOrgToken = "org-secret",
-                                SenderNyxIdAccessToken = "sender-secret",
-                            },
-                            Routing = new LLMRequestRoutingContextPayload
-                            {
-                                ModelOverride = "opus",
-                            },
-                        },
-                    }))),
-            "0 9 * * *",
-            "UTC",
-            true,
-            new Dictionary<string, string>());
-
-        var prepared = await service.PrepareAsync(configuration, "cmd-tool", "corr-tool");
-
-        var request = prepared.TriggerEnvelope.Payload.Unpack<ServiceInvocationRequest>();
-        var persistedChat = request.Payload.Unpack<ChatRequestEvent>();
-        persistedChat.LlmControl.Should().BeNull();
-        persistedChat.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
-        persistedChat.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
-        persistedChat.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
-        persistedChat.ToolContext.Routing.ModelOverride.Should().Be("opus");
-    }
-
-    [Fact]
     public async Task ScheduledServiceInvocationDispatchPort_ShouldInvokeExplicitServiceInvocationPort()
     {
         var invocationPort = new RecordingServiceInvocationPort();
@@ -214,11 +96,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
             Payload = Any.Pack(new ChatRequestEvent
             {
                 Prompt = "hello",
-                ConnectorHttpAuthorization = "Bearer stored-token",
-                Metadata =
-                {
-                    ["trace"] = "kept",
-                },
+                Metadata = { ["trace"] = "kept" },
                 LlmControl = new LLMControlContextPayload
                 {
                     ModelOverride = "sonnet",
@@ -229,15 +107,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
             "proxy"));
 
-        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
-            original,
-            auth,
-            new Dictionary<string, string>
-            {
-                ["connector.http.authorization"] = "Bearer header-token",
-                ["schedule"] = "scheduled",
-            },
-            ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential: true));
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
 
         credentialExchange.Sources.Should().ContainSingle()
             .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
@@ -246,77 +116,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
         invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token-1");
         invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
-        invokedChat.ConnectorHttpAuthorization.Should().Be("Bearer sender-token-1");
         invokedChat.Metadata.Should().Contain("trace", "kept");
-        invokedChat.Metadata.Should().NotContainKey("connector.http.authorization");
-        invokedChat.Metadata.Should().Contain("schedule", "scheduled");
         invokedChat.Metadata.Should().NotContainValue("sender-token-1");
-        invokedChat.Metadata.Should().NotContainValue("Bearer sender-token-1");
-        var originalChat = original.Payload.Unpack<ChatRequestEvent>();
-        originalChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
-        originalChat.LlmControl.ModelOverride.Should().Be("sonnet");
-        originalChat.ConnectorHttpAuthorization.Should().Be("Bearer stored-token");
-        originalChat.Metadata.Should().Contain("trace", "kept");
-        originalChat.Metadata.Should().NotContainKey("schedule");
-        originalChat.Metadata.Should().NotContainKey("connector.http.authorization");
-    }
-
-    [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithAuthAndDefaultProjection_ShouldOnlyInjectSenderTokenIntoLlmControl()
-    {
-        var invocationPort = new RecordingServiceInvocationPort();
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-2");
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
-        var original = new ServiceInvocationRequest
-        {
-            CommandId = "cmd-invoke",
-            CorrelationId = "corr-invoke",
-            Payload = Any.Pack(new ChatRequestEvent
-            {
-                Prompt = "hello",
-                Metadata =
-                {
-                    ["trace"] = "kept",
-                },
-                LlmControl = new LLMControlContextPayload
-                {
-                    ModelOverride = "opus",
-                },
-            }),
-        };
-        var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
-            "proxy"));
-
-        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
-            original,
-            auth,
-            new Dictionary<string, string>
-            {
-                ["connector.http.authorization"] = "Bearer header-token",
-                ["schedule"] = "scheduled",
-            }));
-
-        credentialExchange.Sources.Should().ContainSingle()
-            .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
-        var invoked = invocationPort.Requests.Should().ContainSingle().Which;
-        invoked.Should().NotBeSameAs(original);
-        var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token-2");
-        invokedChat.LlmControl.ModelOverride.Should().Be("opus");
-        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
-        invokedChat.Metadata.Should().Contain("trace", "kept");
-        invokedChat.Metadata.Should().NotContainKey("connector.http.authorization");
-        invokedChat.Metadata.Should().Contain("schedule", "scheduled");
-        invokedChat.Metadata.Should().NotContainValue("sender-token-2");
-        invokedChat.Metadata.Should().NotContainValue("Bearer sender-token-2");
-        var originalChat = original.Payload.Unpack<ChatRequestEvent>();
-        originalChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
-        originalChat.LlmControl.ModelOverride.Should().Be("opus");
-        originalChat.ConnectorHttpAuthorization.Should().BeEmpty();
-        originalChat.Metadata.Should().Contain("trace", "kept");
-        originalChat.Metadata.Should().NotContainKey("schedule");
-        originalChat.Metadata.Should().NotContainKey("connector.http.authorization");
+        original.Payload.Unpack<ChatRequestEvent>().LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
     }
 
     [Fact]
@@ -364,38 +166,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("exchange failed");
-        credentialExchange.Sources.Should().ContainSingle();
-        invocationPort.Requests.Should().BeEmpty();
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData(" ")]
-    [InlineData("Bearer sender-token")]
-    [InlineData("sender token")]
-    public async Task ScheduledServiceInvocationDispatchPort_WithAuthMalformedToken_ShouldFailBeforeInvocation(
-        string accessToken)
-    {
-        var invocationPort = new RecordingServiceInvocationPort();
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort(accessToken);
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
-        var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
-            "proxy"));
-
-        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
-            new ServiceInvocationRequest
-            {
-                CommandId = "cmd-invoke",
-                CorrelationId = "corr-invoke",
-                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
-            },
-            auth));
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage(string.IsNullOrWhiteSpace(accessToken)
-                ? "Scheduled service invocation sender NyxID credential exchange returned an empty access token."
-                : "Scheduled service invocation sender NyxID credential exchange returned an invalid access token.");
         credentialExchange.Sources.Should().ContainSingle();
         invocationPort.Requests.Should().BeEmpty();
     }

@@ -445,8 +445,6 @@ Canonical key 规则：
 | Discord Guild Channel | Channel | `discord:{guild}:{channel}` |
 | Discord Thread | Thread | `discord:{guild}:{channel}:thread:{thread_id}` |
 
-Production note: for Lark relay callbacks, `conversation.id` is the NyxID route record id; group actor identity must use platform `chat_id` from raw `event.message.chat_id` or callback `conversation.platform_id`.
-
 `ConversationGAgent` 以 `CanonicalKey` 作为 Orleans grain primary key 持久化。
 
 **为什么不用 sender 做 key（legacy 基线）**：历史上的 `ChannelUserGAgent` 以 sender id 为 key，对 Lark 1-1 能跑。一旦迁到 group / Slack thread / Discord guild，多条会话的 state 会串到同一个 actor。这是**正确性 bug**，不是优化空间。issue `#308` 已把这条 sender-keyed runtime 路径整体删除；这里保留它只是为了说明为什么后续若重建多会话 actor，仍必须坚持 canonical conversation key。
@@ -488,8 +486,6 @@ public record MessageContent(
 ```
 
 **核心原则**：`MessageContent` 描述 "要表达什么"，不描述 "长什么样"。`IMessageComposer` 把它翻译成 channel-native 的具体 payload。
-
-**NyxID relay inbound attachment rule**：`Channel.NyxIdRelay` 在进入 channel runtime 前把 NyxID callback `content.attachments` 以及 Lark / Feishu raw `event.message.content` 中的 `image_key` / `file_key` 归一到现有 `MessageContent.Attachments` / `AttachmentRef`。非 card 入站只要有 text 或至少一个有效 attachment ref 就是有效内容；空 text 且无 attachment ref 才按 `empty_text` 忽略。attachment ref 只携带 platform locator / key / filename / MIME / size / URL 等引用事实，不下载 bytes、不塞 base64、不新增第二套 attachment abstraction，也不要求 NyxID 仓库改 schema。
 
 **Card action typed payload rule**：workflow resume 与 LLM selection 是仓库内可控的控制语义，必须通过 `WorkflowResumeActionPayload` / `LlmSelectionActionPayload` 挂在 `ActionElement` 与 `CardActionSubmission` 上。`ActionElement.arguments` / `CardActionSubmission.Arguments` 只作为第三方或平台扩展 map，以及旧 callback JSON 的入站兼容边界；进入 `ChannelConversationTurnRunner`、`ChannelCardActionRouting` 或 LLM selection handoff 后，不得把这些字段当成权威事实源。
 
@@ -851,14 +847,6 @@ ConversationGAgent.HandleTurnCompletedAsync(cmd: ConversationTurnCompleted):
 **当前实现的 placeholder 解读**：`agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs` 的 `await runner.RunInboundAsync(activity, ...)` 是 Phase 0 的 inline call placeholder——runner 实现当前是 `NullConversationTurnRunner`，没有 LLM 调用因此没有热点问题。**Phase 1（Lark/Telegram 迁移）之前**必须把 inline call 改成"grain dispatch run → runner actor → completion command 回写"的 continuation 形态，否则 group 场景下第一次接入真实 LLM runner 就会暴露热点。
 
 **为什么不退回到"一个 actor 拿全部职责"的方案**：AGENTS.md "Actor 即业务实体 / 单线程 actor 不做热点共享服务"。group conversation 天然是共享会话，让同一 grain 既扛串行顺序又扛 LLM 执行就是热点共享服务。拆成 "权威 grain（轻） + run-scoped runner（重）" 是在遵守 actor 边界的前提下让重负载水平扩展。
-
-### 5.6.2 Nyx relay workflow draft-run lifecycle
-
-Nyx relay 中明确的 workflow-run 文本意图不走普通 LLM / tool selection，也不复用 accepted-only `aevatar_start_workflow` 结果作为用户可见完成态。`ChannelConversationTurnRunner` 只负责确定性 admission：解析窄语法、读取 scope 内 workflow 定义、确认 runtime-only Nyx 用户凭据存在，然后产出强类型 `NeedsWorkflowDraftRunEvent`。不匹配或不满足准入条件时，runner 只能返回普通回复或继续既有路径，不能偷偷降级成工具选择。
-
-`ConversationGAgent` 是 draft-run channel reply lifecycle 的权威拥有者。它把 `NeedsWorkflowDraftRunEvent` 写入 `pending_workflow_draft_run_requests` 时只保留可持久化字段：conversation、workflow source、prompt、headers、run id 等；reply token 与 Nyx user access token 只能留在 dispatch copy 中，通过 accepted-only `IChannelWorkflowDraftRunInteractionPort` 投递给 NyxidChat runtime。actor 重新激活后，如果只剩 scrubbed pending state，就必须诚实失败并清理 pending，而不是用 query fallback 或 event replay 临时重建 token。
-
-NyxidChat 的 draft-run interaction port 不在 `ConversationGAgent` turn 内执行 workflow；它创建/定位 run-scoped `ChannelWorkflowDraftRunGAgent` 并投递 `ChannelWorkflowDraftRunStartRequested` 后返回 accepted。`ChannelWorkflowDraftRunGAgent` 作为单次 draft-run owner 只持久化 start fact，然后把现有 `IWorkflowChatRunInteractionPort` 交给非 actor bridge pump；该 bridge 只把 workflow frames / terminal facts 回投为 `ChannelWorkflowDraftRunFrameObserved` / `ChannelWorkflowDraftRunInteractionCompleted` continuation。run actor 在自己的 continuation handler 中做 stale check、渲染 frame，并把结果转成已有 channel streaming carriers：增量帧回投 `LlmReplyStreamChunkEvent`，终态帧回投 `LlmReplyReadyEvent`。这些事件都发回同一个 `ConversationGAgent` actor，由它继续执行去重、流式合并、最终回复发送、history append 与 pending cleanup；workflow runtime 不直接操作 channel outbound，也不新增第二条 relay 回复链路。
 
 ### 5.7 Middleware Pipeline（窄范围）
 
@@ -1274,14 +1262,6 @@ public static class GAgentSchedulingExtensions {
 
 **为什么不继承**：Orleans `GAgentBase<TState, TEvent>` 的继承链已经够深。再加一层中间基类会让诊断/反射/序列化复杂化。composition over inheritance：`ISchedulable` 做 capability 标记，extension method 提供共享逻辑，`ScheduleState` 做数据容器。
 
-### 7.2.1 Scheduled SkillRunner remote skill contract
-
-Scheduled SkillRunner stores the executable remote identity as typed `skill_ref` instead of encoding an Ornn lookup hint inside `skill_content`. `skill_ref.name` and legacy inline `skill_content` are mutually exclusive by default; inline fallback is a compatibility path only when `allow_inline_fallback=true`.
-
-For `skill_ref.source=ORNN` with empty `version`, every trigger fetches the current `SkillDefinition` through `IRemoteSkillFetcher` using the owner Nyx token from the runner outbound configuration. The runner does not keep a service cache, registry, or versioned package download layer. Non-empty `skill_ref.version` fails before fetch; this avoids silently treating a versioned request as latest.
-
-Prompt-only skills continue through `ChatStreamAsync`, with the fetched instructions used only as the current run's system prompt override. Workflow-bearing skills do not ask the LLM to decide workflow startup; `SkillRunnerGAgent` maps the selected descriptor to `WorkflowChatSource.InlineYamlBundle` and dispatches `WorkflowChatRunRequest` through the existing workflow command dispatch service. The returned workflow receipt is accepted-only: it means the workflow run command was accepted for dispatch, not that the workflow completed or its read model is visible.
-
 ### 7.3 `AgentRegistry → UserAgentCatalog` 改名
 
 ChannelRuntime 里的 `AgentRegistryGAgent` 和平台级 `Aevatar.GAgents.Registry.GAgentRegistryGAgent` 命名冲突——前者是"用户所有 SkillRunner/WorkflowAgent 的执行状态目录"，后者是"平台 actor 类型注册表"。两者职责本来就不同，原命名是历史遗留。
@@ -1560,7 +1540,7 @@ test/
 
 ### 9.1.1 Build slice 归属
 
-aevatar 仓库按 slnf 分片构建（`aevatar.foundation.slnf` / `aevatar.ai.slnf` / `aevatar.cqrs.slnf` / `aevatar.workflow.slnf` / `aevatar.capabilities.slnf` / `aevatar.distributed.slnf`），受 `solution_split_guards.sh` 守护。本 RFC 新增包的 slice 归属：
+aevatar 仓库按 slnf 分片构建（`aevatar.foundation.slnf` / `aevatar.ai.slnf` / `aevatar.cqrs.slnf` / `aevatar.workflow.slnf` / `aevatar.hosting.slnf` / `aevatar.distributed.slnf`），受 `solution_split_guards.sh` 守护。本 RFC 新增包的 slice 归属：
 
 | 新包 | 归属 slnf | 理由 |
 |---|---|---|
@@ -2171,10 +2151,10 @@ v1 cutover step 2 细化为：
 
 | Modality | 入口 | 为什么不纳入 |
 |---|---|---|
-| **Voice Presence** | `POST /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable?agentKind=...` actor-owned enable command; `/ws/voice` policy-aware Host entry; `/ws/voice/{actorId}` dev/admin bypass | 语音是独立 modality：wake word / AEC / VAD / ASR / LLM / TTS 链路完全不同于 IM webhook 模型。VoicePresence 不是独立 router/session GAgent；enable 是显式写侧命令，成功只表示 accepted for dispatch，attach 只读取已物化 capability read model，不在 query/attach/projection 路径补写第一行 read model。Voice ↔ Chat 互通接口见 §15.5 open question |
+| **Voice Presence** | `VoicePresence` EventModule capability on a target actor; `/ws/voice` policy-aware Host entry; `/ws/voice/{actorId}` dev/admin bypass | 语音是独立 modality：wake word / AEC / VAD / ASR / LLM / TTS 链路完全不同于 IM webhook 模型。VoicePresence 不是独立 router/session GAgent，Voice ↔ Chat 互通接口见 §15.5 open question |
 | **Aevatar Console Web chat 框** | `apps/aevatar-console-web/` | Console 是 aevatar 自有前端 UI，直接调 HTTP API，不走外部 IM channel 链路 |
 | **Direct HTTP API** | `/api/scopes/{scopeId}/...` | 同上 |
-| **DeviceRegistration / HouseholdEntity 设备事件** | `Aevatar.GAgents.Device` + `Aevatar.GAgents.Household` | 设备事件是 sensor push，业务语义和对话无关。transport 虽然也是 webhook，但强行套 channel adapter 抽象会让 `IChannelTransport` / `IChannelOutboundPort` 失焦。voice 主动播报复用此路径：NyxID HTTP Event Gateway -> `/api/device-events/{registrationId}` -> typed `DeviceInbound` -> target actor direct envelope；`VoicePresenceModule` 只在 Host 明确配置 exact `Any.TypeUrl`、publisher 为 `device-events.callback`、direct target 等于当前 actor 且存在 active voice session/lease 时注入，v1 无会话 drop+log，不新建 webhook、session router、readmodel lookup 或进程内 active-session registry |
+| **DeviceRegistration / HouseholdEntity 设备事件** | `Aevatar.GAgents.Device` + `Aevatar.GAgents.Household` | 设备事件是 sensor push，业务语义和对话无关。transport 虽然也是 webhook，但强行套 channel adapter 抽象会让 `IChannelTransport` / `IChannelOutboundPort` 失焦 |
 | **WeChat 个人 bot** | — | transport + capability gap 差异过大，单独 RFC 承接，继承本 RFC 的 `IChannelTransport` + `IChannelOutboundPort` 契约 |
 
 这是**显式的 scope 收缩**，避免抽象被"所有 aevatar 入口都要统一"的诱惑牵引而退化成 LCD（最小公约数）。

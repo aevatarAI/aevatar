@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -18,7 +17,6 @@ namespace Aevatar.GAgents.UserMemory;
 ///   2. If no same-category entry remains, evict the globally oldest entry.
 ///
 /// </summary>
-[GAgent("user.memory")]
 public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>, IProjectedActor
 {
     public static string ProjectionKind => "user-memory";

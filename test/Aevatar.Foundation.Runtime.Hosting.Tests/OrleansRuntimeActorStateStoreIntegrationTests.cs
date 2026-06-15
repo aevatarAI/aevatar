@@ -1,8 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -30,13 +28,14 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
         {
             var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var agentType = typeof(StateStoreAwareActivationAgent).AssemblyQualifiedName!;
 
-            (await grain.InitializeAgentByKindAsync("tests.state-store-aware-activation")).Should().BeTrue();
+            (await grain.InitializeAgentAsync(agentType)).Should().BeTrue();
             (await grain.GetDescriptionAsync()).Should().Be("activation-count:1");
 
             await grain.DeactivateAsync();
 
-            (await grain.InitializeAgentByKindAsync("tests.state-store-aware-activation")).Should().BeTrue();
+            (await grain.InitializeAgentAsync(agentType)).Should().BeTrue();
             (await grain.GetDescriptionAsync()).Should().Be("activation-count:1");
         }
         finally
@@ -56,8 +55,9 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
         {
             var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var agentType = typeof(ObserveAwareStatefulAgent).AssemblyQualifiedName!;
 
-            (await grain.InitializeAgentByKindAsync("tests.observe-aware-stateful")).Should().BeTrue();
+            (await grain.InitializeAgentAsync(agentType)).Should().BeTrue();
             (await grain.GetDescriptionAsync()).Should().Be("handled-count:0");
 
             await grain.HandleEnvelopeAsync(new EventEnvelope
@@ -99,16 +99,9 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
                     options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendInMemory;
                     options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendInMemory;
                 });
-                siloBuilder.ConfigureServices(services =>
-                {
-                    services.AddAevatarAgentKindRegistry(builder => builder
-                        .Register<StateStoreAwareActivationAgent>()
-                        .Register<ObserveAwareStatefulAgent>());
-                });
             })
             .Build());
 
-    [GAgent("tests.state-store-aware-activation")]
     public sealed class StateStoreAwareActivationAgent : GAgentBase<Int32Value>
     {
         protected override Task OnActivateAsync(CancellationToken ct)
@@ -121,7 +114,6 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
             Task.FromResult($"activation-count:{State.Value}");
     }
 
-    [GAgent("tests.observe-aware-stateful")]
     public sealed class ObserveAwareStatefulAgent : GAgentBase<Int32Value>
     {
         [EventHandler]

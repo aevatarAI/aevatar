@@ -3,49 +3,42 @@ using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Core.TypeSystem;
-using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
 using Aevatar.Foundation.Runtime.Observability;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
-public sealed class RuntimeObservabilityAndKindProbeCoverageTests
+public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
 {
     [Fact]
-    public async Task LocalActorKindProbe_ShouldResolveRuntimeAgentKind_AndReturnNullWhenActorMissing()
+    public async Task LocalActorTypeProbe_ShouldResolveRuntimeAgentTypeName_AndReturnNullWhenActorMissing()
     {
-        var services = new ServiceCollection();
-        services.AddAevatarRuntime();
-        services.AddSingleton(new AgentKindRegistryBuilder().Register<RecordingAgent>());
-        using var provider = services.BuildServiceProvider();
-        var runtime = provider.GetRequiredService<IActorRuntime>();
-        var probe = provider.GetRequiredService<IActorKindProbe>();
+        var runtime = new RecordingRuntime
+        {
+            Actor = new RecordingActor("actor-1", new RecordingAgent()),
+        };
+        var probe = new LocalActorTypeProbe(runtime);
 
-        await runtime.CreateByKindAsync("tests.recording-agent", "actor-1");
+        var typeName = await probe.GetRuntimeAgentTypeNameAsync("actor-1");
+        typeName.Should().Contain(typeof(RecordingAgent).FullName);
 
-        var kind = await probe.GetRuntimeAgentKindAsync("actor-1");
-        kind.Should().Be("tests.recording-agent");
-
-        (await probe.GetRuntimeAgentKindAsync("missing")).Should().BeNull();
+        runtime.Actor = null;
+        (await probe.GetRuntimeAgentTypeNameAsync("missing")).Should().BeNull();
     }
 
     [Fact]
-    public async Task LocalActorKindProbe_ShouldValidateInputAndCancellationToken()
+    public async Task LocalActorTypeProbe_ShouldValidateInputAndCancellationToken()
     {
-        var services = new ServiceCollection();
-        services.AddAevatarRuntime();
-        using var provider = services.BuildServiceProvider();
-        var probe = provider.GetRequiredService<IActorKindProbe>();
+        var probe = new LocalActorTypeProbe(new RecordingRuntime());
 
-        await Assert.ThrowsAsync<ArgumentException>(() => probe.GetRuntimeAgentKindAsync(""));
+        await Assert.ThrowsAsync<ArgumentException>(() => probe.GetRuntimeAgentTypeNameAsync(""));
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            probe.GetRuntimeAgentKindAsync("actor-1", cts.Token));
+            probe.GetRuntimeAgentTypeNameAsync("actor-1", cts.Token));
     }
 
     [Fact]
@@ -376,7 +369,6 @@ public sealed class RuntimeObservabilityAndKindProbeCoverageTests
             Task.FromResult<IReadOnlyList<string>>([]);
     }
 
-    [GAgent("tests.recording-agent")]
     private sealed class RecordingAgent : IAgent
     {
         public string Id { get; } = "agent-1";

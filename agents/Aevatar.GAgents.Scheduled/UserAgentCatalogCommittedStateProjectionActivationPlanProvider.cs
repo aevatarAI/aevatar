@@ -44,7 +44,6 @@ public sealed class UserAgentCatalogCommittedStateProjectionActivationPlanProvid
         payload.Is(SkillRunnerExecutionCompletedEvent.Descriptor) ||
         payload.Is(SkillRunnerExecutionFailedEvent.Descriptor) ||
         payload.Is(SkillRunnerExecutionRejectedEvent.Descriptor) ||
-        payload.Is(SkillRunnerOneShotRetiredEvent.Descriptor) ||
         payload.Is(SkillRunnerDisabledEvent.Descriptor) ||
         payload.Is(SkillRunnerEnabledEvent.Descriptor);
 

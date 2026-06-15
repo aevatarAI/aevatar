@@ -4,12 +4,9 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Channels;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Hooks;
-using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -17,10 +14,8 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Hosting.Endpoints;
-using Aevatar.Capabilities.ExecutionActivity;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -55,20 +50,18 @@ public sealed class ScopeGAgentEndpointsTests
             .ToHashSet(StringComparer.Ordinal);
 
         routes.Should().Contain(route => route.Contains("gagent-types"));
-        routes.Should().NotContain(route => route.Contains("gagent-kinds"));
         routes.Should().Contain(route => route.Contains("gagent/draft-run"));
         routes.Should().Contain(route => route.Contains("gagent-actors"));
-        routes.Should().Contain("/api/scopes/{scopeId}/execution-events");
     }
 
     [Fact]
-    public async Task HandleDraftRunAsync_ShouldRejectUnknownAgentKindWithJsonError()
+    public async Task HandleDraftRunAsync_ShouldRejectUnknownActorTypeWithJsonError()
     {
         var interactionPort = new FakeGAgentDraftRunInteractionPort
         {
             ResultFactory = (_, _, _, _) => Task.FromResult(
                 CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
-                    GAgentDraftRunStartError.UnknownAgentKind))
+                    GAgentDraftRunStartError.UnknownActorType))
         };
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
@@ -77,7 +70,7 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                "tests.missing-gagent",
+                "Aevatar.IamNotReal, Aevatar.IamNotReal",
                 "hello"),
             interactionPort,
             logger,
@@ -86,66 +79,7 @@ public sealed class ScopeGAgentEndpointsTests
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
         context.Response.ContentType.Should().Be("application/json");
         var body = await ReadResponseBodyAsync(context);
-        body.Should().Contain("UNKNOWN_GAGENT_KIND");
-    }
-
-    [Fact]
-    public async Task DraftRunHttp_ShouldRejectLegacyActorTypeNameEvenWithAgentKind()
-    {
-        await using var host = await ScopeGAgentEndpointHostedTestHost.StartAsync(new FakeGAgentDraftRunInteractionPort());
-        using var response = await host.Client.PostAsJsonAsync(
-            "/api/scopes/scope-a/gagent/draft-run",
-            new
-            {
-                agentKind = "aevatar.role",
-                actorTypeName = "Tests.RoleGAgent, Tests",
-                prompt = "hello",
-            });
-
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        var body = await response.Content.ReadAsStringAsync();
-        body.Should().Contain("LEGACY_ACTOR_TYPE_NAME_REJECTED");
-    }
-
-    [Fact]
-    public async Task DeleteActorHttp_ShouldRejectLegacyGAgentTypeQuery()
-    {
-        await using var host = await ScopeGAgentEndpointHostedTestHost.StartAsync(new FakeGAgentDraftRunInteractionPort());
-        using var response = await host.Client.DeleteAsync(
-            "/api/scopes/scope-a/gagent-actors/actor-1?agentKind=aevatar.role&gagentType=Tests.RoleGAgent");
-
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        var body = await response.Content.ReadAsStringAsync();
-        body.Should().Contain("LEGACY_GAGENT_TYPE_REJECTED");
-    }
-
-    [Fact]
-    public async Task GAgentTypesRoute_ShouldReturnAgentKindCatalogOverHttp()
-    {
-        var catalogReader = new FakeServiceCatalogQueryReader
-        {
-            Services = [CreateServiceCatalogSnapshot("orders")],
-        };
-        var revisionReader = new FakeServiceRevisionCatalogQueryReader();
-        revisionReader.Revisions[ServiceKeys.Build(CreateServiceIdentity("orders"))] = new ServiceRevisionCatalogSnapshot(
-            ServiceKeys.Build(CreateServiceIdentity("orders")),
-            [CreateStaticRevisionSnapshot(
-                "rev-1",
-                "Tests.OrdersGAgent, Tests",
-                "tests.orders",
-                "run")],
-            DateTimeOffset.UtcNow);
-        await using var host = await ScopeGAgentEndpointHostedTestHost.StartAsync(
-            new FakeGAgentDraftRunInteractionPort(),
-            catalogReader,
-            revisionReader);
-        using var response = await host.Client.GetAsync("/api/scopes/gagent-types");
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadAsStringAsync();
-        body.Should().Contain("\"agentKind\":\"tests.orders\"");
-        body.Should().Contain("\"diagnosticClrTypeName\":\"Tests.OrdersGAgent, Tests\"");
-        body.Should().NotContain("actorTypeName");
+        body.Should().Contain("UNKNOWN_GAGENT_TYPE");
     }
 
     [Fact]
@@ -159,7 +93,7 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                "aevatar.role",
+                "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
                 "hello"),
             interactionPort,
             logger,
@@ -191,10 +125,10 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                "aevatar.role",
+                "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
                 "hello",
-                preferredActorId: "existing-actor",
-                timeoutMs: 1),
+                PreferredActorId: "existing-actor",
+                TimeoutMs: 1),
             interactionPort,
             logger,
             CancellationToken.None);
@@ -244,10 +178,10 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                "aevatar.role",
+                "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
                 "hello",
-                preferredActorId: "existing-actor",
-                timeoutMs: 200),
+                PreferredActorId: "existing-actor",
+                TimeoutMs: 200),
             interactionPort,
             logger,
             CancellationToken.None);
@@ -301,7 +235,7 @@ public sealed class ScopeGAgentEndpointsTests
         {
             Content = JsonContent.Create(new
             {
-                agentKind = "aevatar.role",
+                actorTypeName = "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
                 prompt = "hello",
                 preferredActorId = "existing-actor",
                 timeoutMs = 2000,
@@ -331,171 +265,6 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public async Task ExecutionEventsEndpoint_ShouldStreamStartedAndCompletedFrames_ForRequestedScope()
-    {
-        var streamProvider = new InMemoryStreamProvider();
-        var context = CreateExecutionEventsContext("scope-a");
-        var responseStream = new ObservableResponseStream();
-        context.Response.Body = responseStream;
-        using var cts = new CancellationTokenSource();
-        var endpointTask = InvokeHandleExecutionEventsAsync(context, "scope-a", streamProvider, cts.Token);
-
-        await streamProvider.GetStream(ExecutionActivityStreamTopics.ForScope("scope-a")).ProduceAsync(
-            new ExecutionActivityEvent
-            {
-                ScopeId = "scope-a",
-                ActorId = "actor-1",
-                AgentType = "RoleGAgent",
-                HandlerName = "HandleAsync",
-                EventType = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
-                EventId = "evt-1",
-                Stage = ExecutionActivityLifecycleStage.Started,
-                Ts = Timestamp.FromDateTime(DateTime.UtcNow),
-            });
-
-        var startedFrame = await responseStream.WaitUntilContainsAsync("handler.started", TimeSpan.FromSeconds(5));
-        context.Response.StatusCode.Should().Be((int)HttpStatusCode.OK);
-        context.Response.ContentType.Should().Be("text/event-stream; charset=utf-8");
-        startedFrame.Should().Contain("\"scopeId\":\"scope-a\"");
-        startedFrame.Should().Contain("\"actorId\":\"actor-1\"");
-        startedFrame.Should().Contain("\"handlerName\":\"HandleAsync\"");
-        startedFrame.Should().Contain("\"eventId\":\"evt-1\"");
-
-        await streamProvider.GetStream(ExecutionActivityStreamTopics.ForScope("scope-a")).ProduceAsync(
-            new ExecutionActivityEvent
-            {
-                ScopeId = "scope-a",
-                ActorId = "actor-1",
-                AgentType = "RoleGAgent",
-                HandlerName = "HandleAsync",
-                EventType = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
-                EventId = "evt-1",
-                Stage = ExecutionActivityLifecycleStage.Completed,
-                Duration = Duration.FromTimeSpan(TimeSpan.FromMilliseconds(12)),
-                Ts = Timestamp.FromDateTime(DateTime.UtcNow),
-            });
-
-        var completedFrame = await responseStream.WaitUntilContainsAsync("handler.completed", TimeSpan.FromSeconds(5));
-        completedFrame.Should().Contain("\"durationMs\":12");
-
-        await cts.CancelAsync();
-        await endpointTask;
-    }
-
-    [Fact]
-    public async Task ExecutionEventsEndpoint_ShouldNotLeakEventsAcrossScopes()
-    {
-        var streamProvider = new InMemoryStreamProvider();
-        var context = CreateExecutionEventsContext("scope-a");
-        var responseStream = new ObservableResponseStream();
-        context.Response.Body = responseStream;
-        using var cts = new CancellationTokenSource();
-        var endpointTask = InvokeHandleExecutionEventsAsync(context, "scope-a", streamProvider, cts.Token);
-
-        await streamProvider.GetStream(ExecutionActivityStreamTopics.ForScope("scope-b")).ProduceAsync(
-            new ExecutionActivityEvent
-            {
-                ScopeId = "scope-b",
-                ActorId = "actor-b",
-                AgentType = "RoleGAgent",
-                HandlerName = "OtherHandler",
-                EventType = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
-                EventId = "evt-b",
-                Stage = ExecutionActivityLifecycleStage.Started,
-                Ts = Timestamp.FromDateTime(DateTime.UtcNow),
-            });
-
-        await streamProvider.GetStream(ExecutionActivityStreamTopics.ForScope("scope-a")).ProduceAsync(
-            new ExecutionActivityEvent
-            {
-                ScopeId = "scope-a",
-                ActorId = "actor-a",
-                AgentType = "RoleGAgent",
-                HandlerName = "ScopeAHandler",
-                EventType = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
-                EventId = "evt-a",
-                Stage = ExecutionActivityLifecycleStage.Started,
-                Ts = Timestamp.FromDateTime(DateTime.UtcNow),
-            });
-
-        var frame = await responseStream.WaitUntilContainsAsync("handler.started", TimeSpan.FromSeconds(5));
-        frame.Should().Contain("\"scopeId\":\"scope-a\"");
-        frame.Should().Contain("\"actorId\":\"actor-a\"");
-        frame.Should().NotContain("scope-b");
-        frame.Should().NotContain("actor-b");
-
-        await cts.CancelAsync();
-        await endpointTask;
-    }
-
-    [Fact]
-    public async Task ExecutionEventsEndpoint_ShouldStreamFailedFrames()
-    {
-        var streamProvider = new InMemoryStreamProvider();
-        var context = CreateExecutionEventsContext("scope-a");
-        var responseStream = new ObservableResponseStream();
-        context.Response.Body = responseStream;
-        using var cts = new CancellationTokenSource();
-        var endpointTask = InvokeHandleExecutionEventsAsync(context, "scope-a", streamProvider, cts.Token);
-
-        await streamProvider.GetStream(ExecutionActivityStreamTopics.ForScope("scope-a")).ProduceAsync(
-            new ExecutionActivityEvent
-            {
-                ScopeId = "scope-a",
-                ActorId = "actor-1",
-                AgentType = "RoleGAgent",
-                HandlerName = "FailingHandler",
-                EventType = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
-                EventId = "evt-fail",
-                Stage = ExecutionActivityLifecycleStage.Failed,
-                Duration = Duration.FromTimeSpan(TimeSpan.FromMilliseconds(7)),
-                Error = "boom",
-                Ts = Timestamp.FromDateTime(DateTime.UtcNow),
-            });
-
-        var failedFrame = await responseStream.WaitUntilContainsAsync("handler.failed", TimeSpan.FromSeconds(5));
-        failedFrame.Should().Contain("\"error\":\"boom\"");
-        failedFrame.Should().Contain("\"durationMs\":7");
-
-        await cts.CancelAsync();
-        await endpointTask;
-    }
-
-    [Fact]
-    public async Task ExecutionActivityPublisherHook_ShouldNotBlockHandler_WhenStreamPublishBackpressures()
-    {
-        var blockingStreamProvider = new BlockingStreamProvider();
-        var hook = new ExecutionActivityPublisherHook(
-            blockingStreamProvider,
-            new ExecutionActivityScopeResolver(),
-            LoggerFactory.Create(_ => { }).CreateLogger<ExecutionActivityPublisherHook>());
-        var envelope = new EventEnvelope
-        {
-            Id = "evt-1",
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new Aevatar.AI.Abstractions.ChatRequestEvent { ScopeId = "scope-a" }),
-        };
-        var ctx = new GAgentExecutionHookContext
-        {
-            AgentId = "actor-1",
-            AgentType = "RoleGAgent",
-            EventId = "evt-1",
-            EventType = envelope.Payload.TypeUrl,
-            HandlerName = "HandleAsync",
-        };
-        ctx.Items[GAgentExecutionHookItemKeys.InboundEnvelope] = envelope;
-
-        var publishTask = hook.OnEventHandlerStartAsync(ctx, CancellationToken.None);
-
-        await publishTask.WaitAsync(TimeSpan.FromSeconds(2));
-        await blockingStreamProvider.FirstAttempt.Task.WaitAsync(TimeSpan.FromSeconds(2));
-
-        publishTask.IsCompletedSuccessfully.Should().BeTrue();
-        blockingStreamProvider.Attempts.Should().Be(1);
-        blockingStreamProvider.ReleasePublish.TrySetResult(null);
-    }
-
-    [Fact]
     public async Task HandleDraftRunAsync_ShouldRejectBlankActorTypeAndPrompt()
     {
         var interactionPort = new FakeGAgentDraftRunInteractionPort();
@@ -516,7 +285,7 @@ public sealed class ScopeGAgentEndpointsTests
             missingPromptContext,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                "aevatar.role",
+                "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
                 " "),
             interactionPort,
             logger,
@@ -545,10 +314,10 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                "aevatar.role",
+                "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
                 "hello",
-                preferredActorId: "auth-actor",
-                timeoutMs: 50),
+                PreferredActorId: "auth-actor",
+                TimeoutMs: 50),
             interactionPort,
             logger,
             CancellationToken.None);
@@ -572,7 +341,7 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                "aevatar.role",
+                "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
                 "hello"),
             interactionPort,
             logger,
@@ -586,13 +355,13 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public async Task HandleDraftRunAsync_ShouldReturnConflict_WhenInteractionReportsActorKindMismatch()
+    public async Task HandleDraftRunAsync_ShouldReturnConflict_WhenInteractionReportsActorTypeMismatch()
     {
         var interactionPort = new FakeGAgentDraftRunInteractionPort
         {
             ResultFactory = (_, _, _, _) => Task.FromResult(
                 CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
-                    GAgentDraftRunStartError.ActorKindMismatch))
+                    GAgentDraftRunStartError.ActorTypeMismatch))
         };
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
@@ -601,21 +370,21 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                "tests.fake-agent",
+                typeof(FakeAgent).AssemblyQualifiedName!,
                 "hello",
-                preferredActorId: "existing-actor"),
+                PreferredActorId: "existing-actor"),
             interactionPort,
             logger,
             CancellationToken.None);
 
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.Conflict);
         var body = await ReadResponseBodyAsync(context);
-        body.Should().Contain("GAGENT_ACTOR_KIND_MISMATCH");
+        body.Should().Contain("GAGENT_ACTOR_TYPE_MISMATCH");
         body.Should().Contain("existing-actor");
     }
 
     [Fact]
-    public async Task HandleDraftRunAsync_ShouldReturnConflict_WhenInteractionPortReportsActorKindMismatch()
+    public async Task HandleDraftRunAsync_ShouldReturnConflict_WhenInteractionPortReportsActorTypeMismatch()
     {
         var interactionPort = new FakeGAgentDraftRunInteractionPort
         {
@@ -623,7 +392,7 @@ public sealed class ScopeGAgentEndpointsTests
             {
                 return Task.FromResult(
                     CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
-                        GAgentDraftRunStartError.ActorKindMismatch));
+                        GAgentDraftRunStartError.ActorTypeMismatch));
             }
         };
         var logger = LoggerFactory.Create(_ => { });
@@ -633,16 +402,16 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                "tests.fake-agent",
+                typeof(FakeAgent).AssemblyQualifiedName!,
                 "hello",
-                preferredActorId: "existing-actor"),
+                PreferredActorId: "existing-actor"),
             interactionPort,
             logger,
             CancellationToken.None);
 
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.Conflict);
         var body = await ReadResponseBodyAsync(context);
-        body.Should().Contain("GAGENT_ACTOR_KIND_MISMATCH");
+        body.Should().Contain("GAGENT_ACTOR_TYPE_MISMATCH");
         body.Should().Contain("existing-actor");
     }
 
@@ -662,7 +431,7 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                "tests.fake-agent",
+                typeof(FakeAgent).AssemblyQualifiedName!,
                 "hello"),
             interactionPort,
             logger,
@@ -684,7 +453,7 @@ public sealed class ScopeGAgentEndpointsTests
             {
                 var receipt = new GAgentDraftRunAcceptedReceipt(
                     "generated-actor",
-                    request.AgentKind,
+                    request.ActorTypeName,
                     "cmd-new",
                     "corr-new");
                 if (onAcceptedAsync != null)
@@ -706,20 +475,20 @@ public sealed class ScopeGAgentEndpointsTests
         };
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
-        var agentKind = "tests.fake-agent";
+        var actorTypeName = typeof(FakeAgent).AssemblyQualifiedName!;
 
         await InvokeHandleDraftRunAsync(
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                agentKind,
+                actorTypeName,
                 "hello"),
             interactionPort,
             logger,
             CancellationToken.None);
 
         interactionPort.Requests.Should().ContainSingle();
-        interactionPort.Requests[0].AgentKind.Should().Be(agentKind);
+        interactionPort.Requests[0].ActorTypeName.Should().Be(actorTypeName);
         interactionPort.Requests[0].ScopeId.Should().Be("scope-a");
         interactionPort.Requests[0].Prompt.Should().Be("hello");
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.OK);
@@ -737,13 +506,13 @@ public sealed class ScopeGAgentEndpointsTests
         };
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
-        var agentKind = "tests.fake-agent";
+        var actorTypeName = typeof(FakeAgent).AssemblyQualifiedName!;
 
         await InvokeHandleDraftRunAsync(
             context,
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
-                agentKind,
+                actorTypeName,
                 "hello"),
             interactionPort,
             logger,
@@ -789,12 +558,12 @@ public sealed class ScopeGAgentEndpointsTests
     [Fact]
     public async Task HandleActorStoreEndpoints_ShouldCoverSuccessAndFailureBranches()
     {
-        var agentKind = "tests.fake-agent";
+        var actorTypeName = typeof(FakeAgent).AssemblyQualifiedName!;
         var store = new RecordingGAgentActorStore
         {
             Actors =
             [
-                new GAgentActorGroup(agentKind, ["actor-1", "actor-2"])
+                new GAgentActorGroup(actorTypeName, ["actor-1", "actor-2"])
             ]
         };
         var logger = LoggerFactory.Create(_ => { });
@@ -817,7 +586,7 @@ public sealed class ScopeGAgentEndpointsTests
         var addResult = await InvokeHandleAddActorAsync(
             context,
             "scope-a",
-            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(agentKind, "actor-3"),
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(actorTypeName, "actor-3"),
             store,
             logger,
             CancellationToken.None);
@@ -828,14 +597,14 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             "actor-1",
-            agentKind,
+            actorTypeName,
             store,
             logger,
             CancellationToken.None);
         ((IStatusCodeHttpResult)removeResult).StatusCode.Should().Be((int)HttpStatusCode.OK);
         store.RemovedActors.Should().ContainSingle(x =>
             x.ScopeId == "scope-a" &&
-            x.AgentKind == agentKind &&
+            x.GAgentType == actorTypeName &&
             x.ActorId == "actor-1");
 
         var invalidAdd = await InvokeHandleAddActorAsync(
@@ -860,7 +629,7 @@ public sealed class ScopeGAgentEndpointsTests
         var unknownTypeAdd = await InvokeHandleAddActorAsync(
             context,
             "scope-a",
-            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest("tests.missing-agent", "actor-4"),
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest("not.a.real.agent.type", "actor-4"),
             store,
             logger,
             CancellationToken.None);
@@ -873,7 +642,7 @@ public sealed class ScopeGAgentEndpointsTests
         var throwAdd = await InvokeHandleAddActorAsync(
             context,
             "scope-a",
-            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(agentKind, "actor-1"),
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(actorTypeName, "actor-1"),
             new RecordingGAgentActorStore { ThrowOnAdd = new InvalidOperationException("add failed") },
             logger,
             CancellationToken.None);
@@ -883,7 +652,7 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             "actor-1",
-            agentKind,
+            actorTypeName,
             new RecordingGAgentActorStore { ThrowOnRemove = new InvalidOperationException("remove failed") },
             logger,
             CancellationToken.None);
@@ -900,7 +669,7 @@ public sealed class ScopeGAgentEndpointsTests
         var throwAddUnexpected = await InvokeHandleAddActorAsync(
             context,
             "scope-a",
-            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(agentKind, "actor-1"),
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(actorTypeName, "actor-1"),
             new RecordingGAgentActorStore { ThrowOnAdd = new Exception("boom") },
             logger,
             CancellationToken.None);
@@ -910,7 +679,7 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             "actor-1",
-            agentKind,
+            actorTypeName,
             new RecordingGAgentActorStore { ThrowOnRemove = new Exception("boom") },
             logger,
             CancellationToken.None);
@@ -930,7 +699,7 @@ public sealed class ScopeGAgentEndpointsTests
         var addResult = await InvokeHandleAddActorAsync(
             deniedContext,
             "scope-a",
-            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest("tests.fake-agent", "actor-1"),
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(typeof(FakeAgent).AssemblyQualifiedName!, "actor-1"),
             store,
             logger,
             CancellationToken.None);
@@ -940,7 +709,7 @@ public sealed class ScopeGAgentEndpointsTests
             deniedContext,
             "scope-a",
             "actor-1",
-            "tests.fake-agent",
+            typeof(FakeAgent).AssemblyQualifiedName!,
             store,
             logger,
             CancellationToken.None);
@@ -952,10 +721,9 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public async Task HandleListAgentKindsAsync_ShouldReadRegisteredStaticServiceRevisionFacts()
+    public async Task HandleListGAgentTypesAsync_ShouldReadRegisteredStaticServiceRevisionFacts()
     {
         var staticActorTypeName = "Tests.RegisteredStaticGAgent, Tests.Assembly";
-        var staticAgentKind = "tests.registered-static-gagent";
         var requestTypeUrl = "type.googleapis.com/aevatar.ai.ChatRequestEvent";
         var responseTypeUrl = "type.googleapis.com/aevatar.ai.ChatResponseEvent";
         var catalogReader = new FakeServiceCatalogQueryReader
@@ -992,26 +760,22 @@ public sealed class ScopeGAgentEndpointsTests
                             DateTimeOffset.UtcNow,
                             null,
                             new ServiceRevisionImplementationSnapshot(
-                                Static: new ServiceRevisionStaticSnapshot(staticActorTypeName, "preferred-actor", staticAgentKind))),
+                                Static: new ServiceRevisionStaticSnapshot(staticActorTypeName, "preferred-actor"))),
                     ],
                     DateTimeOffset.UtcNow),
             },
         };
 
-        var result = await InvokeHandleListAgentKindsAsync(catalogReader, revisionReader);
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
         statusCode.Should().Be((int)HttpStatusCode.OK);
         using var document = JsonDocument.Parse(body);
-        var agentKind = document.RootElement.EnumerateArray().Should().ContainSingle().Subject;
-        agentKind.GetProperty("agentKind").GetString().Should().Be(staticAgentKind);
-        agentKind.GetProperty("displayName").GetString().Should().Be("svc-a");
-        agentKind.GetProperty("diagnosticClrTypeName").GetString().Should().Be(staticActorTypeName);
-        agentKind.TryGetProperty("gagentType", out _).Should().BeFalse();
-        agentKind.TryGetProperty("typeName", out _).Should().BeFalse();
-        agentKind.TryGetProperty("fullName", out _).Should().BeFalse();
-        agentKind.TryGetProperty("assemblyName", out _).Should().BeFalse();
-        var endpoint = agentKind.GetProperty("endpoints").EnumerateArray().Should().ContainSingle().Subject;
+        var gAgentType = document.RootElement.EnumerateArray().Should().ContainSingle().Subject;
+        gAgentType.GetProperty("typeName").GetString().Should().Be("RegisteredStaticGAgent");
+        gAgentType.GetProperty("fullName").GetString().Should().Be(staticActorTypeName);
+        gAgentType.GetProperty("assemblyName").GetString().Should().Be("Tests.Assembly");
+        var endpoint = gAgentType.GetProperty("endpoints").EnumerateArray().Should().ContainSingle().Subject;
         AssertEndpointContract(
             endpoint,
             endpointId: "chat",
@@ -1026,7 +790,7 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public async Task HandleListAgentKindsAsync_ShouldSkipServicesWithoutRevisionCatalog()
+    public async Task HandleListGAgentTypesAsync_ShouldSkipServicesWithoutRevisionCatalog()
     {
         var catalogReader = new FakeServiceCatalogQueryReader
         {
@@ -1037,7 +801,7 @@ public sealed class ScopeGAgentEndpointsTests
         };
         var revisionReader = new FakeServiceRevisionCatalogQueryReader();
 
-        var result = await InvokeHandleListAgentKindsAsync(catalogReader, revisionReader);
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
         statusCode.Should().Be((int)HttpStatusCode.OK);
@@ -1048,7 +812,7 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public async Task HandleListAgentKindsAsync_ShouldIgnoreNonStaticAndBlankStaticRevisionFacts()
+    public async Task HandleListGAgentTypesAsync_ShouldIgnoreNonStaticAndBlankStaticRevisionFacts()
     {
         var catalogReader = new FakeServiceCatalogQueryReader
         {
@@ -1066,13 +830,13 @@ public sealed class ScopeGAgentEndpointsTests
                     ServiceKeys.Build(identity),
                     [
                         CreateWorkflowRevisionSnapshot("rev-workflow", "workflow-endpoint"),
-                        CreateStaticRevisionSnapshot("rev-blank-static", " ", " ", "blank-static-endpoint"),
+                        CreateStaticRevisionSnapshot("rev-blank-static", " ", "blank-static-endpoint"),
                     ],
                     DateTimeOffset.UtcNow),
             },
         };
 
-        var result = await InvokeHandleListAgentKindsAsync(catalogReader, revisionReader);
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
         statusCode.Should().Be((int)HttpStatusCode.OK);
@@ -1085,10 +849,9 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public async Task HandleListAgentKindsAsync_ShouldMapBlankDisplayNameAndCustomEndpointKind()
+    public async Task HandleListGAgentTypesAsync_ShouldMapBlankDisplayNameAndCustomEndpointKind()
     {
         var staticActorTypeName = "Tests.CustomEndpointGAgent, Tests.Assembly";
-        var staticAgentKind = "tests.custom-endpoint-gagent";
         var catalogReader = new FakeServiceCatalogQueryReader
         {
             Services =
@@ -1109,7 +872,6 @@ public sealed class ScopeGAgentEndpointsTests
                         CreateStaticRevisionSnapshot(
                             "rev-custom",
                             staticActorTypeName,
-                            staticAgentKind,
                             new ServiceEndpointSnapshot(
                                 "custom-action",
                                 " ",
@@ -1122,16 +884,16 @@ public sealed class ScopeGAgentEndpointsTests
             },
         };
 
-        var result = await InvokeHandleListAgentKindsAsync(catalogReader, revisionReader);
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
         statusCode.Should().Be((int)HttpStatusCode.OK);
         using var document = JsonDocument.Parse(body);
-        var agentKind = document.RootElement.EnumerateArray().Should().ContainSingle().Subject;
-        agentKind.GetProperty("agentKind").GetString().Should().Be(staticAgentKind);
-        agentKind.GetProperty("displayName").GetString().Should().Be("svc-custom-endpoint");
-        agentKind.GetProperty("diagnosticClrTypeName").GetString().Should().Be(staticActorTypeName);
-        var endpoint = agentKind.GetProperty("endpoints").EnumerateArray().Should().ContainSingle().Subject;
+        var gAgentType = document.RootElement.EnumerateArray().Should().ContainSingle().Subject;
+        gAgentType.GetProperty("typeName").GetString().Should().Be("CustomEndpointGAgent");
+        gAgentType.GetProperty("fullName").GetString().Should().Be(staticActorTypeName);
+        gAgentType.GetProperty("assemblyName").GetString().Should().Be("Tests.Assembly");
+        var endpoint = gAgentType.GetProperty("endpoints").EnumerateArray().Should().ContainSingle().Subject;
         AssertEndpointContract(
             endpoint,
             endpointId: "custom-action",
@@ -1143,10 +905,9 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public async Task HandleListAgentKindsAsync_ShouldMergeDuplicateStaticAgentKindEndpoints()
+    public async Task HandleListGAgentTypesAsync_ShouldMergeDuplicateStaticActorTypeEndpoints()
     {
         var staticActorTypeName = "Tests.SharedStaticGAgent, Tests.Assembly";
-        var staticAgentKind = "tests.shared-static-gagent";
         var catalogReader = new FakeServiceCatalogQueryReader
         {
             Services =
@@ -1162,27 +923,28 @@ public sealed class ScopeGAgentEndpointsTests
                 [ServiceKeys.Build(identity)] = new ServiceRevisionCatalogSnapshot(
                     ServiceKeys.Build(identity),
                     [
-                        CreateStaticRevisionSnapshot("rev-a", staticActorTypeName, staticAgentKind, "chat", "run"),
-                        CreateStaticRevisionSnapshot("rev-b", "Tests.OtherDiagnosticGAgent, Tests.Assembly", staticAgentKind, "chat", "status"),
+                        CreateStaticRevisionSnapshot("rev-a", staticActorTypeName, "chat", "run"),
+                        CreateStaticRevisionSnapshot("rev-b", staticActorTypeName, "chat", "status"),
                     ],
                     DateTimeOffset.UtcNow),
             },
         };
 
-        var result = await InvokeHandleListAgentKindsAsync(catalogReader, revisionReader);
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
         statusCode.Should().Be((int)HttpStatusCode.OK);
         using var document = JsonDocument.Parse(body);
-        var agentKind = document.RootElement.EnumerateArray().Should().ContainSingle().Subject;
-        agentKind.GetProperty("agentKind").GetString().Should().Be(staticAgentKind);
-        agentKind.GetProperty("diagnosticClrTypeName").GetString().Should().Be(staticActorTypeName);
-        agentKind.GetProperty("endpoints")
+        var gAgentType = document.RootElement.EnumerateArray().Should().ContainSingle().Subject;
+        gAgentType.GetProperty("typeName").GetString().Should().Be("SharedStaticGAgent");
+        gAgentType.GetProperty("fullName").GetString().Should().Be(staticActorTypeName);
+        gAgentType.GetProperty("assemblyName").GetString().Should().Be("Tests.Assembly");
+        gAgentType.GetProperty("endpoints")
             .EnumerateArray()
             .Select(endpoint => endpoint.GetProperty("endpointId").GetString())
             .Should()
             .BeEquivalentTo(["chat", "run", "status"]);
-        agentKind.GetProperty("endpoints")
+        gAgentType.GetProperty("endpoints")
             .EnumerateArray()
             .Count(endpoint => endpoint.GetProperty("endpointId").GetString() == "chat")
             .Should()
@@ -1190,12 +952,12 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public async Task HandleListAgentKindsAsync_ShouldNotDiscoverLoadedClrAgentClasses()
+    public async Task HandleListGAgentTypesAsync_ShouldNotDiscoverLoadedClrAgentClasses()
     {
         var catalogReader = new FakeServiceCatalogQueryReader();
         var revisionReader = new FakeServiceRevisionCatalogQueryReader();
 
-        var result = await InvokeHandleListAgentKindsAsync(catalogReader, revisionReader);
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
         statusCode.Should().Be((int)HttpStatusCode.OK);
@@ -1218,7 +980,7 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public void ScopeGAgentEndpointsSource_ShouldNotUseReflectionAsAgentKindCatalog()
+    public void ScopeGAgentEndpointsSource_ShouldNotUseReflectionAsGAgentTypeCatalog()
     {
         var source = File.ReadAllText(GetScopeGAgentEndpointsSourcePath());
 
@@ -1277,12 +1039,12 @@ public sealed class ScopeGAgentEndpointsTests
         })!;
     }
 
-    private static async Task<IResult> InvokeHandleListAgentKindsAsync(
+    private static async Task<IResult> InvokeHandleListGAgentTypesAsync(
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader)
     {
         var method = typeof(ScopeGAgentEndpoints).GetMethod(
-            "HandleListGAgentKindsAsync",
+            "HandleListGAgentTypesAsync",
             BindingFlags.NonPublic | BindingFlags.Static);
         return await (Task<IResult>)method!.Invoke(null, new object[]
         {
@@ -1318,7 +1080,7 @@ public sealed class ScopeGAgentEndpointsTests
         HttpContext context,
         string scopeId,
         string actorId,
-        string? agentKind,
+        string? gagentType,
         RecordingGAgentActorStore actorStore,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -1331,8 +1093,7 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             scopeId,
             actorId,
-            agentKind,
-            null,
+            gagentType,
             actorStore,
             actorStore,
             loggerFactory,
@@ -1364,26 +1125,6 @@ public sealed class ScopeGAgentEndpointsTests
             })!;
     }
 
-    private static Task InvokeHandleExecutionEventsAsync(
-        HttpContext context,
-        string scopeId,
-        IStreamProvider streamProvider,
-        CancellationToken ct)
-    {
-        var method = typeof(ScopeGAgentEndpoints).GetMethod(
-            "HandleExecutionEventsAsync",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        return (Task)method!.Invoke(
-            null,
-            new object[]
-            {
-                context,
-                scopeId,
-                streamProvider,
-                ct,
-            })!;
-    }
-
     private static HttpContext CreateDraftRunContext(string? authorization = null, string claimedScopeId = "scope-a")
     {
         var context = CreateScopedHttpContext(claimedScopeId);
@@ -1393,13 +1134,6 @@ public sealed class ScopeGAgentEndpointsTests
             context.Request.Headers.Authorization = authorization;
         }
 
-        return context;
-    }
-
-    private static HttpContext CreateExecutionEventsContext(string claimedScopeId)
-    {
-        var context = CreateScopedHttpContext(claimedScopeId);
-        context.Response.Body = new MemoryStream();
         return context;
     }
 
@@ -1451,18 +1185,15 @@ public sealed class ScopeGAgentEndpointsTests
     private static ServiceRevisionSnapshot CreateStaticRevisionSnapshot(
         string revisionId,
         string actorTypeName,
-        string agentKind,
         params string[] endpointIds) =>
         CreateStaticRevisionSnapshot(
             revisionId,
             actorTypeName,
-            agentKind,
             endpointIds.Select(CreateEndpointSnapshot).ToArray());
 
     private static ServiceRevisionSnapshot CreateStaticRevisionSnapshot(
         string revisionId,
         string actorTypeName,
-        string agentKind,
         params ServiceEndpointSnapshot[] endpoints) =>
         new(
             revisionId,
@@ -1476,7 +1207,7 @@ public sealed class ScopeGAgentEndpointsTests
             DateTimeOffset.UtcNow,
             null,
             new ServiceRevisionImplementationSnapshot(
-                Static: new ServiceRevisionStaticSnapshot(actorTypeName, "preferred-actor", agentKind)));
+                Static: new ServiceRevisionStaticSnapshot(actorTypeName, "preferred-actor")));
 
     private static ServiceRevisionSnapshot CreateWorkflowRevisionSnapshot(
         string revisionId,
@@ -1558,112 +1289,20 @@ public sealed class ScopeGAgentEndpointsTests
         }
     }
 
-    private sealed class ObservableResponseStream : MemoryStream
-    {
-        private readonly Lock _lock = new();
-        private readonly List<ContentWaiter> _waiters = [];
-
-        public Task<string> WaitUntilContainsAsync(string expected, TimeSpan timeout)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(expected);
-
-            lock (_lock)
-            {
-                var snapshot = ReadSnapshotUnsafe();
-                if (snapshot.Contains(expected, StringComparison.Ordinal))
-                    return Task.FromResult(snapshot);
-
-                var waiter = new ContentWaiter(
-                    expected,
-                    new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously));
-                _waiters.Add(waiter);
-
-                var cancellation = new CancellationTokenSource(timeout);
-                cancellation.Token.Register(() =>
-                {
-                    if (waiter.Completion.TrySetCanceled(cancellation.Token))
-                    {
-                        lock (_lock)
-                        {
-                            _waiters.Remove(waiter);
-                        }
-                    }
-                });
-                return waiter.Completion.Task;
-            }
-        }
-
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            base.Write(buffer, offset, count);
-            NotifyWaiters();
-        }
-
-        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            var result = base.WriteAsync(buffer, cancellationToken);
-            NotifyWaiters();
-            return result;
-        }
-
-        private void NotifyWaiters()
-        {
-            List<ContentWaiter>? completed = null;
-            string snapshot;
-            lock (_lock)
-            {
-                snapshot = ReadSnapshotUnsafe();
-                foreach (var waiter in _waiters)
-                {
-                    if (!snapshot.Contains(waiter.Expected, StringComparison.Ordinal))
-                        continue;
-
-                    completed ??= [];
-                    completed.Add(waiter);
-                }
-
-                if (completed != null)
-                {
-                    foreach (var waiter in completed)
-                        _waiters.Remove(waiter);
-                }
-            }
-
-            if (completed == null)
-                return;
-
-            foreach (var waiter in completed)
-                waiter.Completion.TrySetResult(snapshot);
-        }
-
-        private string ReadSnapshotUnsafe()
-        {
-            return Encoding.UTF8.GetString(GetBuffer(), 0, checked((int)Length));
-        }
-
-        private sealed record ContentWaiter(
-            string Expected,
-            TaskCompletionSource<string> Completion);
-    }
-
     private sealed class ScopeGAgentEndpointHostedTestHost : IAsyncDisposable
     {
         private readonly WebApplication _app;
 
-        private ScopeGAgentEndpointHostedTestHost(WebApplication app, HttpClient client, InMemoryStreamProvider streamProvider)
+        private ScopeGAgentEndpointHostedTestHost(WebApplication app, HttpClient client)
         {
             _app = app;
             Client = client;
-            StreamProvider = streamProvider;
         }
 
         public HttpClient Client { get; }
-        public InMemoryStreamProvider StreamProvider { get; }
 
         public static async Task<ScopeGAgentEndpointHostedTestHost> StartAsync(
-            FakeGAgentDraftRunInteractionPort interactionPort,
-            IServiceCatalogQueryReader? catalogReader = null,
-            IServiceRevisionCatalogQueryReader? revisionCatalogReader = null)
+            FakeGAgentDraftRunInteractionPort interactionPort)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
@@ -1673,14 +1312,6 @@ public sealed class ScopeGAgentEndpointsTests
             builder.Configuration["Aevatar:Authentication:Enabled"] = "true";
             builder.Services.AddAuthorization();
             builder.Services.AddSingleton<IGAgentDraftRunInteractionPort>(interactionPort);
-            var streamProvider = new InMemoryStreamProvider();
-            builder.Services.AddSingleton<IStreamProvider>(streamProvider);
-            var actorStore = new RecordingGAgentActorStore();
-            builder.Services.AddSingleton<IGAgentActorRegistryCommandPort>(actorStore);
-            builder.Services.AddSingleton<IGAgentActorRegistryQueryPort>(actorStore);
-            builder.Services.AddSingleton<IScopeResourceAdmissionPort>(actorStore);
-            builder.Services.AddSingleton(catalogReader ?? new FakeServiceCatalogQueryReader());
-            builder.Services.AddSingleton(revisionCatalogReader ?? new FakeServiceRevisionCatalogQueryReader());
 
             var app = builder.Build();
             app.Use(async (http, next) =>
@@ -1705,53 +1336,13 @@ public sealed class ScopeGAgentEndpointsTests
                 BaseAddress = new Uri(addressFeature.Addresses.Single()),
             };
 
-            return new ScopeGAgentEndpointHostedTestHost(app, client, streamProvider);
+            return new ScopeGAgentEndpointHostedTestHost(app, client);
         }
 
         public async ValueTask DisposeAsync()
         {
             Client.Dispose();
             await _app.DisposeAsync();
-        }
-    }
-
-    private sealed class BlockingStreamProvider : IStreamProvider
-    {
-        public int Attempts { get; private set; }
-        public TaskCompletionSource<object?> FirstAttempt { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource<object?> ReleasePublish { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public IStream GetStream(string actorId) => new BlockingStream(this, actorId);
-
-        private sealed class BlockingStream(BlockingStreamProvider owner, string streamId) : IStream
-        {
-            public string StreamId => streamId;
-
-            public Task ProduceAsync<T>(T message, CancellationToken ct = default)
-                where T : Google.Protobuf.IMessage
-            {
-                owner.Attempts++;
-                owner.FirstAttempt.TrySetResult(null);
-                return owner.ReleasePublish.Task;
-            }
-
-            public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
-                where T : Google.Protobuf.IMessage, new() =>
-                Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
-
-            public Task UpsertRelayAsync(Aevatar.Foundation.Abstractions.Streaming.StreamForwardingBinding binding, CancellationToken ct = default) =>
-                Task.CompletedTask;
-
-            public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
-                Task.CompletedTask;
-
-            public Task<IReadOnlyList<Aevatar.Foundation.Abstractions.Streaming.StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
-                Task.FromResult<IReadOnlyList<Aevatar.Foundation.Abstractions.Streaming.StreamForwardingBinding>>([]);
-        }
-
-        private sealed class NoopAsyncDisposable : IAsyncDisposable
-        {
-            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 
@@ -1818,7 +1409,7 @@ public sealed class ScopeGAgentEndpointsTests
             {
                 return Task.FromResult(
                     CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
-                        new GAgentDraftRunAcceptedReceipt("actor-default", request.AgentKind, "cmd-default", "corr-default"),
+                        new GAgentDraftRunAcceptedReceipt("actor-default", request.ActorTypeName, "cmd-default", "corr-default"),
                         new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(GAgentDraftRunCompletionStatus.Unknown, false)));
             }
 
@@ -1832,8 +1423,8 @@ public sealed class ScopeGAgentEndpointsTests
         IScopeResourceAdmissionPort
     {
         public List<GAgentActorGroup> Actors { get; set; } = [];
-        public List<(string ScopeId, string AgentKind, string ActorId)> AddedActors { get; } = [];
-        public List<(string ScopeId, string AgentKind, string ActorId)> RemovedActors { get; } = [];
+        public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
+        public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
         public long SnapshotStateVersion { get; init; } = 23;
         public DateTimeOffset SnapshotUpdatedAt { get; init; } =
             new(2026, 4, 27, 9, 30, 0, TimeSpan.Zero);
@@ -1863,7 +1454,7 @@ public sealed class ScopeGAgentEndpointsTests
             if (ThrowOnAdd != null)
                 throw ThrowOnAdd;
 
-            AddedActors.Add((registration.ScopeId, registration.AgentKind, registration.ActorId));
+            AddedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionVisible));
@@ -1876,7 +1467,7 @@ public sealed class ScopeGAgentEndpointsTests
             if (ThrowOnRemove != null)
                 throw ThrowOnRemove;
 
-            RemovedActors.Add((registration.ScopeId, registration.AgentKind, registration.ActorId));
+            RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionRemoved));

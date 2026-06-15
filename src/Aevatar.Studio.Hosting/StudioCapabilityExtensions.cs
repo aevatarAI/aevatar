@@ -1,4 +1,4 @@
-using Aevatar.Capabilities;
+using Aevatar.Hosting;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting.Endpoints;
 using Microsoft.AspNetCore.Builder;

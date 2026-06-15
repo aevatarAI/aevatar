@@ -169,64 +169,6 @@ public class BindingToolsTests
         }
     }
 
-    [Fact]
-    public async Task BindingBindTool_GAgentKind_UsesAgentKind()
-    {
-        ScopeBindingUpsertRequest? captured = null;
-        var commandPort = new StubCommandPort(captureRequest: r => captured = r);
-        var tool = new BindingBindTool(commandPort);
-
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-gagent"
-        });
-
-        try
-        {
-            var result = await tool.ExecuteAsync(
-                """{"kind":"gagent","agent_kind":"orders.assistant","display_name":"Orders Assistant"}""");
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
-
-            captured.Should().NotBeNull();
-            captured!.ScopeId.Should().Be("scope-gagent");
-            captured.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
-            captured.GAgent.Should().NotBeNull();
-            captured.GAgent!.AgentKind.Should().Be("orders.assistant");
-            captured.DisplayName.Should().Be("Orders Assistant");
-        }
-        finally
-        {
-            AgentToolRequestContext.Current = null;
-        }
-    }
-
-    [Fact]
-    public async Task BindingBindTool_GAgentKind_RejectsGAgentTypeAlias()
-    {
-        var commandPort = new StubCommandPort();
-        var tool = new BindingBindTool(commandPort);
-
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-gagent"
-        });
-
-        try
-        {
-            var result = await tool.ExecuteAsync(
-                """{"kind":"gagent","gagent_type":"OrdersGAgent","agent_kind":"orders.assistant"}""");
-
-            using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("error").GetString().Should().Contain("agent_kind");
-        }
-        finally
-        {
-            AgentToolRequestContext.Current = null;
-        }
-    }
-
     #endregion
 
     #region ScopeWorkflows tools

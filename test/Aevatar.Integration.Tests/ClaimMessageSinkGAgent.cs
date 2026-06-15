@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Integration.Tests.Protocols;
@@ -7,7 +6,6 @@ using Google.Protobuf;
 
 namespace Aevatar.Integration.Tests;
 
-[GAgent("tests.claim-message-sink")]
 public sealed class ClaimMessageSinkGAgent : GAgentBase<ClaimSinkState>
 {
     [EventHandler]

@@ -117,7 +117,7 @@ public class ConnectorCallIntegrationTests
             roles:
               - id: coordinator
                 name: Coordinator
-                agent_kind: workflow.role-agent
+                agent_kind: workflow.assistant-role
                 system_prompt: ""
                 connectors:
                   - allowed_connector
@@ -149,7 +149,7 @@ public class ConnectorCallIntegrationTests
             roles:
               - id: coordinator
                 name: Coordinator
-                agent_kind: workflow.role-agent
+                agent_kind: workflow.assistant-role
                 system_prompt: ""
                 connectors:
                   - only_this_one
@@ -183,7 +183,12 @@ public class ConnectorCallIntegrationTests
     }
 
     private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
-        builder.Register<WorkflowRoleGAgent>();
+        builder.Register(new AgentRegistration(
+            "workflow.assistant-role",
+            typeof(WorkflowRoleGAgent),
+            typeof(RoleGAgentState),
+            [],
+            []));
 
     private static async Task<WorkflowRunResult> RunWorkflowAsync(
         ServiceProvider provider,

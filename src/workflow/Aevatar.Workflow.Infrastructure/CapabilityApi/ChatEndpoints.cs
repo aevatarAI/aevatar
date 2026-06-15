@@ -2,7 +2,7 @@ using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.RunForks;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
@@ -26,9 +26,8 @@ public static class WorkflowCapabilityEndpoints
     {
         var group = app.MapGroup("/api").WithTags("Chat");
         ChatQueryEndpoints.Map(group);
-        group.MapPost("/workflow/runs/fork", HandleForkRun)
-            .WithName("ForkWorkflowRun");
-        WorkflowWebhookIngressEndpoints.Map(group);
+        if (HasWorkflowScheduleDependencies(app.ServiceProvider))
+            WorkflowScheduleEndpoints.Map(group);
 
         return app;
     }
@@ -38,13 +37,15 @@ public static class WorkflowCapabilityEndpoints
         return app;
     }
 
+    private static bool HasWorkflowScheduleDependencies(IServiceProvider services) =>
+        services.GetService<IServiceProviderIsService>()?.IsService(typeof(IScheduledDispatchApplicationService)) == true;
+
     public static async Task HandleChat(
         HttpContext http,
         ChatInput input,
         IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
-        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
-        IWorkflowFileIngressPort? fileIngressPort = null)
+        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var writer = new ChatSseResponseWriter(http.Response);
@@ -55,23 +56,11 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
-            if (!callerCredential.Succeeded)
-            {
-                var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
-                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(callerCredential.Error);
-                scope.MarkResult(statusCode);
-                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
-                return;
-            }
-
-            fileIngressPort ??= serviceProvider?.GetService<IWorkflowFileIngressPort>();
-            var normalizedRequest = await ChatRunRequestNormalizer.NormalizeAsync(
+            var connectorAuthorization = ConnectorHttpAuthorizationExtractor.Extract(http);
+            var normalizedRequest = ChatRunRequestNormalizer.Normalize(
                 input,
-                fileIngressPort,
                 defaultMetadata,
-                trustedCallerCredential: callerCredential.Credential,
-                cancellationToken: ct);
+                trustedConnectorHttpAuthorization: connectorAuthorization);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -116,12 +105,11 @@ public static class WorkflowCapabilityEndpoints
             logger?.LogError(ex, "Workflow chat execution failed.");
             if (!writer.Started)
             {
-                var (code, message) = WorkflowExecutionErrorMapper.ToError(ex);
                 await WriteJsonErrorResponseAsync(
                     http,
                     StatusCodes.Status500InternalServerError,
-                    code,
-                    message,
+                    "EXECUTION_FAILED",
+                    "Workflow execution failed.",
                     CancellationToken.None);
                 return;
             }
@@ -135,17 +123,12 @@ public static class WorkflowCapabilityEndpoints
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? defaultMetadata = null,
-        IWorkflowFileIngressPort? fileIngressPort = null)
+        IReadOnlyDictionary<string, string>? defaultMetadata = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
 
-        var normalizedRequest = await ChatRunRequestNormalizer.NormalizeAsync(
-            input,
-            fileIngressPort,
-            defaultMetadata: defaultMetadata,
-            cancellationToken: ct);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, defaultMetadata: defaultMetadata);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -221,8 +204,7 @@ public static class WorkflowCapabilityEndpoints
                     input.UserInput,
                     NormalizeMetadata(input.Metadata),
                     input.EditedContent,
-                    input.Feedback,
-                    ToolApproval: ToToolApprovalResumeCommand(input.ToolApproval)),
+                    input.Feedback),
                 ct);
             if (!dispatch.Succeeded || dispatch.Receipt == null)
             {
@@ -380,76 +362,6 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
-    public static async Task<IResult> HandleForkRun(
-        WorkflowForkRunInput input,
-        [FromServices] ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> forkDispatchService,
-        HttpContext? http = null,
-        CancellationToken ct = default)
-    {
-        using var scope = ApiRequestScope.BeginHttp();
-        ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(forkDispatchService);
-
-        try
-        {
-            var sourceRunId = (input.SourceRunId ?? string.Empty).Trim();
-            var startAtStepId = (input.StartAtStepId ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(sourceRunId) ||
-                string.IsNullOrWhiteSpace(startAtStepId))
-            {
-                scope.MarkResult(StatusCodes.Status400BadRequest);
-                return Results.BadRequest(new { error = "sourceRunId and startAtStepId are required." });
-            }
-
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
-            if (!callerCredential.Succeeded)
-            {
-                scope.MarkResult(StatusCodes.Status400BadRequest);
-                return Results.Json(
-                    new { error = "Caller credential is invalid.", code = "INVALID_CALLER_CREDENTIAL" },
-                    statusCode: StatusCodes.Status400BadRequest);
-            }
-
-            var dispatch = await forkDispatchService.DispatchAsync(
-                new WorkflowForkRunCommand(
-                    sourceRunId,
-                    startAtStepId,
-                    input.InlineYaml,
-                    NormalizeStringMap(input.InlineSubYamls),
-                    NormalizeStringMap(input.VariableOverrides),
-                    input.Input,
-                    NormalizeOptional(input.CommandId),
-                    NormalizeOptional(input.CorrelationId),
-                    ScopeId: NormalizeOptional(input.ScopeId),
-                    CallerCredential: callerCredential.Credential),
-                ct);
-
-            if (!dispatch.Succeeded || dispatch.Receipt == null)
-                return MapForkRunFailure(dispatch.Error, scope);
-
-            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt.NewRunActorId);
-            return Results.Accepted(statusUrl, new
-            {
-                accepted = true,
-                sourceRunId = dispatch.Receipt.SourceRunId,
-                newRunActorId = dispatch.Receipt.NewRunActorId,
-                workflowName = dispatch.Receipt.WorkflowName,
-                acceptedCommandId = dispatch.Receipt.CommandId,
-                correlationId = dispatch.Receipt.CorrelationId,
-                statusUrl,
-            });
-        }
-        catch (OperationCanceledException)
-        {
-            return Results.StatusCode(499);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            scope.MarkError();
-            throw;
-        }
-    }
-
     private static string BuildWorkflowRunStatusUrl(WorkflowRunControlAcceptedReceipt receipt) =>
         BuildWorkflowRunStatusUrl(receipt.ActorId);
 
@@ -474,27 +386,6 @@ public static class WorkflowCapabilityEndpoints
                 }),
             },
         };
-
-    private static WorkflowToolApprovalResumeCommand? ToToolApprovalResumeCommand(
-        WorkflowToolApprovalResumeInput? input)
-    {
-        if (input == null)
-            return null;
-
-        return new WorkflowToolApprovalResumeCommand(
-            NormalizeRequired(input.ExecutionId, nameof(input.ExecutionId)),
-            NormalizeRequired(input.ToolCallId, nameof(input.ToolCallId)),
-            NormalizeRequired(input.ApprovalRequestId, nameof(input.ApprovalRequestId)));
-    }
-
-    private static string NormalizeRequired(string? value, string name)
-    {
-        var normalized = NormalizeOptional(value);
-        if (normalized == null)
-            throw new ArgumentException("Value is required.", name);
-
-        return normalized;
-    }
 
     private static IResult MapRunControlDispatchFailure(
         WorkflowRunControlStartError error,
@@ -534,41 +425,6 @@ public static class WorkflowCapabilityEndpoints
         return Results.Json(new { error = message }, statusCode: statusCode);
     }
 
-    private static IResult MapForkRunFailure(
-        WorkflowForkRunStartError error,
-        ApiRequestScope scope)
-    {
-        var (statusCode, message) = error.Code switch
-        {
-            WorkflowForkRunStartErrorCode.SourceRunNotFound => (
-                StatusCodes.Status404NotFound,
-                error.Reason),
-            WorkflowForkRunStartErrorCode.SourceRunNotTerminal => (
-                StatusCodes.Status409Conflict,
-                error.Reason),
-            WorkflowForkRunStartErrorCode.InvalidWorkflowYaml => (
-                StatusCodes.Status400BadRequest,
-                error.Reason),
-            WorkflowForkRunStartErrorCode.StartStepNotFound => (
-                StatusCodes.Status400BadRequest,
-                error.Reason),
-            WorkflowForkRunStartErrorCode.RunCreationFailed => (
-                StatusCodes.Status502BadGateway,
-                error.Reason),
-            WorkflowForkRunStartErrorCode.DispatchFailed => (
-                StatusCodes.Status502BadGateway,
-                error.Reason),
-            WorkflowForkRunStartErrorCode.InvalidCallerCredential => (
-                StatusCodes.Status400BadRequest,
-                error.Reason),
-            _ => (
-                StatusCodes.Status500InternalServerError,
-                "Workflow fork dispatch failed."),
-        };
-        scope.MarkResult(statusCode);
-        return Results.Json(new { error = message }, statusCode: statusCode);
-    }
-
     private static string? NormalizeOptional(string? value)
     {
         var normalized = (value ?? string.Empty).Trim();
@@ -591,26 +447,6 @@ public static class WorkflowCapabilityEndpoints
                 continue;
 
             normalized[normalizedKey] = normalizedValue;
-        }
-
-        return normalized.Count == 0
-            ? null
-            : normalized;
-    }
-
-    private static IReadOnlyDictionary<string, string>? NormalizeStringMap(IDictionary<string, string>? map)
-    {
-        if (map == null || map.Count == 0)
-            return null;
-
-        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in map)
-        {
-            var normalizedKey = NormalizeOptional(key);
-            if (normalizedKey == null)
-                continue;
-
-            normalized[normalizedKey] = value ?? string.Empty;
         }
 
         return normalized.Count == 0
@@ -644,79 +480,40 @@ public static class WorkflowCapabilityEndpoints
     {
         try
         {
-            var (code, message) = WorkflowExecutionErrorMapper.ToError(ex);
             await writer.WriteAsync(
                 new WorkflowRunEventEnvelope
                 {
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     RunError = new WorkflowRunErrorEventPayload
                     {
-                        Code = code,
-                        Message = message,
+                        Code = "EXECUTION_FAILED",
+                        Message = $"Workflow execution failed: {SanitizeErrorMessage(ex.Message)}",
                     },
                 },
                 ct);
         }
-        catch (IOException writeEx)
-        {
-            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
-        }
-        catch (ObjectDisposedException writeEx)
-        {
-            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
-        }
-        catch (InvalidOperationException writeEx)
-        {
-            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
-        }
-        catch (OperationCanceledException writeEx)
-        {
-            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
-        }
         catch (Exception writeEx)
         {
-            logger?.LogWarning(writeEx, "Unexpected failure while writing SSE error frame.");
+            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
         }
     }
 
-    public static class WorkflowExecutionErrorMapper
+    private static string SanitizeErrorMessage(string? message)
     {
-        public const string CompatibilityErrorCode = "WORKFLOW_REVISION_INCOMPATIBLE";
-        private const string DescriptorMissingMarker = "Type registry has no descriptor for type name";
+        if (string.IsNullOrWhiteSpace(message))
+            return "unknown error";
 
-        public static (string Code, string Message) ToError(Exception ex)
-        {
-            ArgumentNullException.ThrowIfNull(ex);
-
-            return IsCompatibilityFailure(ex)
-                ? (
-                    CompatibilityErrorCode,
-                    "Workflow revision is incompatible with this backend. Re-publish or migrate the workflow/service revision.")
-                : (
-                    "EXECUTION_FAILED",
-                    "Workflow execution failed.");
-        }
-
-        public static bool IsCompatibilityFailure(Exception ex)
-        {
-            ArgumentNullException.ThrowIfNull(ex);
-
-            for (var current = ex; current != null; current = current.InnerException)
-            {
-                if (current.Message.Contains(DescriptorMissingMarker, StringComparison.Ordinal))
-                    return true;
-            }
-
-            return false;
-        }
+        return message
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
     }
 
     internal static async Task HandleChatWebSocket(
         HttpContext http,
         IWorkflowChatRunInteractionPort chatRunService,
         ILoggerFactory loggerFactory,
-        CancellationToken ct = default,
-        IWorkflowFileIngressPort? fileIngressPort = null)
+        CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginWebSocket();
         if (!http.WebSockets.IsWebSocketRequest)
@@ -755,15 +552,13 @@ public static class WorkflowCapabilityEndpoints
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(http.RequestServices, logger);
-            fileIngressPort ??= http.RequestServices.GetService<IWorkflowFileIngressPort>();
             await ChatWebSocketRunCoordinator.ExecuteAsync(
                 socket,
                 command,
                 chatRunService,
                 scope,
                 ct,
-                defaultMetadata,
-                fileIngressPort);
+                defaultMetadata);
         }
         catch (OperationCanceledException)
         {
@@ -806,7 +601,7 @@ public static class WorkflowCapabilityEndpoints
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Failed to resolve workflow runtime default metadata from configuration.");
+            logger?.LogDebug(ex, "Failed to resolve workflow runtime default metadata from configuration.");
             return new Dictionary<string, string>(StringComparer.Ordinal);
         }
     }

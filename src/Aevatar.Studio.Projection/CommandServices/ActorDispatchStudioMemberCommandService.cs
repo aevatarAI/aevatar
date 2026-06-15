@@ -67,8 +67,6 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             PublishedServiceId = publishedServiceId,
             CreatedAtUtc = Timestamp.FromDateTimeOffset(createdAt),
         };
-        if (request.ImplementationRef != null)
-            evt.ImplementationRef = BuildImplementationRefMessage(request.ImplementationRef);
 
         await DispatchAsync(normalizedScopeId, memberId, evt, ct);
 
@@ -100,17 +98,12 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             DisplayName: displayName,
             Description: evt.Description,
             ImplementationKind: MemberImplementationKindMapper.ToWireName(implementationKind),
-            LifecycleStage: request.ImplementationRef == null
-                ? MemberLifecycleStageNames.Created
-                : MemberLifecycleStageNames.BuildReady,
+            LifecycleStage: MemberLifecycleStageNames.Created,
             PublishedServiceId: publishedServiceId,
             LastBoundRevisionId: null,
             CreatedAt: createdAt,
             UpdatedAt: createdAt)
-        {
-            TeamId = responseTeamId,
-            ImplementationRef = request.ImplementationRef,
-        };
+        { TeamId = responseTeamId };
     }
 
     public async Task PatchTeamAssignmentAsync(
@@ -194,25 +187,6 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
-    public async Task RenameAsync(
-        string scopeId,
-        string memberId,
-        string displayName,
-        CancellationToken ct = default)
-    {
-        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
-        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
-        var normalizedDisplayName = (displayName ?? string.Empty).Trim();
-
-        var evt = new StudioMemberRenamedEvent
-        {
-            DisplayName = normalizedDisplayName,
-            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        };
-
-        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
-    }
-
     public async Task StartBindingRunAsync(
         StudioMemberBindingRunStartRequest request,
         CancellationToken ct = default)
@@ -269,7 +243,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             case MemberImplementationKindNames.GAgent:
                 message.Gagent = new StudioMemberGAgentRef
                 {
-                    ActorTypeName = implementation.DiagnosticActorTypeName ?? string.Empty,
+                    ActorTypeName = implementation.ActorTypeName ?? string.Empty,
                 };
                 break;
             default:
@@ -316,7 +290,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             case MemberImplementationKindNames.GAgent:
                 request.Gagent = new StudioMemberGAgentBindingRequest
                 {
-                    AgentKind = binding.GAgent?.AgentKind ?? string.Empty,
+                    ActorTypeName = binding.GAgent?.ActorTypeName ?? string.Empty,
                 };
                 foreach (var endpoint in binding.GAgent?.Endpoints ?? [])
                 {

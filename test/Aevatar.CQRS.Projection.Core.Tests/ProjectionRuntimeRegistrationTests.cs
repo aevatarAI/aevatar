@@ -1,9 +1,6 @@
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Device;
-using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -55,9 +52,6 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         runtime.CreatedActorIds.Should().ContainSingle()
             .Which.Should().Be(ProjectionScopeActorId.Build(scopeKey));
-        runtime.CreatedByKind.Should().ContainSingle().Which.Should().Be((
-            "projection.materialization-scope.test-materialization-context",
-            ProjectionScopeActorId.Build(scopeKey)));
         dispatchPort.Dispatched.Should().HaveCount(2);
         dispatchPort.Dispatched[0].actorId.Should().Be(ProjectionScopeActorId.Build(scopeKey));
         dispatchPort.Dispatched[0].command.Payload!.Unpack<EnsureProjectionScopeCommand>().ProjectionKind.Should().Be("projection-a");
@@ -308,9 +302,6 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         runtime.CreatedActorIds.Should().ContainSingle()
             .Which.Should().Be(ProjectionScopeActorId.Build(scopeKey));
-        runtime.CreatedByKind.Should().ContainSingle().Which.Should().Be((
-            "projection.session-scope.test-session-context",
-            ProjectionScopeActorId.Build(scopeKey)));
         dispatchPort.Dispatched.Should().HaveCount(2);
         dispatchPort.Dispatched[0].command.Payload!.Unpack<EnsureProjectionScopeCommand>().SessionId.Should().Be("session-9");
         dispatchPort.Dispatched[1].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().SessionId.Should().Be("session-9");
@@ -417,75 +408,10 @@ public sealed class ProjectionRuntimeRegistrationTests
         await sink.PublishAsync(alert);
     }
 
-    [Fact]
-    public void ProjectionScopeAgentRegistration_ShouldGenerateNonGenericPrimaryKind()
-    {
-        var registration = ProjectionScopeAgentRegistration.Create<NonGenericScopeAgent>();
-
-        registration.Kind.Should().Be("projection.scope");
-        registration.ImplementationType.Should().Be(typeof(NonGenericScopeAgent));
-    }
-
-    [Fact]
-    public void ProjectionScopeAgentRegistration_ShouldGenerateFallbackGenericPrimaryKind()
-    {
-        var registration = ProjectionScopeAgentRegistration.Create<FallbackScopeAgent<TestFallbackScopeContext>>();
-
-        registration.Kind.Should().Be("projection.scope.test-fallback-scope-context");
-        registration.ImplementationType.Should().Be(typeof(FallbackScopeAgent<TestFallbackScopeContext>));
-    }
-
-    [Fact]
-    public void RetiredProjectionScopeTokens_ShouldNotRetireLiveMaterializationScopeKinds()
-    {
-        // A retired-actor spec must NEVER list a currently-live materialization scope
-        // kind. RetiredActorTarget.MatchesRuntimeKind compares the probed runtime kind
-        // to the retired tokens by exact ordinal equality, so a live kind in the retired
-        // list destroys the live projection scope on every startup cleanup pass, leaving
-        // its read model un-materialized.
-        //
-        // Regression guard for #1763: the legacy CLR-name tokens
-        // ("Aevatar.GAgents.ChannelRuntime.*MaterializationContext") were translated into
-        // the live "projection.materialization-scope.*" kinds. Because the kind is derived
-        // from the context type's *simple name* (namespace-independent), the old and new
-        // materialization contexts collapse to the same kind, so retiring it silently
-        // killed the channel/device/scheduled read-model projections on every boot.
-        var userAgentCatalogKind = ProjectionScopeAgentRegistration
-            .Create<ProjectionMaterializationScopeGAgent<UserAgentCatalogMaterializationContext>>()
-            .Kind;
-        var channelBotRegistrationKind = ProjectionScopeAgentRegistration
-            .Create<ProjectionMaterializationScopeGAgent<ChannelBotRegistrationMaterializationContext>>()
-            .Kind;
-        var deviceRegistrationKind = ProjectionScopeAgentRegistration
-            .Create<ProjectionMaterializationScopeGAgent<DeviceRegistrationMaterializationContext>>()
-            .Kind;
-
-        var scheduledTokens = new ScheduledRetiredActorSpec()
-            .Targets
-            .SelectMany(static target => target.RetiredKindTokens)
-            .ToArray();
-        var channelTokens = new ChannelRuntimeRetiredActorSpec()
-            .Targets
-            .SelectMany(static target => target.RetiredKindTokens)
-            .ToArray();
-        var deviceTokens = new DeviceRetiredActorSpec()
-            .Targets
-            .SelectMany(static target => target.RetiredKindTokens)
-            .ToArray();
-
-        userAgentCatalogKind.Should().Be("projection.materialization-scope.user-agent-catalog-materialization-context");
-        channelBotRegistrationKind.Should().Be("projection.materialization-scope.channel-bot-registration-materialization-context");
-        deviceRegistrationKind.Should().Be("projection.materialization-scope.device-registration-materialization-context");
-        scheduledTokens.Should().NotContain(userAgentCatalogKind);
-        channelTokens.Should().NotContain(channelBotRegistrationKind);
-        deviceTokens.Should().NotContain(deviceRegistrationKind);
-    }
-
     private sealed class RecordingActorRuntime : IActorRuntime
     {
         public HashSet<string> ExistingActorIds { get; } = [];
         public List<string> CreatedActorIds { get; } = [];
-        public List<(string agentKind, string actorId)> CreatedByKind { get; } = [];
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent
@@ -498,17 +424,6 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
-
-        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            ArgumentException.ThrowIfNullOrWhiteSpace(agentKind);
-            var actorId = id ?? Guid.NewGuid().ToString("N");
-            ExistingActorIds.Add(actorId);
-            CreatedActorIds.Add(actorId);
-            CreatedByKind.Add((agentKind, actorId));
-            return Task.FromResult<IActor>(new RecordingActor(actorId));
-        }
 
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
 
@@ -685,29 +600,5 @@ public sealed class ProjectionRuntimeRegistrationTests
         public TestSessionContext Context { get; }
 
         public string SessionId => Context.SessionId;
-    }
-
-    private sealed class TestFallbackScopeContext;
-
-    private sealed class NonGenericScopeAgent : IAgent
-    {
-        public string Id => "non-generic";
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("non-generic");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
-            Task.FromResult<IReadOnlyList<System.Type>>([]);
-    }
-
-    private sealed class FallbackScopeAgent<TContext> : IAgent
-    {
-        public string Id => "fallback";
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("fallback");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
-            Task.FromResult<IReadOnlyList<System.Type>>([]);
     }
 }

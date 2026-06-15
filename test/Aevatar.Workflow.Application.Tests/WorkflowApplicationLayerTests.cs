@@ -58,10 +58,10 @@ public sealed class WorkflowApplicationLayerTests
         {
             Result = Success(target, receipt),
         };
-        target.RequireLiveSink().Push(BuildEvent("progress"));
-        target.RequireLiveSink().Push(BuildEvent("done"));
-        target.RequireLiveSink().Complete();
-        var outputStream = new FakeEventOutputStream();
+        var outputStream = new FakeEventOutputStream
+        {
+            Events = [BuildEvent("progress"), BuildEvent("done")],
+        };
         var completionPolicy = new FakeWorkflowRunCompletionPolicy
         {
             TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished,
@@ -104,7 +104,7 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task CommandInteractionService_ShouldNotifyAcceptedAfterPreparedDispatchBeforeEmittingOutput()
+    public async Task CommandInteractionService_ShouldNotifyAcceptedAfterPreparedDispatchBeforePumpingOutput()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
@@ -116,11 +116,13 @@ public sealed class WorkflowApplicationLayerTests
             Result = Success(target, receipt),
             DispatchPreparedRelease = dispatchRelease,
         };
-        var outputStream = new FakeEventOutputStream();
+        var outputStream = new FakeEventOutputStream
+        {
+            Events = [BuildEvent("done")],
+        };
         var accepted = new TaskCompletionSource<WorkflowChatRunAcceptedReceipt>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var acceptedRelease = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var emitted = new ConcurrentQueue<WorkflowRunEventEnvelope>();
         var service = CreateInteractionService(
             pipeline,
             outputStream,
@@ -134,11 +136,7 @@ public sealed class WorkflowApplicationLayerTests
 
         var executeTask = service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
-            (frame, _) =>
-            {
-                emitted.Enqueue(frame);
-                return ValueTask.CompletedTask;
-            },
+            static (_, _) => ValueTask.CompletedTask,
             async (acceptedReceipt, _) =>
             {
                 accepted.SetResult(acceptedReceipt);
@@ -147,24 +145,18 @@ public sealed class WorkflowApplicationLayerTests
             CancellationToken.None);
 
         pipeline.DispatchPreparedCalls.Should().Be(1);
-        outputStream.PumpCalls.Should().Be(1);
-        emitted.Should().BeEmpty();
-
-        await target.RequireLiveSink().PushAsync(BuildEvent("done"), CancellationToken.None);
-        (await outputStream.EventRead.Task.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
-        emitted.Should().BeEmpty();
+        outputStream.PumpCalls.Should().Be(0);
 
         dispatchRelease.SetResult(null);
         (await accepted.Task.WaitAsync(TimeSpan.FromSeconds(5))).Should().Be(receipt);
         pipeline.DispatchPreparedCalls.Should().Be(1);
-        emitted.Should().BeEmpty();
+        outputStream.PumpCalls.Should().Be(0);
 
         acceptedRelease.SetResult(null);
-        target.RequireLiveSink().Complete();
         var result = await executeTask.WaitAsync(TimeSpan.FromSeconds(5));
 
         result.Succeeded.Should().BeTrue();
-        emitted.Should().ContainSingle();
+        outputStream.PumpCalls.Should().Be(1);
     }
 
     [Fact]
@@ -176,12 +168,10 @@ public sealed class WorkflowApplicationLayerTests
             DestroyException = new InvalidOperationException("cleanup failed"),
         };
         var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
-        target.RequireLiveSink().Push(BuildEvent("done"));
-        target.RequireLiveSink().Complete();
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var service = CreateInteractionService(
             new FakeDispatchPipeline { Result = Success(target, receipt) },
-            new FakeEventOutputStream(),
+            new FakeEventOutputStream { Events = [BuildEvent("done")] },
             new FakeWorkflowRunCompletionPolicy
             {
                 TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished,
@@ -214,8 +204,6 @@ public sealed class WorkflowApplicationLayerTests
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
         var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
-        target.RequireLiveSink().Push(BuildEvent("progress"));
-        target.RequireLiveSink().Complete();
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var pipeline = new FakeDispatchPipeline
         {
@@ -223,7 +211,7 @@ public sealed class WorkflowApplicationLayerTests
         };
         var service = CreateInteractionService(
             pipeline,
-            new FakeEventOutputStream(),
+            new FakeEventOutputStream { Events = [BuildEvent("progress")] },
             new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
             new FakeFinalizeEmitter(),
             new FakeDurableCompletionResolver(
@@ -253,12 +241,10 @@ public sealed class WorkflowApplicationLayerTests
             "direct",
             "cmd-1",
             ["definition-1", "actor-1"]);
-        target.RequireLiveSink().Push(BuildEvent("progress"));
-        target.RequireLiveSink().Complete();
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var service = CreateInteractionService(
             new FakeDispatchPipeline { Result = Success(target, receipt) },
-            new FakeEventOutputStream(),
+            new FakeEventOutputStream { Events = [BuildEvent("progress")] },
             new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
             new FakeFinalizeEmitter(),
             new FakeDurableCompletionResolver());
@@ -501,9 +487,9 @@ public sealed class WorkflowApplicationLayerTests
 
     private sealed class FakeEventOutputStream : IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>
     {
+        public IReadOnlyList<WorkflowRunEventEnvelope> Events { get; set; } = [];
         public int PumpCalls { get; private set; }
         public TaskCompletionSource<bool> PumpStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource<bool> EventRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task PumpAsync(
             IAsyncEnumerable<WorkflowRunEventEnvelope> events,
@@ -511,12 +497,12 @@ public sealed class WorkflowApplicationLayerTests
             Func<WorkflowRunEventEnvelope, bool>? shouldStop = null,
             CancellationToken ct = default)
         {
+            _ = events;
             PumpCalls++;
             PumpStarted.TrySetResult(true);
 
-            await foreach (var evt in events.WithCancellation(ct))
+            foreach (var evt in Events)
             {
-                EventRead.TrySetResult(true);
                 await emitAsync(evt, ct);
                 if (shouldStop?.Invoke(evt) == true)
                     break;

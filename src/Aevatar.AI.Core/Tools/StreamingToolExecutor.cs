@@ -8,7 +8,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using System.Diagnostics;
@@ -17,12 +16,7 @@ using System.Runtime.CompilerServices;
 namespace Aevatar.AI.Core.Tools;
 
 /// <summary>Tool execution result with call-id for message pairing.</summary>
-public readonly record struct ToolExecutionResult(
-    string CallId,
-    string ToolName,
-    string Result,
-    bool IsError,
-    AgentToolReceipt? Receipt = null);
+public readonly record struct ToolExecutionResult(string CallId, string Result, bool IsError);
 
 /// <summary>
 /// Streaming tool executor that starts executing tools as soon as they appear,
@@ -72,25 +66,6 @@ public sealed class StreamingToolExecutor
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(toolCall);
 
-        if (!IsToolVisible(toolCall.Name))
-        {
-            var unauthorized = new ToolExecutionEntry(
-                Call: toolCall,
-                Tool: null,
-                IsConcurrencySafe: true)
-            {
-                Status = ToolStatus.Completed,
-                Result = new ToolExecutionResult(
-                    toolCall.Id,
-                    toolCall.Name,
-                    ToolManager.BuildErrorJson($"Tool '{toolCall.Name}' is not available in this context."),
-                    IsError: true),
-            };
-            state.Tools.Add(unauthorized);
-            Advance(state);
-            return;
-        }
-
         var tool = _tools.Get(toolCall.Name);
         var tracked = new ToolExecutionEntry(
             Call: toolCall,
@@ -101,11 +76,10 @@ public sealed class StreamingToolExecutor
         if (state.Discarded)
         {
             tracked.Status = ToolStatus.Completed;
-                tracked.Result = new ToolExecutionResult(
-                    toolCall.Id,
-                    toolCall.Name,
-                    "Tool execution was discarded",
-                    IsError: true);
+            tracked.Result = new ToolExecutionResult(
+                toolCall.Id,
+                "Tool execution was discarded",
+                IsError: true);
         }
 
         Advance(state);
@@ -188,7 +162,6 @@ public sealed class StreamingToolExecutor
                 completion = new ToolExecutionCompletion(
                     new ToolExecutionResult(
                         tracked.Call.Id,
-                        tracked.Call.Name,
                         "Tool execution was discarded",
                         IsError: true),
                     SchedulerFault: false);
@@ -199,7 +172,6 @@ public sealed class StreamingToolExecutor
                 completion = new ToolExecutionCompletion(
                     new ToolExecutionResult(
                         tracked.Call.Id,
-                        tracked.Call.Name,
                         ToolManager.BuildErrorJson(ex.Message),
                         IsError: true),
                     SchedulerFault: false);
@@ -228,7 +200,6 @@ public sealed class StreamingToolExecutor
                 tracked.Status = ToolStatus.Completed;
                 tracked.Result = new ToolExecutionResult(
                     tracked.Call.Id,
-                    tracked.Call.Name,
                     state.Discarded ? "Tool execution was discarded" : "Skipped due to prior tool error",
                     IsError: true);
                 continue;
@@ -292,7 +263,6 @@ public sealed class StreamingToolExecutor
             tracked.Status = ToolStatus.Completed;
             tracked.Result = new ToolExecutionResult(
                 tracked.Call.Id,
-                tracked.Call.Name,
                 "Tool execution was discarded",
                 IsError: true);
         }
@@ -320,17 +290,6 @@ public sealed class StreamingToolExecutor
 
             // Re-resolve tool after hooks — hooks may have rewritten the tool name.
             var effectiveToolName = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName!;
-            if (!IsToolVisible(effectiveToolName))
-            {
-                return new ToolExecutionCompletion(
-                    new ToolExecutionResult(
-                        call.Id,
-                        call.Name,
-                        ToolManager.BuildErrorJson($"Tool '{effectiveToolName}' is not available in this context."),
-                        IsError: true),
-                    SchedulerFault: true);
-            }
-
             var effectiveTool = _tools.Get(effectiveToolName) ?? tracked.Tool ?? new NullAgentTool(call.Name);
 
             // If the hook changed the tool name to a different tool, re-evaluate concurrency
@@ -342,7 +301,6 @@ public sealed class StreamingToolExecutor
                     return new ToolExecutionCompletion(
                         new ToolExecutionResult(
                             call.Id,
-                            call.Name,
                             ToolManager.BuildErrorJson("Tool hook rewrote a concurrent read-only call to a non-read-only tool."),
                             IsError: true),
                         SchedulerFault: true);
@@ -368,31 +326,14 @@ public sealed class StreamingToolExecutor
                     ArgumentsJson = toolCallContext.ArgumentsJson,
                 };
 
-                var (result, error) = await _tools.ExecuteToolCallRawAsync(resolvedCall, ct);
-                toolCallContext.Result = result;
-                if (error is not null)
-                {
-                    toolCallContext.Receipt = AgentToolReceiptFactory.CreateError(
-                        effectiveTool,
-                        toolCallContext.ToolCallId,
-                        toolCallContext.ToolName,
-                        result,
-                        "tool_execution_error",
-                        error.Message);
-                }
+                var result = await _tools.ExecuteToolCallAsync(resolvedCall, ct);
+                toolCallContext.Result = result.Content;
             });
 
             var toolResult = toolCallContext.Result
                 ?? (toolCallContext.Terminate
                     ? "Tool call terminated by middleware"
                     : $"Tool '{toolCallContext.ToolName}' returned no result");
-            var receipt = toolCallContext.Receipt ??
-                          AgentToolReceiptFactory.CreateSuccess(
-                              effectiveTool,
-                              toolCallContext.ToolCallId,
-                              toolCallContext.ToolName,
-                              toolResult);
-            var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied;
 
             toolCtx.ToolResult = toolResult;
             toolCtx.Duration = Stopwatch.GetElapsedTime(toolStartedAt);
@@ -401,16 +342,11 @@ public sealed class StreamingToolExecutor
 
             if (ct.IsCancellationRequested)
                 return new ToolExecutionCompletion(
-                new ToolExecutionResult(call.Id, call.Name, "Tool execution was discarded", IsError: true),
+                    new ToolExecutionResult(call.Id, "Tool execution was discarded", IsError: true),
                     SchedulerFault: false);
 
             return new ToolExecutionCompletion(
-                new ToolExecutionResult(
-                    call.Id,
-                    call.Name,
-                    toolResult,
-                    IsError: isErrorReceipt,
-                    Receipt: receipt),
+                new ToolExecutionResult(call.Id, toolResult, IsError: false),
                 SchedulerFault: false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -418,7 +354,6 @@ public sealed class StreamingToolExecutor
             return new ToolExecutionCompletion(
                 new ToolExecutionResult(
                     tracked.Call.Id,
-                    tracked.Call.Name,
                     "Tool execution was discarded",
                     IsError: true),
                 SchedulerFault: false);
@@ -428,15 +363,11 @@ public sealed class StreamingToolExecutor
             return new ToolExecutionCompletion(
                 new ToolExecutionResult(
                     tracked.Call.Id,
-                    tracked.Call.Name,
                     ToolManager.BuildErrorJson(ex.Message),
                     IsError: true),
                 SchedulerFault: false);
         }
     }
-
-    private bool IsToolVisible(string? toolName) =>
-        (_toolContext ?? AgentToolRequestContext.Current)?.ToolVisibility.Allows(toolName) ?? true;
 
     private sealed class NullAgentTool(string name) : IAgentTool
     {

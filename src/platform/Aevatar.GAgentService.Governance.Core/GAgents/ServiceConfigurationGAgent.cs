@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
@@ -9,7 +8,6 @@ using Google.Protobuf;
 
 namespace Aevatar.GAgentService.Governance.Core.GAgents;
 
-[GAgent("gagent.service.governance.configuration")]
 public sealed class ServiceConfigurationGAgent : GAgentBase<ServiceConfigurationState>
 {
     public ServiceConfigurationGAgent()

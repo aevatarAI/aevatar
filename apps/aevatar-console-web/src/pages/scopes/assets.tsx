@@ -739,6 +739,8 @@ const TeamAssetsPage: React.FC = () => {
               buildRuntimeGAgentsHref({
                 scopeId: activeDraft.scopeId.trim(),
                 actorId: currentDefaultRouteRevision?.primaryActorId || undefined,
+                actorTypeName:
+                  currentDefaultRouteRevision?.staticActorTypeName || undefined,
               }),
             )
           }

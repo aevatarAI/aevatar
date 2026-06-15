@@ -18,7 +18,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
         "aevatar_invoke_team",
         "aevatar_start_workflow",
         "aevatar_observe_run",
-        "aevatar_read_workflow_run_artifact",
+        "aevatar_query_readmodel",
     ];
 
     private readonly IToolSetRegistry _toolSetRegistry;
@@ -145,7 +145,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
             typeof(InvokeTeamToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
-            typeof(ReadWorkflowRunArtifactToolSource),
+            typeof(QueryReadModelToolSource),
         };
 
         foreach (var source in sources)
@@ -294,7 +294,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
             InvokeTeamToolSource or
             StartWorkflowToolSource or
             ObserveRunToolSource or
-            ReadWorkflowRunArtifactToolSource;
+            QueryReadModelToolSource;
 
     private static HealthProbeOutcome? VerifyCompletionObservationTools(
         IReadOnlyDictionary<string, IAgentTool> discovered)
@@ -312,11 +312,10 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
                 "completion_observe_tool_not_read_only",
                 "aevatar_observe_run must remain a read-only readmodel observation tool.");
 
-        if (discovered["aevatar_read_workflow_run_artifact"] is not IAevatarInvocationTool readWorkflowRunArtifact ||
-            !readWorkflowRunArtifact.IsReadOnly)
+        if (discovered["aevatar_query_readmodel"] is not IAevatarInvocationTool queryReadmodel || !queryReadmodel.IsReadOnly)
             return Failure(
-                "workflow_run_artifact_tool_not_read_only",
-                "aevatar_read_workflow_run_artifact must remain a read-only workflow-run artifact query tool.");
+                "completion_query_tool_not_read_only",
+                "aevatar_query_readmodel must remain a read-only readmodel query tool.");
 
         return null;
     }

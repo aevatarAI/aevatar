@@ -112,9 +112,9 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不创建 run、不调用固定 actor/team，只验证 host 组合层是否仍具备 core-loop 所需能力：
 
 1. `workspace.default` tool set 可解析。
-2. 四个 Aevatar invocation tools 可发现，且具备 description、parameters schema 与 `IAevatarInvocationTool` 契约。
+2. 五个 Aevatar invocation tools 可发现，且具备 description、parameters schema 与 `IAevatarInvocationTool` 契约。
 3. route policy 使用 `ForwardToModel + tool_choice_hint` 表达 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 目标；旧 GAgent/team wire action 已删除。
-4. `wait=complete` 在 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 上只保留公开参数与 accepted/streaming receipt 语义；完成态由 typed `aevatar_observe_run` target 读取单一 readmodel 获取，不再进入 ChatRun completion 协调。普通 workflow 查询走 workflow-owned `workflow_actor_current_state`、`workflow_status`、`event_query`。
+4. `wait=complete` 在 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 上只保留公开参数与 accepted/streaming receipt 语义；完成态由 `aevatar_observe_run` 或 `aevatar_query_readmodel` 读取 readmodel 获取，不再进入 ChatRun completion 协调。
 
 `http_status` 支持的常用参数：
 
@@ -335,14 +335,14 @@ internal sealed class MyReadmodelFreshnessSource : IReadmodelFreshnessSource
 | `test/Aevatar.GAgents.StatusDashboard.Tests/HttpStatusProbeExecutorTests.cs` | HTTP executor status/body/header/timeout 行为 |
 | `test/Aevatar.GAgents.StatusDashboard.Tests/ReadmodelFreshnessProbeExecutorTests.cs` | freshness executor 分类逻辑 |
 | `test/Aevatar.GAgents.StatusDashboard.Tests/HealthProbeTargetProjectorTests.cs` | actor state 到 readmodel 的物化 |
-| `test/Aevatar.Capabilities.Tests/MainnetStatusEndpointsTests.cs` | mainnet `/status` 与 `/api/status` endpoint |
-| `test/Aevatar.Capabilities.Tests/MainnetHostCompositionTests.cs` | Mainnet host 注册与 `aevatar_core_loop` executor 可用性 |
+| `test/Aevatar.Hosting.Tests/MainnetStatusEndpointsTests.cs` | mainnet `/status` 与 `/api/status` endpoint |
+| `test/Aevatar.Hosting.Tests/MainnetHostCompositionTests.cs` | Mainnet host 注册与 `aevatar_core_loop` executor 可用性 |
 
 常用验证命令：
 
 ```bash
 dotnet test test/Aevatar.GAgents.StatusDashboard.Tests/Aevatar.GAgents.StatusDashboard.Tests.csproj --nologo
-dotnet test test/Aevatar.Capabilities.Tests/Aevatar.Capabilities.Tests.csproj --filter MainnetStatusEndpointsTests --nologo
+dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --filter MainnetStatusEndpointsTests --nologo
 ```
 
 若修改测试或新增测试，还必须执行：

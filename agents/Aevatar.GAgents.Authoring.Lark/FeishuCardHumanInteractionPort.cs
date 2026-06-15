@@ -1,7 +1,7 @@
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
-using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
@@ -18,7 +18,9 @@ namespace Aevatar.GAgents.Authoring.Lark;
 /// </summary>
 public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 {
-    private readonly FeishuCardOutboundMessageSender _sender;
+    private readonly IUserAgentDeliveryTargetReader _deliveryTargetReader;
+    private readonly NyxIdApiClient _nyxIdApiClient;
+    private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly LarkMessageComposer _composer;
     private readonly ILogger<FeishuCardHumanInteractionPort> _logger;
 
@@ -29,15 +31,11 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         ILogger<FeishuCardHumanInteractionPort> logger,
         ILarkOutboundDispatcher? larkOutboundDispatcher = null)
     {
-        ArgumentNullException.ThrowIfNull(deliveryTargetReader);
-        ArgumentNullException.ThrowIfNull(nyxIdApiClient);
+        _deliveryTargetReader = deliveryTargetReader ?? throw new ArgumentNullException(nameof(deliveryTargetReader));
+        _nyxIdApiClient = nyxIdApiClient ?? throw new ArgumentNullException(nameof(nyxIdApiClient));
+        _larkOutboundDispatcher = larkOutboundDispatcher;
         _composer = composer ?? throw new ArgumentNullException(nameof(composer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _sender = new FeishuCardOutboundMessageSender(
-            deliveryTargetReader,
-            nyxIdApiClient,
-            logger,
-            larkOutboundDispatcher);
     }
 
     public async Task DeliverSuspensionAsync(
@@ -47,11 +45,8 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var target = await _sender.ResolveTargetAsync(
-            deliveryTargetId,
-            "human interaction",
-            cancellationToken);
-        await _sender.SendInteractiveCardMessageAsync(
+        var target = await ResolveTargetAsync(deliveryTargetId, cancellationToken);
+        await SendInteractiveCardMessageAsync(
             target,
             BuildCardJson(request, _composer),
             "Feishu human interaction card delivery returned empty response.",
@@ -72,11 +67,8 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     {
         ArgumentNullException.ThrowIfNull(resolution);
 
-        var target = await _sender.ResolveTargetAsync(
-            deliveryTargetId,
-            "human interaction",
-            cancellationToken);
-        await _sender.SendTextMessageAsync(
+        var target = await ResolveTargetAsync(deliveryTargetId, cancellationToken);
+        await SendTextMessageAsync(
             target,
             BuildApprovalResolutionText(resolution, target),
             "Feishu approval resolution delivery returned empty response.",
@@ -169,9 +161,6 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
     internal static MessageContent BuildSuspensionIntent(HumanInteractionRequest request)
     {
-        if (request.InteractionSpec is not null)
-            return BuildTypedSuspensionIntent(request);
-
         var intent = new MessageContent
         {
             Text = string.Empty,
@@ -219,37 +208,6 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         return intent;
     }
-
-    private static MessageContent BuildTypedSuspensionIntent(HumanInteractionRequest request)
-    {
-        var intent = InteractionSpecMapper.ToMessageContent(request.InteractionSpec!);
-        var actions = EnumerateActions(intent).ToArray();
-        foreach (var action in actions)
-        {
-            if (action.Kind != ActionElementKind.FormSubmit)
-                continue;
-
-            action.WorkflowResume = BuildWorkflowResumePayload(request, ResolveTypedApprovalDecision(action));
-        }
-
-        return intent;
-    }
-
-    private static IEnumerable<ActionElement> EnumerateActions(MessageContent intent)
-    {
-        foreach (var action in intent.Actions)
-            yield return action;
-        foreach (var card in intent.Cards)
-        {
-            foreach (var action in card.Actions)
-                yield return action;
-        }
-    }
-
-    private static bool? ResolveTypedApprovalDecision(ActionElement action) =>
-        action.WorkflowResume?.HasApproved == true
-            ? action.WorkflowResume.Approved
-            : null;
 
     private static ActionElement BuildTextInput(string actionId, string label, string placeholder) =>
         new()
@@ -300,6 +258,159 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     {
         Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
     };
+
+    private async Task<UserAgentDeliveryTarget> ResolveTargetAsync(
+        string deliveryTargetId,
+        CancellationToken cancellationToken)
+    {
+        var target = await _deliveryTargetReader.GetAsync(deliveryTargetId, cancellationToken);
+        if (target == null)
+            throw new InvalidOperationException($"Agent delivery target not found: {deliveryTargetId}");
+
+        if (!string.Equals(target.Platform, "lark", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException($"Unsupported human interaction platform: {target.Platform}");
+
+        return target;
+    }
+
+    private async Task SendTextMessageAsync(
+        UserAgentDeliveryTarget target,
+        string text,
+        string emptyResponseMessage,
+        string failurePrefix,
+        CancellationToken cancellationToken) =>
+        await SendMessageAsync(
+            target,
+            "text",
+            JsonSerializer.Serialize(new { text }),
+            emptyResponseMessage,
+            failurePrefix,
+            cancellationToken);
+
+    private async Task SendInteractiveCardMessageAsync(
+        UserAgentDeliveryTarget target,
+        string cardJson,
+        string emptyResponseMessage,
+        string failurePrefix,
+        CancellationToken cancellationToken)
+        => await SendMessageAsync(
+            target,
+            "interactive",
+            cardJson,
+            emptyResponseMessage,
+            failurePrefix,
+            cancellationToken);
+
+    private async Task SendMessageAsync(
+        UserAgentDeliveryTarget target,
+        string messageType,
+        string contentJson,
+        string emptyResponseMessage,
+        string failurePrefix,
+        CancellationToken cancellationToken)
+    {
+        var deliveryTarget = LarkConversationTargets.Resolve(
+            target.LarkReceiveId,
+            target.LarkReceiveIdType,
+            target.ConversationId);
+        if (deliveryTarget.FellBackToPrefixInference)
+        {
+            // Catalog entry predates the typed lark_receive_id fields; fall back to the prefix
+            // heuristic on conversation_id and emit a breadcrumb so format drift is observable.
+            _logger.LogDebug(
+                "Feishu human interaction port resolved Lark receive target by prefix inference (legacy entry): agent={AgentId}, conversationId={ConversationId}, receiveIdType={ReceiveIdType}",
+                target.AgentId,
+                target.ConversationId,
+                deliveryTarget.ReceiveIdType);
+        }
+
+        var outcome = await TrySendWithFallbackAsync(
+            target,
+            messageType,
+            contentJson,
+            deliveryTarget,
+            emptyResponseMessage,
+            cancellationToken);
+
+        if (!outcome.Succeeded)
+        {
+            throw new InvalidOperationException(BuildLarkRejectionMessage(failurePrefix, outcome.LarkCode, outcome.Detail));
+        }
+    }
+
+    /// <summary>
+    /// Sends via the shared Lark new-message dispatcher so proactive human-interaction cards
+    /// keep the same primary, fallback, and parser semantics as SkillRunner output.
+    /// </summary>
+    private async Task<LarkSendNewMessageResult> TrySendWithFallbackAsync(
+        UserAgentDeliveryTarget target,
+        string messageType,
+        string contentJson,
+        LarkReceiveTarget primary,
+        string emptyResponseMessage,
+        CancellationToken cancellationToken)
+    {
+        var result = await ResolveLarkOutboundDispatcher().SendNewMessageAsync(
+            new LarkSendNewMessageRequest(
+                target.NyxApiKey,
+                target.NyxProviderSlug,
+                messageType,
+                contentJson,
+                primary,
+                ResolveFallbackTarget(target)),
+            cancellationToken);
+
+        if (!result.Succeeded && string.IsNullOrWhiteSpace(result.Detail))
+            throw new InvalidOperationException(emptyResponseMessage);
+
+        return result;
+    }
+
+    private static LarkReceiveTarget? ResolveFallbackTarget(UserAgentDeliveryTarget target)
+    {
+        var fallbackId = target.LarkReceiveIdFallback?.Trim();
+        var fallbackType = target.LarkReceiveIdTypeFallback?.Trim();
+        return string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType)
+            ? null
+            : new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
+    }
+
+    private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher() =>
+        _larkOutboundDispatcher ?? new LarkOutboundDispatcher(_nyxIdApiClient, _logger);
+
+    private static string BuildLarkRejectionMessage(string failurePrefix, int? larkCode, string detail)
+    {
+        if (larkCode == LarkBotErrorCodes.OpenIdCrossApp)
+        {
+            // Mirrors the SkillRunnerGAgent recovery hint: the workflow agent's catalog target
+            // was captured before union_id ingress existed and the persisted typed pair is
+            // permanently relay-app-scoped. Surface the recreate-the-agent instruction inside
+            // the exception message so it ends up in `/agent-status`'s `last_error` field
+            // instead of the cryptic Lark `99992361 open_id cross app`.
+            return
+                $"{failurePrefix} (code={larkCode}): {detail}. " +
+                "This agent was created before cross-app union_id ingress existed; " +
+                "delete it (`/agents` → Delete) and recreate it to pick up the cross-app safe target.";
+        }
+
+        if (larkCode == LarkBotErrorCodes.UserIdCrossTenant)
+        {
+            // Cross-tenant variant of the open_id case — even union_id fails. Same recovery
+            // shape: recreate the agent so the chat_id-preferred outbound takes effect, or
+            // align the NyxID `s/api-lark-bot` proxy with the channel-bot that received the
+            // inbound event so the apps share a tenant.
+            return
+                $"{failurePrefix} (code={larkCode}): {detail}. " +
+                "The outbound Lark app is in a different tenant than the inbound app, so " +
+                "user-id translation is impossible. Delete the agent (`/agents` → Delete) and recreate " +
+                "it so the new chat_id-preferred outbound path takes effect, or align the NyxID " +
+                "`s/api-lark-bot` proxy with the channel-bot that received the inbound event.";
+        }
+
+        return larkCode is { } code
+            ? $"{failurePrefix} (code={code}): {detail}"
+            : $"{failurePrefix}: {detail}";
+    }
 
     private static bool SupportsApproveReject(HumanInteractionRequest request) =>
         string.Equals(request.SuspensionType, "human_approval", StringComparison.OrdinalIgnoreCase) ||

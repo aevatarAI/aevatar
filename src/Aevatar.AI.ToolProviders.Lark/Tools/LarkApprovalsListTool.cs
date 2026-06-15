@@ -5,6 +5,20 @@ namespace Aevatar.AI.ToolProviders.Lark.Tools;
 
 public sealed class LarkApprovalsListTool : AgentToolBase<LarkApprovalsListTool.Parameters>
 {
+    private static readonly HashSet<string> AllowedLocales =
+    [
+        "zh-CN",
+        "en-US",
+        "ja-JP",
+    ];
+
+    private static readonly HashSet<string> AllowedUserIdTypes =
+    [
+        "user_id",
+        "union_id",
+        "open_id",
+    ];
+
     private static readonly Dictionary<string, string> TopicAliases = new(StringComparer.OrdinalIgnoreCase)
     {
         ["1"] = "1",
@@ -34,8 +48,7 @@ public sealed class LarkApprovalsListTool : AgentToolBase<LarkApprovalsListTool.
     public override string Name => "lark_approvals_list";
 
     public override string Description =>
-        "List the Lark approval tasks of the current operator (the user behind this turn; " +
-        "their identity is taken from the channel context, not from arguments). " +
+        "List approval tasks visible to the current Nyx-backed Lark identity. " +
         "Use this to discover pending, completed, initiated, or CC approval work before acting on a task.";
 
     public override ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
@@ -56,28 +69,39 @@ public sealed class LarkApprovalsListTool : AgentToolBase<LarkApprovalsListTool.
             });
         }
 
-        var pageSize = parameters.PageSize is > 0 ? parameters.PageSize.Value : 20;
-        if (pageSize is < 1 or > 100)
-            return LarkProxyResponseParser.Serialize(new { success = false, error = "page_size must be between 1 and 100." });
-
-        var operatorIdentity = LarkApprovalOperatorIdentity.Resolve();
-        if (operatorIdentity == null)
+        var locale = parameters.Locale?.Trim();
+        if (!string.IsNullOrWhiteSpace(locale) && !AllowedLocales.Contains(locale))
         {
             return LarkProxyResponseParser.Serialize(new
             {
                 success = false,
-                error = "No Lark operator identity in the current channel context. Approval tasks can only be listed for the user behind this turn.",
+                error = "locale must be one of: zh-CN, en-US, ja-JP",
             });
         }
+
+        var userIdType = parameters.UserIdType?.Trim().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(userIdType) && !AllowedUserIdTypes.Contains(userIdType))
+        {
+            return LarkProxyResponseParser.Serialize(new
+            {
+                success = false,
+                error = "user_id_type must be one of: user_id, union_id, open_id",
+            });
+        }
+
+        var pageSize = parameters.PageSize is > 0 ? parameters.PageSize.Value : 20;
+        if (pageSize is < 1 or > 100)
+            return LarkProxyResponseParser.Serialize(new { success = false, error = "page_size must be between 1 and 100." });
 
         var response = await _client.ListApprovalTasksAsync(
             token,
             new LarkApprovalTaskQueryRequest(
                 Topic: topic!,
-                UserId: operatorIdentity.UserId,
+                DefinitionCode: parameters.DefinitionCode?.Trim(),
+                Locale: locale,
                 PageSize: pageSize,
                 PageToken: parameters.PageToken?.Trim(),
-                UserIdType: operatorIdentity.UserIdType),
+                UserIdType: userIdType),
             ct);
 
         if (LarkProxyResponseParser.TryParseError(response, out var error))
@@ -93,18 +117,23 @@ public sealed class LarkApprovalsListTool : AgentToolBase<LarkApprovalsListTool.
             tasks = result.Tasks.Select(task => new
             {
                 task_id = task.TaskId,
-                instance_code = task.ProcessCode,
-                process_id = task.ProcessId,
+                instance_code = task.InstanceCode,
                 title = task.Title,
                 status = NormalizeTaskStatus(task.Status),
-                process_status = NormalizeProcessStatus(task.ProcessStatus),
                 topic = NormalizeTopicValue(task.Topic),
+                support_api_operate = task.SupportApiOperate,
                 definition_code = task.DefinitionCode,
                 definition_name = task.DefinitionName,
-                initiators = task.Initiators,
-                initiator_names = task.InitiatorNames,
+                initiator = task.Initiator,
+                initiator_name = task.InitiatorName,
                 user_id = task.UserId,
+                instance_status = NormalizeInstanceStatus(task.InstanceStatus),
                 link = task.Link,
+                summaries = task.Summaries.Select(summary => new
+                {
+                    key = summary.Key,
+                    value = summary.Value,
+                }).ToArray(),
             }).ToArray(),
         });
     }
@@ -140,7 +169,7 @@ public sealed class LarkApprovalsListTool : AgentToolBase<LarkApprovalsListTool.
             _ => value,
         };
 
-    private static string? NormalizeProcessStatus(string? value) =>
+    private static string? NormalizeInstanceStatus(string? value) =>
         value switch
         {
             "0" => "none",
@@ -155,7 +184,10 @@ public sealed class LarkApprovalsListTool : AgentToolBase<LarkApprovalsListTool.
     public sealed class Parameters
     {
         public string? Topic { get; set; }
+        public string? DefinitionCode { get; set; }
+        public string? Locale { get; set; }
         public int? PageSize { get; set; }
         public string? PageToken { get; set; }
+        public string? UserIdType { get; set; }
     }
 }

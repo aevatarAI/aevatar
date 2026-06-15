@@ -2,7 +2,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
@@ -67,15 +66,13 @@ public sealed class LocalSkillCatalogTests
         using (BeginTokenScope("token-a"))
         {
             var result = await tool.ExecuteAsync("""{"skill":"nyxid"}""");
-            ExtractText(result).Should().Contain("remote-token-a-1");
-            ExtractLoaded(result).Should().BeTrue();
+            result.Should().Contain("remote-token-a-1");
         }
 
         using (BeginTokenScope("token-b"))
         {
             var result = await tool.ExecuteAsync("""{"skill":"nyxid"}""");
-            ExtractText(result).Should().Contain("remote-token-b-2");
-            ExtractLoaded(result).Should().BeTrue();
+            result.Should().Contain("remote-token-b-2");
         }
 
         fetcher.Requests.Should().Equal(
@@ -94,12 +91,10 @@ public sealed class LocalSkillCatalogTests
 
         using var _ = BeginTokenScope("token-a");
         var result = await tool.ExecuteAsync("""{"skill":"local"}""");
-        var text = ExtractText(result);
 
-        text.Should().Contain("local-body");
-        text.Should().Contain("Skill Continuation");
-        text.Should().Contain("ornn_search_skills");
-        ExtractLoaded(result).Should().BeTrue();
+        result.Should().Contain("local-body");
+        result.Should().Contain("Skill Continuation");
+        result.Should().Contain("ornn_search_skills");
         fetcher.Requests.Should().BeEmpty();
     }
 
@@ -125,113 +120,12 @@ public sealed class LocalSkillCatalogTests
             }));
 
         var result = await tool.ExecuteAsync("""{"skill":"workflow-skill"}""");
-        var text = ExtractText(result);
 
-        text.Should().Contain("## aevatar_start_workflow Handoff");
-        text.Should().Contain("\"workflow_id\": \"summary-report\"");
-        text.Should().Contain("\"workflow_yamls\"");
-        text.Should().Contain("after the workflow is mounted");
-        text.IndexOf("## aevatar_start_workflow Handoff", StringComparison.Ordinal)
-            .Should().BeLessThan(text.IndexOf("## Associated Files", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task UseSkillTool_MountsWorkflowsByDefault_WhenHostProvidesMountPort()
-    {
-        var catalog = new LocalSkillCatalog();
-        var mountPort = new RecordingSkillWorkflowMountPort();
-        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
-        catalog.Register(MakeSkill(
-            "workflow-skill",
-            workflows:
-            [
-                new SkillWorkflowDescriptor
-                {
-                    WorkflowId = "summary-report",
-                    WorkflowYamls = ["name: summary-report\nsteps: []"],
-                }
-            ]));
-
-        using var _ = BeginMetadataScope(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.ScopeId] = "scope-1",
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
-        });
-        var result = await tool.ExecuteAsync("""{"skill":"workflow-skill"}""");
-
-        ExtractLoaded(result).Should().BeTrue();
-        mountPort.Requests.Should().ContainSingle();
-        ExtractWorkflowMount(result).Should().NotBeNull();
-    }
-
-    [Fact]
-    public async Task UseSkillTool_MountsWorkflows_WhenExplicitlyRequested()
-    {
-        var catalog = new LocalSkillCatalog();
-        var mountPort = new RecordingSkillWorkflowMountPort();
-        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
-        catalog.Register(MakeSkill(
-            "workflow-skill",
-            workflows:
-            [
-                new SkillWorkflowDescriptor
-                {
-                    WorkflowId = "summary-report",
-                    WorkflowYamls = ["name: summary-report\nsteps: []"],
-                }
-            ]));
-
-        using var _ = BeginMetadataScope(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.ScopeId] = "scope-1",
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
-        });
-        var result = await tool.ExecuteAsync("""{"skill":"workflow-skill","mount_workflows":true}""");
-
-        ExtractLoaded(result).Should().BeTrue();
-        mountPort.Requests.Should().ContainSingle();
-        mountPort.Requests[0].ScopeId.Should().Be("scope-1");
-        mountPort.Requests[0].NyxIdAccessToken.Should().Be("token-a");
-        mountPort.Requests[0].Workflows.Should().ContainSingle(x => x.WorkflowId == "summary-report");
-
-        using var document = JsonDocument.Parse(result);
-        var workflowMount = document.RootElement.GetProperty("workflow_mount");
-        workflowMount.GetProperty("status").GetString().Should().Be("mounted");
-        workflowMount.GetProperty("mounted").GetBoolean().Should().BeTrue();
-        workflowMount.GetProperty("workflows")[0].GetProperty("service_id").GetString().Should().Be("summary-report");
-        workflowMount.GetProperty("workflows")[0].GetProperty("endpoint_id").GetString().Should().Be("chat");
-    }
-
-    [Fact]
-    public async Task UseSkillTool_MountWorkflows_SafelyDegrades_WhenScopeMissing()
-    {
-        var catalog = new LocalSkillCatalog();
-        var mountPort = new RecordingSkillWorkflowMountPort();
-        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
-        catalog.Register(MakeSkill(
-            "workflow-skill",
-            workflows:
-            [
-                new SkillWorkflowDescriptor
-                {
-                    WorkflowId = "summary-report",
-                    WorkflowYamls = ["name: summary-report\nsteps: []"],
-                }
-            ]));
-
-        using var _ = BeginMetadataScope(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
-        });
-        var result = await tool.ExecuteAsync("""{"skill":"workflow-skill","mount_workflows":true}""");
-
-        ExtractLoaded(result).Should().BeTrue();
-        mountPort.Requests.Should().BeEmpty();
-
-        using var document = JsonDocument.Parse(result);
-        var workflowMount = document.RootElement.GetProperty("workflow_mount");
-        workflowMount.GetProperty("status").GetString().Should().Be("missing_scope");
-        workflowMount.GetProperty("mounted").GetBoolean().Should().BeFalse();
+        result.Should().Contain("## aevatar_start_workflow Handoff");
+        result.Should().Contain("\"workflow_id\": \"summary-report\"");
+        result.Should().Contain("\"workflow_yamls\"");
+        result.IndexOf("## aevatar_start_workflow Handoff", StringComparison.Ordinal)
+            .Should().BeLessThan(result.IndexOf("## Associated Files", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -294,27 +188,6 @@ public sealed class LocalSkillCatalogTests
         }
     }
 
-    private sealed class RecordingSkillWorkflowMountPort : ISkillWorkflowMountPort
-    {
-        public List<SkillWorkflowMountRequest> Requests { get; } = [];
-
-        public Task<SkillWorkflowMountResult> MountAsync(
-            SkillWorkflowMountRequest request,
-            CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            return Task.FromResult(new SkillWorkflowMountResult(
-                Status: "mounted",
-                Mounted: true,
-                Workflows: request.Workflows.Select(workflow => new MountedSkillWorkflow(
-                    workflow.WorkflowId,
-                    workflow.WorkflowId,
-                    "chat",
-                    "rev-1")).ToArray(),
-                Message: "Mounted."));
-        }
-    }
-
     private static SkillDefinition MakeSkill(
         string name,
         string instructions = "body",
@@ -336,16 +209,12 @@ public sealed class LocalSkillCatalogTests
 
     private static IDisposable BeginTokenScope(string token)
     {
-        return BeginMetadataScope(new Dictionary<string, string>
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = token,
         });
-    }
 
-    private static IDisposable BeginMetadataScope(IReadOnlyDictionary<string, string> metadata)
-    {
-        var previous = AgentToolRequestContext.Current;
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
         return new RestoreContextScope(previous);
     }
 
@@ -382,26 +251,5 @@ public sealed class LocalSkillCatalogTests
     private sealed class RestoreContextScope(AgentToolExecutionContext? previous) : IDisposable
     {
         public void Dispose() => AgentToolRequestContext.Current = previous;
-    }
-
-    private static string ExtractText(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-        return document.RootElement.GetProperty("text").GetString() ?? string.Empty;
-    }
-
-    private static bool ExtractLoaded(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-        return document.RootElement.GetProperty("loaded").GetBoolean();
-    }
-
-    private static JsonElement? ExtractWorkflowMount(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-        return document.RootElement.TryGetProperty("workflow_mount", out var workflowMount) &&
-               workflowMount.ValueKind != JsonValueKind.Null
-            ? workflowMount.Clone()
-            : null;
     }
 }

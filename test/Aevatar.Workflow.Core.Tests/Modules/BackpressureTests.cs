@@ -39,31 +39,10 @@ public class BackpressureHelperTests
     }
 
     [Fact]
-    public void ResolveMaxConcurrent_AllowsExplicitValueAboveDefault()
+    public void ResolveMaxConcurrent_ClampedToFallback()
     {
         var parameters = new Dictionary<string, string> { ["max_concurrent_workers"] = "100" };
-        BackpressureHelper.ResolveMaxConcurrent(parameters, 20).Should().Be(100);
-    }
-
-    [Fact]
-    public void ResolveMaxConcurrent_ClampedToHardLimit()
-    {
-        var parameters = new Dictionary<string, string> { ["max_concurrent_workers"] = "999" };
-        BackpressureHelper.ResolveMaxConcurrent(parameters).Should().Be(BackpressureHelper.MaxConcurrentWorkersHardLimit);
-    }
-
-    [Fact]
-    public void ResolveMinConcurrent_WithValidParameter_ReturnsValue()
-    {
-        var parameters = new Dictionary<string, string> { ["min_concurrent_workers"] = "4" };
-        BackpressureHelper.ResolveMinConcurrent(parameters, 10).Should().Be(4);
-    }
-
-    [Fact]
-    public void ResolveMinConcurrent_ClampedToMaxConcurrent()
-    {
-        var parameters = new Dictionary<string, string> { ["min_concurrent_workers"] = "40" };
-        BackpressureHelper.ResolveMinConcurrent(parameters, 6).Should().Be(6);
+        BackpressureHelper.ResolveMaxConcurrent(parameters, 20).Should().Be(20);
     }
 
     [Fact]
@@ -75,20 +54,6 @@ public class BackpressureHelperTests
         BackpressureHelper.TryAdmit(bp, entry).Should().BeTrue();
         bp.ActiveWorkers.Should().Be(1);
         bp.Queue.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void TryAdmit_WithMinConcurrentLowerThanMax_ShouldQueueAfterFloor()
-    {
-        var bp = BackpressureHelper.Initialize(5, 2);
-
-        BackpressureHelper.TryAdmit(bp, MakeEntry("s1")).Should().BeTrue();
-        BackpressureHelper.TryAdmit(bp, MakeEntry("s2")).Should().BeTrue();
-        BackpressureHelper.TryAdmit(bp, MakeEntry("s3")).Should().BeFalse();
-
-        bp.ActiveWorkers.Should().Be(2);
-        BackpressureHelper.QueuedCount(bp).Should().Be(1);
-        bp.Queue[0].StepId.Should().Be("s3");
     }
 
     [Fact]
@@ -150,23 +115,6 @@ public class BackpressureHelperTests
 
         var third = BackpressureHelper.TryDrainOne(bp);
         third.Should().BeNull();
-    }
-
-    [Fact]
-    public void CompleteAndTopUp_ShouldRefillToConfiguredFloor()
-    {
-        var bp = BackpressureHelper.Initialize(6, 3);
-        BackpressureHelper.TryAdmit(bp, MakeEntry("s1"));
-        BackpressureHelper.TryAdmit(bp, MakeEntry("s2"));
-        BackpressureHelper.TryAdmit(bp, MakeEntry("s3"));
-        BackpressureHelper.TryAdmit(bp, MakeEntry("s4"));
-        BackpressureHelper.TryAdmit(bp, MakeEntry("s5"));
-
-        var topUps = BackpressureHelper.CompleteAndTopUp(bp);
-
-        topUps.Select(entry => entry.StepId).Should().Equal("s4");
-        bp.ActiveWorkers.Should().Be(3);
-        BackpressureHelper.QueuedCount(bp).Should().Be(1);
     }
 
     [Fact]

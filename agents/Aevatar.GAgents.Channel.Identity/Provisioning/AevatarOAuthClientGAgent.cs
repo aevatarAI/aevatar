@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -20,7 +19,6 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// secrets store needed. See cluster bootstrap service for the startup
 /// signal wiring.
 /// </summary>
-[GAgent("channel.identity.aevatar-oauth-client")]
 public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientState>
 {
     // Refactor (iter71/cluster-071-identity-projection-rebuild-events):

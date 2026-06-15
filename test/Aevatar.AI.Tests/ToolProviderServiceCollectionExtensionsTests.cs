@@ -36,7 +36,6 @@ public class ToolProviderServiceCollectionExtensionsTests
         sources.Count(x => x is SkillsAgentToolSource).Should().Be(1);
         sources.OfType<SkillsAgentToolSource>().Should().ContainSingle()
             .Which.Should().BeSameAs(provider.GetRequiredService<SkillsAgentToolSource>());
-        provider.GetRequiredService<ISkillWorkflowMountPort>().Should().BeOfType<NoOpSkillWorkflowMountPort>();
     }
 
     [Fact]

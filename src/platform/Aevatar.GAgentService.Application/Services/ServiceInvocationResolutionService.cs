@@ -8,16 +8,27 @@ namespace Aevatar.GAgentService.Application.Services;
 public sealed class ServiceInvocationResolutionService
 {
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
-    private readonly IServiceInvocationCatalogQueryReader _invocationCatalogQueryReader;
+    private readonly IServiceTrafficViewQueryReader _trafficViewQueryReader;
+    private readonly IServiceServingSetQueryReader? _servingSetQueryReader;
     private readonly IServiceRevisionCatalogQueryReader _revisionCatalogQueryReader;
 
     public ServiceInvocationResolutionService(
         IServiceCatalogQueryReader catalogQueryReader,
-        IServiceInvocationCatalogQueryReader invocationCatalogQueryReader,
+        IServiceTrafficViewQueryReader trafficViewQueryReader,
+        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader)
+        : this(catalogQueryReader, trafficViewQueryReader, null, revisionCatalogQueryReader)
+    {
+    }
+
+    public ServiceInvocationResolutionService(
+        IServiceCatalogQueryReader catalogQueryReader,
+        IServiceTrafficViewQueryReader trafficViewQueryReader,
+        IServiceServingSetQueryReader? servingSetQueryReader,
         IServiceRevisionCatalogQueryReader revisionCatalogQueryReader)
     {
         _catalogQueryReader = catalogQueryReader ?? throw new ArgumentNullException(nameof(catalogQueryReader));
-        _invocationCatalogQueryReader = invocationCatalogQueryReader ?? throw new ArgumentNullException(nameof(invocationCatalogQueryReader));
+        _trafficViewQueryReader = trafficViewQueryReader ?? throw new ArgumentNullException(nameof(trafficViewQueryReader));
+        _servingSetQueryReader = servingSetQueryReader;
         _revisionCatalogQueryReader = revisionCatalogQueryReader ?? throw new ArgumentNullException(nameof(revisionCatalogQueryReader));
     }
 
@@ -41,119 +52,143 @@ public sealed class ServiceInvocationResolutionService
         var serviceKey = ServiceKeys.Build(request.Identity);
         var definition = await _catalogQueryReader.GetAsync(request.Identity, ct)
             ?? throw new InvalidOperationException($"Service '{serviceKey}' was not found.");
-        var readiness = await ResolveReadinessAsync(request, serviceKey, ct);
+        var trafficView = await _trafficViewQueryReader.GetAsync(request.Identity, ct);
+        var endpointView = trafficView?.Endpoints.FirstOrDefault(x =>
+            string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal));
+        if (endpointView == null || endpointView.Targets.Count == 0)
+        {
+            endpointView = await BuildFallbackEndpointViewAsync(request, trafficView != null, ct);
+        }
+        if (endpointView == null || endpointView.Targets.Count == 0)
+            throw new InvalidOperationException($"Endpoint '{request.EndpointId}' has no serving target on service '{serviceKey}'.");
+
+        var selectedTarget = SelectTarget(endpointView.Targets, request, serviceKey);
         var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(request.Identity, ct);
-        var artifact = ResolvePreparedArtifact(
-            revisionCatalog,
-            request.Identity,
-            readiness.SelectedRevisionId,
-            readiness);
+        // Refactor (iter100/cluster-100): Old invocation resolved artifacts from a process-local store. / New invocation resolves prepared artifacts from the revision readmodel catalog.
+        var artifact = revisionCatalog.GetRequiredPreparedArtifact(request.Identity, selectedTarget.RevisionId);
         var endpoint = artifact.Endpoints.FirstOrDefault(x =>
             string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal));
         if (endpoint == null)
-            throw CreateUnavailable(
-                readiness with
-                {
-                    UnavailableReason = ServiceInvokeUnavailableReason.PreparedArtifactMissing,
-                    ReadinessStatus = ServiceInvokeReadinessStatus.Unavailable,
-                },
-                $"Endpoint '{request.EndpointId}' was not found on prepared artifact for service '{serviceKey}'.");
+            throw new InvalidOperationException($"Endpoint '{request.EndpointId}' was not found on service '{serviceKey}'.");
 
         return new ServiceInvocationResolvedTarget(
             new ServiceInvocationResolvedService(
                 serviceKey,
-                readiness.SelectedRevisionId,
-                readiness.SelectedDeploymentId,
-                readiness.SelectedActorId,
-                ServiceServingState.Active.ToString(),
+                selectedTarget.RevisionId,
+                selectedTarget.DeploymentId,
+                selectedTarget.PrimaryActorId,
+                selectedTarget.ServingState,
                 definition.PolicyIds),
             artifact,
             endpoint);
     }
 
-    private async Task<ServiceInvokeReadinessSnapshot> ResolveReadinessAsync(
+    private async Task<ServiceTrafficEndpointSnapshot?> BuildFallbackEndpointViewAsync(
         ServiceInvocationRequest request,
-        string serviceKey,
+        bool hasTrafficView,
         CancellationToken ct)
     {
-        var catalog = await _invocationCatalogQueryReader.GetAsync(request.Identity!, ct);
-        if (catalog == null)
-            throw CreateUnavailable(CreateUnspecifiedSnapshot(serviceKey, request.EndpointId), $"Service '{serviceKey}' has no invocation catalog readmodel.");
+        if (_servingSetQueryReader == null)
+        {
+            if (hasTrafficView)
+                return null;
 
-        var requestedRevisionId = request.RevisionId?.Trim() ?? string.Empty;
-        var readiness = catalog.Entries.FirstOrDefault(x =>
-            string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal) &&
-            (string.IsNullOrWhiteSpace(requestedRevisionId) ||
-             string.Equals(x.SelectedRevisionId, requestedRevisionId, StringComparison.Ordinal)));
-        if (readiness == null)
-            throw CreateUnavailable(CreateUnspecifiedSnapshot(catalog, request.EndpointId), $"Endpoint '{request.EndpointId}' has no invocation readiness on service '{serviceKey}'.");
+            throw new InvalidOperationException($"Service '{ServiceKeys.Build(request.Identity!)}' has no serving traffic view.");
+        }
 
-        if (readiness.ReadinessStatus != ServiceInvokeReadinessStatus.Ready)
-            throw CreateUnavailable(readiness, $"Service '{serviceKey}' endpoint '{request.EndpointId}' is not ready for invoke.");
+        var servingSet = await _servingSetQueryReader.GetAsync(request.Identity!, ct);
+        if (servingSet == null)
+        {
+            if (hasTrafficView)
+                return null;
 
-        return readiness;
+            throw new InvalidOperationException($"Service '{ServiceKeys.Build(request.Identity!)}' has no serving traffic view.");
+        }
+
+        var targets = servingSet.Targets
+            .Where(x => IsEndpointEnabled(x, request.EndpointId))
+            .Select(x => new ServiceTrafficTargetSnapshot(
+                x.DeploymentId,
+                x.RevisionId,
+                x.PrimaryActorId,
+                x.AllocationWeight,
+                x.ServingState))
+            .ToList();
+
+        return new ServiceTrafficEndpointSnapshot(request.EndpointId, targets);
     }
 
-    private static PreparedServiceRevisionArtifact ResolvePreparedArtifact(
-        ServiceRevisionCatalogSnapshot? revisionCatalog,
-        ServiceIdentity identity,
-        string revisionId,
-        ServiceInvokeReadinessSnapshot readiness)
+    private static bool IsEndpointEnabled(ServiceServingTargetSnapshot target, string endpointId)
     {
-        try
-        {
-            return revisionCatalog.GetRequiredPreparedArtifact(identity, revisionId);
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw CreateUnavailable(
-                readiness with
-                {
-                    UnavailableReason = ServiceInvokeUnavailableReason.PreparedArtifactMissing,
-                    ReadinessStatus = ServiceInvokeReadinessStatus.Unavailable,
-                },
-                ex.Message);
-        }
+        if (target.EnabledEndpointIds.Count == 0)
+            return true;
+
+        return target.EnabledEndpointIds.Any(x => string.Equals(x, endpointId, StringComparison.Ordinal));
     }
 
-    private static ServiceInvokeReadinessException CreateUnavailable(
-        ServiceInvokeReadinessSnapshot snapshot,
-        string message) =>
-        new(message, snapshot);
+    private static ServiceTrafficTargetSnapshot SelectTarget(
+        IReadOnlyList<ServiceTrafficTargetSnapshot> targets,
+        ServiceInvocationRequest request,
+        string serviceKey)
+    {
+        var requestedRevisionId = request.RevisionId?.Trim() ?? string.Empty;
+        var selectedCandidates = targets;
+        if (!string.IsNullOrWhiteSpace(requestedRevisionId))
+        {
+            selectedCandidates = targets
+                .Where(x => string.Equals(x.RevisionId, requestedRevisionId, StringComparison.Ordinal))
+                .ToList();
+            if (selectedCandidates.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{requestedRevisionId}' has no serving target on service '{serviceKey}'.");
+            }
+        }
 
-    private static ServiceInvokeReadinessSnapshot CreateUnspecifiedSnapshot(
-        ServiceInvocationCatalogSnapshot catalog,
-        string endpointId) =>
-        new(
-            catalog.ServiceKey,
-            endpointId,
-            ServiceInvokeReadinessStatus.Unspecified,
-            ServiceInvokeUnavailableReason.Unspecified,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            catalog.ObservedAt,
-            catalog.AggregateStateVersion,
-            catalog.LastEventId,
-            catalog.SourceCatalogVersion,
-            catalog.SourceServingVersion,
-            catalog.SourceRevisionVersion);
+        var activeTargets = selectedCandidates
+            .Where(x => x.AllocationWeight > 0 && string.Equals(x.ServingState, ServiceServingState.Active.ToString(), StringComparison.Ordinal))
+            .ToList();
+        if (activeTargets.Count == 0)
+        {
+            if (!string.IsNullOrWhiteSpace(requestedRevisionId))
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{requestedRevisionId}' is not active on service '{serviceKey}'.");
+            }
 
-    private static ServiceInvokeReadinessSnapshot CreateUnspecifiedSnapshot(
-        string serviceKey,
-        string endpointId) =>
-        new(
-            serviceKey,
-            endpointId,
-            ServiceInvokeReadinessStatus.Unspecified,
-            ServiceInvokeUnavailableReason.Unspecified,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            DateTimeOffset.UnixEpoch,
-            0,
-            string.Empty,
-            0,
-            0,
-            0);
+            throw new InvalidOperationException("No active serving targets are available.");
+        }
+
+        var totalWeight = activeTargets.Sum(x => x.AllocationWeight);
+        var seed = request.CommandId;
+        if (string.IsNullOrWhiteSpace(seed))
+            seed = request.CorrelationId;
+        if (string.IsNullOrWhiteSpace(seed))
+            seed = request.EndpointId;
+
+        var slot = (int)(ComputeDeterministicHash(seed ?? string.Empty) % (uint)totalWeight);
+        var cumulative = 0;
+        foreach (var target in activeTargets)
+        {
+            cumulative += target.AllocationWeight;
+            if (slot < cumulative)
+                return target;
+        }
+
+        return activeTargets[^1];
+    }
+
+    private static uint ComputeDeterministicHash(string value)
+    {
+        const uint offsetBasis = 2166136261;
+        const uint prime = 16777619;
+        var hash = offsetBasis;
+        foreach (var ch in value)
+        {
+            hash ^= ch;
+            hash *= prime;
+        }
+
+        return hash;
+    }
 }

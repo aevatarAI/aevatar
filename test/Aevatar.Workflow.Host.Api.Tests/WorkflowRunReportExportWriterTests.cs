@@ -61,8 +61,6 @@ public class WorkflowRunReportExportWriterTests
             html.Should().Contain("parent-1");
             html.Should().Contain("role-a");
             html.Should().Contain("workflow.completed");
-            html.Should().Contain("Usage.PromptTokens");
-            html.Should().Contain("gpt-5.4");
         }
         finally
         {
@@ -160,15 +158,6 @@ public class WorkflowRunReportExportWriterTests
                     Data = new Dictionary<string, string> { ["ok"] = "true" },
                 },
             ],
-            Usage = new WorkflowRunUsageMetrics
-            {
-                PromptTokens = 21,
-                CompletionTokens = 34,
-                TotalTokens = 55,
-                Model = "gpt-5.4",
-                Cost = 0.78,
-                LatencyMs = 456,
-            },
             Summary = new WorkflowRunStatistics
             {
                 TotalSteps = 1,

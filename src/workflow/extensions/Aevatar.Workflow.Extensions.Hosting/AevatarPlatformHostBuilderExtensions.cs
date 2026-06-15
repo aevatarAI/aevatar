@@ -1,9 +1,7 @@
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Capabilities;
-using Aevatar.GAgentService.Hosting.DependencyInjection;
-using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Hosting;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Workflow.Extensions.Maker;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -69,26 +67,12 @@ public static class AevatarPlatformHostBuilderExtensions
                 Category = "dependency",
                 ProbeAsync = static async (serviceProvider, cancellationToken) =>
                 {
-                    var indexProbe = serviceProvider.GetService<IProjectionIndexConsistencyProbe<WorkflowExecutionCurrentStateDocument>>();
-                    if (indexProbe != null)
-                    {
-                        var consistency = await indexProbe.CheckIndexConsistencyAsync(cancellationToken);
-                        return ProjectionIndexDiagnostics.ToContributorResult(consistency);
-                    }
-
                     var documentReader = serviceProvider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
-                    try
+                    _ = await documentReader.QueryAsync(new ProjectionDocumentQuery
                     {
-                        _ = await documentReader.QueryAsync(new ProjectionDocumentQuery
-                        {
-                            Take = 1,
-                        }, cancellationToken);
-                        return AevatarHealthContributorResult.Healthy("Workflow document read model is reachable.");
-                    }
-                    catch (ProjectionIndexSchemaDriftException exception)
-                    {
-                        return ProjectionIndexDiagnostics.ToUnhealthyContributorResult(exception);
-                    }
+                        Take = 1,
+                    }, cancellationToken);
+                    return AevatarHealthContributorResult.Healthy("Workflow document read model is reachable.");
                 },
             });
             builder.Services.AddAevatarHealthContributor(new AevatarHealthContributorRegistration
@@ -107,10 +91,6 @@ public static class AevatarPlatformHostBuilderExtensions
                 },
             });
             builder.AddWorkflowCapabilityBundle();
-            builder.AddAevatarCapability(
-                "scheduled-dispatch",
-                static (services, configuration) => services.AddScheduledDispatchCapability(configuration),
-                static app => app.MapScheduledDispatchEndpoints());
         }
 
         if (options.EnableScriptingCapability)

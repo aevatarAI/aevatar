@@ -53,10 +53,6 @@ and provider state machines.
 - Raw audio frames, WebSocket connection identifiers, session IDs, and client
   connection metadata remain transient. They must not be written to actor state,
   event store, projection documents, or read models.
-- Raw PCM has exactly one runtime path: the active transport lease's
-  `IVoiceVolatileMediaStreamPort` volatile relay forwards media between the
-  `IVoiceTransport` and `IRealtimeVoiceProvider` session. It must not be
-  carried by actor-facing protobuf signals or packed into `EventEnvelope`.
 - Voice control and transcript protobuf frames are not raw audio. They use the
   shared `IRealtimeSession` lifecycle and projection-backed realtime stream as
   `VoiceRealtimeFrame`; that frame must not carry PCM/audio bytes.

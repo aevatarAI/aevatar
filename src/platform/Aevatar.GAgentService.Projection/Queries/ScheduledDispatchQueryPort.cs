@@ -50,15 +50,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
 
     private static ProjectionDocumentFilter[] BuildFilters(ScheduledDispatchListQuery query)
     {
-        var filters = new List<ProjectionDocumentFilter>
-        {
-            new()
-            {
-                FieldPath = nameof(ScheduledDispatchDocument.Deleted),
-                Operator = ProjectionDocumentFilterOperator.EqOrMissing,
-                Value = ProjectionDocumentValue.FromBool(false),
-            },
-        };
+        var filters = new List<ProjectionDocumentFilter>();
         if (query.TargetKind != null)
         {
             filters.Add(new ProjectionDocumentFilter
@@ -125,8 +117,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.FailureCount,
             document.Headers.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
             document.ScheduleActorId ?? string.Empty,
-            ParseScheduleKind(document.ScheduleKind),
-            document.Deleted);
+            ParseScheduleKind(document.ScheduleKind));
 
     private static ScheduledDispatchFireRecord MapFireRecord(ScheduledDispatchFireRecordDocument document) =>
         new(

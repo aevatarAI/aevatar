@@ -1,11 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
-using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Authoring.Lark;
 
@@ -21,8 +17,6 @@ namespace Aevatar.GAgents.Authoring.Lark;
 /// </remarks>
 public static class AuthoringServiceCollectionExtensions
 {
-    private static readonly Func<IServiceProvider, object> AgentToolSourceFactory = CreateAgentBuilderToolSource;
-
     /// <summary>
     /// Replaces the default <see cref="IHumanInteractionPort"/> with the Feishu-card
     /// implementation and registers the AgentBuilder tool source so LLM turns can author
@@ -33,32 +27,8 @@ public static class AuthoringServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, FeishuCardHumanInteractionPort>());
-        services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, FeishuCardNotificationPort>());
-        services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, LarkRemoteToolApprovalNotificationPort>());
-        services.TryAddSingleton<ScheduledAgentCreatorOptions>();
-        services.TryAddSingleton<ScheduledAgentCreateRequestMapper>();
-        services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();
-        if (!services.Any(IsAgentBuilderToolSourceRegistration))
-            services.Add(ServiceDescriptor.Singleton(typeof(IAgentToolSource), AgentToolSourceFactory));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, AgentBuilderToolSource>());
 
         return services;
     }
-
-    private static bool IsAgentBuilderToolSourceRegistration(ServiceDescriptor descriptor) =>
-        descriptor.ServiceType == typeof(IAgentToolSource) &&
-        (descriptor.ImplementationType == typeof(AgentBuilderToolSource) ||
-         descriptor.ImplementationFactory == AgentToolSourceFactory);
-
-    private static object CreateAgentBuilderToolSource(IServiceProvider sp) =>
-        new AgentBuilderToolSource(
-            sp.GetRequiredService<IUserAgentCatalogQueryPort>(),
-            sp.GetRequiredService<ISkillRunnerExecutionQueryPort>(),
-            sp.GetRequiredService<INyxIdApiClientFactory>(),
-            sp.GetRequiredService<ISkillRunnerCommandPort>(),
-            sp.GetRequiredService<IUserAgentCatalogCommandPort>(),
-            sp.GetRequiredService<ICallerScopeResolver>(),
-            sp.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
-            sp.GetRequiredService<ScheduledAgentApiKeyIssuer>(),
-            sp.GetService<ILogger<AgentBuilderTool>>(),
-            sp.GetService<ILogger<ScheduledAgentCreatorTool>>());
 }

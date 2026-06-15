@@ -7,7 +7,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.Capabilities;
+using Aevatar.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -142,7 +142,7 @@ public static partial class NyxIdChatEndpoints
 
         var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
         var actorIds = snapshot.Groups
-            .FirstOrDefault(g => string.Equals(g.AgentKind, NyxIdChatServiceDefaults.GAgentKind, StringComparison.Ordinal))
+            .FirstOrDefault(g => string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal))
             ?.ActorIds
             ?? [];
         return Results.Ok(new
@@ -193,7 +193,7 @@ public static partial class NyxIdChatEndpoints
             new ScopeResourceTarget(
                 scopeId,
                 ScopeResourceKind.GAgentActor,
-                NyxIdChatServiceDefaults.GAgentKind,
+                NyxIdChatServiceDefaults.GAgentTypeName,
                 actorId,
                 operation),
             ct);

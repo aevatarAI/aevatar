@@ -1,8 +1,8 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Compatibility;
 using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using FluentAssertions;
@@ -12,46 +12,51 @@ using Orleans.Serialization;
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 /// <summary>
-/// Verifies the primary-only kind identity contract through Orleans runtime
-/// registration and serialization.
+/// Issue #498 Phase 1: verifies that the kind-token identity model is wired
+/// end-to-end through DI and that the persisted <see cref="RuntimeActorIdentity"/>
+/// envelope round-trips through Orleans serialization.
 /// </summary>
 public sealed class AgentKindIdentityIntegrationTests
 {
     [Fact]
-    public void OrleansRuntimeRegistration_ShouldRegisterPrimaryKindServices()
+    public void OrleansRuntimeRegistration_ShouldRegisterAgentKindRegistry()
     {
         var services = new ServiceCollection();
         services.AddAevatarFoundationRuntimeOrleans();
 
         using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IAgentKindRegistry>();
+        var legacyResolver = provider.GetRequiredService<ILegacyAgentClrTypeResolver>();
 
-        provider.GetRequiredService<IAgentKindRegistry>().Should().NotBeNull();
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IActorKindProbe) &&
-            descriptor.ImplementationType == typeof(OrleansActorKindProbe));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IAgentKindVerifier) &&
-            descriptor.ImplementationType == typeof(DefaultAgentKindVerifier));
+        registry.Should().NotBeNull();
+        legacyResolver.Should().NotBeNull();
+        legacyResolver.Should().BeOfType<ReflectionLegacyAgentClrTypeResolver>();
     }
 
     [Fact]
-    public void OrleansRuntimeRegistration_PreservesPrimaryKindContributionsAcrossModuleExtensions()
+    public void OrleansRuntimeRegistration_PreservesContributionsAcrossModuleExtensions()
     {
         var services = new ServiceCollection();
         services.AddAevatarFoundationRuntimeOrleans();
-        services.AddAevatarAgentKindRegistry(builder => builder.Register<IdentityFixtureAgent>());
+        services.AddAevatarAgentKindRegistry(builder => builder.Register<IdentityFixtureRenamedAgent>());
 
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IAgentKindRegistry>();
 
-        var implementation = registry.Resolve("tests.identity-primary");
-        implementation.Metadata.Kind.Should().Be("tests.identity-primary");
-        implementation.Metadata.ImplementationClrTypeName.Should().Be(typeof(IdentityFixtureAgent).FullName);
-        registry.TryResolve("tests.identity-legacy", out _).Should().BeFalse();
+        var implementation = registry.Resolve("tests.identity-renamed");
+        implementation.Metadata.Kind.Should().Be("tests.identity-renamed");
+
+        registry.TryResolveKindByClrTypeName(
+            "Aevatar.Foundation.Runtime.Hosting.Tests.IdentityFixtureLegacyAgent",
+            out var aliasedKind).Should().BeTrue();
+        aliasedKind.Should().Be("tests.identity-renamed");
+
+        registry.Resolve("tests.identity-legacy").Metadata.ImplementationClrTypeName
+            .Should().Be(typeof(IdentityFixtureRenamedAgent).FullName);
     }
 
     [Fact]
-    public void RuntimeActorIdentity_ShouldRoundtripPrimaryKindThroughOrleansSerializer()
+    public void RuntimeActorIdentity_ShouldRoundtripThroughOrleansSerializer()
     {
         var services = new ServiceCollection();
         services.AddAevatarFoundationRuntimeOrleans();
@@ -63,6 +68,7 @@ public sealed class AgentKindIdentityIntegrationTests
         {
             Kind = "scheduled.skill-runner",
             StateSchemaVersion = 3,
+            LegacyClrTypeName = "Aevatar.GAgents.Scheduled.SkillRunnerGAgent",
         };
 
         var bytes = serializer.SerializeToArray(original);
@@ -71,10 +77,11 @@ public sealed class AgentKindIdentityIntegrationTests
         roundtripped.Should().NotBeNull();
         roundtripped.Kind.Should().Be("scheduled.skill-runner");
         roundtripped.StateSchemaVersion.Should().Be(3);
+        roundtripped.LegacyClrTypeName.Should().Be("Aevatar.GAgents.Scheduled.SkillRunnerGAgent");
     }
 
     [Fact]
-    public void RuntimeActorGrainState_ShouldRoundtripIdentityFieldWithoutAgentTypeNameMirror()
+    public void RuntimeActorGrainState_ShouldRoundtripIdentityField()
     {
         var services = new ServiceCollection();
         services.AddAevatarFoundationRuntimeOrleans();
@@ -85,6 +92,7 @@ public sealed class AgentKindIdentityIntegrationTests
         var state = new RuntimeActorGrainState
         {
             AgentId = "actor-1",
+            AgentTypeName = "Aevatar.GAgents.Scheduled.SkillRunnerGAgent",
             Identity = new RuntimeActorIdentity
             {
                 Kind = "scheduled.skill-runner",
@@ -95,15 +103,18 @@ public sealed class AgentKindIdentityIntegrationTests
         var bytes = serializer.SerializeToArray(state);
         var roundtripped = serializer.Deserialize<RuntimeActorGrainState>(bytes);
 
-        roundtripped.AgentTypeName.Should().BeNull();
+        roundtripped.AgentTypeName.Should().Be("Aevatar.GAgents.Scheduled.SkillRunnerGAgent");
         roundtripped.Identity.Should().NotBeNull();
         roundtripped.Identity!.Kind.Should().Be("scheduled.skill-runner");
         roundtripped.Identity.StateSchemaVersion.Should().Be(1);
     }
 
     [Fact]
-    public void RuntimeActorGrainState_WithoutIdentityKind_ShouldDeserializeWithoutFallbackIdentity()
+    public void RuntimeActorGrainState_LegacyRowsWithoutIdentity_ShouldDeserializeWithNullIdentity()
     {
+        // Round-trips a state row that was serialized before [Id(7)] Identity
+        // existed. The identity envelope must default to null so legacy data
+        // continues to activate via the AgentTypeName fallback.
         var services = new ServiceCollection();
         services.AddAevatarFoundationRuntimeOrleans();
 
@@ -113,20 +124,33 @@ public sealed class AgentKindIdentityIntegrationTests
         var legacyState = new RuntimeActorGrainState
         {
             AgentId = "legacy-actor",
-            AgentTypeName = "Old.Clr.Type, Old.Assembly",
+            AgentTypeName = "Aevatar.GAgents.Scheduled.SkillRunnerGAgent",
             Identity = null,
         };
 
         var bytes = serializer.SerializeToArray(legacyState);
         var roundtripped = serializer.Deserialize<RuntimeActorGrainState>(bytes);
 
-        roundtripped.AgentTypeName.Should().Be("Old.Clr.Type, Old.Assembly");
+        roundtripped.AgentTypeName.Should().Be("Aevatar.GAgents.Scheduled.SkillRunnerGAgent");
         roundtripped.Identity.Should().BeNull();
     }
 }
 
-[GAgent("tests.identity-primary")]
-internal sealed class IdentityFixtureAgent : IAgent
+/// <summary>
+/// Stand-in for a renamed/split actor that takes over a previously-used
+/// kind and CLR type name. Mirrors the pattern PR #497 will use:
+/// <c>[GAgent("scheduled.skill-definition")]</c> +
+/// <c>[LegacyAgentKind("scheduled.skill-runner")]</c> + a
+/// <c>[LegacyClrTypeName]</c> alias.
+/// </summary>
+[GAgent("tests.identity-renamed")]
+[LegacyAgentKind("tests.identity-legacy")]
+[LegacyClrTypeName("Aevatar.Foundation.Runtime.Hosting.Tests.IdentityFixtureLegacyAgent")]
+internal sealed class IdentityFixtureRenamedAgent : IdentityFixtureAgentBase
+{
+}
+
+internal abstract class IdentityFixtureAgentBase : IAgent
 {
     public string Id { get; } = "fixture";
 

@@ -1,23 +1,19 @@
 namespace Aevatar.GAgentService.Abstractions.ScopeGAgents;
 
-// Refactor (issue-1687):
-//   Old pattern: draft-run application services owned explicit pre-dispatch projection activation.
-//   New principle: this port only prepares observation scope leases for one interaction attempt.
-//   It does not promise command admission and is not query/read-model priming.
-public sealed record GAgentDraftRunObservationScopeLeasePreparation(
+public sealed record GAgentDraftRunObservationScopeActivation(
     string ActorId,
     string CommandId,
     string CorrelationId);
 
-public interface IGAgentDraftRunObservationScopeLeasePreparationPort
+public interface IGAgentDraftRunObservationScopeActivationPort
 {
-    Task<GAgentDraftRunObservationScopeLeasePreparation?> PrepareAsync(
+    Task<GAgentDraftRunObservationScopeActivation?> ActivateAsync(
         string actorId,
         string commandId,
         string correlationId,
         CancellationToken ct = default);
 
     Task ReleaseAsync(
-        GAgentDraftRunObservationScopeLeasePreparation preparation,
+        GAgentDraftRunObservationScopeActivation activation,
         CancellationToken ct = default);
 }

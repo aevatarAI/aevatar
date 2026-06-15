@@ -117,7 +117,7 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_lark_action_card_forwards_card_metadata()
+    public async Task DispatchAsync_lark_action_card_sends_text_only_fallback()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK,
             JsonSerializer.Serialize(new { message_id = "mid", platform_message_id = "pmid" }));
@@ -162,7 +162,7 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
             new ComposeContext());
 
         result.Succeeded.Should().BeTrue();
-        result.FellBackToText.Should().BeFalse();
+        result.FellBackToText.Should().BeTrue();
         result.Capability.Should().Be(ComposeCapability.Exact);
         handler.LastRequestBody.Should().NotBeNull();
         using var document = JsonDocument.Parse(handler.LastRequestBody!);
@@ -171,15 +171,9 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
             .GetProperty("text")
             .GetString()
             .Should()
-            .Be("Pick one");
-        document.RootElement
-            .GetProperty("reply")
-            .GetProperty("metadata")
-            .GetProperty("card")
-            .GetProperty("schema")
-            .GetString()
-            .Should()
-            .Be("2.0");
+            .Be("Pick one\n• Approve\n• Reject");
+        handler.LastRequestBody.Should().NotContain("metadata");
+        handler.LastRequestBody.Should().NotContain("card");
     }
 
     [Fact]
@@ -225,14 +219,14 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
 
         result.Succeeded.Should().BeTrue();
         result.FellBackToText.Should().BeTrue();
-        producer.Received(1).Produce(Arg.Any<MessageContent>(), Arg.Any<ComposeContext>());
+        producer.DidNotReceive().Produce(Arg.Any<MessageContent>(), Arg.Any<ComposeContext>());
         using var document = JsonDocument.Parse(handler.LastRequestBody!);
         document.RootElement
             .GetProperty("reply")
             .GetProperty("text")
             .GetString()
             .Should()
-            .Be("Pick one");
+            .Be("Pick one\nRouting\nChoose a route\nCurrent: gpt-4.1\n• Use fast model");
         handler.LastRequestBody.Should().NotContain("metadata");
         handler.LastRequestBody.Should().NotContain("card");
     }

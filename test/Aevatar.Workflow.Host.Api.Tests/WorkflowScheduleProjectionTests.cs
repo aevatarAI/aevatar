@@ -37,8 +37,6 @@ public sealed class WorkflowScheduleProjectionTests
             CronExpression = "*/15 * * * *",
             Timezone = "UTC",
             Enabled = true,
-            Deleted = true,
-            DeletedAt = observedAt.AddMinutes(-1),
             CreatedAt = createdAt,
             NextFireAt = nextFireAt,
             LastFireAt = lastFireAt,
@@ -106,8 +104,6 @@ public sealed class WorkflowScheduleProjectionTests
         document.CronExpression.Should().Be("*/15 * * * *");
         document.Timezone.Should().Be("UTC");
         document.Enabled.Should().BeTrue();
-        document.Deleted.Should().BeTrue();
-        document.DeletedAt.Should().Be(observedAt.AddMinutes(-1));
         document.CreatedAt.Should().Be(createdAt);
         document.UpdatedAt.Should().Be(observedAt);
         document.NextFireAt.Should().Be(nextFireAt);
@@ -230,7 +226,6 @@ public sealed class WorkflowScheduleProjectionTests
         reader.GetKeys.Should().Equal("schedule-1");
         detail.Should().NotBeNull();
         detail!.Schedule.ScheduleId.Should().Be("schedule-1");
-        detail.Schedule.Deleted.Should().BeFalse();
         detail.Schedule.DisplayName.Should().BeEmpty();
         detail.Schedule.CronExpression.Should().BeEmpty();
         detail.Schedule.Timezone.Should().BeEmpty();
@@ -251,29 +246,6 @@ public sealed class WorkflowScheduleProjectionTests
         detail.RecentFires[1].CommandId.Should().BeEmpty();
         detail.RecentFires[1].CorrelationId.Should().BeEmpty();
         detail.RecentFires[1].Error.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task QueryPort_ShouldMapDeletedDetailForApplicationLayerVisibilityBoundary()
-    {
-        var deletedAt = DateTimeOffset.Parse("2026-05-29T09:30:00+00:00");
-        var reader = new StubScheduleDocumentReader();
-        reader.Documents["deleted-schedule"] = new ScheduledDispatchDocument
-        {
-            ScheduleId = "deleted-schedule",
-            Deleted = true,
-            DeletedAt = deletedAt,
-            CreatedAt = DateTimeOffset.Parse("2026-05-29T08:00:00+00:00"),
-            UpdatedAt = deletedAt,
-        };
-        var port = new ScheduledDispatchQueryPort(reader);
-
-        var detail = await port.GetAsync(" deleted-schedule ");
-
-        reader.GetKeys.Should().Equal("deleted-schedule");
-        detail.Should().NotBeNull();
-        detail!.Schedule.ScheduleId.Should().Be("deleted-schedule");
-        detail.Schedule.Deleted.Should().BeTrue();
     }
 
     [Fact]
@@ -319,11 +291,6 @@ public sealed class WorkflowScheduleProjectionTests
         result.NextCursor.Should().Be("next");
         result.TotalCount.Should().Be(12);
         result.Items.Should().ContainSingle();
-        var deletedFilter = reader.Queries[0].Filters.Should().ContainSingle(filter =>
-            filter.FieldPath == nameof(ScheduledDispatchDocument.Deleted)).Subject;
-        deletedFilter.Operator.Should().Be(ProjectionDocumentFilterOperator.EqOrMissing);
-        deletedFilter.Value.Kind.Should().Be(ProjectionDocumentValueKind.Bool);
-        deletedFilter.Value.RawValue.Should().Be(false);
         var summary = result.Items.Single();
         summary.ScheduleId.Should().Be("schedule-1");
         summary.DisplayName.Should().Be("Daily");

@@ -7,10 +7,11 @@ namespace Aevatar.Foundation.Core.TypeSystem;
 public static class AgentKindRegistryServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the default <see cref="IAgentKindRegistry"/>. Modules
-    /// contribute kinds via <paramref name="configure"/>; repeated calls
-    /// accumulate into the same shared builder so each module's DI extension
-    /// can scan its own assembly without races.
+    /// Registers the default <see cref="IAgentKindRegistry"/> and the
+    /// transitional <see cref="ILegacyAgentClrTypeResolver"/> reflection
+    /// fallback. Modules contribute kinds via <paramref name="configure"/>;
+    /// repeated calls accumulate into the same shared builder so each
+    /// module's DI extension can scan its own assembly without races.
     /// </summary>
     public static IServiceCollection AddAevatarAgentKindRegistry(
         this IServiceCollection services,
@@ -21,6 +22,7 @@ public static class AgentKindRegistryServiceCollectionExtensions
         var builder = ResolveSharedBuilder(services);
         configure?.Invoke(builder);
 
+        services.TryAddSingleton<ILegacyAgentClrTypeResolver, ReflectionLegacyAgentClrTypeResolver>();
         return services;
     }
 

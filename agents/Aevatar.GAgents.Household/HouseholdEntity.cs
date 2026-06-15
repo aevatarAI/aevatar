@@ -6,7 +6,6 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
@@ -20,7 +19,6 @@ namespace Aevatar.GAgents.Household;
 // Refactor (iter108/cluster-108-003-household-tool-direct-runtime-command-path):
 //   Old pattern: orphan HouseholdEntityTool derived actor id, created actor through IActorRuntime, built EventEnvelope, and dispatched directly.
 //   New principle: HouseholdEntity is reached through the device callback CQRS command facade; the orphan LLM tool adapter was deleted.
-[GAgent("household.entity")]
 public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 {
     public HouseholdEntity(

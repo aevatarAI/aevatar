@@ -58,7 +58,7 @@ public sealed class NyxIdRelayOutboundPortTests
     }
 
     [Fact]
-    public async Task SendAsync_LarkInteractiveContent_ShouldUseComposerPlainText()
+    public async Task SendAsync_LarkInteractiveContent_ShouldPostTextFallbackWithCardsAndOptions()
     {
         var handler = new RecordingJsonHandler();
         var port = CreatePort(handler, new StubComposer("lark", text: "composer only kept top text"));
@@ -96,8 +96,13 @@ public sealed class NyxIdRelayOutboundPortTests
         handler.Requests[0].Body.Should().Contain("\"message_id\":\"msg-lark-options-1\"");
         using var document = JsonDocument.Parse(handler.Requests[0].Body);
         var text = document.RootElement.GetProperty("reply").GetProperty("text").GetString();
-        text.Should().Be("composer only kept top text");
-        handler.Requests[0].Body.Should().NotContain("metadata");
+        text.Should().Contain("Choose route");
+        text.Should().Contain("Model settings");
+        text.Should().Contain("Service: openai");
+        text.Should().Contain("Select service");
+        text.Should().Contain("OpenAI");
+        text.Should().Contain("Azure OpenAI");
+        handler.Requests[0].Body.Should().NotContain("composer only kept top text");
     }
 
     [Fact]

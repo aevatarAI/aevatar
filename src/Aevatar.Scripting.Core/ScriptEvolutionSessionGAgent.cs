@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Abstractions;
@@ -11,7 +10,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Scripting.Core;
 
-[GAgent("scripting.evolution-session")]
 public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSessionState>
 {
     private const string SessionStatusStarted = "session_started";

@@ -37,6 +37,10 @@ public class OpenAIRealtimeProviderIntegrationTests
                     case VoiceProviderEvent.EventOneofCase.ResponseStarted:
                         responseStarted.TrySetResult();
                         break;
+                    case VoiceProviderEvent.EventOneofCase.AudioReceived:
+                        if (!evt.AudioReceived.Pcm16.IsEmpty)
+                            audioReceived.TrySetResult();
+                        break;
                     case VoiceProviderEvent.EventOneofCase.ResponseDone:
                         responseDone.TrySetResult();
                         break;
@@ -46,14 +50,6 @@ public class OpenAIRealtimeProviderIntegrationTests
                         break;
                 }
 
-                return Task.CompletedTask;
-            },
-            (key, audio, ct) =>
-            {
-                _ = key;
-                _ = ct;
-                if (!audio.Pcm16.IsEmpty)
-                    audioReceived.TrySetResult();
                 return Task.CompletedTask;
             },
             cts.Token);

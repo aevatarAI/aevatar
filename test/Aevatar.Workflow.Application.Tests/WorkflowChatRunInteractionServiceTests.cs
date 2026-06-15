@@ -17,10 +17,12 @@ public sealed class WorkflowChatRunInteractionServiceTests
     public async Task ExecuteAsync_ShouldReturnProjectionDisabled_BeforeActorResolutionOrActivation()
     {
         var actorResolver = new RecordingActorResolver();
+        var activationPort = new RecordingActivationPort();
         var inner = new RecordingInteractionService();
         var service = CreateService(
             actorResolver,
             new RecordingProjectionPort { ProjectionEnabled = false },
+            activationPort,
             new RecordingRunProvisioningPort(),
             inner);
 
@@ -31,37 +33,8 @@ public sealed class WorkflowChatRunInteractionServiceTests
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
         actorResolver.Requests.Should().BeEmpty();
+        activationPort.Activations.Should().BeEmpty();
         inner.Requests.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_ShouldReturnInvalidCallerCredential_BeforeActorResolutionOrActivation()
-    {
-        var actorResolver = new RecordingActorResolver();
-        var projectionPort = new RecordingProjectionPort();
-        var runProvisioningPort = new RecordingRunProvisioningPort();
-        var inner = new RecordingInteractionService();
-        var service = CreateService(
-            actorResolver,
-            projectionPort,
-            runProvisioningPort,
-            inner);
-
-        var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest(
-                "hello",
-                WorkflowChatSource.CatalogWorkflow("direct"),
-                CallerCredential: new WorkflowCallerCredential("Bearer token-123")),
-            static (_, _) => ValueTask.CompletedTask);
-
-        result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
-        actorResolver.Requests.Should().BeEmpty();
-        projectionPort.AttachExistingCalls.Should().BeEmpty();
-        projectionPort.DetachCalls.Should().BeEmpty();
-        projectionPort.ReleaseCalls.Should().BeEmpty();
-        inner.Requests.Should().BeEmpty();
-        runProvisioningPort.DestroyCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -77,6 +50,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
                     WorkflowChatRunStartError.None),
             },
         };
+        var activationPort = new RecordingActivationPort();
         var inner = new RecordingInteractionService();
         var acceptedReceipts = new List<WorkflowChatRunAcceptedReceipt>();
         var headers = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -86,6 +60,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         var service = CreateService(
             actorResolver,
             new RecordingProjectionPort(),
+            activationPort,
             new RecordingRunProvisioningPort(),
             inner);
 
@@ -100,22 +75,25 @@ public sealed class WorkflowChatRunInteractionServiceTests
 
         result.Succeeded.Should().BeTrue();
         actorResolver.Requests.Should().ContainSingle();
+        activationPort.Activations.Should().ContainSingle()
+            .Which.ActorId.Should().Be("run-1");
         inner.Requests.Should().ContainSingle();
         var command = inner.Requests.Single();
         command.TargetSeed.Should().NotBeNull();
         command.TargetSeed!.ActorId.Should().Be("run-1");
         command.TargetSeed.WorkflowNameForRun.Should().Be("direct");
         command.TargetSeed.CreatedActorIds.Should().Equal("definition-1", "run-1");
-        command.CommandIdSeed.Should().NotBeNullOrWhiteSpace();
+        command.CommandIdSeed.Should().Be(activationPort.Activations.Single().CommandId);
         command.CorrelationIdSeed.Should().NotBeNullOrWhiteSpace();
         command.Headers.Should().BeSameAs(headers);
         acceptedReceipts.Should().ContainSingle();
         acceptedReceipts[0].CommandId.Should().Be(command.CommandIdSeed);
         acceptedReceipts[0].CorrelationId.Should().Be(command.CorrelationIdSeed);
+        activationPort.Releases.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldRollback_WhenInnerReturnsProjectionUnavailableBeforeAccepted()
+    public async Task ExecuteAsync_ShouldReturnProjectionUnavailableAndRollback_WhenActivationFails()
     {
         var actorResolver = new RecordingActorResolver
         {
@@ -127,15 +105,16 @@ public sealed class WorkflowChatRunInteractionServiceTests
                     WorkflowChatRunStartError.None),
             },
         };
-        var runProvisioningPort = new RecordingRunProvisioningPort();
-        var inner = new RecordingInteractionService
+        var activationPort = new RecordingActivationPort
         {
-            Result = CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                .Failure(WorkflowChatRunStartError.ProjectionUnavailable),
+            ReturnNull = true,
         };
+        var runProvisioningPort = new RecordingRunProvisioningPort();
+        var inner = new RecordingInteractionService();
         var service = CreateService(
             actorResolver,
             new RecordingProjectionPort(),
+            activationPort,
             runProvisioningPort,
             inner);
 
@@ -145,12 +124,13 @@ public sealed class WorkflowChatRunInteractionServiceTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionUnavailable);
-        inner.Requests.Should().ContainSingle();
+        inner.Requests.Should().BeEmpty();
         runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+        activationPort.Releases.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldRollback_WhenInnerFailsBeforeAccepted()
+    public async Task ExecuteAsync_ShouldReleaseActivationAndRollback_WhenInnerFailsBeforeAccepted()
     {
         var actorResolver = new RecordingActorResolver
         {
@@ -162,6 +142,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
                     WorkflowChatRunStartError.None),
             },
         };
+        var activationPort = new RecordingActivationPort();
         var runProvisioningPort = new RecordingRunProvisioningPort();
         var inner = new RecordingInteractionService
         {
@@ -171,6 +152,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         var service = CreateService(
             actorResolver,
             new RecordingProjectionPort(),
+            activationPort,
             runProvisioningPort,
             inner);
 
@@ -180,6 +162,8 @@ public sealed class WorkflowChatRunInteractionServiceTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionUnavailable);
+        activationPort.Releases.Should().ContainSingle()
+            .Which.Should().Be(activationPort.Activations.Single());
         runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
     }
 
@@ -200,11 +184,13 @@ public sealed class WorkflowChatRunInteractionServiceTests
         {
             AttachExistingReturnsNull = true,
         };
+        var activationPort = new RecordingActivationPort();
         var runProvisioningPort = new RecordingRunProvisioningPort();
         var inner = CreateDefaultInner(projectionPort, runProvisioningPort);
         var service = CreateService(
             actorResolver,
             projectionPort,
+            activationPort,
             runProvisioningPort,
             inner);
 
@@ -215,7 +201,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionUnavailable);
         projectionPort.AttachExistingCalls.Should().ContainSingle()
-            .Which.RootActorId.Should().Be("run-1");
+            .Which.Should().Be(("run-1", activationPort.Activations.Single().CommandId));
+        activationPort.Releases.Should().ContainSingle()
+            .Which.Should().Be(activationPort.Activations.Single());
         runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
     }
 
@@ -236,11 +224,13 @@ public sealed class WorkflowChatRunInteractionServiceTests
         {
             AttachExistingException = new InvalidOperationException("attach failed"),
         };
+        var activationPort = new RecordingActivationPort();
         var runProvisioningPort = new RecordingRunProvisioningPort();
         var inner = CreateDefaultInner(projectionPort, runProvisioningPort);
         var service = CreateService(
             actorResolver,
             projectionPort,
+            activationPort,
             runProvisioningPort,
             inner);
 
@@ -251,7 +241,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("attach failed");
         projectionPort.AttachExistingCalls.Should().ContainSingle()
-            .Which.RootActorId.Should().Be("run-1");
+            .Which.Should().Be(("run-1", activationPort.Activations.Single().CommandId));
+        activationPort.Releases.Should().ContainSingle()
+            .Which.Should().Be(activationPort.Activations.Single());
         runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
     }
 
@@ -269,11 +261,13 @@ public sealed class WorkflowChatRunInteractionServiceTests
             },
         };
         var projectionPort = new RecordingProjectionPort();
+        var activationPort = new RecordingActivationPort();
         var runProvisioningPort = new RecordingRunProvisioningPort();
         var inner = CreateDefaultInner(projectionPort, runProvisioningPort);
         var service = CreateService(
             actorResolver,
             projectionPort,
+            activationPort,
             runProvisioningPort,
             inner);
 
@@ -284,7 +278,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("dispatch failed");
         projectionPort.AttachExistingCalls.Should().ContainSingle()
-            .Which.RootActorId.Should().Be("run-1");
+            .Which.Should().Be(("run-1", activationPort.Activations.Single().CommandId));
+        activationPort.Releases.Should().ContainSingle()
+            .Which.Should().Be(activationPort.Activations.Single());
         runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
     }
 
@@ -301,6 +297,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
                     WorkflowChatRunStartError.None),
             },
         };
+        var activationPort = new RecordingActivationPort();
         var runProvisioningPort = new RecordingRunProvisioningPort();
         var inner = new RecordingInteractionService
         {
@@ -311,6 +308,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         var service = CreateService(
             actorResolver,
             new RecordingProjectionPort(),
+            activationPort,
             runProvisioningPort,
             inner);
 
@@ -319,6 +317,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
+        activationPort.Releases.Should().BeEmpty();
         runProvisioningPort.DestroyCalls.Should().BeEmpty();
     }
 
@@ -335,6 +334,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
                     WorkflowChatRunStartError.None),
             },
         };
+        var activationPort = new RecordingActivationPort();
         var runProvisioningPort = new RecordingRunProvisioningPort();
         var inner = new RecordingInteractionService
         {
@@ -343,6 +343,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         var service = CreateService(
             actorResolver,
             new RecordingProjectionPort(),
+            activationPort,
             runProvisioningPort,
             inner);
 
@@ -352,6 +353,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("pump failed");
+        activationPort.Releases.Should().BeEmpty();
         runProvisioningPort.DestroyCalls.Should().BeEmpty();
     }
 
@@ -372,12 +374,14 @@ public sealed class WorkflowChatRunInteractionServiceTests
                     WorkflowChatRunStartError.None),
             },
         };
+        var activationPort = new RecordingActivationPort();
         var runProvisioningPort = new RecordingRunProvisioningPort();
         var inner = new RecordingInteractionService();
         inner.Exceptions.Enqueue(new WorkflowDirectFallbackTriggerException("retry direct"));
         var service = CreateService(
             actorResolver,
             new RecordingProjectionPort(),
+            activationPort,
             runProvisioningPort,
             inner);
 
@@ -396,6 +400,8 @@ public sealed class WorkflowChatRunInteractionServiceTests
         inner.Requests[1].Source.ActorId.Should().BeNull();
         inner.Requests[1].CommandIdSeed.Should().Be(inner.Requests[0].CommandIdSeed);
         inner.Requests[1].CorrelationIdSeed.Should().Be(inner.Requests[0].CorrelationIdSeed);
+        activationPort.Releases.Should().ContainSingle()
+            .Which.Should().Be(activationPort.Activations[0]);
         runProvisioningPort.DestroyCalls.Should().Equal("auto-run", "definition-auto");
     }
 
@@ -412,12 +418,14 @@ public sealed class WorkflowChatRunInteractionServiceTests
                     WorkflowChatRunStartError.None),
             },
         };
+        var activationPort = new RecordingActivationPort();
         var runProvisioningPort = new RecordingRunProvisioningPort();
         var inner = new RecordingInteractionService();
         inner.Exceptions.Enqueue(new OperationCanceledException("cancelled"));
         var service = CreateService(
             actorResolver,
             new RecordingProjectionPort(),
+            activationPort,
             runProvisioningPort,
             inner);
 
@@ -428,12 +436,15 @@ public sealed class WorkflowChatRunInteractionServiceTests
         await act.Should().ThrowAsync<OperationCanceledException>();
         actorResolver.Requests.Should().ContainSingle();
         inner.Requests.Should().ContainSingle();
+        activationPort.Releases.Should().ContainSingle()
+            .Which.Should().Be(activationPort.Activations.Single());
         runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
     }
 
     private static WorkflowChatRunInteractionService CreateService(
         RecordingActorResolver actorResolver,
         RecordingProjectionPort projectionPort,
+        RecordingActivationPort activationPort,
         RecordingRunProvisioningPort runProvisioningPort,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> inner,
         WorkflowDirectFallbackPolicy? fallbackPolicy = null) =>
@@ -441,6 +452,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             actorResolver,
             projectionPort,
             runProvisioningPort,
+            activationPort,
             inner,
             fallbackPolicy ?? new WorkflowDirectFallbackPolicy());
 
@@ -565,6 +577,36 @@ public sealed class WorkflowChatRunInteractionServiceTests
     private sealed class NoopAsyncDisposable : IAsyncDisposable
     {
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingActivationPort : IWorkflowChatRunObservationScopeActivationPort
+    {
+        public bool ReturnNull { get; set; }
+        public List<WorkflowChatRunObservationScopeActivation> Activations { get; } = [];
+        public List<WorkflowChatRunObservationScopeActivation> Releases { get; } = [];
+
+        public Task<WorkflowChatRunObservationScopeActivation?> ActivateAsync(
+            string actorId,
+            string commandId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (ReturnNull)
+                return Task.FromResult<WorkflowChatRunObservationScopeActivation?>(null);
+
+            var activation = new WorkflowChatRunObservationScopeActivation(actorId, commandId);
+            Activations.Add(activation);
+            return Task.FromResult<WorkflowChatRunObservationScopeActivation?>(activation);
+        }
+
+        public Task ReleaseAsync(
+            WorkflowChatRunObservationScopeActivation activation,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Releases.Add(activation);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingRunProvisioningPort : IWorkflowRunProvisioningPort

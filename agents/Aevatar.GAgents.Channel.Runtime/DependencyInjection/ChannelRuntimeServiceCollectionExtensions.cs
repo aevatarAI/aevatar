@@ -1,11 +1,12 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.EventSourcing;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,6 +27,7 @@ public static class ChannelRuntimeServiceCollectionExtensions
     /// Backwards-compat overload — registers the channel runtime middlewares,
     /// default turn-runner fallback, ChannelBotRegistration projection
     /// pipeline, and pipeline composition without an <see cref="IConfiguration"/>.
+    /// Falls back to the InMemory projection store.
     /// </summary>
     public static IServiceCollection AddChannelRuntime(this IServiceCollection services)
         => AddChannelRuntime(services, configuration: null);
@@ -33,6 +35,8 @@ public static class ChannelRuntimeServiceCollectionExtensions
     /// <summary>
     /// Registers the channel runtime middlewares, default turn-runner
     /// fallback, ChannelBotRegistration projection pipeline, and pipeline composition.
+    /// Pass <paramref name="configuration"/> so the document projection store matches
+    /// the host environment (Elasticsearch in prod, InMemory for local dev / tests).
     /// </summary>
     public static IServiceCollection AddChannelRuntime(
         this IServiceCollection services, IConfiguration? configuration)
@@ -40,7 +44,6 @@ public static class ChannelRuntimeServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         // ─── Retired-actor cleanup contribution ───
-        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ChannelBotRegistrationGAgent).Assembly));
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IRetiredActorSpec, ChannelRuntimeRetiredActorSpec>());
 
@@ -50,10 +53,6 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<TracingMiddleware>();
         services.TryAddSingleton<IConversationTurnRunner, NullConversationTurnRunner>();
         services.TryAddSingleton<IConversationCardTurnRunner, NullConversationCardTurnRunner>();
-        services.TryAddSingleton<INyxRelayTextReplyStreamRenderer, NyxRelayTextReplyStreamRenderer>();
-        services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IReplyOperationStepRenderer, NyxRelayTextReplyStreamRenderer>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IReplyOperationStepRenderer, LarkCardReplyStreamRenderer>());
 
         // ─── Tombstone compaction options + materialized watermark ───
         services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
@@ -78,6 +77,13 @@ public static class ChannelRuntimeServiceCollectionExtensions
             IProjectionActivationPlanProvider,
             ChannelBotRegistrationCommittedStateProjectionActivationPlanProvider>());
 
+        var documentProvider = configuration is null
+            ? new ProjectionDocumentProviderSelection(
+                ProjectionDocumentProviderKind.InMemory,
+                ElasticsearchEnabled: false,
+                InMemoryEnabled: true)
+            : ProjectionDocumentProviderConfiguration.Resolve(configuration, "ChannelRuntime");
+
         // ─── Channel Bot Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
             ChannelBotRegistrationMaterializationContext,
@@ -99,6 +105,27 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionBootstrapActivator>();
         services.AddHostedService<ChannelBotRegistrationStartupService>();
+
+        if (documentProvider.ElasticsearchEnabled)
+        {
+            services.AddElasticsearchDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
+                optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+            services.AddElasticsearchDocumentProjectionStore<ProjectionScopeStatusDocument, string>(
+                optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
+                static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<ProjectionScopeStatusDocument, string>(
+                static doc => doc.Id, static key => key);
+        }
 
         // ─── Channel pipeline composition ───
         services.TryAddSingleton<ConversationDispatchMiddleware>();

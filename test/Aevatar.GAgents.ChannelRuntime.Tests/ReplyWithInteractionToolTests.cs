@@ -62,42 +62,6 @@ public sealed class ReplyWithInteractionToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_maps_non_button_actions_and_options_into_intent_actions()
-    {
-        var collector = new AsyncLocalInteractiveReplyCollector();
-        using var scope = collector.BeginScope();
-        var tool = new ReplyWithInteractionTool(collector);
-
-        await tool.ExecuteAsync(
-            """
-            {"body":"configure","actions":[
-                {"kind":"select","action_id":"environment","label":"Environment","placeholder":"Choose env","options":[
-                    {"label":"Production","value":"prod"},
-                    {"label":"Staging","value":"stage"}
-                ]},
-                {"kind":"text_input","action_id":"reason","label":"Reason","placeholder":"Why?"},
-                {"kind":"form_submit","action_id":"submit","label":"Submit","style":"primary"},
-                {"kind":"link","action_id":"docs","label":"Docs","value":"https://example.test/docs"}
-            ]}
-            """);
-
-        var captured = collector.TryTake();
-
-        captured.Should().NotBeNull();
-        captured!.Actions.Should().HaveCount(4);
-        captured.Actions[0].Kind.Should().Be(ActionElementKind.Select);
-        captured.Actions[0].Placeholder.Should().Be("Choose env");
-        captured.Actions[0].Options.Should().HaveCount(2);
-        captured.Actions[0].Options[0].Value.Should().Be("prod");
-        captured.Actions[1].Kind.Should().Be(ActionElementKind.TextInput);
-        captured.Actions[1].Placeholder.Should().Be("Why?");
-        captured.Actions[2].Kind.Should().Be(ActionElementKind.FormSubmit);
-        captured.Actions[2].IsPrimary.Should().BeTrue();
-        captured.Actions[3].Kind.Should().Be(ActionElementKind.Link);
-        captured.Actions[3].Value.Should().Be("https://example.test/docs");
-    }
-
-    [Fact]
     public async Task ExecuteAsync_maps_cards_into_intent_cards()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();

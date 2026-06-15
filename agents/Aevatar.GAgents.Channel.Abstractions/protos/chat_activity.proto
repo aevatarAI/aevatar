@@ -198,18 +198,6 @@ message WorkflowResumeActionPayload {
   string edited_content = 6;
   // The feedback submitted with an approval or rejection action.
   string feedback = 7;
-  // The typed tool approval continuation keys for direct workflow tool calls.
-  WorkflowToolApprovalResumeActionPayload tool_approval = 8;
-}
-
-// Carries direct workflow tool approval resume keys.
-message WorkflowToolApprovalResumeActionPayload {
-  // The workflow tool execution identifier.
-  string execution_id = 1;
-  // The original workflow tool call identifier.
-  string tool_call_id = 2;
-  // The approval request identifier emitted by the workflow actor.
-  string approval_request_id = 3;
 }
 
 // Refactor (iter93/cluster-093):
@@ -224,20 +212,6 @@ message LlmSelectionActionPayload {
   string service_id = 2;
   // The target preset identifier when applying a preset.
   string preset_id = 3;
-  // The target model name when applying a model override.
-  string model = 4;
-  // The requested list page when navigating compact LLM option cards.
-  int32 page = 5;
-  // The display mode that produced the card, such as route or model.
-  string display_mode = 6;
-}
-
-// Carries repository-owned NyxID approval decision semantics for one card action.
-message NyxIdApprovalActionPayload {
-  // The NyxID approval request identifier.
-  string request_id = 1;
-  // The submitted approval decision.
-  bool approved = 2;
 }
 
 // Declares one interactive card element.
@@ -268,8 +242,6 @@ message ActionElement {
   WorkflowResumeActionPayload workflow_resume = 11;
   // Repository-owned LLM selection payload for this action.
   LlmSelectionActionPayload llm_selection = 12;
-  // Repository-owned NyxID approval decision payload for this action.
-  NyxIdApprovalActionPayload nyx_id_approval = 13;
 }
 
 // Declares one title-text pair rendered inside a card.
@@ -316,10 +288,6 @@ message CardActionSubmission {
   WorkflowResumeActionPayload workflow_resume = 6;
   // Repository-owned LLM selection payload submitted by this action.
   LlmSelectionActionPayload llm_selection = 7;
-  // The kind of action element that produced this callback.
-  ActionElementKind action_kind = 8;
-  // Repository-owned NyxID approval decision payload submitted by this action.
-  NyxIdApprovalActionPayload nyx_id_approval = 9;
 }
 
 // Carries the channel-agnostic message content used for send, update, and reply operations.

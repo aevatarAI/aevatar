@@ -105,21 +105,6 @@ internal sealed class SubWorkflowOrchestrator
         var invocationId = string.IsNullOrWhiteSpace(request.InvocationId)
             ? WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId)
             : request.InvocationId.Trim();
-        var rootRunId = ResolveRootRunId(request.RootRunId, state, parentRunId);
-        var parentDepth = ResolveParentDepth(state, parentRunId);
-        var requestedDepth = WorkflowCallLimitPolicy.ResolveChildDepth(request.RequestedDepth, parentDepth);
-        var admission = WorkflowCallLimitPolicy.Admit(
-            requestedDepth,
-            parentDepth,
-            state.MaxSubWorkflowDepth,
-            state.PendingSubWorkflowInvocations.Count + state.PendingSubWorkflowDefinitionResolutions.Count,
-            state.MaxActiveSubWorkflows);
-        if (!admission.Accepted)
-        {
-            await PublishWorkflowCallFailureAsync(parentStepId, parentRunId, admission.Error, ct);
-            return;
-        }
-
         RuntimeCallbackLease? timeoutLease = null;
 
         try
@@ -134,8 +119,6 @@ internal sealed class SubWorkflowOrchestrator
                     request.Input ?? string.Empty,
                     lifecycle,
                     inlineSnapshot,
-                    rootRunId,
-                    requestedDepth,
                     state,
                     ct);
                 return;
@@ -177,8 +160,6 @@ internal sealed class SubWorkflowOrchestrator
                 },
                 TimeoutCallbackSlotEpoch = timeoutLease.SlotEpoch,
                 TimeoutMs = timeoutMs,
-                RootRunId = rootRunId,
-                RequestedDepth = requestedDepth,
             }, ct);
 
             await _sendToAsync(
@@ -312,8 +293,6 @@ internal sealed class SubWorkflowOrchestrator
                 pending.Input ?? string.Empty,
                 pending.Lifecycle,
                 definition,
-                ResolveRootRunId(pending.RootRunId, state, pending.ParentRunId),
-                WorkflowCallLimitPolicy.ResolveChildDepth(pending.RequestedDepth, ResolveParentDepth(state, pending.ParentRunId)),
                 state,
                 ct);
             await TryCancelDefinitionResolutionTimeoutAsync(pending, CancellationToken.None);
@@ -379,8 +358,6 @@ internal sealed class SubWorkflowOrchestrator
         string input,
         string lifecycle,
         WorkflowDefinitionSnapshot definition,
-        string rootRunId,
-        int depth,
         WorkflowRunState state,
         CancellationToken ct)
     {
@@ -391,16 +368,7 @@ internal sealed class SubWorkflowOrchestrator
         ArgumentNullException.ThrowIfNull(state);
         ValidateDefinitionSnapshotOrThrow(definition);
 
-        var registered = BuildPendingSubWorkflowInvocation(
-            invocationId,
-            parentRunId,
-            parentStepId,
-            input,
-            lifecycle,
-            definition,
-            rootRunId,
-            depth,
-            state);
+        var registered = BuildPendingSubWorkflowInvocation(invocationId, parentRunId, parentStepId, input, lifecycle, definition, state);
 
         await _persistDomainEventAsync(new SubWorkflowInvocationRegisteredEvent
         {
@@ -417,8 +385,6 @@ internal sealed class SubWorkflowOrchestrator
             HandoffPhase = (int)SubWorkflowInvocationHandoffPhase.Registered,
             DefinitionYaml = registered.DefinitionYaml,
             ScopeId = registered.ScopeId,
-            RootRunId = registered.RootRunId,
-            Depth = registered.Depth,
             InlineWorkflowYamls = { registered.InlineWorkflowYamls },
         }, ct);
 
@@ -628,11 +594,9 @@ internal sealed class SubWorkflowOrchestrator
                     Backend = evt.TimeoutCallbackBackend == (int)WorkflowRuntimeCallbackBackendState.Dedicated
                         ? WorkflowRuntimeCallbackBackendState.Dedicated
                         : WorkflowRuntimeCallbackBackendState.InMemory,
-            },
+                },
             TimeoutCallbackId = evt.TimeoutCallbackId?.Trim() ?? string.Empty,
             TimeoutMs = evt.TimeoutMs,
-            RootRunId = ResolveRootRunId(evt.RootRunId, current, evt.ParentRunId),
-            RequestedDepth = Math.Max(0, evt.RequestedDepth),
         };
 
         RemovePendingDefinitionResolution(next, invocationId);
@@ -672,8 +636,6 @@ internal sealed class SubWorkflowOrchestrator
             Input = evt.Input ?? string.Empty,
             DefinitionYaml = evt.DefinitionYaml ?? string.Empty,
             ScopeId = evt.ScopeId ?? string.Empty,
-            RootRunId = ResolveRootRunId(evt.RootRunId, current, evt.ParentRunId),
-            Depth = Math.Max(0, evt.Depth),
             InlineWorkflowYamls = { evt.InlineWorkflowYamls },
         };
         RemovePendingDefinitionResolution(next, invocationId);
@@ -732,8 +694,6 @@ internal sealed class SubWorkflowOrchestrator
         string input,
         string lifecycle,
         WorkflowDefinitionSnapshot definition,
-        string rootRunId,
-        int depth,
         WorkflowRunState state)
     {
         var normalizedLifecycle = WorkflowCallLifecycle.Normalize(lifecycle);
@@ -756,8 +716,6 @@ internal sealed class SubWorkflowOrchestrator
             ScopeId = string.IsNullOrWhiteSpace(definition.ScopeId)
                 ? state.ScopeId ?? string.Empty
                 : definition.ScopeId,
-            RootRunId = ResolveRootRunId(rootRunId, state, parentRunId),
-            Depth = Math.Max(0, depth),
         };
 
         foreach (var (inlineWorkflowName, inlineWorkflowYaml) in definition.InlineWorkflowYamls.Count > 0
@@ -944,14 +902,6 @@ internal sealed class SubWorkflowOrchestrator
             WorkflowName = definition.WorkflowName ?? string.Empty,
             Input = pending.Input ?? string.Empty,
             RunId = pending.ChildRunId,
-            WorkflowRuntime = new WorkflowToolRuntimeContextPayload
-            {
-                ParentActorId = _ownerActorIdAccessor(),
-                ParentRunId = pending.ParentRunId,
-                ParentStepId = pending.ParentStepId,
-                RootRunId = NormalizeRootRunId(pending.RootRunId, pending.ParentRunId),
-                Depth = Math.Max(0, pending.Depth),
-            },
         };
         start.Parameters[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
         start.Parameters[WorkflowCallParentRunIdMetadataKey] = pending.ParentRunId;
@@ -1284,12 +1234,18 @@ internal sealed class SubWorkflowOrchestrator
         if (lease == null)
             return;
 
-        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
-            _cancelDurableCallbackAsync,
-            _loggerAccessor(),
-            lease,
-            "workflow_call definition timeout cleanup",
-            ct);
+        try
+        {
+            await _cancelDurableCallbackAsync(lease, ct);
+        }
+        catch (Exception ex)
+        {
+            _loggerAccessor().LogDebug(
+                ex,
+                "Ignore workflow_call definition timeout cancellation failure. callback={CallbackId} generation={Generation}",
+                lease.CallbackId,
+                lease.Generation);
+        }
     }
 
     private string BuildSubWorkflowActorId(WorkflowDefinitionSnapshot definition, string lifecycle)
@@ -1482,35 +1438,6 @@ internal sealed class SubWorkflowOrchestrator
     {
         return pendingInvocations.Any(x =>
             string.Equals(x.ChildActorId, childActorId, StringComparison.Ordinal));
-    }
-
-    private static string ResolveRootRunId(string? requestedRootRunId, WorkflowRunState state, string fallbackRunId)
-    {
-        var requested = WorkflowRunIdNormalizer.Normalize(requestedRootRunId);
-        if (!string.IsNullOrWhiteSpace(requested))
-            return requested;
-
-        return NormalizeRootRunId(state.RunId, fallbackRunId);
-    }
-
-    private static string NormalizeRootRunId(string? rootRunId, string fallbackRunId)
-    {
-        var normalizedRoot = WorkflowRunIdNormalizer.Normalize(rootRunId);
-        if (!string.IsNullOrWhiteSpace(normalizedRoot))
-            return normalizedRoot;
-
-        return WorkflowRunIdNormalizer.Normalize(fallbackRunId);
-    }
-
-    private static int ResolveParentDepth(WorkflowRunState state, string parentRunId)
-    {
-        foreach (var pending in state.PendingSubWorkflowInvocations)
-        {
-            if (string.Equals(pending.ChildRunId, parentRunId, StringComparison.Ordinal))
-                return Math.Max(0, pending.Depth);
-        }
-
-        return Math.Max(0, state.ExecutionContext?.WorkflowRuntime?.Depth ?? 0);
     }
 
     private static ISet<string> CollectReferencedSingletonWorkflowNames(IEnumerable<StepDefinition> steps)

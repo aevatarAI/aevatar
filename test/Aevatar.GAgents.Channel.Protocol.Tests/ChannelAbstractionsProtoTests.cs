@@ -1,5 +1,4 @@
 using System.Linq;
-using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -64,24 +63,6 @@ public sealed class ChannelAbstractionsProtoTests
                     ActionId = "approve",
                     SubmittedValue = "true",
                     SourceMessageId = "om_123",
-                    ActionKind = ActionElementKind.FormSubmit,
-                    WorkflowResume = new WorkflowResumeActionPayload
-                    {
-                        ActorId = "workflow-actor-1",
-                        RunId = "run-1",
-                        StepId = "tool-step",
-                        ToolApproval = new WorkflowToolApprovalResumeActionPayload
-                        {
-                            ExecutionId = "exec-1",
-                            ToolCallId = "tool-call-1",
-                            ApprovalRequestId = "approval-1",
-                        },
-                    },
-                    NyxIdApproval = new NyxIdApprovalActionPayload
-                    {
-                        RequestId = "nyx-approval-1",
-                        Approved = true,
-                    },
                 },
             },
             ReplyToActivityId = "orig-1",
@@ -122,11 +103,6 @@ public sealed class ChannelAbstractionsProtoTests
             Label = "Ack",
             Value = "ack",
             IsPrimary = true,
-            NyxIdApproval = new NyxIdApprovalActionPayload
-            {
-                RequestId = "nyx-approval-1",
-                Approved = false,
-            },
         });
         activity.Content.Cards.Add(new CardBlock
         {
@@ -140,14 +116,7 @@ public sealed class ChannelAbstractionsProtoTests
 
         parsed.ShouldBe(activity);
         parsed.Content.CardAction.ActionId.ShouldBe("approve");
-        parsed.Content.CardAction.ActionKind.ShouldBe(ActionElementKind.FormSubmit);
-        parsed.Content.CardAction.WorkflowResume.ToolApproval.ExecutionId.ShouldBe("exec-1");
-        parsed.Content.CardAction.WorkflowResume.ToolApproval.ToolCallId.ShouldBe("tool-call-1");
-        parsed.Content.CardAction.WorkflowResume.ToolApproval.ApprovalRequestId.ShouldBe("approval-1");
-        parsed.Content.CardAction.NyxIdApproval.RequestId.ShouldBe("nyx-approval-1");
-        parsed.Content.CardAction.NyxIdApproval.Approved.ShouldBeTrue();
         parsed.Content.Actions[0].Kind.ShouldBe(ActionElementKind.Button);
-        parsed.Content.Actions[0].NyxIdApproval.Approved.ShouldBeFalse();
         parsed.Conversation.Scope.ShouldBe(ConversationScope.Thread);
         parsed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
         parsed.TransportExtras.NyxAgentApiKeyId.ShouldBe("nyx-key-1");
@@ -158,13 +127,6 @@ public sealed class ChannelAbstractionsProtoTests
             .ShouldContain(nameof(MessageContent));
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(CardActionSubmission));
-        ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
-            .ShouldContain(nameof(NyxIdApprovalActionPayload));
-        ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
-            .ShouldContain(nameof(WorkflowToolApprovalResumeActionPayload));
-        WorkflowResumeActionPayload.Descriptor.FindFieldByName("tool_approval")!.FieldNumber.ShouldBe(8);
-        ActionElement.Descriptor.FindFieldByName("nyx_id_approval")!.FieldNumber.ShouldBe(13);
-        CardActionSubmission.Descriptor.FindFieldByName("nyx_id_approval")!.FieldNumber.ShouldBe(9);
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(OutboundDeliveryContext));
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
@@ -237,43 +199,5 @@ public sealed class ChannelAbstractionsProtoTests
             .ShouldContain(nameof(ChannelTransportBinding));
         ScheduleReflection.Descriptor.EnumTypes.Select(x => x.Name)
             .ShouldContain(nameof(ProjectionVerdict));
-    }
-
-    [Fact]
-    public void InteractionSpecMapper_ShouldProjectTypedSpecToMessageContent()
-    {
-        var spec = new InteractionSpec
-        {
-            Title = "Review",
-            Body = "Deploy v1?",
-            Disposition = InteractionDisposition.Ephemeral,
-        };
-        spec.Actions.Add(new InteractionAction
-        {
-            Kind = InteractionActionKind.Select,
-            ActionId = "route",
-            Label = "Route",
-            Style = InteractionActionStyle.Primary,
-            ApprovalDecision = InteractionApprovalDecision.Approve,
-            Options =
-            {
-                new InteractionOption { Label = "Canary", Value = "canary" },
-            },
-        });
-        spec.Fields.Add(new InteractionField
-        {
-            Title = "Env",
-            Text = "prod",
-            IsShort = true,
-        });
-
-        var content = InteractionSpecMapper.ToMessageContent(spec);
-
-        content.Text.ShouldBe("Review\nDeploy v1?");
-        content.Disposition.ShouldBe(MessageDisposition.Ephemeral);
-        content.Actions.ShouldHaveSingleItem().Kind.ShouldBe(ActionElementKind.Select);
-        content.Actions[0].WorkflowResume.Approved.ShouldBeTrue();
-        content.Actions[0].Options.ShouldHaveSingleItem().Value.ShouldBe("canary");
-        content.Cards.ShouldHaveSingleItem().Fields.ShouldHaveSingleItem().IsShort.ShouldBeTrue();
     }
 }

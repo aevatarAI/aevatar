@@ -70,8 +70,6 @@ public sealed class ServiceRunCurrentStateProjector
             UpdatedAt = record.UpdatedAt?.ToDateTimeOffset() ?? observedAt,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
-            LastOutput = record.LastOutput ?? string.Empty,
-            LastError = record.LastError ?? string.Empty,
         };
 
         await _writeDispatcher.UpsertAsync(document, ct);

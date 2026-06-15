@@ -71,12 +71,6 @@ public static class WorkflowRunReportExportWriter
         AppendRow(sb, "UpdatedAt", report.UpdatedAt.ToString("O"));
         AppendRow(sb, "StartedAt", report.StartedAt.ToString("O"));
         AppendRow(sb, "EndedAt", report.EndedAt.ToString("O"));
-        AppendRow(sb, "Usage.PromptTokens", report.Usage.PromptTokens.ToString());
-        AppendRow(sb, "Usage.CompletionTokens", report.Usage.CompletionTokens.ToString());
-        AppendRow(sb, "Usage.TotalTokens", report.Usage.TotalTokens.ToString());
-        AppendRow(sb, "Usage.Model", report.Usage.Model);
-        AppendRow(sb, "Usage.Cost", report.Usage.Cost.ToString("G17"));
-        AppendRow(sb, "Usage.LatencyMs", report.Usage.LatencyMs.ToString());
         sb.AppendLine("</tbody></table>");
         sb.AppendLine("</div>");
 
@@ -111,7 +105,7 @@ public static class WorkflowRunReportExportWriter
         sb.AppendLine("</tbody></table></div>");
 
         sb.AppendLine("<div class='card'><h2>Steps</h2>");
-        sb.AppendLine("<table><thead><tr><th>StepId</th><th>Type</th><th>TargetRole</th><th>Success</th><th>Worker</th><th>DurationMs</th><th>Tokens</th><th>OutputPreview</th><th>Error</th></tr></thead><tbody>");
+        sb.AppendLine("<table><thead><tr><th>StepId</th><th>Type</th><th>TargetRole</th><th>Success</th><th>Worker</th><th>DurationMs</th><th>OutputPreview</th><th>Error</th></tr></thead><tbody>");
         foreach (var step in report.Steps)
         {
             sb.AppendLine("<tr>");
@@ -121,7 +115,6 @@ public static class WorkflowRunReportExportWriter
             sb.AppendLine($"<td>{E(step.Success?.ToString() ?? "")}</td>");
             sb.AppendLine($"<td>{E(step.WorkerId)}</td>");
             sb.AppendLine($"<td>{(step.DurationMs.HasValue ? step.DurationMs.Value.ToString("F2") : "")}</td>");
-            sb.AppendLine($"<td>{step.Usage.TotalTokens}</td>");
             sb.AppendLine($"<td>{E(step.OutputPreview)}</td>");
             sb.AppendLine($"<td>{E(step.Error)}</td>");
             sb.AppendLine("</tr>");

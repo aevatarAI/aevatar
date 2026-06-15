@@ -113,7 +113,9 @@ internal sealed class SkillRecoveryOrchestrator
         _directiveSequence++;
         var uniqueToolCall = new ToolCall
         {
-            Id = SkillRecoveryPlanner.BuildSequencedCallId(toolCall.Id, _directiveSequence),
+            Id = string.IsNullOrWhiteSpace(toolCall.Id)
+                ? $"skill-recovery:{_directiveSequence}"
+                : $"{toolCall.Id}:recovery:{_directiveSequence}",
             Name = toolCall.Name,
             ArgumentsJson = toolCall.ArgumentsJson,
         };
@@ -144,7 +146,7 @@ internal sealed class SkillRecoveryOrchestrator
             executor.AddTool(state, toolCall);
             await foreach (var result in executor.GetRemainingResultsAsync(state, ct))
             {
-                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
+                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
             }

@@ -17,7 +17,6 @@ public class ChatRunStartErrorMapperTests
     [InlineData(WorkflowChatRunStartError.AgentWorkflowNotConfigured, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.InvalidWorkflowYaml, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.WorkflowNameMismatch, StatusCodes.Status400BadRequest)]
-    [InlineData(WorkflowChatRunStartError.InvalidCallerCredential, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.None, StatusCodes.Status400BadRequest)]
     public void ToHttpStatusCode_ShouldMapExpectedCode(
         WorkflowChatRunStartError error,
@@ -32,12 +31,7 @@ public class ChatRunStartErrorMapperTests
         var mapped = ChatRunStartErrorMapper.ToCommandError(WorkflowChatRunStartError.WorkflowNotFound);
 
         mapped.Code.Should().Be("WORKFLOW_NOT_FOUND");
-        mapped.Message.Should().Be(WorkflowChatRunStartErrorGuidance.WorkflowNotFound);
-        mapped.Message.Should().Contain("current scope catalog");
-        mapped.Message.Should().Contain("nyxid_proxy");
-        mapped.Message.Should().Contain("slug/path");
-        mapped.Message.Should().Contain("use_skill");
-        mapped.Message.Should().Contain("workflow_id");
+        mapped.Message.Should().Be("Workflow not found.");
     }
 
     [Fact]
@@ -65,14 +59,5 @@ public class ChatRunStartErrorMapperTests
 
         mapped.Code.Should().Be("WORKFLOW_PROJECTION_UNAVAILABLE");
         mapped.Message.Should().Be("Workflow projection is unavailable.");
-    }
-
-    [Fact]
-    public void ToCommandError_InvalidCallerCredential_ShouldMapExpectedPayload()
-    {
-        var mapped = ChatRunStartErrorMapper.ToCommandError(WorkflowChatRunStartError.InvalidCallerCredential);
-
-        mapped.Code.Should().Be("INVALID_CALLER_CREDENTIAL");
-        mapped.Message.Should().Be("Caller credential is invalid.");
     }
 }

@@ -10,7 +10,6 @@
 - 为 run actor 建立 projection lifecycle 和 live sink
 - 生成 `WorkflowChatRunAcceptedReceipt`
 - 通过 `IWorkflowChatRunInteractionPort` 启动实时交互，并经 CQRS Core 通用 event stream 持续输出 `WorkflowRunEventEnvelope`
-- 通过 `ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>` 启动 fork run，seed 只走 execution request/start 链路
 - 暴露读侧查询门面
 
 ## Run 主链路
@@ -49,7 +48,6 @@
 - 真正的 envelope 投递由 CQRS Core 的 `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 完成，`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑
 - 状态快照由 `WorkflowRunFinalizeEmitter` 统一在收尾阶段补发
 - `resume/signal` 入口也收敛为标准 CQRS 命令：Host 只依赖 `ICommandDispatchService<WorkflowResumeCommand/...>` 与 `ICommandDispatchService<WorkflowSignalCommand/...>`
-- `fork` 入口同样收敛为标准 CQRS 命令：Host 与自动 fork coordinator 只构造 `WorkflowForkRunCommand`，由 target resolver 查询 seed、创建新 run，并由 fork pipeline 从 target 的 prepared request 把 `WorkflowChatRequestEvent.ForkSeed` 投递给新 run actor
 
 ## Query 语义
 
@@ -71,13 +69,6 @@
 
 ```
 Aevatar.Workflow.Application/
-├── RunForks/
-│   ├── WorkflowForkRunAcceptedReceiptFactory.cs
-│   ├── WorkflowForkRunCommandDispatchService.cs
-│   ├── WorkflowForkRunCommandEnvelopeFactory.cs
-│   ├── WorkflowForkRunCommandTarget.cs
-│   ├── WorkflowForkRunCommandTargetResolver.cs
-│   └── WorkflowRunForkCoordinator.cs
 ├── Runs/
 │   ├── WorkflowRunAcceptedReceiptFactory.cs
 │   ├── WorkflowRunAcceptedCommandTarget.cs

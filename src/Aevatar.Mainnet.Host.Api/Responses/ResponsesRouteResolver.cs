@@ -96,22 +96,23 @@ internal sealed class ResponsesChatRouteDecisionPort(
     ChatRouteResolver resolver) : IResponsesChatRouteDecisionPort
 {
     public async Task<ChatRouteDecision> ResolveAsync(
-        ResponsesChatRouteDecisionRequest request,
+        ResponsesCallerScope callerScope,
+        string model,
+        ToolMode toolMode,
+        string contentHint,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var ownerScope = OwnerScope.ForNyxIdNative(request.CallerScope.ScopeId);
+        var ownerScope = OwnerScope.ForNyxIdNative(callerScope.ScopeId);
         var snapshot = await queryPort.LookupForCallerAsync(ownerScope, ct);
         return resolver.Resolve(snapshot, new ChatRouteInput
         {
             SourceKind = ChatSourceKind.NyxResponses,
             CallerScope = ownerScope.Clone(),
             Channel = string.Empty,
-            CommandName = request.CommandName,
-            ContentHint = request.ContentHint,
-            ToolMode = request.ToolMode,
-            Model = request.Model,
+            CommandName = string.Empty,
+            ContentHint = contentHint,
+            ToolMode = toolMode,
+            Model = model,
         });
     }
 }

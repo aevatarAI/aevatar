@@ -87,7 +87,7 @@ public sealed class StudioMemberServiceBindingTests
             MemberId,
             new UpdateStudioMemberBindingRequest(
                 GAgent: new StudioMemberGAgentBindingSpec(
-                    AgentKind: "my.actor",
+                    ActorTypeName: "MyActor",
                     Endpoints: [
                         new StudioMemberGAgentEndpointSpec(
                             EndpointId: "chat",
@@ -100,7 +100,7 @@ public sealed class StudioMemberServiceBindingTests
 
         var started = commandPort.StartedRuns.Should().ContainSingle().Which;
         started.ImplementationKind.Should().Be(MemberImplementationKindNames.GAgent);
-        started.Binding.GAgent!.AgentKind.Should().Be("my.actor");
+        started.Binding.GAgent!.ActorTypeName.Should().Be("MyActor");
         started.Binding.GAgent.Endpoints.Should().ContainSingle()
             .Which.Kind.Should().Be("chat");
     }
@@ -417,16 +417,6 @@ public sealed class StudioMemberServiceBindingTests
         {
             RecordedImplementationUpdates.Add(implementation);
             OperationsInOrder.Add("UpdateImplementation");
-            return Task.CompletedTask;
-        }
-
-        public Task RenameAsync(
-            string scopeId,
-            string memberId,
-            string displayName,
-            CancellationToken ct = default)
-        {
-            OperationsInOrder.Add("Rename");
             return Task.CompletedTask;
         }
 

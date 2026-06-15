@@ -41,11 +41,6 @@ public sealed class WorkflowDefinition
     public WorkflowRuntimeConfiguration Configuration { get; init; } = new();
 
     /// <summary>
-    /// Run-level failure policy. Null means terminal failure is not auto-driven.
-    /// </summary>
-    public WorkflowRunFailurePolicy? OnFailure { get; init; }
-
-    /// <summary>
     /// 入口步骤 ID，即第一个步骤的 ID；若无步骤则为 null。
     /// </summary>
     public string? EntryStepId => Steps.Count > 0 ? Steps[0].Id : null;
@@ -100,18 +95,6 @@ public sealed class WorkflowRuntimeConfiguration
     public bool ClosedWorldMode { get; init; }
 }
 
-public sealed class WorkflowRunFailurePolicy
-{
-    public string Action { get; init; } = string.Empty;
-
-    public int MaxAttempts { get; init; }
-}
-
-public static class WorkflowRunFailureActions
-{
-    public const string ForkFromFailedStep = "fork_from_failed_step";
-}
-
 /// <summary>
 /// 角色定义。描述工作流中参与者的 ID、名称、系统提示及模型配置。
 /// </summary>
@@ -130,6 +113,9 @@ public sealed class RoleDefinition
     /// <summary>
     /// Stable agent kind token used by WorkflowRunGAgent to provision the role actor.
     /// </summary>
+    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
     public string? AgentKind { get; init; }
 
     /// <summary>
@@ -176,8 +162,6 @@ public sealed class RoleDefinition
     /// 该角色绑定的事件路由规则（DSL 或 YAML list）。
     /// </summary>
     public string? EventRoutes { get; init; }
-
-    public WorkflowAgentToolScopeDefinition? AgentToolScope { get; init; }
 
     /// <summary>
     /// 该角色允许使用的 Connector 名称列表（中心化配置在 ~/.aevatar/connectors.json）。

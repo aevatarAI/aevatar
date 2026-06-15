@@ -16,26 +16,6 @@ namespace Aevatar.AI.LLMProviders.NyxId;
 public sealed class NyxIdLLMProvider : ILLMProvider
 {
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1/";
-    private static readonly LLMProviderCapabilities ProviderCapabilities = new()
-    {
-        SupportedInputModalities = new HashSet<ContentPartKind>
-        {
-            ContentPartKind.Text,
-            ContentPartKind.Image,
-            ContentPartKind.Audio,
-            ContentPartKind.Video,
-        },
-        SupportedOutputModalities = new HashSet<ContentPartKind>
-        {
-            ContentPartKind.Text,
-            ContentPartKind.Image,
-            ContentPartKind.Audio,
-            ContentPartKind.Video,
-        },
-        SupportsStreaming = true,
-        SupportsToolCalls = true,
-        SupportsReasoningDeltas = true,
-    };
 
     private readonly string _defaultModel;
     private readonly Uri _defaultNyxEndpoint;
@@ -66,8 +46,6 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     }
 
     public string Name { get; }
-
-    public LLMProviderCapabilities Capabilities => ProviderCapabilities;
 
     // Refactor (iter18/cluster-001):
     //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
@@ -253,18 +231,15 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     {
         _ = ct;
         var normalizedRequest = NormalizeRequest(request);
-        var (accessToken, tokenSource) = ResolveAccessTokenWithSource(normalizedRequest);
+        var accessToken = ResolveAccessToken(normalizedRequest);
         var routePreference = NormalizeRoutePreference(ResolveRoutePreference(normalizedRequest));
         var route = ResolvePreferredRoute(normalizedRequest, accessToken, routePreference);
 
-        // Credential-source probe for the 2026-06-12 empty-reply incident: source + length only.
-        _logger.LogInformation(
-            "Resolved NyxID LLM route '{RouteName}' to {Endpoint} for model {Model}: tokenSource={TokenSource} tokenLength={TokenLength}",
+        _logger.LogDebug(
+            "Resolved NyxID LLM route '{RouteName}' to {Endpoint} for model {Model}",
             route.RouteName,
             route.Endpoint,
-            route.Request.Model,
-            tokenSource,
-            accessToken.Length);
+            route.Request.Model);
 
         return Task.FromResult(route);
     }
@@ -373,23 +348,17 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveAccessToken(LLMRequest request)
     {
-        var (token, _) = ResolveAccessTokenWithSource(request);
-        return token;
-    }
-
-    private (string Token, string Source) ResolveAccessTokenWithSource(LLMRequest request)
-    {
         var typedToken = request.CallerContext?.Credentials?.NyxIdBearer?.Trim();
         if (!string.IsNullOrWhiteSpace(typedToken))
-            return (typedToken, "caller-typed");
+            return typedToken;
 
         var controlToken = request.LlmControl?.NyxIdAccessToken?.Trim();
         if (!string.IsNullOrWhiteSpace(controlToken))
-            return (controlToken, "llm-control");
+            return controlToken;
 
         var configuredToken = _accessTokenAccessor()?.Trim();
         if (!string.IsNullOrWhiteSpace(configuredToken))
-            return (configuredToken, "host-accessor");
+            return configuredToken;
 
         throw new NyxIdAuthenticationRequiredException(Name);
     }

@@ -923,11 +923,8 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         // lifecycle drift is a configuration error and projection refuses writes.
         var act = () => store.UpsertAsync(new TestStoreReadModel { Id = "actor-1", ActorId = "actor-1" });
 
-        var exception = await act.Should().ThrowAsync<ProjectionIndexSchemaDriftException>();
-        exception.Which.Provider.Should().Be("Elasticsearch");
-        exception.Which.IndexAlias.Should().Be("aevatar-projection-core-tests");
-        exception.Which.CurrentPhysicalIndex.Should().Be("aevatar-projection-core-tests-v00000000");
-        exception.Which.ExpectedPhysicalIndex.Should().StartWith("aevatar-projection-core-tests-v");
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*schema drift detected*");
         handler.CapturedRequests.Should().ContainSingle();
         handler.CapturedRequests
             .Any(r => r.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal))
@@ -935,68 +932,6 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.CapturedRequests
             .Any(r => r.PathAndQuery == "/_aliases" && r.Method == "POST")
             .Should().BeFalse("drift must not swap aliases from the projection write path");
-    }
-
-    [Fact]
-    public async Task CheckIndexConsistencyAsync_WhenAliasFingerprintDrifts_ShouldReportDriftWithoutLifecycleMutation()
-    {
-        var handler = new ScriptedHttpMessageHandler();
-        handler.EnqueueResponse(req =>
-        {
-            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
-            return CreateJsonResponse(HttpStatusCode.OK, $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
-        });
-
-        using var store = CreateStore(
-            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
-            handler);
-
-        var result = await store.CheckIndexConsistencyAsync();
-
-        result.Status.Should().Be(ProjectionIndexConsistencyStatus.Drifted);
-        result.Provider.Should().Be("Elasticsearch");
-        result.IndexAlias.Should().Be("aevatar-projection-core-tests");
-        result.CurrentPhysicalIndex.Should().Be("aevatar-projection-core-tests-v00000000");
-        result.ExpectedPhysicalIndex.Should().StartWith("aevatar-projection-core-tests-v");
-        handler.CapturedRequests.Should().ContainSingle(r =>
-            r.Method == "GET" &&
-            r.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
-        handler.CapturedRequests
-            .Any(r => r.Method is "PUT" or "POST" or "DELETE")
-            .Should().BeFalse("the consistency probe must not mutate indices or aliases");
-        handler.CapturedRequests
-            .Any(r => r.PathAndQuery.Contains("_search", StringComparison.Ordinal))
-            .Should().BeFalse("the consistency probe must not query read models");
-    }
-
-    [Fact]
-    public async Task QueryAsync_WhenAliasFingerprintDrifts_ShouldThrowTypedDriftWithoutLifecycleMutation()
-    {
-        var handler = new ScriptedHttpMessageHandler();
-        handler.EnqueueResponse(req =>
-        {
-            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
-            return CreateJsonResponse(HttpStatusCode.OK, $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
-        });
-
-        using var store = CreateStore(
-            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
-            handler);
-
-        Func<Task> act = () => store.QueryAsync(new ProjectionDocumentQuery());
-
-        var exception = await act.Should().ThrowAsync<ProjectionIndexSchemaDriftException>();
-        exception.Which.IndexAlias.Should().Be("aevatar-projection-core-tests");
-        exception.Which.CurrentPhysicalIndex.Should().Be("aevatar-projection-core-tests-v00000000");
-        handler.CapturedRequests.Should().ContainSingle(r =>
-            r.Method == "GET" &&
-            r.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
-        handler.CapturedRequests
-            .Any(r => r.Method is "PUT" or "POST" or "DELETE")
-            .Should().BeFalse("projection reads must not repair drift through lifecycle mutation");
-        handler.CapturedRequests
-            .Any(r => r.PathAndQuery.Contains("_search", StringComparison.Ordinal))
-            .Should().BeFalse("the drifted read path must fail before querying a stale read model");
     }
 
     [Fact]

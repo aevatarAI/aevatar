@@ -6,25 +6,23 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Aevatar.GAgents.Channel.Runtime;
 
 /// <summary>
-/// Retired-actor declaration for the channel-bot-registration surface.
+/// Retired-actor declaration for the channel-bot-registration surface previously
+/// hosted by the deleted <c>Aevatar.GAgents.ChannelRuntime</c> assembly.
 /// </summary>
 public sealed class ChannelRuntimeRetiredActorSpec : RetiredActorSpec
 {
     public override string SpecId => "channel-runtime";
 
-    // Retire only the legacy actor body left by the deleted Aevatar.GAgents.ChannelRuntime
-    // assembly. The durable materialization scope MUST NOT be a retired target: its runtime
-    // kind is derived from the context's simple type name, so the legacy and current
-    // ChannelBotRegistrationMaterializationContext collapse to the same
-    // "projection.materialization-scope.channel-bot-registration-materialization-context"
-    // kind. Retiring it would destroy the live projection scope on every startup cleanup
-    // pass and leave the channel-bot-registration read model un-materialized (#1763 regression).
     public override IReadOnlyList<RetiredActorTarget> Targets { get; } =
     [
         new(
             ChannelBotRegistrationGAgent.WellKnownId,
-            ["channel-runtime.channel-bot-registration"],
+            ["Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent"],
             CleanupReadModels: true),
+        new(
+            $"projection.durable.scope:channel-bot-registration:{ChannelBotRegistrationGAgent.WellKnownId}",
+            ["Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationMaterializationContext"],
+            SourceStreamId: ChannelBotRegistrationGAgent.WellKnownId),
     ];
 
     public override Task DeleteReadModelsForActorAsync(

@@ -1,5 +1,4 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -34,10 +33,6 @@ internal sealed class WorkflowRunCommandTargetResolver
         if (!_projectionPort.ProjectionEnabled)
             return CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>.Failure(
                 WorkflowChatRunStartError.ProjectionDisabled);
-
-        if (WorkflowCallerCredentialTokens.ParseOptional(command.CallerCredential?.BearerToken).IsInvalid)
-            return CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>.Failure(
-                WorkflowChatRunStartError.InvalidCallerCredential);
 
         if (command.TargetSeed != null)
             return ResolveSeededTarget(command, command.TargetSeed);

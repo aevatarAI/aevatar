@@ -255,7 +255,6 @@ public sealed class AgentBuilderCardFlowTests
                   "agent_id": "skill-runner-94d754dfdfbb416aa5a676cecd0d7a71",
                   "template": "legacy-template",
                   "status": "running",
-                  "output_format": "text",
                   "next_scheduled_run": "2026-04-23T09:00:00Z",
                   "last_run_at": "2026-04-22T09:00:00Z"
                 }
@@ -270,7 +269,6 @@ public sealed class AgentBuilderCardFlowTests
         card.Text.Should().Contain("legacy-template");
         card.Text.Should().Contain("skill-runner-94d754dfdfbb416aa5a676cecd0d7a71");
         card.Text.Should().Contain("running");
-        card.Text.Should().Contain("Output: `text`");
         card.Text.Should().Contain("/agent-status <id>");
         card.Text.Should().Contain("/run-agent <id>");
         card.Text.Should().Contain("/delete-agent <id> confirm");
@@ -370,7 +368,6 @@ public sealed class AgentBuilderCardFlowTests
               "status": "running",
               "schedule_cron": "0 9 * * *",
               "schedule_timezone": "UTC",
-              "output_format": "feishu_doc",
               "last_run_at": "2026-04-25T05:30:00Z",
               "next_scheduled_run": "2026-04-26T09:00:00Z",
               "error_count": "0"
@@ -380,7 +377,6 @@ public sealed class AgentBuilderCardFlowTests
         result.Text.Should().BeNullOrEmpty();
         result.Cards.Should().ContainSingle(card => card.BlockId == "agent_status:skill-runner-1");
         result.Cards.Single().Text.Should().Contain("Status: `running`");
-        result.Cards.Single().Text.Should().Contain("Output: `feishu_doc`");
         // Lifecycle buttons render as actions, not as embedded JSON in MessageContent.Text.
         result.Actions.Should().Contain(a => a.ActionId == "run_agent");
         result.Actions.Should().Contain(a => a.ActionId == "disable_agent");

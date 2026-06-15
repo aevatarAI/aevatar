@@ -39,8 +39,6 @@ public sealed class AgentToolExecutionContextMapperTests
                 [LLMRequestMetadataKeys.NyxIdRoutePreference] = "legacy-route",
                 [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "4",
                 [LLMRequestMetadataKeys.UserMemoryPrompt] = "legacy-memory",
-                ["workflow.parent_actor_id"] = "forged-parent",
-                ["workflow.root_run_id"] = "forged-root",
                 ["external-trace"] = "trace-1",
             },
         };
@@ -58,7 +56,6 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Routing.NyxIdRoutePreference.Should().Be("typed-route");
         context.Routing.MaxToolRoundsOverride.Should().Be(9);
         context.Routing.UserMemoryPrompt.Should().Be("typed-memory");
-        context.WorkflowRuntime.Should().Be(AgentWorkflowRuntimeContext.Empty);
         context.ExternalMetadata.Should().ContainSingle();
         context.ExternalMetadata["external-trace"].Should().Be("trace-1");
     }
@@ -171,33 +168,6 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
-    public void ToPayloadAndFromPayload_ShouldPreserveRestrictedToolVisibility()
-    {
-        var context = AgentToolExecutionContext.Empty with
-        {
-            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["search"]),
-        };
-
-        var payload = AgentToolExecutionContextMapper.ToPayload(context);
-        var mapped = AgentToolExecutionContextMapper.FromPayload(payload);
-
-        payload.ToolVisibility.Should().NotBeNull();
-        payload.ToolVisibility.AllowedToolNames.Should().Equal("search");
-        mapped.ToolVisibility.IsRestricted.Should().BeTrue();
-        mapped.ToolVisibility.Allows("search").Should().BeTrue();
-        mapped.ToolVisibility.Allows("calendar").Should().BeFalse();
-    }
-
-    [Fact]
-    public void ToPayload_WhenToolVisibilityUnrestricted_ShouldOmitVisibilityPayload()
-    {
-        var payload = AgentToolExecutionContextMapper.ToPayload(AgentToolExecutionContext.Empty);
-
-        payload.ToolVisibility.Should().BeNull();
-        AgentToolExecutionContextMapper.FromPayload(payload).ToolVisibility.IsRestricted.Should().BeFalse();
-    }
-
-    [Fact]
     public void FromMetadata_ShouldIgnoreOwnedControlKeysAndKeepExternalMetadata()
     {
         var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
@@ -211,33 +181,24 @@ public sealed class AgentToolExecutionContextMapperTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "legacy-access",
             [LLMRequestMetadataKeys.NyxIdOrgToken] = "legacy-org",
             [LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "legacy-sender-access",
-                [LLMRequestMetadataKeys.SenderBindingId] = "legacy-binding",
-                [LLMRequestMetadataKeys.ModelOverride] = "legacy-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "legacy-route",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "7",
-                [LLMRequestMetadataKeys.UserMemoryPrompt] = "legacy-memory",
-                [LLMRequestMetadataKeys.ConnectedServicesContext] = """{"services":[]}""",
-                ["channel.platform"] = "canonical-lark",
-                ["platform"] = "lark",
-                ["channel.sender_id"] = "ou-canonical",
-                ["sender_id"] = "ou-legacy",
-                ["registration_scope_id"] = "scope-legacy",
-                ["delivery_target_id"] = "agent-forged",
-                ["channel.delivery_target_id"] = "agent-forged-canonical",
-                ["channel.message_id"] = "msg-canonical",
-                ["message_id"] = "msg-legacy",
-                ["channel.platform_message_id"] = "platform-msg-canonical",
-                ["platform_message_id"] = "platform-msg-legacy",
+            [LLMRequestMetadataKeys.SenderBindingId] = "legacy-binding",
+            [LLMRequestMetadataKeys.ModelOverride] = "legacy-model",
+            [LLMRequestMetadataKeys.NyxIdRoutePreference] = "legacy-route",
+            [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "7",
+            [LLMRequestMetadataKeys.UserMemoryPrompt] = "legacy-memory",
+            [LLMRequestMetadataKeys.ConnectedServicesContext] = """{"services":[]}""",
+            ["channel.platform"] = "canonical-lark",
+            ["platform"] = "lark",
+            ["channel.sender_id"] = "ou-canonical",
+            ["sender_id"] = "ou-legacy",
+            ["registration_scope_id"] = "scope-legacy",
+            ["channel.message_id"] = "msg-canonical",
+            ["message_id"] = "msg-legacy",
+            ["channel.platform_message_id"] = "platform-msg-canonical",
+            ["platform_message_id"] = "platform-msg-legacy",
             ["lark.open_id"] = "ou-lark",
             ["lark.message_id"] = "msg-lark",
             ["telegram.chat_id"] = "10001",
-            ["workflow.parent_actor_id"] = "forged-parent",
-            ["workflow.parent_run_id"] = "forged-run",
-            ["workflow.parent_step_id"] = "forged-step",
-            ["workflow.root_run_id"] = "forged-root",
-            ["workflow.depth"] = "99",
-            ["workflow_call.parent_actor_id"] = "forged-parent-2",
-            ["aevatar.workflow.root_run_id"] = "forged-root-2",
             ["trace-id"] = "trace-1",
         });
 
@@ -252,7 +213,6 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Channel.Platform.Should().BeNull();
         context.Channel.SenderId.Should().BeNull();
         context.Channel.RegistrationScopeId.Should().BeNull();
-        context.Channel.DeliveryTargetId.Should().BeNull();
         context.Channel.MessageId.Should().BeNull();
         context.Channel.PlatformMessageId.Should().BeNull();
         context.SenderBinding.BindingId.Should().BeNull();
@@ -261,7 +221,6 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Routing.MaxToolRoundsOverride.Should().BeNull();
         context.Routing.UserMemoryPrompt.Should().BeNull();
         context.ConnectedServices.ContextJson.Should().BeNull();
-        context.WorkflowRuntime.Should().Be(AgentWorkflowRuntimeContext.Empty);
         context.ExternalMetadata.Should().ContainSingle();
         context.ExternalMetadata["trace-id"].Should().Be("trace-1");
     }
@@ -292,20 +251,17 @@ public sealed class AgentToolExecutionContextMapperTests
             new AgentToolRequestIdentity(" request-1 ", " call-1 "),
             new AgentToolCredentials(" access-1 ", " org-1 ", " sender-access-1 "),
             new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
-            new AgentToolChannelContext(" telegram ", " sender-1 ", " registration-1 ", " message-1 ", " platform-message-1 ", " delivery-target-1 "),
+            new AgentToolChannelContext(" telegram ", " sender-1 ", " registration-1 ", " message-1 ", " platform-message-1 "),
             new AgentToolSenderBindingContext(" binding-1 "),
             new LLMRequestRoutingContext(" model-1 ", " route-1 ", 7, " memory-1 "),
             new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
-            new AgentWorkflowRuntimeContext(" parent-actor ", " parent-run ", " parent-step ", " root-run ", 3),
             new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: true,
                 RequireOrnnSearchOnBlocker: true,
                 CommandName: " goal ",
                 OriginalCommand: " /goal ship ",
                 PrimarySkillName: " goal-skill ",
-                MaxOrnnSearchAttempts: 2,
-                CommandArguments: " ship ",
-                DiscoveryRequested: true),
+                MaxOrnnSearchAttempts: 2),
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external-trace"] = "trace-1",
@@ -330,48 +286,19 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Channel.RegistrationScopeId.Should().Be("registration-1");
         copy.Channel.MessageId.Should().Be("message-1");
         copy.Channel.PlatformMessageId.Should().Be("platform-message-1");
-        copy.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
         copy.SenderBinding.BindingId.Should().Be("binding-1");
         copy.Routing.ModelOverride.Should().Be("model-1");
         copy.Routing.NyxIdRoutePreference.Should().Be("route-1");
         copy.Routing.MaxToolRoundsOverride.Should().Be(7);
         copy.Routing.UserMemoryPrompt.Should().Be("memory-1");
         copy.ConnectedServices.ContextJson.Should().Be("""{"service":"telegram"}""");
-        copy.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
-        copy.WorkflowRuntime.ParentRunId.Should().Be("parent-run");
-        copy.WorkflowRuntime.ParentStepId.Should().Be("parent-step");
-        copy.WorkflowRuntime.RootRunId.Should().Be("root-run");
-        copy.WorkflowRuntime.Depth.Should().Be(3);
-        copy.WorkflowRuntime.HasManagedParent.Should().BeTrue();
         copy.SkillRecovery.RequireInitialOrnnSearch.Should().BeTrue();
         copy.SkillRecovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
         copy.SkillRecovery.CommandName.Should().Be("goal");
         copy.SkillRecovery.OriginalCommand.Should().Be("/goal ship");
         copy.SkillRecovery.PrimarySkillName.Should().Be("goal-skill");
         copy.SkillRecovery.MaxOrnnSearchAttempts.Should().Be(2);
-        copy.SkillRecovery.CommandArguments.Should().Be("ship");
-        copy.SkillRecovery.DiscoveryRequested.Should().BeTrue();
         copy.ExternalMetadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("external-trace", "trace-1"));
-    }
-
-    [Fact]
-    public void FromPayload_WhenSkillRecoveryNewFieldsAreMissing_ShouldUseDefaults()
-    {
-        var payload = new AgentToolExecutionContextPayload
-        {
-            SkillRecovery = new AgentSkillRecoveryContextPayload
-            {
-                RequireInitialOrnnSearch = true,
-                CommandName = "goal",
-            },
-        };
-
-        var context = AgentToolExecutionContextMapper.FromPayload(
-            AgentToolExecutionContextPayload.Parser.ParseFrom(payload.ToByteArray()));
-
-        context.SkillRecovery.CommandName.Should().Be("goal");
-        context.SkillRecovery.CommandArguments.Should().BeNull();
-        context.SkillRecovery.DiscoveryRequested.Should().BeFalse();
     }
 
     [Fact]

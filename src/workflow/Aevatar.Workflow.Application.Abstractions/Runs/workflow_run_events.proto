@@ -36,7 +36,6 @@ message WorkflowRunEventEnvelope {
     WorkflowToolCallEndEventPayload tool_call_end = 12;
     WorkflowCustomEventPayload custom = 13;
     WorkflowRunStoppedEventPayload run_stopped = 14;
-    WorkflowUsageEventPayload usage = 15;
   }
 }
 
@@ -94,16 +93,6 @@ message WorkflowToolCallStartEventPayload {
 message WorkflowToolCallEndEventPayload {
   string tool_call_id = 1;
   google.protobuf.StringValue result = 2;
-}
-
-message WorkflowUsageEventPayload {
-  bool available = 1;
-  int32 prompt_tokens = 2;
-  int32 completion_tokens = 3;
-  int32 total_tokens = 4;
-  google.protobuf.StringValue model = 5;
-  google.protobuf.DoubleValue cost = 6;
-  google.protobuf.Int64Value latency_ms = 7;
 }
 
 message WorkflowCustomEventPayload {

@@ -150,7 +150,6 @@ public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerCo
                     EventType = envelope.Payload?.TypeUrl,
                     HandlerName = handler.Name,
                 };
-                hookCtx.Items[GAgentExecutionHookItemKeys.InboundEnvelope] = envelope;
 
                 var sw = Stopwatch.StartNew();
                 Exception? error = null;

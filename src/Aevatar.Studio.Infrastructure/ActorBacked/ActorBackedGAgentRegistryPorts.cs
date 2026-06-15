@@ -1,6 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgents.Registry;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -21,7 +20,6 @@ internal sealed class ActorBackedGAgentRegistryPorts :
     private readonly IActorRuntime _actorRuntime;
     private readonly StudioActorCommandDispatch _commandDispatch;
     private readonly IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> _documentReader;
-    private readonly IAgentKindRegistry _agentKindRegistry;
     private readonly ILogger<ActorBackedGAgentRegistryPorts> _logger;
 
     public ActorBackedGAgentRegistryPorts(
@@ -30,7 +28,6 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         StudioActorCommandDispatch commandDispatch,
         IAppScopeResolver scopeResolver,
         IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> documentReader,
-        IAgentKindRegistry agentKindRegistry,
         ILogger<ActorBackedGAgentRegistryPorts> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
@@ -38,7 +35,6 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
         _ = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
-        _agentKindRegistry = agentKindRegistry ?? throw new ArgumentNullException(nameof(agentKindRegistry));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -50,7 +46,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         var actor = await EnsureWriteActorAsync(normalized.ScopeId, cancellationToken);
         await _commandDispatch.DispatchAsync(actor, new ActorRegisteredEvent
         {
-            AgentKind = normalized.AgentKind,
+            GagentType = normalized.GAgentType,
             ActorId = normalized.ActorId,
         }, PublisherId, cancellationToken);
         var stage = await VerifyAdmissionVisibleAsync(actor, normalized, cancellationToken)
@@ -69,7 +65,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         var actor = await EnsureWriteActorAsync(normalized.ScopeId, cancellationToken);
         await _commandDispatch.DispatchAsync(actor, new ActorUnregisteredEvent
         {
-            AgentKind = normalized.AgentKind,
+            GagentType = normalized.GAgentType,
             ActorId = normalized.ActorId,
         }, PublisherId, cancellationToken);
         return new GAgentActorRegistryCommandReceipt(
@@ -103,12 +99,9 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         var normalized = target with
         {
             ScopeId = NormalizeScopeId(target.ScopeId),
-            AgentKind = NormalizeRequired(target.AgentKind, nameof(target.AgentKind)),
+            GAgentType = NormalizeRequired(target.GAgentType, nameof(target.GAgentType)),
             ActorId = NormalizeRequired(target.ActorId, nameof(target.ActorId)),
         };
-        if (!IsRegisteredAgentKind(normalized.AgentKind))
-            return ScopeResourceAdmissionResult.NotFound();
-
         try
         {
             var actorId = ResolveWriteActorId(normalized.ScopeId);
@@ -119,7 +112,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
             await _commandDispatch.DispatchAsync(actor, new ScopeResourceAdmissionRequested
             {
                 ScopeId = normalized.ScopeId,
-                AgentKind = normalized.AgentKind,
+                GagentType = normalized.GAgentType,
                 ActorId = normalized.ActorId,
                 Operation = ToRegistryOperation(normalized.Operation),
             }, PublisherId, cancellationToken);
@@ -153,33 +146,14 @@ internal sealed class ActorBackedGAgentRegistryPorts :
                 return new RegistryReadModelSnapshot([], 0, DateTimeOffset.MinValue);
 
             var state = document.StateRoot.Unpack<GAgentRegistryState>();
-            var groups = new List<GAgentActorGroup>();
-            foreach (var group in state.Groups)
-            {
-                if (!IsRegisteredAgentKind(group.AgentKind))
-                {
-                    foreach (var registeredActorId in group.ActorIds)
-                    {
-                        _logger.LogWarning(
-                            "GAgent registry legacy row is quarantined for scope {ScopeId}, actor {ActorId}, previous key {PreviousRegistryKey}",
-                            scopeId,
-                            registeredActorId,
-                            group.AgentKind);
-                    }
-
-                    continue;
-                }
-
-                groups.Add(new GAgentActorGroup(
-                    group.AgentKind,
-                    group.ActorIds.ToList().AsReadOnly()));
-            }
-
-            var canonicalGroups = groups
+            var groups = state.Groups
+                .Select(g => new GAgentActorGroup(
+                    g.GagentType,
+                    g.ActorIds.ToList().AsReadOnly()))
                 .ToList()
                 .AsReadOnly();
             return new RegistryReadModelSnapshot(
-                canonicalGroups,
+                groups,
                 document.StateVersion,
                 document.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
         }
@@ -206,7 +180,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
             await _commandDispatch.DispatchAsync(registryActor, new ScopeResourceAdmissionRequested
             {
                 ScopeId = registration.ScopeId,
-                AgentKind = registration.AgentKind,
+                GagentType = registration.GAgentType,
                 ActorId = registration.ActorId,
                 Operation = GAgentRegistryOperation.Use,
             }, PublisherId, ct);
@@ -236,18 +210,9 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         return registration with
         {
             ScopeId = NormalizeScopeId(registration.ScopeId),
-            AgentKind = NormalizeAgentKind(registration.AgentKind, nameof(registration.AgentKind)),
+            GAgentType = NormalizeRequired(registration.GAgentType, nameof(registration.GAgentType)),
             ActorId = NormalizeRequired(registration.ActorId, nameof(registration.ActorId)),
         };
-    }
-
-    private string NormalizeAgentKind(string value, string parameterName)
-    {
-        var normalized = NormalizeRequired(value, parameterName);
-        if (!IsRegisteredAgentKind(normalized))
-            throw new ArgumentException($"AgentKind '{normalized}' is not registered.", parameterName);
-
-        return normalized;
     }
 
     private static string NormalizeRequired(string value, string parameterName)
@@ -257,10 +222,6 @@ internal sealed class ActorBackedGAgentRegistryPorts :
 
         return value.Trim();
     }
-
-    private bool IsRegisteredAgentKind(string? agentKind) =>
-        !string.IsNullOrWhiteSpace(agentKind) &&
-        _agentKindRegistry.TryResolve(agentKind.Trim(), out _);
 
     private static GAgentRegistryOperation ToRegistryOperation(ScopeResourceOperation operation) =>
         operation switch

@@ -4,9 +4,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -16,7 +14,6 @@ using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
-using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Infrastructure.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -308,82 +305,6 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
-    public async Task ParseWorkflowYamlAsync_WhenRoleAgentKindIsDefaultPrimary_ShouldReturnSuccess()
-    {
-        var port = CreatePort(
-            new RecordingActorRuntime(),
-            agentKindRegistry: CreateRoleAgentKindRegistry());
-
-        var result = await port.ParseWorkflowYamlAsync(
-            """
-            name: sample
-            roles:
-              - id: assistant
-                name: Assistant
-                agent_kind: workflow.role-agent
-            steps:
-              - id: step1
-                type: llm_call
-                target_role: assistant
-            """,
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeTrue();
-        result.WorkflowName.Should().Be("sample");
-    }
-
-    [Fact]
-    public async Task ParseWorkflowYamlAsync_WhenRoleAgentKindIsMissing_ShouldDefaultAndReturnSuccess()
-    {
-        var port = CreatePort(
-            new RecordingActorRuntime(),
-            agentKindRegistry: CreateRoleAgentKindRegistry());
-
-        var result = await port.ParseWorkflowYamlAsync(
-            """
-            name: sample
-            roles:
-              - id: assistant
-                name: Assistant
-            steps:
-              - id: step1
-                type: llm_call
-                target_role: assistant
-            """,
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeTrue();
-        result.WorkflowName.Should().Be("sample");
-    }
-
-    [Fact]
-    public async Task ParseWorkflowYamlAsync_WhenRoleAgentKindIsUnknown_ShouldReturnActionableInvalidResult()
-    {
-        var port = CreatePort(
-            new RecordingActorRuntime(),
-            agentKindRegistry: CreateRoleAgentKindRegistry());
-
-        var result = await port.ParseWorkflowYamlAsync(
-            """
-            name: sample
-            roles:
-              - id: bridge
-                name: Bridge
-                agent_kind: workflow.missing-kind
-            steps:
-              - id: step1
-                type: llm_call
-                target_role: bridge
-            """,
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeFalse();
-        result.Error.Should().Contain("bridge");
-        result.Error.Should().Contain("workflow.missing-kind");
-        result.Error.Should().Contain(WorkflowRoleConventions.DefaultAgentKind);
-    }
-
-    [Fact]
     public async Task CreateRunAsync_WhenInlineDefinitionsDiffer_ShouldRebindExistingDefinitionActor()
     {
         var runtime = new RecordingActorRuntime();
@@ -643,23 +564,12 @@ public sealed class WorkflowRunActorPortBranchTests
 
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
-        IWorkflowActorBindingReader? bindingReader = null,
-        IAgentKindRegistry? agentKindRegistry = null) =>
+        IWorkflowActorBindingReader? bindingReader = null) =>
         new(
             runtime,
             runtime,
             bindingReader ?? new RuntimeBackedWorkflowActorBindingReader(runtime),
-            [new WorkflowCoreModulePack()],
-            agentKindRegistry);
-
-    private static IAgentKindRegistry CreateRoleAgentKindRegistry() =>
-        new AgentKindRegistry(
-        [
-            new AgentRegistration(
-                Kind: "workflow.role-agent",
-                ImplementationType: typeof(StubAgent),
-                StateContractType: typeof(object)),
-        ]);
+            [new WorkflowCoreModulePack()]);
 
     private static WorkflowGAgent CreateWorkflowDefinitionAgent()
     {
@@ -876,6 +786,11 @@ public sealed class WorkflowRunActorPortBranchTests
             mappings.TryGetValue(actorId, out var binding);
             return Task.FromResult(binding);
         }
+    }
+
+    private sealed class FakeRoleAgentTypeResolver : IRoleAgentTypeResolver
+    {
+        public Type ResolveRoleAgentType() => typeof(StubAgent);
     }
 
     private sealed class FakeStepExecutorFactory : IEventModuleFactory<IWorkflowExecutionContext>

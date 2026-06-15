@@ -1,8 +1,8 @@
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -14,7 +14,7 @@ namespace Aevatar.GAgents.ChatRouting.Tests;
 /// subscribe — committed <c>ChatRoutePolicyUpdated</c> events landed in event
 /// storage but never materialized into <see cref="ChatRoutePolicyCurrentStateDocument"/>.
 /// These assertions lock in the full materialization-runtime + materializer +
-/// metadata/query registration so the host can wire the physical store.
+/// document-store triple so the readmodel actually populates.
 /// </summary>
 // Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
 //   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
@@ -23,33 +23,33 @@ namespace Aevatar.GAgents.ChatRouting.Tests;
 public sealed class ChatRoutingServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddChatRoutingAgents_RegistersProviderNeutralChatRoutePolicyServices()
+    public void AddChatRoutingAgents_RegistersChatRoutePolicyDocumentStore()
     {
-        var services = new ServiceCollection()
-            .AddChatRoutingAgents();
+        using var provider = new ServiceCollection()
+            .AddChatRoutingAgents()
+            .BuildServiceProvider();
 
-        services.Should().ContainSingle(descriptor =>
-            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChatRoutePolicyCurrentStateDocument>));
-        services.Should().ContainSingle(descriptor =>
-            descriptor.ServiceType == typeof(ChatRoutePolicyCurrentStateProjector));
+        provider.GetService<IProjectionDocumentReader<ChatRoutePolicyCurrentStateDocument, string>>()
+            .Should().NotBeNull("the readmodel cannot be queried without its document reader");
+        provider.GetService<IProjectionDocumentWriter<ChatRoutePolicyCurrentStateDocument>>()
+            .Should().NotBeNull("the projector cannot upsert without its document writer");
     }
 
     [Fact]
     public void AddChatRoutingAgents_RegistersMaterializationRuntimeAndProjector()
     {
-        var services = new ServiceCollection()
-            .AddChatRoutingAgents();
-
-        using var provider = services.BuildServiceProvider();
+        using var provider = new ServiceCollection()
+            .AddChatRoutingAgents()
+            .BuildServiceProvider();
 
         provider.GetService<Func<ProjectionRuntimeScopeKey, ChatRoutePolicyMaterializationContext>>()
             .Should().NotBeNull("the materialization runtime needs a scope-key → context factory");
-        services.Should().ContainSingle(descriptor =>
-            descriptor.ServiceType == typeof(ChatRoutePolicyCurrentStateProjector));
-        services.Should().ContainSingle(descriptor =>
-            descriptor.ServiceType == typeof(ICurrentStateProjectionMaterializer<ChatRoutePolicyMaterializationContext>),
-            "without the materializer subscription, committed ChatRoutePolicyUpdated events would " +
-            "land in event storage but never reach ChatRoutePolicyCurrentStateDocument");
+        provider.GetService<ChatRoutePolicyCurrentStateProjector>()
+            .Should().NotBeNull("the current-state projector must be resolvable as a concrete singleton");
+        provider.GetService<ICurrentStateProjectionMaterializer<ChatRoutePolicyMaterializationContext>>()
+            .Should().NotBeNull(
+                "without the materializer subscription, committed ChatRoutePolicyUpdated events would " +
+                "land in event storage but never reach ChatRoutePolicyCurrentStateDocument");
     }
 
     [Fact]

@@ -2,8 +2,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -48,7 +48,6 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
 
         EnsureSuccess(response, "NyxID LLM services");
         var result = NyxIdLlmServiceCatalogParser.ParseServicesResult(response.Body);
-        result = await MergeUserKeyRouteCandidatesAsync(result, bearerToken, ct).ConfigureAwait(false);
         return await MergeProxyRouteCandidatesAsync(result, bearerToken, ct).ConfigureAwait(false);
     }
 
@@ -145,41 +144,6 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to merge NyxID proxy services into LLM route catalog");
-            return result;
-        }
-    }
-
-    private async Task<NyxIdLlmServicesResult> MergeUserKeyRouteCandidatesAsync(
-        NyxIdLlmServicesResult result,
-        string bearerToken,
-        CancellationToken ct)
-    {
-        try
-        {
-            var response = await SendNyxIdAsync(
-                HttpMethod.Get,
-                NyxIdLlmCatalogRoutes.UserKeysPath,
-                bearerToken,
-                body: null,
-                ct).ConfigureAwait(false);
-            if ((int)response.StatusCode is < 200 or > 299)
-            {
-                _logger.LogWarning(
-                    "NyxID user keys endpoint returned {StatusCode}: {Body}",
-                    response.StatusCode,
-                    response.Body.Length > 500 ? response.Body[..500] : response.Body);
-                return result;
-            }
-
-            return NyxIdLlmServiceCatalogParser.MergeUserKeyRouteCandidates(result, response.Body);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to merge NyxID user keys into LLM route catalog");
             return result;
         }
     }

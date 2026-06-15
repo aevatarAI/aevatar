@@ -1,7 +1,5 @@
 using System.Net.WebSockets;
-using System.Text;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
-using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
@@ -148,65 +146,6 @@ public class VoicePresenceEndpointsTests
     }
 
     [Fact]
-    public async Task Request_should_accept_input_image_text_frame_at_host_boundary()
-    {
-        var receivedFrames = new List<VoiceTransportFrame>();
-        var socket = new FakeWebSocket(WebSocketState.Open);
-        socket.EnqueueReceive(
-            WebSocketMessageType.Text,
-            Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(new VoiceControlFrame
-            {
-                InputImage = new VoiceInputImage
-                {
-                    MediaType = "image/jpeg",
-                    Data = ByteString.CopyFrom([7, 8, 9]),
-                },
-            })));
-        var mediaPort = new RecordingVolatileMediaStreamPort(
-            attachAsync: async (transport, ct) =>
-            {
-                await using (transport)
-                {
-                    await foreach (var frame in transport.ReceiveFramesAsync(ct))
-                        receivedFrames.Add(frame);
-                }
-            });
-        using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
-        var context = CreateHttpContext(app);
-        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
-        context.Request.RouteValues["actorId"] = "agent-1";
-
-        await GetVoiceEndpoint(app).RequestDelegate!(context);
-
-        mediaPort.AttachCalls.ShouldBe(1);
-        mediaPort.DetachCalls.ShouldBe(1);
-        var frame = receivedFrames.ShouldHaveSingleItem();
-        frame.InputImage.ShouldNotBeNull();
-        frame.InputImage!.MediaType.ShouldBe("image/jpeg");
-        frame.InputImage.Data.ToByteArray().ShouldBe(new byte[] { 7, 8, 9 });
-    }
-
-    [Fact]
-    public async Task Request_should_detach_using_transport_lifetime_lease_id_when_attach_returns_distinct_lease()
-    {
-        var socket = new FakeWebSocket(WebSocketState.Open, keepOpenUntilCancelledWhenEmpty: true);
-        var mediaPort = new RecordingVolatileMediaStreamPort(transportLeaseId: "transport-attached");
-        using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
-        var context = CreateHttpContext(app);
-        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
-        context.Request.RouteValues["actorId"] = "agent-1";
-
-        socket.CompleteReceiveClose();
-        await GetVoiceEndpoint(app).RequestDelegate!(context);
-
-        mediaPort.AttachCalls.ShouldBe(1);
-        mediaPort.DetachCalls.ShouldBe(1);
-        mediaPort.LastDetachedHandle.ShouldNotBeNull();
-        mediaPort.LastDetachedHandle!.ActiveTransportLeaseId.ShouldBe("transport-attached");
-        mediaPort.LastDetachedHandle.ActiveTransportLeaseId.ShouldNotBe(CreateLeaseHandle().ActiveTransportLeaseId);
-    }
-
-    [Fact]
     public async Task Request_should_reject_second_transport_without_detaching_existing_one()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
@@ -277,87 +216,15 @@ public class VoicePresenceEndpointsTests
             string.Equals(request.ModuleName, "voice_presence_openai", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task Request_should_forward_realtime_frames_to_websocket_control_channel()
-    {
-        var responseId = 37;
-        var hub = new RecordingProjectionSessionEventHub();
-        var receivedControls = new List<VoiceControlFrame>();
-        var socket = new FakeWebSocket(WebSocketState.Open);
-        socket.EnqueueReceive(
-            WebSocketMessageType.Text,
-            Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(new VoiceControlFrame
-            {
-                DrainAcknowledged = new VoiceDrainAcknowledged
-                {
-                    ResponseId = responseId,
-                    PlayoutSequence = 9,
-                },
-            })));
-        var mediaPort = new RecordingVolatileMediaStreamPort(
-            attachAsync: async (transport, ct) =>
-            {
-                await hub.PublishAsync(
-                    "agent-1",
-                    "session-1",
-                    new VoiceRealtimeFrame
-                    {
-                        ModuleName = "voice_presence",
-                        SessionId = "session-1",
-                        ResponseStarted = new VoiceResponseStarted
-                        {
-                            ResponseId = responseId,
-                            ProviderResponseId = "provider-response-37",
-                        },
-                    },
-                    ct);
-
-                await using (transport)
-                {
-                    await foreach (var frame in transport.ReceiveFramesAsync(ct))
-                    {
-                        if (frame.Control != null)
-                            receivedControls.Add(frame.Control.Clone());
-                    }
-                }
-            });
-        using var app = CreateApp(new RecordingRealtimeSession(), mediaPort, hub);
-        var context = CreateHttpContext(app);
-        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
-        context.Request.RouteValues["actorId"] = "agent-1";
-
-        await GetVoiceEndpoint(app).RequestDelegate!(context);
-
-        socket.SentTexts.Count.ShouldBe(2);
-        var accepted = JsonParser.Default.Parse<VoiceControlFrame>(socket.SentTexts[0]);
-        accepted.FrameCase.ShouldBe(VoiceControlFrame.FrameOneofCase.SessionAccepted);
-        accepted.SessionAccepted.SessionId.ShouldBe("session-1");
-        accepted.SessionAccepted.PcmSampleRateHz.ShouldBe(24000);
-
-        var realtime = JsonParser.Default.Parse<VoiceControlFrame>(socket.SentTexts[1]);
-        realtime.FrameCase.ShouldBe(VoiceControlFrame.FrameOneofCase.RealtimeFrame);
-        realtime.RealtimeFrame.SessionId.ShouldBe("session-1");
-        realtime.RealtimeFrame.ResponseStarted.ResponseId.ShouldBe(responseId);
-        realtime.RealtimeFrame.ResponseStarted.ProviderResponseId.ShouldBe("provider-response-37");
-
-        var ack = receivedControls.ShouldHaveSingleItem();
-        ack.FrameCase.ShouldBe(VoiceControlFrame.FrameOneofCase.DrainAcknowledged);
-        ack.DrainAcknowledged.ResponseId.ShouldBe(realtime.RealtimeFrame.ResponseStarted.ResponseId);
-        ack.DrainAcknowledged.PlayoutSequence.ShouldBe(9);
-        mediaPort.DetachCalls.ShouldBe(1);
-    }
-
     private static WebApplication CreateApp(
         RecordingRealtimeSession session,
-        RecordingVolatileMediaStreamPort? mediaPort = null,
-        IProjectionSessionEventHub<VoiceRealtimeFrame>? realtimeHub = null) =>
-        CreateApp("/voice/{actorId}", session, mediaPort, realtimeHub);
+        RecordingVolatileMediaStreamPort? mediaPort = null) =>
+        CreateApp("/voice/{actorId}", session, mediaPort);
 
     private static WebApplication CreateApp(
         string pattern,
         RecordingRealtimeSession session,
-        RecordingVolatileMediaStreamPort? mediaPort = null,
-        IProjectionSessionEventHub<VoiceRealtimeFrame>? realtimeHub = null)
+        RecordingVolatileMediaStreamPort? mediaPort = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -365,8 +232,6 @@ public class VoicePresenceEndpointsTests
         });
         builder.Services.AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(session);
         builder.Services.AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort ?? new RecordingVolatileMediaStreamPort());
-        if (realtimeHub != null)
-            builder.Services.AddSingleton(realtimeHub);
         var app = builder.Build();
         app.MapVoicePresenceWebSocket(pattern);
         return app;
@@ -448,8 +313,7 @@ public class VoicePresenceEndpointsTests
     }
 
     private sealed class RecordingVolatileMediaStreamPort(
-        Func<IVoiceTransport, CancellationToken, Task>? attachAsync = null,
-        string transportLeaseId = "transport-1")
+        Func<IVoiceTransport, CancellationToken, Task>? attachAsync = null)
         : IVoiceVolatileMediaStreamPort
     {
         public bool SupportsRemoteAudio => true;
@@ -459,8 +323,6 @@ public class VoicePresenceEndpointsTests
         public int DetachCalls { get; private set; }
 
         public int LifetimeCompletionCalls { get; private set; }
-
-        public VoicePresenceSessionLeaseHandle? LastDetachedHandle { get; private set; }
 
         public async Task<VoiceTransportLifetimeCompleted?> AttachAsync(
             VoicePresenceSessionLeaseHandle handle,
@@ -485,7 +347,7 @@ public class VoicePresenceEndpointsTests
             return new VoiceTransportLifetimeCompleted
             {
                 SessionId = handle.SessionId,
-                TransportLeaseId = transportLeaseId,
+                TransportLeaseId = "transport-1",
                 Reason = "completed",
                 OwnerId = handle.OwnerId,
             };
@@ -496,10 +358,10 @@ public class VoicePresenceEndpointsTests
             IVoiceTransport? expectedTransport,
             CancellationToken ct = default)
         {
+            _ = handle;
             _ = expectedTransport;
             ct.ThrowIfCancellationRequested();
             DetachCalls++;
-            LastDetachedHandle = handle;
             return Task.CompletedTask;
         }
 
@@ -515,58 +377,6 @@ public class VoicePresenceEndpointsTests
             ct.ThrowIfCancellationRequested();
             LifetimeCompletionCalls++;
             return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingProjectionSessionEventHub : IProjectionSessionEventHub<VoiceRealtimeFrame>
-    {
-        private readonly List<Subscription> _subscriptions = [];
-
-        public async Task PublishAsync(
-            string rootActorId,
-            string sessionId,
-            VoiceRealtimeFrame evt,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            foreach (var subscription in _subscriptions.ToArray())
-            {
-                if (!string.Equals(subscription.RootActorId, rootActorId, StringComparison.Ordinal) ||
-                    !string.Equals(subscription.SessionId, sessionId, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                await subscription.Handler(evt.Clone());
-            }
-        }
-
-        public Task<IAsyncDisposable> SubscribeAsync(
-            string rootActorId,
-            string sessionId,
-            Func<VoiceRealtimeFrame, ValueTask> handler,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            var subscription = new Subscription(rootActorId, sessionId, handler);
-            _subscriptions.Add(subscription);
-            return Task.FromResult<IAsyncDisposable>(new SubscriptionHandle(_subscriptions, subscription));
-        }
-
-        private sealed record Subscription(
-            string RootActorId,
-            string SessionId,
-            Func<VoiceRealtimeFrame, ValueTask> Handler);
-
-        private sealed class SubscriptionHandle(
-            List<Subscription> subscriptions,
-            Subscription subscription) : IAsyncDisposable
-        {
-            public ValueTask DisposeAsync()
-            {
-                subscriptions.Remove(subscription);
-                return ValueTask.CompletedTask;
-            }
         }
     }
 

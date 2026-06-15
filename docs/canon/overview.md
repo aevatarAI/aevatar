@@ -15,8 +15,6 @@ owner: eanzhao
 3. Maker 定位：`Workflow` 插件扩展，不是独立能力系统。
 4. 统一读写链路：`Application Command -> Actor Message(EventEnvelope) -> Domain Event -> Projection -> ReadModel`。
 
-新增功能的落点先读 [module-placement-map.md](module-placement-map.md)。该入口按 feature family 给出 tier、actor/domain owner、Application command/query、Projection/readmodel、Infrastructure/provider、Host/bootstrap 与 cross-actor protocol 的默认位置，避免从项目引用图反推架构职责。
-
 ## 2. 解决方案结构
 
 ```mermaid

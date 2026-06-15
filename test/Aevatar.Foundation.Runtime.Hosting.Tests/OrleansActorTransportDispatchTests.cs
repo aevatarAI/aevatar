@@ -136,6 +136,8 @@ public sealed class OrleansActorTransportDispatchTests
         public bool Initialized { get; init; } = true;
         public EventEnvelope? LastHandledEnvelope { get; private set; }
 
+        public Task<bool> InitializeAgentAsync(string agentTypeName) => Task.FromResult(true);
+
         public Task<bool> InitializeAgentByKindAsync(string kind) => Task.FromResult(true);
 
         public Task<bool> IsInitializedAsync()
@@ -164,6 +166,8 @@ public sealed class OrleansActorTransportDispatchTests
         public Task<string?> GetParentAsync() => Task.FromResult<string?>(null);
 
         public Task<string> GetDescriptionAsync() => Task.FromResult("recording");
+
+        public Task<string> GetAgentTypeNameAsync() => Task.FromResult(string.Empty);
 
         public Task<string> GetAgentKindAsync() => Task.FromResult(string.Empty);
 

@@ -33,7 +33,7 @@ owner: eanzhao
 
 - 本文里的 `EventEnvelope` 是 runtime message envelope。
 - LLM streaming 链路消费的是 actor envelope 流；Event Sourcing 领域事件仍由 Actor 显式持久化。
-- Voice control/transcript frame 属于 projection-backed realtime stream；raw PCM 只有一条运行时路径：当前 transport lease 内的 `IVoiceVolatileMediaStreamPort` volatile relay 在 `IVoiceTransport` 与 `IRealtimeVoiceProvider` session 之间转发。raw PCM 不进入 actor/proto `VoiceModuleSignal`、`EventEnvelope`、projection、readmodel 或 committed event。
+- Voice control/transcript frame 属于 projection-backed realtime stream；raw PCM 属于 volatile media stream port，只在 transport socket 边界流动，不进入 projection/readmodel/committed event。
 
 相关架构基线：
 
@@ -53,9 +53,8 @@ owner: eanzhao
 
 Voice presence follows the same realtime control shape for `VoiceRealtimeFrame`
 control/transcript output. Raw audio is intentionally outside this table: it is
-handled only by the lease-scoped `IVoiceVolatileMediaStreamPort` relay between
-the transport and provider session, and never becomes an actor signal,
-projection event, readmodel input, or `EventEnvelope` payload.
+handled through `IVoiceVolatileMediaStreamPort` and never becomes a projection
+event or readmodel input.
 
 关键代码锚点：
 

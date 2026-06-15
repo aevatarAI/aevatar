@@ -292,6 +292,23 @@ public class MakerRecursiveModuleCoverageTests
             throw new NotSupportedException("This test context does not support scheduling.");
         }
 
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            TimeSpan period,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default)
+        {
+            _ = callbackId;
+            _ = dueTime;
+            _ = period;
+            _ = evt;
+            _ = options;
+            _ = ct;
+            throw new NotSupportedException("This test context does not support scheduling.");
+        }
+
         public Task CancelDurableCallbackAsync(
             RuntimeCallbackLease lease,
             CancellationToken ct = default)

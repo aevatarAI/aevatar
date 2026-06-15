@@ -8,7 +8,6 @@ public sealed class RuntimeActorGrainState
     [Id(0)]
     public string AgentId { get; set; } = string.Empty;
 
-    [Obsolete("AgentTypeName is a reserved Orleans state slot. Runtime identity is RuntimeActorIdentity.Kind.")]
     [Id(1)]
     public string? AgentTypeName { get; set; }
 
@@ -28,9 +27,12 @@ public sealed class RuntimeActorGrainState
     public long AgentStateSnapshotVersion { get; set; }
 
     /// <summary>
-    /// Stable business identity (kind + schema version). Once an actor row
-    /// exists, <see cref="RuntimeActorIdentity.Kind"/> is the only runtime
-    /// identity input.
+    /// Stable business identity (kind + schema version). Populated lazily
+    /// during the Phase 1 transition: empty for legacy rows, written on
+    /// first successful activation that resolves the persisted
+    /// <see cref="AgentTypeName"/> to a registered kind. <see cref="AgentTypeName"/>
+    /// stays alongside until Phase 3 hard-deprecation so mixed-version pods
+    /// safely coexist during gradual rollouts.
     /// </summary>
     [Id(7)]
     public RuntimeActorIdentity? Identity { get; set; }

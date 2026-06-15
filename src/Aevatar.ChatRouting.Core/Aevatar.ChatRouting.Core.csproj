@@ -34,7 +34,7 @@
         -->
         <Protobuf Include="chat_route_policy_readmodel.proto"
                   ProtoRoot="."
-                  AdditionalImportDirs="..\Aevatar.ChatRouting.Abstractions;..\Aevatar.Foundation.Abstractions;..\Aevatar.Foundation.VoicePresence.Abstractions"
+                  AdditionalImportDirs="..\Aevatar.ChatRouting.Abstractions;..\Aevatar.Foundation.Abstractions"
                   GrpcServices="None" />
     </ItemGroup>
 

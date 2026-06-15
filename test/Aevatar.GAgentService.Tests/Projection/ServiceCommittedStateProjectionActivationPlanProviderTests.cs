@@ -15,29 +15,20 @@ namespace Aevatar.GAgentService.Tests.Projection;
 
 public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
 {
-    [Theory]
-    [MemberData(nameof(ServiceDefinitionCatalogEvents))]
-    public void GetPlans_ShouldMapServiceDefinitionEventsToCatalogScope(IMessage serviceDefinitionEvent)
+    [Fact]
+    public void GetPlans_ShouldMapServiceDefinitionEventsToCatalogScope()
     {
         var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
 
         var plans = provider.GetPlans(BuildContext(
             typeof(ServiceDefinitionGAgent),
-            serviceDefinitionEvent)).ToArray();
+            new ServiceDefinitionCreatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } })).ToArray();
 
         plans.Should().ContainSingle();
         plans[0].LeaseType.Should().Be(typeof(ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>));
         plans[0].StartRequest.RootActorId.Should().Be("service-actor");
         plans[0].StartRequest.ProjectionKind.Should().Be("service-catalog");
         plans[0].StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
-    }
-
-    public static IEnumerable<object[]> ServiceDefinitionCatalogEvents()
-    {
-        yield return [new ServiceDefinitionCreatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } }];
-        yield return [new ServiceDefinitionUpdatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } }];
-        yield return [new ServiceExternalExposureUpdatedEvent { Identity = Identity(), ExternalExposure = new ExternalExposure { NyxidSlug = "aevatar-orders" } }];
-        yield return [new DefaultServingRevisionChangedEvent { Identity = Identity(), RevisionId = "r1" }];
     }
 
     [Fact]
@@ -58,22 +49,6 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
             typeof(ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>),
             typeof(ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>));
         plans.Select(x => x.StartRequest.ProjectionKind).Should().Equal("service-deployments", "service-catalog");
-    }
-
-    [Fact]
-    public void GetPlans_ShouldMapInvocationCatalogEventsToInvocationCatalogScope()
-    {
-        var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
-
-        var plan = provider.GetPlans(BuildContext(
-                typeof(ServiceInvocationCatalogGAgent),
-                new ServiceInvocationCatalogObservedEvent { Identity = Identity() }))
-            .Should().ContainSingle().Subject;
-
-        plan.LeaseType.Should().Be(typeof(ServiceProjectionRuntimeLease<ServiceInvocationCatalogProjectionContext>));
-        plan.StartRequest.RootActorId.Should().Be("service-actor");
-        plan.StartRequest.ProjectionKind.Should().Be("service-invocation-catalog");
-        plan.StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
     }
 
     [Fact]

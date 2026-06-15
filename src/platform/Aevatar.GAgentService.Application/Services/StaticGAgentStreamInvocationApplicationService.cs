@@ -3,7 +3,6 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
-using Aevatar.GAgentService.Application.ServiceRuns;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.AGUI.Contracts;
 using Google.Protobuf.WellKnownTypes;
@@ -62,26 +61,19 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
         EnsureStaticChatTarget(target, invocationRequest);
         var staticPlan = target.Artifact.DeploymentPlan.StaticPlan;
         var agentKind = staticPlan?.AgentKind?.Trim() ?? string.Empty;
-        if (agentKind.Length == 0)
+        var actorTypeName = staticPlan?.ActorTypeName?.Trim() ?? string.Empty;
+        if (agentKind.Length == 0 && actorTypeName.Length == 0)
             throw new InvalidOperationException("Static GAgent service has no agent kind configured.");
 
         StaticGAgentStreamAcceptedReceipt? accepted = null;
-        ServiceRunRegistrationResult? registeredRun = null;
-        var terminalObservation = new ServiceRunTerminalAguiObservation();
 
         async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt gagentReceipt, CancellationToken token)
         {
             var serviceReceipt = CreateServiceReceipt(target, gagentReceipt);
             accepted = new StaticGAgentStreamAcceptedReceipt(serviceReceipt, gagentReceipt);
-            registeredRun = await RegisterServiceRunAsync(target, invocationRequest, gagentReceipt, token);
+            await RegisterServiceRunAsync(target, invocationRequest, gagentReceipt, token);
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(accepted, token);
-        }
-
-        async ValueTask EmitObservedAsync(AGUIEvent aguiEvent, CancellationToken token)
-        {
-            terminalObservation.Observe(aguiEvent);
-            await emitAsync(aguiEvent, token);
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -92,70 +84,27 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
         var interaction = await _interactionPort.ExecuteAsync(
             new GAgentDraftRunInteractionRequest(
                 ScopeId: identity.TenantId,
-                AgentKind: agentKind,
+                ActorTypeName: actorTypeName,
                 Prompt: prompt,
                 PreferredActorId: preferredActorId,
                 SessionId: input.SessionId,
                 Headers: headers,
                 InputParts: input.InputParts,
                 UseCorrelationIdAsFallbackSessionId: false,
+                AgentKind: agentKind,
                 ToolContext: input.ToolContext,
                 LlmControl: input.LlmControl),
-            EmitObservedAsync,
+            emitAsync,
             OnAcceptedAsync,
             timeoutCts.Token);
 
         var completion = interaction.FinalizeResult?.Completion ?? GAgentDraftRunCompletionStatus.Unknown;
         var completed = interaction.FinalizeResult?.Completed ?? false;
-        await PersistTerminalStatusAsync(registeredRun, completion, completed, terminalObservation);
         return new StaticGAgentStreamInvocationResult(
             accepted,
             interaction.Error,
             completion,
             completed);
-    }
-
-    private async Task PersistTerminalStatusAsync(
-        ServiceRunRegistrationResult? registeredRun,
-        GAgentDraftRunCompletionStatus completion,
-        bool completed,
-        ServiceRunTerminalAguiObservation terminalObservation)
-    {
-        if (registeredRun == null ||
-            !completed ||
-            !TryMapTerminalStatus(completion, terminalObservation, out var status))
-        {
-            return;
-        }
-
-        await _serviceRunRegistrationPort.UpdateStatusAsync(
-            registeredRun.RunActorId,
-            registeredRun.RunId,
-            status,
-            terminalObservation.LastOutput,
-            terminalObservation.LastError,
-            CancellationToken.None);
-    }
-
-    private static bool TryMapTerminalStatus(
-        GAgentDraftRunCompletionStatus completion,
-        ServiceRunTerminalAguiObservation terminalObservation,
-        out ServiceRunStatus status)
-    {
-        if (terminalObservation.HasTerminalObservation)
-        {
-            status = terminalObservation.Status;
-            return status != ServiceRunStatus.Unspecified;
-        }
-
-        status = completion switch
-        {
-            GAgentDraftRunCompletionStatus.TextMessageCompleted => ServiceRunStatus.Completed,
-            GAgentDraftRunCompletionStatus.RunFinished => ServiceRunStatus.Completed,
-            GAgentDraftRunCompletionStatus.Failed => ServiceRunStatus.Failed,
-            _ => ServiceRunStatus.Unspecified,
-        };
-        return status != ServiceRunStatus.Unspecified;
     }
 
     private static ServiceIdentity NormalizeIdentity(ServiceIdentity? identity)
@@ -221,7 +170,7 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
         }
     }
 
-    private async Task<ServiceRunRegistrationResult> RegisterServiceRunAsync(
+    private async Task RegisterServiceRunAsync(
         ServiceInvocationResolvedTarget target,
         ServiceInvocationRequest invocationRequest,
         GAgentDraftRunAcceptedReceipt receipt,
@@ -243,7 +192,7 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
             Status = ServiceRunStatus.Accepted,
             Identity = invocationRequest.Identity?.Clone(),
         };
-        return await _serviceRunRegistrationPort.RegisterAsync(record, ct);
+        await _serviceRunRegistrationPort.RegisterAsync(record, ct);
     }
 
     private static ServiceInvocationAcceptedReceipt CreateServiceReceipt(

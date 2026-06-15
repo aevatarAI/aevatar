@@ -126,28 +126,6 @@ public sealed class WorkflowStepTargetAgentResolverAdditionalTests
     }
 
     [Fact]
-    public void GetEffectiveRoles_WhenImplicitRoleIsCreated_ShouldAssignDefaultAgentKind()
-    {
-        var workflow = new WorkflowDefinition
-        {
-            Name = "wf",
-            Roles = [],
-            Steps =
-            [
-                new StepDefinition { Id = "chat", Type = "llm_call" },
-            ],
-        };
-
-        var role = WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(workflow)
-            .Should()
-            .ContainSingle()
-            .Subject;
-
-        role.Id.Should().Be(WorkflowImplicitLlmRolePolicy.DefaultRoleId);
-        role.AgentKind.Should().Be(WorkflowRoleConventions.DefaultAgentKind);
-    }
-
-    [Fact]
     public void WorkflowChatSessionKeys_ShouldValidateRequiredInputs()
     {
         FluentActions.Invoking(() => WorkflowChatSessionKeys.CreateWorkflowStepSessionId(" ", "step"))

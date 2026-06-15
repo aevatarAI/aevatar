@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
@@ -22,7 +21,6 @@ namespace Aevatar.GAgents.StatusDashboard;
 /// <see cref="HealthProbeStoreCommands.BuildActorId(string)"/>). Callers query
 /// the read model by slug, not by actor id.
 /// </summary>
-[GAgent("status.dashboard.health-probe-target")]
 public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>, IProjectedActor
 {
     public static string ProjectionKind => "health-probe-target";

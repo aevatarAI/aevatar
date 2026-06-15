@@ -29,7 +29,7 @@ public sealed class LarkCardOperationSignalTests
                 "stream rejected",
                 isRateLimited: true),
         };
-        var agent = await CreateAgentAsync("conv-lark-card-signal-only", runner, dispatch, new InMemoryEventStore());
+        var agent = CreateAgent("conv-lark-card-signal-only", runner, dispatch, new InMemoryEventStore());
 
         await agent.HandleEventAsync(Envelope("conv-lark-card-signal-only",
             CreateCardStreamChunk("corr-signal-only", "relay-msg-1", "hello")));
@@ -54,7 +54,7 @@ public sealed class LarkCardOperationSignalTests
     {
         var dispatch = new RecordingActorDispatchPort();
         var store = new InMemoryEventStore();
-        var agent = await CreateAgentAsync(
+        var agent = CreateAgent(
             "conv-lark-card-self-dispatch",
             new RecordingCardRunner(),
             dispatch,
@@ -87,7 +87,7 @@ public sealed class LarkCardOperationSignalTests
     public async Task LarkCardOperationCompleted_ActorReconstructsRichContinuation()
     {
         var store = new InMemoryEventStore();
-        var agent = await CreateAgentAsync(
+        var agent = CreateAgent(
             "conv-lark-card-reconstruct",
             new RecordingCardRunner(),
             new RecordingActorDispatchPort(),
@@ -143,7 +143,7 @@ public sealed class LarkCardOperationSignalTests
     public async Task HandleLlmReplyCardStreamChunkAsync_ScheduledTimeoutPayload_StripsRuntimeRelayCredentials()
     {
         await using var callbackHarness = await RuntimeCallbackSchedulerGrainTestHarness.StartAsync();
-        var agent = await CreateAgentAsync(
+        var agent = CreateAgent(
             "conv-lark-card-timeout-sanitize",
             new RecordingCardRunner(),
             new RecordingActorDispatchPort(),
@@ -169,7 +169,7 @@ public sealed class LarkCardOperationSignalTests
     public async Task HandleLlmReplyReadyAsync_FinalizeTimeoutPayload_StripsActivityRuntimeRelayCredentials()
     {
         var scheduler = new RecordingCallbackScheduler();
-        var agent = await CreateAgentAsync(
+        var agent = CreateAgent(
             "conv-lark-card-finalize-timeout-sanitize",
             new RecordingCardRunner(),
             new RecordingActorDispatchPort(),
@@ -244,7 +244,7 @@ public sealed class LarkCardOperationSignalTests
     {
         var scheduler = new RecordingCallbackScheduler();
         var runner = new RecordingCardRunner();
-        var agent = await CreateAgentAsync(
+        var agent = CreateAgent(
             "conv-lark-card-create-inflight-failure-finalize",
             runner,
             new RecordingActorDispatchPort(),
@@ -323,90 +323,12 @@ public sealed class LarkCardOperationSignalTests
         agent.State.ProcessedCommandIds.Should().Contain("llm:corr-card-create-inflight-failure");
     }
 
-    [Fact]
-    public async Task HandleLlmReplyReadyAsync_CardFinalize_UsesReadyRuntimeUserAccessTokenWithoutPersistingIt()
-    {
-        var scheduler = new RecordingCallbackScheduler();
-        var runner = new RecordingCardRunner();
-        var store = new InMemoryEventStore();
-        var eventPublisher = new SelfHandlingEventPublisher(autoHandleSelfEvents: false);
-        var agent = await CreateAgentAsync(
-            "conv-lark-card-finalize-ready-token",
-            runner,
-            new RecordingActorDispatchPort(),
-            store,
-            scheduler,
-            eventPublisher);
-        eventPublisher.SelfTarget = agent;
-        var chunk = CreateCardStreamChunk("corr-card-finalize-ready-token", "relay-msg-1", "hello");
-
-        await agent.HandleEventAsync(Envelope(agent.Id, chunk));
-        var lifecycle = agent.State.ActiveReplyLifecycles.Single();
-        await agent.HandleEventAsync(Envelope(agent.Id,
-            new LarkCardOperationCompletedEvent
-            {
-                OperationId = "corr-card-finalize-ready-token:create:1:1",
-                CorrelationId = "corr-card-finalize-ready-token",
-                Operation = LarkCardOperationPhase.Create,
-                Sequence = lifecycle.LarkCardInFlightSequence,
-                OperationGeneration = lifecycle.LarkCardOperationGeneration,
-                State = LarkCardOperationResultState.Succeeded,
-                Chunk = chunk.Clone(),
-                RawResult = new LarkCardOperationRawResult
-                {
-                    CardId = "card_ok",
-                    CardMessageId = "om_card_msg",
-                },
-            }));
-        scheduler.Timeouts.Clear();
-
-        var readyActivity = chunk.Activity.Clone();
-        readyActivity.TransportExtras.NyxUserAccessToken = "runtime-ready-user-access-token";
-        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
-        {
-            CorrelationId = "corr-card-finalize-ready-token",
-            RegistrationId = "reg-1",
-            SourceActorId = "agent-run",
-            RunId = "run-card-finalize-ready-token",
-            Activity = readyActivity,
-            Outbound = new MessageContent { Text = "final text" },
-            TerminalState = LlmReplyTerminalState.Completed,
-            ReplyToken = "runtime-ready-token-corr-card-finalize-ready-token",
-            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
-            ReadyAtUnixMs = 100,
-        });
-
-        runner.FinalizeCalls.Should().BeEmpty();
-        var finalizeStep = eventPublisher.Sent
-            .OfType<ReplyOperationStepEvent>()
-            .Single(step => step.LarkCard.Operation == LarkCardOperationPhase.Finalize);
-        finalizeStep.OperationName.Should().Be("lark-card-finalize");
-        finalizeStep.LarkCard.Activity.TransportExtras.NyxUserAccessToken.Should()
-            .Be("runtime-ready-user-access-token");
-
-        await agent.HandleReplyOperationStepAsync(finalizeStep);
-
-        var finalizeCall = await runner.WaitForFinalizeCallAsync();
-        finalizeCall.ActivityUserAccessToken.Should().Be("runtime-ready-user-access-token");
-        finalizeCall.RuntimeUserAccessToken.Should().Be("runtime-ready-user-access-token");
-
-        var scheduled = scheduler.Timeouts.Should().ContainSingle().Subject;
-        var timeout = scheduled.TriggerEnvelope.Payload.Unpack<LarkCardOperationTimeoutFiredEvent>();
-        timeout.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
-
-        var persistedBytes = (await store.GetEventsAsync(agent.Id))
-            .SelectMany(evt => evt.EventData.Value.ToByteArray())
-            .ToArray();
-        Encoding.UTF8.GetString(persistedBytes).Should().NotContain("runtime-ready-user-access-token");
-    }
-
-    private static async Task<ConversationGAgent> CreateAgentAsync(
+    private static ConversationGAgent CreateAgent(
         string id,
         IConversationCardTurnRunner cardRunner,
         IActorDispatchPort dispatch,
         IEventStore store,
-        IActorRuntimeCallbackScheduler? callbackScheduler = null,
-        SelfHandlingEventPublisher? eventPublisher = null)
+        IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
         var services = new ServiceCollection()
             .AddSingleton(store)
@@ -424,10 +346,8 @@ public sealed class LarkCardOperationSignalTests
                 services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
         SetId(agent, id);
-        eventPublisher ??= new SelfHandlingEventPublisher();
-        eventPublisher.SelfTarget = agent;
-        agent.EventPublisher = eventPublisher;
-        await agent.ActivateAsync();
+        agent.EventPublisher = new SelfHandlingEventPublisher(agent);
+        agent.ActivateAsync().GetAwaiter().GetResult();
         return agent;
     }
 
@@ -517,15 +437,15 @@ public sealed class LarkCardOperationSignalTests
 
     private sealed class RecordingCardRunner : IConversationCardTurnRunner
     {
-        private readonly TaskCompletionSource<FinalizeCall> _finalizeCall =
+        private readonly TaskCompletionSource<(string FinalText, bool FinalTextDiffersFromLastFlushed, long Sequence)> _finalizeCall =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ConversationCardCreateResult CreateResult { get; init; } =
             ConversationCardCreateResult.Succeeded("card_ok", "om_card_msg");
 
-        public List<FinalizeCall> FinalizeCalls { get; } = [];
+        public List<(string FinalText, bool FinalTextDiffersFromLastFlushed, long Sequence)> FinalizeCalls { get; } = [];
 
-        public async Task<FinalizeCall> WaitForFinalizeCallAsync() =>
+        public async Task<(string FinalText, bool FinalTextDiffersFromLastFlushed, long Sequence)> WaitForFinalizeCallAsync() =>
             await _finalizeCall.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         public Task<ConversationCardCreateResult> RunCardCreateAsync(
@@ -554,24 +474,12 @@ public sealed class LarkCardOperationSignalTests
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct)
         {
-            var call = new FinalizeCall(
-                finalText,
-                finalTextDiffersFromLastFlushed,
-                sequence,
-                referenceActivity.TransportExtras?.NyxUserAccessToken ?? string.Empty,
-                runtimeContext.NyxUserAccessToken ?? string.Empty);
+            var call = (finalText, finalTextDiffersFromLastFlushed, sequence);
             FinalizeCalls.Add(call);
             _finalizeCall.TrySetResult(call);
             return Task.FromResult(ConversationCardFinalizeResult.Succeeded());
         }
     }
-
-    private sealed record FinalizeCall(
-        string FinalText,
-        bool FinalTextDiffersFromLastFlushed,
-        long Sequence,
-        string ActivityUserAccessToken,
-        string RuntimeUserAccessToken);
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
@@ -733,12 +641,8 @@ public sealed class LarkCardOperationSignalTests
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class SelfHandlingEventPublisher(bool autoHandleSelfEvents = true) : IEventPublisher
+    private sealed class SelfHandlingEventPublisher(ConversationGAgent agent) : IEventPublisher
     {
-        public ConversationGAgent? SelfTarget { get; set; }
-
-        public List<IMessage> Sent { get; } = [];
-
         public Task PublishAsync<TEvent>(
             TEvent evt,
             TopologyAudience audience = TopologyAudience.Children,
@@ -755,17 +659,8 @@ public sealed class LarkCardOperationSignalTests
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage =>
-            SendToSelfIfConfiguredAsync(targetActorId, evt);
-
-        private Task SendToSelfIfConfiguredAsync<TEvent>(string targetActorId, TEvent evt)
-            where TEvent : IMessage
-        {
-            Sent.Add(evt);
-            return autoHandleSelfEvents &&
-                   SelfTarget is not null &&
-                   string.Equals(targetActorId, SelfTarget.Id, StringComparison.Ordinal)
-                ? SelfTarget.HandleEventAsync(Envelope(targetActorId, evt))
+            string.Equals(targetActorId, agent.Id, StringComparison.Ordinal)
+                ? agent.HandleEventAsync(Envelope(targetActorId, evt))
                 : Task.CompletedTask;
-        }
     }
 }

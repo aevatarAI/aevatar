@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
@@ -20,27 +19,6 @@ public sealed class IdempotentStepExecutionTests
         Name = "test-workflow",
         Roles = [new RoleDefinition { Id = "worker", Name = "Worker" }],
         Steps = [new StepDefinition { Id = stepId, Type = "llm_call", TargetRole = "worker" }],
-    };
-
-    private static WorkflowDefinition ThreeStepWorkflow() => new()
-    {
-        Name = "test-resume-workflow",
-        Roles = [new RoleDefinition { Id = "worker", Name = "Worker" }],
-        Steps =
-        [
-            new StepDefinition { Id = "step-a", Type = "transform" },
-            new StepDefinition
-            {
-                Id = "step-b",
-                Type = "transform",
-                Parameters =
-                {
-                    ["summary"] = "${concat(step_a_output, ':', topic, ':', input)}",
-                    ["topic_value"] = "${topic}",
-                },
-            },
-            new StepDefinition { Id = "step-c", Type = "transform" },
-        ],
     };
 
     private static EventEnvelope Wrap(IMessage msg) => new()
@@ -97,77 +75,6 @@ public sealed class IdempotentStepExecutionTests
             .Where(e => e.Is(StepRequestEvent.Descriptor))
             .Should()
             .BeEmpty();
-    }
-
-    [Fact]
-    public async Task StartWorkflow_WithForkSeed_ShouldPersistHydratedSeedVariables()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
-        var start = new StartWorkflowEvent
-        {
-            RunId = "run-1",
-            Input = "fresh-input",
-            ForkSeed = new WorkflowRunForkSeed
-            {
-                SourceRunId = "source-run",
-                StartAtStepId = "step-b",
-            },
-        };
-        start.ForkSeed.Variables["input"] = "seed-input";
-        start.ForkSeed.Variables["step_a_output"] = "alpha";
-        start.ForkSeed.Variables["topic"] = "seed-topic";
-
-        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
-
-        var request = ctx.Published
-            .Select(p => p.Event)
-            .Where(e => e.Is(StepRequestEvent.Descriptor))
-            .Select(e => e.Unpack<StepRequestEvent>())
-            .Single();
-        request.StepId.Should().Be("step-b");
-        request.Input.Should().Be("seed-input");
-        request.Parameters["summary"].Should().Be("alpha:seed-topic:seed-input");
-        StepRequests(ctx).Should().NotContain(x => x.StepId == "step-a");
-
-        var state = host.States["workflow_execution_kernel"].Unpack<WorkflowExecutionKernelState>();
-        state.Variables["step_a_output"].Should().Be("alpha");
-        state.Variables["input"].Should().Be("seed-input");
-        state.Variables["topic"].Should().Be("seed-topic");
-    }
-
-    [Fact]
-    public async Task StartWorkflow_WithForkSeedMissingStep_ShouldPublishFailureWithoutDispatch()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
-
-        await kernel.HandleAsync(
-            Wrap(new StartWorkflowEvent
-            {
-                RunId = "run-1",
-                Input = "hello",
-                ForkSeed = new WorkflowRunForkSeed
-                {
-                    SourceRunId = "source-run",
-                    StartAtStepId = "missing-step",
-                },
-            }),
-            ctx,
-            CancellationToken.None);
-
-        ctx.Published.Select(p => p.Event)
-            .Where(e => e.Is(StepRequestEvent.Descriptor))
-            .Should()
-            .BeEmpty();
-        var completed = ctx.Published.Select(p => p.Event)
-            .Where(e => e.Is(WorkflowCompletedEvent.Descriptor))
-            .Select(e => e.Unpack<WorkflowCompletedEvent>())
-            .First(e => !e.Success && e.Error.Contains("missing-step", StringComparison.Ordinal));
-        completed.Success.Should().BeFalse();
-        completed.Error.Should().Contain("missing-step");
     }
 
     [Fact]
@@ -355,19 +262,18 @@ public sealed class IdempotentStepExecutionTests
         var ctx = new RecordingEventHandlerContext();
         var host = new RecordingStateHost();
         var kernel = new WorkflowExecutionKernel(workflow, host);
-        var start = new StartWorkflowEvent { RunId = "run-1", Input = "hello" };
-        start.InputFileRefs.Add(BuildWorkflowFileRef("file-retry"));
 
         // Start workflow → first dispatch
-        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+        await kernel.HandleAsync(
+            Wrap(new StartWorkflowEvent { RunId = "run-1", Input = "hello" }),
+            ctx, CancellationToken.None);
 
-        var firstRequest = ctx.Published
+        var firstExecutionId = ctx.Published
             .Select(p => p.Event)
             .Where(e => e.Is(StepRequestEvent.Descriptor))
             .Select(e => e.Unpack<StepRequestEvent>())
-            .First(r => r.StepId == "step-1");
-        var firstExecutionId = firstRequest.ExecutionId;
-        firstRequest.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-retry");
+            .First(r => r.StepId == "step-1")
+            .ExecutionId;
 
         ctx.Published.Clear();
 
@@ -392,435 +298,9 @@ public sealed class IdempotentStepExecutionTests
         secondRequest.Should().NotBeNull("retry with delayMs=0 should immediately re-dispatch");
         secondRequest!.ExecutionId.Should().NotBeNullOrEmpty();
         secondRequest.ExecutionId.Should().NotBe(firstExecutionId, "retry must generate a new execution_id");
-        secondRequest.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-retry");
-    }
-
-    [Fact]
-    public async Task StepCompleted_WithUsage_ShouldMirrorRunAndStepUsageVariables()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var workflow = new WorkflowDefinition
-        {
-            Name = "usage-workflow",
-            Roles = [new RoleDefinition { Id = "worker", Name = "Worker" }],
-            Steps =
-            [
-                new StepDefinition { Id = "step-1", Type = "llm_call", TargetRole = "worker" },
-                new StepDefinition { Id = "step-2", Type = "transform" },
-            ],
-        };
-        var kernel = new WorkflowExecutionKernel(workflow, host);
-
-        await kernel.HandleAsync(
-            Wrap(new StartWorkflowEvent { RunId = "run-usage", Input = "hello" }),
-            ctx,
-            CancellationToken.None);
-
-        var executionId = ctx.Published
-            .Select(p => p.Event)
-            .Where(e => e.Is(StepRequestEvent.Descriptor))
-            .Select(e => e.Unpack<StepRequestEvent>())
-            .First(r => r.StepId == "step-1")
-            .ExecutionId;
-
-        ctx.Published.Clear();
-
-        await kernel.HandleAsync(
-            Wrap(new StepCompletedEvent
-            {
-                StepId = "step-1",
-                RunId = "run-usage",
-                Success = true,
-                Output = "done",
-                ExecutionId = executionId,
-                Usage = new WorkflowUsageMetrics
-                {
-                    PromptTokens = 10,
-                    CompletionTokens = 15,
-                    TotalTokens = 25,
-                    Model = "gpt-5.4",
-                    Cost = 0.42,
-                    LatencyMs = 123,
-                },
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var state = host.GetExecutionState("workflow_execution_kernel")!.Unpack<WorkflowExecutionKernelState>();
-        state.Variables["workflow.usage.prompt_tokens"].Should().Be("10");
-        state.Variables["workflow.usage.completion_tokens"].Should().Be("15");
-        state.Variables["workflow.usage.total_tokens"].Should().Be("25");
-        state.Variables["workflow.usage.model"].Should().Be("gpt-5.4");
-        state.Variables["workflow.usage.cost"].Should().Be("0.41999999999999998");
-        state.Variables["workflow.usage.latency_ms"].Should().Be("123");
-        state.Variables["steps.step-1.usage.total_tokens"].Should().Be("25");
-        state.Variables["steps.step-1.usage.model"].Should().Be("gpt-5.4");
-    }
-
-    [Fact]
-    public async Task StartWorkflow_WithForkSeed_ShouldDispatchSeedStartStepAndHydrateVariables()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
-        var start = new StartWorkflowEvent
-        {
-            RunId = "run-resume",
-            Input = "fresh-input",
-            ForkSeed = new WorkflowRunForkSeed
-            {
-                SourceRunId = "run-source",
-                StartAtStepId = "step-b",
-            },
-        };
-        start.ForkSeed.Variables["input"] = "seed-input";
-        start.ForkSeed.Variables["step_a_output"] = "alpha";
-        start.ForkSeed.Variables["topic"] = "seed-topic";
-
-        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
-
-        var requests = StepRequests(ctx);
-        requests.Should().ContainSingle();
-        requests[0].StepId.Should().Be("step-b");
-        requests[0].Input.Should().Be("seed-input");
-        requests[0].Parameters["summary"].Should().Be("alpha:seed-topic:seed-input");
-        requests.Should().NotContain(x => x.StepId == "step-a");
-
-        var state = LoadKernelState(host);
-        state.CurrentStepId.Should().Be("step-b");
-        state.CurrentStepInput.Should().Be("seed-input");
-        state.Variables["step_a_output"].Should().Be("alpha");
-        state.Variables["topic"].Should().Be("seed-topic");
-    }
-
-    [Fact]
-    public async Task StartWorkflow_WithForkSeedMissingStartStep_ShouldPublishFailureWithoutDispatch()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
-        var start = new StartWorkflowEvent
-        {
-            RunId = "run-resume",
-            Input = "fresh-input",
-            ForkSeed = new WorkflowRunForkSeed
-            {
-                SourceRunId = "run-source",
-                StartAtStepId = "missing-step",
-            },
-        };
-        start.ForkSeed.Variables["step_a_output"] = "alpha";
-
-        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
-
-        StepRequests(ctx).Should().BeEmpty();
-        var completions = WorkflowCompletions(ctx);
-        completions.Should().HaveCount(2);
-        completions.Should().OnlyContain(x => !x.Success);
-        completions.Should().OnlyContain(
-            x => x.Error == "fork seed start step 'missing-step' was not found");
-        host.GetExecutionState("workflow_execution_kernel").Should().BeNull();
-    }
-
-    [Fact]
-    public async Task StartWorkflow_WithForkSeed_ShouldLetStartParametersOverrideSeedVariables()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
-        var start = new StartWorkflowEvent
-        {
-            RunId = "run-resume",
-            Input = "fresh-input",
-            ForkSeed = new WorkflowRunForkSeed
-            {
-                SourceRunId = "run-source",
-                StartAtStepId = "step-b",
-            },
-        };
-        start.ForkSeed.Variables["input"] = "seed-input";
-        start.ForkSeed.Variables["step_a_output"] = "alpha";
-        start.ForkSeed.Variables["topic"] = "seed-topic";
-        start.Parameters["topic"] = "parameter-topic";
-
-        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
-
-        var request = StepRequests(ctx).Single();
-        request.StepId.Should().Be("step-b");
-        request.Input.Should().Be("seed-input");
-        request.Parameters["topic_value"].Should().Be("parameter-topic");
-
-        var state = LoadKernelState(host);
-        state.Variables["topic"].Should().Be("parameter-topic");
-        state.Variables["step_a_output"].Should().Be("alpha");
-    }
-
-    [Fact]
-    public async Task StartWorkflow_WithoutForkSeed_ShouldDispatchFirstStepWithFreshVariables()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
-
-        await kernel.HandleAsync(
-            Wrap(new StartWorkflowEvent { RunId = "run-plain", Input = "fresh-input" }),
-            ctx,
-            CancellationToken.None);
-
-        var requests = StepRequests(ctx);
-        requests.Should().ContainSingle();
-        requests[0].StepId.Should().Be("step-a");
-        requests[0].Input.Should().Be("fresh-input");
-
-        var state = LoadKernelState(host);
-        state.Variables["input"].Should().Be("fresh-input");
-        state.Variables.Should().NotContainKey("step_a_output");
-        state.Variables.Keys.Should().BeEquivalentTo(DefaultStartVariableKeys);
-    }
-
-    [Fact]
-    public async Task StartWorkflow_WithInputFileRefs_ShouldDispatchFirstStepAndPersistCurrentStepRefs()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
-        var start = new StartWorkflowEvent
-        {
-            RunId = "run-files",
-            Input = "fresh-input",
-        };
-        start.InputFileRefs.Add(BuildWorkflowFileRef("file-first"));
-
-        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
-
-        var request = StepRequests(ctx).Single();
-        request.StepId.Should().Be("step-a");
-        request.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-first");
-
-        var state = LoadKernelState(host);
-        state.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-first");
-        state.CurrentStepInputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-first");
-    }
-
-    [Fact]
-    public async Task StepCompleted_ShouldNotCarryStartInputFileRefsToNextStep()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
-        var start = new StartWorkflowEvent
-        {
-            RunId = "run-files",
-            Input = "fresh-input",
-        };
-        start.InputFileRefs.Add(BuildWorkflowFileRef("file-first"));
-
-        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
-        var first = StepRequests(ctx).Single();
-        ctx.Published.Clear();
-
-        await kernel.HandleAsync(
-            Wrap(new StepCompletedEvent
-            {
-                StepId = "step-a",
-                RunId = "run-files",
-                Success = true,
-                Output = "alpha",
-                ExecutionId = first.ExecutionId,
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var second = StepRequests(ctx).Single();
-        second.StepId.Should().Be("step-b");
-        second.InputFileRefs.Should().BeEmpty();
-        LoadKernelState(host).CurrentStepInputFileRefs.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task StartWorkflow_WithStepPresentation_ShouldDispatchTypedInteractionSpec()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var workflow = new WorkflowDefinition
-        {
-            Name = "interaction-workflow",
-            Roles = [new RoleDefinition { Id = "worker", Name = "Worker" }],
-            Steps =
-            [
-                new StepDefinition
-                {
-                    Id = "approval",
-                    Type = "human_approval",
-                    TargetRole = "worker",
-                    Presentation = new StepPresentation
-                    {
-                        InteractionSpec = new InteractionSpec
-                        {
-                            Title = "Approve ${input}",
-                            Body = "Release ${release}",
-                            Disposition = InteractionDisposition.Ephemeral,
-                            Actions =
-                            {
-                                new InteractionAction
-                                {
-                                    Kind = InteractionActionKind.Button,
-                                    ActionId = "approve",
-                                    Label = "Approve ${release}",
-                                    Value = "${release}",
-                                    Style = InteractionActionStyle.Primary,
-                                },
-                            },
-                        },
-                    },
-                },
-            ],
-        };
-        var kernel = new WorkflowExecutionKernel(workflow, host);
-        var start = new StartWorkflowEvent { RunId = "run-interaction", Input = "deploy" };
-        start.Parameters["release"] = "v1";
-
-        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
-
-        var request = StepRequests(ctx).Single();
-        request.Parameters.Should().NotContainKey("interaction_spec");
-        request.StepParameters.InteractionSpec.Title.Should().Be("Approve deploy");
-        request.StepParameters.InteractionSpec.Body.Should().Be("Release v1");
-        request.StepParameters.InteractionSpec.Disposition.Should().Be(InteractionDisposition.Ephemeral);
-        request.StepParameters.InteractionSpec.Actions[0].Label.Should().Be("Approve v1");
-        request.StepParameters.InteractionSpec.Actions[0].Value.Should().Be("v1");
-        request.StepParameters.InteractionSpec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
-    }
-
-    [Fact]
-    public async Task StartWorkflow_WithRoleAndStepToolScopes_ShouldDispatchIntersection()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var workflow = new WorkflowDefinition
-        {
-            Name = "tool-scope-workflow",
-            Roles =
-            [
-                new RoleDefinition
-                {
-                    Id = "worker",
-                    Name = "Worker",
-                    AgentToolScope = new WorkflowAgentToolScopeDefinition
-                    {
-                        AllowedToolNames = ["search", "calendar"],
-                    },
-                },
-            ],
-            Steps =
-            [
-                new StepDefinition
-                {
-                    Id = "scoped",
-                    Type = "llm_call",
-                    TargetRole = "worker",
-                    AgentToolScope = new WorkflowAgentToolScopeDefinition
-                    {
-                        AllowedToolNames = ["calendar", "forbidden"],
-                    },
-                },
-            ],
-        };
-        var kernel = new WorkflowExecutionKernel(workflow, host);
-
-        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-tools", Input = "hello" }), ctx, CancellationToken.None);
-
-        var request = StepRequests(ctx).Single();
-        request.StepParameters.AgentToolScope.Should().NotBeNull();
-        request.StepParameters.AgentToolScope.AllowedToolNames.Should().Equal("calendar");
-    }
-
-    [Fact]
-    public async Task StartWorkflow_WithPresentEmptyStepToolScope_ShouldDispatchNoToolsScope()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var workflow = new WorkflowDefinition
-        {
-            Name = "no-tools-workflow",
-            Roles =
-            [
-                new RoleDefinition
-                {
-                    Id = "worker",
-                    Name = "Worker",
-                    AgentToolScope = new WorkflowAgentToolScopeDefinition
-                    {
-                        AllowedToolNames = ["search"],
-                    },
-                },
-            ],
-            Steps =
-            [
-                new StepDefinition
-                {
-                    Id = "scoped",
-                    Type = "llm_call",
-                    TargetRole = "worker",
-                    AgentToolScope = new WorkflowAgentToolScopeDefinition(),
-                },
-            ],
-        };
-        var kernel = new WorkflowExecutionKernel(workflow, host);
-
-        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-no-tools", Input = "hello" }), ctx, CancellationToken.None);
-
-        var request = StepRequests(ctx).Single();
-        request.StepParameters.AgentToolScope.Should().NotBeNull();
-        request.StepParameters.AgentToolScope.AllowedToolNames.Should().BeEmpty();
     }
 
     // ──── Test infrastructure ────
-
-    private static readonly string[] DefaultStartVariableKeys =
-    [
-        "input",
-        "workflow.usage.prompt_tokens",
-        "workflow.usage.completion_tokens",
-        "workflow.usage.total_tokens",
-        "workflow.usage.model",
-        "workflow.usage.cost",
-        "workflow.usage.latency_ms",
-    ];
-
-    private static IReadOnlyList<StepRequestEvent> StepRequests(RecordingEventHandlerContext ctx) =>
-        ctx.Published
-            .Select(p => p.Event)
-            .Where(e => e.Is(StepRequestEvent.Descriptor))
-            .Select(e => e.Unpack<StepRequestEvent>())
-            .ToList();
-
-    private static IReadOnlyList<WorkflowCompletedEvent> WorkflowCompletions(RecordingEventHandlerContext ctx) =>
-        ctx.Published
-            .Select(p => p.Event)
-            .Where(e => e.Is(WorkflowCompletedEvent.Descriptor))
-            .Select(e => e.Unpack<WorkflowCompletedEvent>())
-            .ToList();
-
-    private static WorkflowExecutionKernelState LoadKernelState(RecordingStateHost host) =>
-        host.GetExecutionState("workflow_execution_kernel")!.Unpack<WorkflowExecutionKernelState>();
-
-    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
-        new()
-        {
-            FileId = fileId,
-            ArtifactId = $"workflow-file://{fileId}",
-            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
-            SourceMessageId = "om_1",
-            SourceResourceKey = "image_key_1",
-            FileName = $"{fileId}.png",
-            MediaType = "image/png",
-            SizeBytes = 3,
-            Sha256 = $"sha-{fileId}",
-            CreatedAtUnixMs = 1710000000000,
-            ExpiresAtUnixMs = 1710003600000,
-        };
 
     private sealed class RecordingEventHandlerContext : IEventHandlerContext
     {
@@ -924,7 +404,7 @@ public sealed class IdempotentStepExecutionTests
         public Task ClearExecutionContextAsync(CancellationToken ct = default)
         {
             ExecutionContextState.Llm = null;
-            ExecutionContextState.CallerCredential = null;
+            ExecutionContextState.Connector = null;
             return Task.CompletedTask;
         }
 
@@ -972,25 +452,24 @@ public sealed class IdempotentStepExecutionTests
     {
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearCallerCredential)
-            state.CallerCredential = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
         if (delta.Llm != null)
         {
             state.Llm = new WorkflowLlmExecutionContextState
             {
                 ModelOverride = delta.Llm.ModelOverride,
                 UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
-                RoutePreference = delta.Llm.RoutePreference,
             };
             if (delta.Llm.HasMaxToolRoundsOverride)
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.CallerCredential != null)
+        if (delta.Connector != null)
         {
-            state.CallerCredential = new WorkflowCallerCredentialState
+            state.Connector = new WorkflowConnectorExecutionContextState
             {
-                BearerToken = delta.CallerCredential.BearerToken,
+                HttpAuthorization = delta.Connector.HttpAuthorization,
             };
         }
     }

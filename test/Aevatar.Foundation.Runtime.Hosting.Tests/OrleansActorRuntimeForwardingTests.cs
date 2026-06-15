@@ -2,7 +2,6 @@ using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -24,14 +23,14 @@ public sealed class OrleansActorRuntimeForwardingTests
     {
         var runtime = CreateRuntime(out _, out var grains, out _);
 
-        var actor = await runtime.CreateByKindAsync("  workflow.role-agent  ", "role:assistant");
+        var actor = await runtime.CreateByKindAsync("  workflow.assistant-role  ", "role:assistant");
 
         actor.Should().BeOfType<OrleansActor>();
         actor.Id.Should().Be("role:assistant");
         grains.Should().ContainKey("role:assistant");
         grains["role:assistant"].InitializedKinds.Should()
             .ContainSingle()
-            .Which.Should().Be("workflow.role-agent");
+            .Which.Should().Be("workflow.assistant-role");
     }
 
     [Fact]
@@ -41,13 +40,13 @@ public sealed class OrleansActorRuntimeForwardingTests
         await runtime.ExistsAsync("role:assistant");
         grains["role:assistant"].InitializeAgentByKindResult = false;
 
-        var act = () => runtime.CreateByKindAsync("workflow.role-agent", "role:assistant");
+        var act = () => runtime.CreateByKindAsync("workflow.assistant-role", "role:assistant");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Failed to initialize Orleans actor role:assistant for kind 'workflow.role-agent'.*");
+            .WithMessage("*Failed to initialize Orleans actor role:assistant for kind 'workflow.assistant-role'.*");
         grains["role:assistant"].InitializedKinds.Should()
             .ContainSingle()
-            .Which.Should().Be("workflow.role-agent");
+            .Which.Should().Be("workflow.assistant-role");
     }
 
     [Fact]
@@ -296,7 +295,6 @@ public sealed class OrleansActorRuntimeForwardingTests
             grainFactory,
             streams,
             new OrleansActorRuntimeDurableCallbackScheduler(grainFactory),
-            new AgentKindRegistry([]),
             streamLifecycleManager: streamLifecycleManager);
     }
 
@@ -360,6 +358,13 @@ public sealed class OrleansActorRuntimeForwardingTests
         public List<EventEnvelope> HandledEnvelopes { get; } = [];
 
         public int IsInitializedCallCount { get; private set; }
+
+        public Task<bool> InitializeAgentAsync(string agentTypeName)
+        {
+            _ = agentTypeName;
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
+            return SubscribeSelfStreamOnceAsync();
+        }
 
         private async Task<bool> SubscribeSelfStreamOnceAsync()
         {
@@ -446,6 +451,9 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task<string> GetDescriptionAsync() =>
             Task.FromResult("recording");
+
+        public Task<string> GetAgentTypeNameAsync() =>
+            Task.FromResult(string.Empty);
 
         public Task<string> GetAgentKindAsync() =>
             Task.FromResult(string.Empty);

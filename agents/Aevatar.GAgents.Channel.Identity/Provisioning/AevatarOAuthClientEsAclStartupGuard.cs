@@ -1,6 +1,8 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -9,18 +11,21 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity;
 
-public sealed class AevatarOAuthClientEsAclStartupGuard : IHostedService
+internal sealed class AevatarOAuthClientEsAclStartupGuard : IHostedService
 {
     private readonly IServiceProvider _serviceProvider;
+    private readonly IConfiguration _configuration;
     private readonly AevatarOAuthClientEsAclOptions _options;
     private readonly ILogger<AevatarOAuthClientEsAclStartupGuard> _logger;
 
     public AevatarOAuthClientEsAclStartupGuard(
         IServiceProvider serviceProvider,
+        IConfiguration configuration,
         IOptions<AevatarOAuthClientEsAclOptions> options,
         ILogger<AevatarOAuthClientEsAclStartupGuard>? logger = null)
     {
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? NullLogger<AevatarOAuthClientEsAclStartupGuard>.Instance;
     }
@@ -28,6 +33,9 @@ public sealed class AevatarOAuthClientEsAclStartupGuard : IHostedService
     public Task StartAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (!ElasticsearchProjectionConfiguration.IsEnabled(_configuration, storeName: "ChannelIdentity"))
+            return Task.CompletedTask;
 
         if (!_options.GrantMatchesGrainEventStoreInternal)
         {

@@ -99,8 +99,6 @@ message AgentToolExecutionContextPayload {
   AgentToolConnectedServicesContextPayload connected_services = 7;
   map<string, string> external_metadata = 8;
   AgentSkillRecoveryContextPayload skill_recovery = 9;
-  AgentWorkflowRuntimeContextPayload workflow_runtime = 10;
-  AgentToolVisibilityScopePayload tool_visibility = 11;
 }
 
 message AgentSkillRecoveryContextPayload {
@@ -110,12 +108,6 @@ message AgentSkillRecoveryContextPayload {
   string original_command = 4;
   string primary_skill_name = 5;
   int32 max_ornn_search_attempts = 6;
-  string command_arguments = 7;
-  bool discovery_requested = 8;
-}
-
-message AgentToolVisibilityScopePayload {
-  repeated string allowed_tool_names = 1;
 }
 
 message AgentToolRequestIdentityPayload {
@@ -141,7 +133,6 @@ message AgentToolChannelContextPayload {
   string registration_scope_id = 3;
   string message_id = 4;
   string platform_message_id = 5;
-  string delivery_target_id = 6;
 }
 
 message AgentToolSenderBindingContextPayload {
@@ -159,14 +150,6 @@ message AgentToolConnectedServicesContextPayload {
   string context_json = 1;
 }
 
-message AgentWorkflowRuntimeContextPayload {
-  string parent_actor_id = 1;
-  string parent_run_id = 2;
-  string parent_step_id = 3;
-  string root_run_id = 4;
-  int32 depth = 5;
-}
-
 message TextMessageStartEvent   { string session_id = 1; string agent_id = 2; }
 message TextMessageContentEvent { string delta = 1; string session_id = 2; }
 message TextMessageReasoningEvent { string delta = 1; string session_id = 2; }
@@ -174,66 +157,7 @@ message MediaContentEvent { string session_id = 1; string agent_id = 2; ChatCont
 message TextMessageEndEvent     { string content = 1; string session_id = 2; }
 
 message ToolCallEvent   { string tool_name = 1; string arguments_json = 2; string call_id = 3; }
-
-enum AgentToolReceiptStatus {
-  AGENT_TOOL_RECEIPT_STATUS_UNSPECIFIED = 0;
-  AGENT_TOOL_RECEIPT_STATUS_SUCCESS = 1;
-  AGENT_TOOL_RECEIPT_STATUS_APPROVAL_REQUIRED = 2;
-  AGENT_TOOL_RECEIPT_STATUS_DENIED = 3;
-  AGENT_TOOL_RECEIPT_STATUS_ERROR = 4;
-}
-
-enum AgentToolReceiptApprovalMode {
-  AGENT_TOOL_RECEIPT_APPROVAL_MODE_UNSPECIFIED = 0;
-  AGENT_TOOL_RECEIPT_APPROVAL_MODE_NEVER_REQUIRE = 1;
-  AGENT_TOOL_RECEIPT_APPROVAL_MODE_ALWAYS_REQUIRE = 2;
-  AGENT_TOOL_RECEIPT_APPROVAL_MODE_AUTO = 3;
-}
-
-message AgentToolReceipt {
-  string call_id = 1;
-  string tool_name = 2;
-  AgentToolReceiptStatus status = 3;
-  AgentToolReceiptApprovalMode approval_mode = 4;
-  bool is_destructive = 5;
-  string side_effect_kind = 6;
-  string subject_kind = 7;
-  string subject_id = 8;
-  string subject_version = 9;
-  string subject_hash = 10;
-  string approval_request_id = 11;
-  string error_code = 12;
-  string error_message = 13;
-  string result_json = 14;
-  ManagedWorkflowHandoffReceipt managed_workflow_handoff = 15;
-}
-
-message ManagedWorkflowHandoffReceipt {
-  string parent_actor_id = 1;
-  string parent_run_id = 2;
-  string parent_step_id = 3;
-  string invocation_id = 4;
-  string child_run_id = 5;
-  string stream_topic = 6;
-}
-
-message ToolResultEvent {
-  string call_id = 1;
-  string result_json = 2;
-  bool success = 3;
-  string error = 4;
-  AgentToolReceipt receipt = 5;
-}
-message TokenUsagePayload {
-  int32 prompt_tokens = 1;
-  int32 completion_tokens = 2;
-  int32 total_tokens = 3;
-}
-message ChatTokenUsageEvent {
-  string session_id = 1;
-  TokenUsagePayload usage = 2;
-  string model = 3;
-}
+message ToolResultEvent { string call_id = 1; string result_json = 2; bool success = 3; string error = 4; }
 message RoleChatSessionStartedEvent {
   string session_id = 1;
   string prompt = 2;
@@ -248,9 +172,6 @@ message RoleChatSessionCompletedEvent {
   bool content_emitted = 6;
   repeated ChatContentPart output_parts = 7;
   string role_id = 8;
-  TokenUsagePayload usage = 9;
-  string model = 10;
-  repeated AgentToolReceipt tool_receipts = 11;
 }
 
 message InitializeRoleAgentEvent {
@@ -271,21 +192,8 @@ message InitializeRoleAgentEvent {
   double compression_threshold = 13;
   bool enable_summarization = 14;
   string role_id = 15;
-  map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 16;
   reserved 9;
   reserved "stream_buffer_capacity";
-}
-
-message VoicePresenceEnableRequested {
-  string module_name = 1;
-  aevatar.voice.VoiceSessionDefaults voice_session_defaults = 2;
-  aevatar.voice.VoiceRemoteAudioSupport remote_audio_support = 3;
-}
-
-message VoicePresenceEnabledEvent {
-  string module_name = 1;
-  aevatar.voice.VoiceSessionDefaults voice_session_defaults = 2;
-  aevatar.voice.VoicePresenceRuntimeState runtime_state = 3;
 }
 
 message AIAgentConfigOverrides {
@@ -336,9 +244,6 @@ message RoleChatSessionState {
   bool content_emitted = 7;
   repeated ChatContentPart input_parts = 8;
   repeated ChatContentPart output_parts = 9;
-  TokenUsagePayload usage = 10;
-  string model = 11;
-  repeated AgentToolReceipt tool_receipts = 12;
 }
 
 message RoleGAgentState {
@@ -351,7 +256,6 @@ message RoleGAgentState {
   PendingToolApprovalState pending_approval = 7;
   string role_id = 8;
   map<string, aevatar.voice.VoicePresenceRuntimeState> voice_presence = 9;
-  map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 10;
 }
 
 // ─── Multi-turn tool approval continuation ───

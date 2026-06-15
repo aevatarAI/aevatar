@@ -19,44 +19,30 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         //   New principle: Ornn skill discovery remains the typed instruction-package lookup; nyxid_proxy is only a live downstream proxy surface.
         "Search the user's Ornn skill library for matching skill packages. " +
         "Call this FIRST whenever the user mentions a named skill (in quotes, slug-like, or Title Case), " +
-        "asks which Ornn skills they have, wants to list or browse available skills, " +
         "asks for a specialized capability (translation, content generation, analysis, network or device discovery, " +
         "domain workflows), or says \"挂载/use/load this skill\". " +
         "Also call this when a loaded skill leaves you blocked by a missing capability, unknown workflow step, " +
         "unavailable service, unknown API contract, or repeated tool failure. " +
         "Prefer this over nyxid_proxy path-guessing; proxy discovery lists service APIs, " +
         "this discovers ready-made instruction packages. " +
-        "Returns matching skill names + descriptions; follow up with use_skill to load and activate one. " +
-        "When the user asks what skills are available without a keyword, call this with an empty or omitted query.";
+        "Returns matching skill names + descriptions; follow up with use_skill to load and activate one.";
 
     public string ParametersSchema => """
         {
           "type": "object",
           "properties": {
-            "query": { "type": "string", "description": "Search keywords. Omit or pass an empty string to list/browse available skills." },
+            "query": { "type": "string", "description": "Search keywords" },
             "scope": { "type": "string", "enum": ["public", "private", "mixed"], "description": "Search scope (default: mixed)" }
-          }
+          },
+          "required": ["query"]
         }
         """;
-
-    public bool IsReadOnly => true;
-
-    public string SideEffectKind => "";
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
-        {
-            return BuildStructuredResult(
-                status: "error",
-                query: null,
-                scope: null,
-                error: "No NyxID access token available. User must be authenticated.",
-                matches: Array.Empty<object>(),
-                httpStatus: null,
-                text: "Error: No NyxID access token available. User must be authenticated.");
-        }
+            return "Error: No NyxID access token available. User must be authenticated.";
 
         string query = "";
         string scope = "mixed";
@@ -74,28 +60,10 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         var result = await _client.SearchSkillsAsync(token, query, scope, ct: ct);
 
         if (!string.IsNullOrEmpty(result.Error))
-        {
-            return BuildStructuredResult(
-                status: "error",
-                query: query,
-                scope: scope,
-                error: result.Error,
-                matches: Array.Empty<object>(),
-                httpStatus: null,
-                text: $"Search failed: {result.Error}");
-        }
+            return $"Search failed: {result.Error}";
 
         if (result.Items.Count == 0)
-        {
-            return BuildStructuredResult(
-                status: "no_match",
-                query: query,
-                scope: scope,
-                error: null,
-                matches: Array.Empty<object>(),
-                httpStatus: null,
-                text: $"No skills found for query '{query}' (scope: {scope}).");
-        }
+            return $"No skills found for query '{query}' (scope: {scope}).";
 
         var lines = new List<string>
         {
@@ -116,43 +84,6 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         }
 
         lines.Add("Use use_skill with the skill name to load and activate a skill.");
-        var matches = result.Items.Select(skill => new
-        {
-            skill_name = skill.Name ?? string.Empty,
-            description = skill.Description,
-            is_private = skill.IsPrivate,
-            category = skill.Metadata?.Category,
-            tags = skill.Tags ?? skill.Metadata?.Tags ?? [],
-        }).ToArray();
-        return BuildStructuredResult(
-            status: "success",
-            query: query,
-            scope: scope,
-            error: null,
-            matches: matches,
-            httpStatus: null,
-            text: string.Join("\n", lines));
-    }
-
-    private static string BuildStructuredResult(
-        string status,
-        string? query,
-        string? scope,
-        string? error,
-        object matches,
-        int? httpStatus,
-        string text)
-    {
-        return JsonSerializer.Serialize(new
-        {
-            result_type = "skill_search",
-            status,
-            query,
-            scope,
-            error,
-            http_status = httpStatus,
-            matches,
-            text,
-        });
+        return string.Join("\n", lines);
     }
 }

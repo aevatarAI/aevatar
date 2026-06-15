@@ -2,8 +2,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.TypeSystem;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
@@ -52,7 +50,7 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
         {
             var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(topology.ActorId);
-            (await grain.InitializeAgentByKindAsync("tests.always-succeed-on-next"))
+            (await grain.InitializeAgentAsync(typeof(AlwaysSucceedOnNextAgent).AssemblyQualifiedName!))
                 .Should().BeTrue();
 
             var envelopeId = Guid.NewGuid().ToString("N");
@@ -85,7 +83,7 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
         {
             var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(topology.ActorId);
-            (await grain.InitializeAgentByKindAsync("tests.throw-once-then-succeed"))
+            (await grain.InitializeAgentAsync(typeof(ThrowOnceThenSucceedAgent).AssemblyQualifiedName!))
                 .Should().BeTrue();
 
             var envelopeId = Guid.NewGuid().ToString("N");
@@ -158,9 +156,6 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             })
             .ConfigureServices(services =>
             {
-                services.AddAevatarAgentKindRegistry(builder => builder
-                    .Register<AlwaysSucceedOnNextAgent>()
-                    .Register<ThrowOnceThenSucceedAgent>());
                 services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
                 {
                     options.BootstrapServers = bootstrapServers;
@@ -292,7 +287,6 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             });
     }
 
-    [GAgent("tests.always-succeed-on-next")]
     public sealed class AlwaysSucceedOnNextAgent : IAgent
     {
         public string Id => "always-succeed-on-next-agent";
@@ -322,7 +316,6 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
         }
     }
 
-    [GAgent("tests.throw-once-then-succeed")]
     public sealed class ThrowOnceThenSucceedAgent : IAgent
     {
         public string Id => "throw-once-then-succeed-agent";

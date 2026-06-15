@@ -226,7 +226,7 @@ Orleans Silo 集群（Garnet/Redis 状态、Kafka 流、Gossip 集群发现）
 
 ```yaml
 Orleans:
-  ClusteringMode: "Garnet"           # 生产；开发可用 "Development" / "Localhost"
+  ClusteringMode: "Development"      # 或 "Localhost"
   ClusterId: "aevatar-mainnet-cluster"
   ServiceId: "aevatar-mainnet-host-api"
 Runtime:
@@ -373,7 +373,7 @@ src/
 ├── workflow/Aevatar.Workflow.*   # 工作流引擎、步骤模块、投影
 ├── Aevatar.Authentication.*      # NyxID 认证 Provider
 ├── Aevatar.Mainnet.Host.Api      # 生产统一宿主
-└── Aevatar.Capabilities               # 共享能力边界支持
+└── Aevatar.Hosting               # 共享宿主基础设施
 test/                             # 单元、集成和 API 测试
 apps/aevatar-console-web/          # 前端控制台
 docs/                             # 架构文档

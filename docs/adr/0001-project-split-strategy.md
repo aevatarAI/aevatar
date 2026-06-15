@@ -22,7 +22,7 @@ owner: eanzhao
 | AI | `aevatar.ai.slnf` | `AI.*` |
 | CQRS | `aevatar.cqrs.slnf` | `CQRS.*` + `Foundation.Projection` + CQRS 单测 |
 | Workflow | `aevatar.workflow.slnf` | `workflow/*` + `workflow/extensions/*` + Workflow 单测 |
-| Capabilities | `aevatar.capabilities.slnf` | `Configuration/Capabilities/Bootstrap/Host Api/Tools` |
+| Hosting | `aevatar.hosting.slnf` | `Configuration/Hosting/Bootstrap/Host Api/Tools` |
 
 可复现验证：
 
@@ -47,7 +47,7 @@ flowchart LR
 建议仓库边界：
 
 1. `aevatar.platform`
-   `Aevatar.Foundation.*`, `Aevatar.CQRS.*`, `Aevatar.Capabilities`, `Aevatar.Foundation.Runtime.Hosting`, `Aevatar.Configuration`
+   `Aevatar.Foundation.*`, `Aevatar.CQRS.*`, `Aevatar.Hosting`, `Aevatar.Foundation.Runtime.Hosting`, `Aevatar.Configuration`
 2. `aevatar.ai`
    `Aevatar.AI.*`（含 provider/tool/projection）
 3. `aevatar.workflow`

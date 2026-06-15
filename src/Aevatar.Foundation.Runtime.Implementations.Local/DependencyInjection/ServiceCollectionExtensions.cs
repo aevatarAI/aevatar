@@ -93,8 +93,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
         services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
-        services.TryAddSingleton<IActorKindProbe, LocalActorKindProbe>();
-        services.TryAddSingleton<IAgentKindVerifier, DefaultAgentKindVerifier>();
+        services.TryAddSingleton<IActorTypeProbe, LocalActorTypeProbe>();
+        services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
 
         // Kind-token identity registry (issue #498). Mirrors the Orleans

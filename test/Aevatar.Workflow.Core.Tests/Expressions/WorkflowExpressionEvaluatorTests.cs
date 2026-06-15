@@ -15,7 +15,7 @@ public class WorkflowExpressionEvaluatorTests
         ["zero"] = "0",
     };
 
-    // Variable resolution
+    // ─── Variable Resolution ───
 
     [Fact]
     public void Evaluate_PlainText_ReturnsUnchanged()
@@ -54,7 +54,7 @@ public class WorkflowExpressionEvaluatorTests
         _eval.Evaluate(null!, _vars).Should().BeNull();
     }
 
-    // String literals
+    // ─── String Literals ───
 
     [Fact]
     public void Evaluate_SingleQuoteLiteral()
@@ -68,7 +68,7 @@ public class WorkflowExpressionEvaluatorTests
         _eval.EvaluateExpression("\"hello\"", _vars).Should().Be("hello");
     }
 
-    // Functions
+    // ─── Functions ───
 
     [Fact]
     public void If_TruthyCondition_ReturnsTrueBranch()
@@ -143,7 +143,7 @@ public class WorkflowExpressionEvaluatorTests
         _eval.Evaluate("${gte(5, 5)}", _vars).Should().Be("true");
     }
 
-    // Boolean functions
+    // ─── Boolean Functions ───
 
     [Fact]
     public void Not_TruthyValue_ReturnsFalse()
@@ -181,7 +181,7 @@ public class WorkflowExpressionEvaluatorTests
         _eval.Evaluate("${or(zero, empty)}", _vars).Should().Be("false");
     }
 
-    // String functions
+    // ─── String Functions ───
 
     [Fact]
     public void Upper_ConvertsToUpperCase()
@@ -210,7 +210,7 @@ public class WorkflowExpressionEvaluatorTests
         _eval.Evaluate("${json(x)}", vars).Should().Be("line1\\n\\\"quoted\\\"");
     }
 
-    // Nested functions
+    // ─── Nested Functions ───
 
     [Fact]
     public void NestedFunctions_IfWithConcat()
@@ -225,7 +225,7 @@ public class WorkflowExpressionEvaluatorTests
         _eval.Evaluate("${concat(upper(name), '!')}", _vars).Should().Be("ALICE!");
     }
 
-    // Truthiness rules
+    // ─── Truthiness Rules ───
 
     [Theory]
     [InlineData("true", "yes")]
@@ -241,7 +241,7 @@ public class WorkflowExpressionEvaluatorTests
         _eval.Evaluate("${if(v, 'yes', 'no')}", vars).Should().Be(expected);
     }
 
-    // Unknown function
+    // ─── Unknown Function ───
 
     [Fact]
     public void UnknownFunction_ReturnsErrorTag()
@@ -249,48 +249,7 @@ public class WorkflowExpressionEvaluatorTests
         _eval.Evaluate("${foo(bar)}", _vars).Should().Contain("unknown function");
     }
 
-    // Escaped literals
-
-    [Fact]
-    public void Evaluate_EscapedExpressionOpen_ReturnsLiteralExpressionOpen()
-    {
-        _eval.Evaluate("$${name}", _vars).Should().Be("${name}");
-    }
-
-    [Fact]
-    public void Evaluate_EscapedExpressionOpen_CanCoexistWithInterpolation()
-    {
-        _eval.Evaluate("literal=$${name}; evaluated=${name}", _vars)
-            .Should().Be("literal=${name}; evaluated=Alice");
-    }
-
-    [Fact]
-    public void Evaluate_EscapedExpressionOpen_PreservesCodeRegexAndShellText()
-    {
-        const string template = """
-            const s = `$${user.id}`;
-            const re = /\$${([A-Z_]+)}/g;
-            echo "$${HOME}"
-            ${concat('user=', name)}
-            """;
-
-        var evaluated = _eval.Evaluate(template, _vars);
-
-        evaluated.Should().Contain("const s = `${user.id}`;");
-        evaluated.Should().Contain(@"const re = /\${([A-Z_]+)}/g;");
-        evaluated.Should().Contain("echo \"${HOME}\"");
-        evaluated.Should().Contain("user=Alice");
-    }
-
-    [Fact]
-    public void Evaluate_EscapedExpressionOpen_DoesNotRewriteEvaluatedVariableValues()
-    {
-        var vars = new Dictionary<string, string> { ["code"] = "$${already-authored}" };
-
-        _eval.Evaluate("${code}", vars).Should().Be("$${already-authored}");
-    }
-
-    // No expression
+    // ─── No Expression ───
 
     [Fact]
     public void NoExpression_ReturnsSameString()

@@ -2,11 +2,12 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
@@ -20,7 +21,11 @@ using Microsoft.Extensions.Hosting;
 namespace Aevatar.GAgents.Channel.Identity.DependencyInjection;
 
 /// <summary>
-/// DI extensions for the Channel.Identity module.
+/// DI extensions for the Channel.Identity module. Split into two methods
+/// so the host composition root owns the document-store wiring (ES vs
+/// InMemory) and the agent module only registers actors / projectors /
+/// broker / slash-commands (PR #521 review glm-5.1 on the agent-level
+/// projection-provider coupling).
 /// </summary>
 public static class IdentityServiceCollectionExtensions
 {
@@ -29,9 +34,11 @@ public static class IdentityServiceCollectionExtensions
     /// query port, the cluster-singleton OAuth client
     /// projection + provider, the production NyxID broker, the OAuth
     /// client bootstrap service, and the slash-command handlers.
-    /// Document stores are wired by the host composition root. Caller must
-    /// additionally call <c>MapIdentityOAuthEndpoints</c> on the endpoint
-    /// route builder.
+    /// Document stores are NOT wired here — the host composition root
+    /// chooses ES vs InMemory and calls
+    /// <see cref="AddChannelIdentityProjectionStores"/> alongside this
+    /// method (or wires its own custom store). Caller must additionally
+    /// call <c>MapIdentityOAuthEndpoints</c> on the endpoint route builder.
     /// </summary>
     public static IServiceCollection AddChannelIdentity(
         this IServiceCollection services,
@@ -51,8 +58,6 @@ public static class IdentityServiceCollectionExtensions
         // module.
         if (services.Any(static d => d.ImplementationType == typeof(AevatarOAuthClientBootstrapService)))
             return services;
-
-        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ExternalIdentityBindingGAgent).Assembly));
 
         // ─── Shared projection runtime infrastructure ───
         services.AddProjectionReadModelRuntime();
@@ -112,6 +117,7 @@ public static class IdentityServiceCollectionExtensions
         var aclOptions = services.AddOptions<AevatarOAuthClientEsAclOptions>();
         if (configuration is not null)
             aclOptions.Bind(configuration.GetSection(AevatarOAuthClientEsAclOptions.SectionName));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, AevatarOAuthClientEsAclStartupGuard>());
 
         // Endpoint filter for the operator /rebuild path — rejects unauthenticated
         // callers before model binding/DI resolution kicks in.
@@ -200,6 +206,54 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<
             ICommandDispatchService<TCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>,
             ChannelIdentityOAuthCommandDispatch<TCommand, TAgent>>();
+        return services;
+    }
+
+    /// <summary>
+    /// Wires the per-binding + cluster-singleton projection document stores
+    /// for Channel.Identity. Picks Elasticsearch when configuration enables
+    /// it under the <c>ChannelIdentity</c> store name, else falls back to
+    /// in-memory (suitable for tests / single-host dev). Hosts that want a
+    /// custom store implementation skip this method and register their own
+    /// <see cref="IProjectionDocumentStore{TDocument,TKey}"/> directly.
+    /// </summary>
+    /// <remarks>
+    /// Lives in this same project as <see cref="AddChannelIdentity"/> for
+    /// discoverability, but split out so the host (Mainnet, demo, CLI) is
+    /// the explicit owner of the ES vs InMemory choice — the agent module
+    /// never makes that decision on the host's behalf.
+    /// </remarks>
+    public static IServiceCollection AddChannelIdentityProjectionStores(
+        this IServiceCollection services,
+        IConfiguration? configuration = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
+            configuration,
+            storeName: "ChannelIdentity");
+
+        if (useElasticsearch)
+        {
+            services.AddElasticsearchDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ExternalIdentityBindingDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+            services.AddElasticsearchDocumentProjectionStore<AevatarOAuthClientDocument, string>(
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<AevatarOAuthClientDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
+                static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<AevatarOAuthClientDocument, string>(
+                static doc => doc.Id, static key => key);
+        }
+
         return services;
     }
 }

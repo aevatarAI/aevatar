@@ -77,29 +77,8 @@ host_can_reach_providers() {
     bash -lc "exec 3<>/dev/tcp/${NEO4J_HOST}/${NEO4J_PORT}" >/dev/null 2>&1
 }
 
-start_projection_providers() {
-  local max_attempts=3
-  local attempt=1
-
-  while [ "${attempt}" -le "${max_attempts}" ]; do
-    echo "Starting Elasticsearch + Neo4j (attempt ${attempt}/${max_attempts})..."
-    if docker compose -f "${COMPOSE_FILE}" up -d elasticsearch neo4j; then
-      return 0
-    fi
-
-    if [ "${attempt}" -eq "${max_attempts}" ]; then
-      echo "Failed to start Elasticsearch + Neo4j after ${max_attempts} attempts."
-      return 1
-    fi
-
-    echo "Docker compose startup failed; cleaning up and retrying..."
-    docker compose -f "${COMPOSE_FILE}" down --volumes --remove-orphans >/dev/null 2>&1 || true
-    sleep $((attempt * 5))
-    attempt=$((attempt + 1))
-  done
-}
-
-start_projection_providers
+echo "Starting Elasticsearch + Neo4j..."
+docker compose -f "${COMPOSE_FILE}" up -d elasticsearch neo4j
 
 wait_elasticsearch
 wait_neo4j

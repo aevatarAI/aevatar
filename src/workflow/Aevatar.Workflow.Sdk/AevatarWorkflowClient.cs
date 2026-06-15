@@ -107,7 +107,6 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
                 editedContent = NormalizeOptional(request.EditedContent),
                 feedback = NormalizeOptional(request.Feedback),
                 metadata = request.Metadata,
-                toolApproval = ToToolApprovalPayload(request.ToolApproval),
             },
             cancellationToken).ConfigureAwait(false);
     }
@@ -414,27 +413,5 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
-
-    private static object? ToToolApprovalPayload(WorkflowToolApprovalResumeRequest? request)
-    {
-        if (request == null)
-            return null;
-
-        return new
-        {
-            executionId = NormalizeRequired(request.ExecutionId, nameof(request.ExecutionId)),
-            toolCallId = NormalizeRequired(request.ToolCallId, nameof(request.ToolCallId)),
-            approvalRequestId = NormalizeRequired(request.ApprovalRequestId, nameof(request.ApprovalRequestId)),
-        };
-    }
-
-    private static string NormalizeRequired(string? value, string fieldName)
-    {
-        var normalized = NormalizeOptional(value);
-        if (normalized == null)
-            throw AevatarWorkflowException.InvalidRequest($"Parameter '{fieldName}' is required.");
-
-        return normalized;
     }
 }

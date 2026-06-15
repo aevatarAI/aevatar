@@ -7,7 +7,6 @@ option csharp_namespace = "Aevatar.ChatRouting.Abstractions";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
 import "agent_messages.proto";
-import "Protos/voice_presence.proto";
 
 // Refactor (iter91/cluster-091-owner-scope-foundation):
 //   Old: OwnerScope mirrored Scheduled.OwnerScope to avoid a reverse dependency.
@@ -116,7 +115,6 @@ message ChatRouteToolChoiceHint {
 message ChatRouteVoiceAttachTarget {
   string actor_id = 1;
   string voice_module_name = 2;
-  aevatar.voice.VoiceSessionOverrides session_overrides = 3;
 }
 
 message ForwardToModel {

@@ -20,8 +20,6 @@ public static class ServiceActorIds
 
     public static string Rollout(ServiceIdentity identity) => Build("rollout", identity);
 
-    public static string InvocationCatalog(ServiceIdentity identity) => Build("invocation-catalog", identity);
-
     private static string Build(string prefix, ServiceIdentity identity) =>
         $"gagent-service:{prefix}:{ServiceKeys.Build(identity)}";
 }

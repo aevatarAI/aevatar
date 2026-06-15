@@ -17,8 +17,6 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
     private const string ModuleStateKey = "wait_signal";
     private const int DefaultSignalBufferRetentionMs = 600_000;
     private const int MaxSignalBufferRetentionMs = 3_600_000;
-    private const int MaxWaitSignalTimeoutMs = 5_400_000;
-    private const int MaxWaitSignalTimeoutSeconds = MaxWaitSignalTimeoutMs / 1000;
 
     public string Name => "wait_signal";
     public int Priority => 5;
@@ -107,7 +105,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     StepId = stepId,
                     SignalName = signalName,
-                    TimeoutMs = Math.Clamp(timeoutMs, 100, MaxWaitSignalTimeoutMs),
+                    TimeoutMs = Math.Clamp(timeoutMs, 100, 3_600_000),
                 };
                 var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
                     pendingState.TimeoutCallbackId,
@@ -221,11 +219,19 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
 
         if (pendingStateForSignal.TimeoutLease != null)
         {
-            await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
-                ctx,
-                pendingStateForSignal.TimeoutLease,
-                $"WaitSignal timeout cleanup run={pendingStateForSignal.RunId} step={pendingStateForSignal.StepId} signal={pendingStateForSignal.SignalName}",
-                CancellationToken.None);
+            try
+            {
+                await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pendingStateForSignal.TimeoutLease, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                ctx.Logger.LogDebug(
+                    ex,
+                    "WaitSignal: failed to cancel timeout after signal completion run={RunId} step={StepId} signal={Signal}",
+                    pendingStateForSignal.RunId,
+                    pendingStateForSignal.StepId,
+                    pendingStateForSignal.SignalName);
+            }
         }
     }
 
@@ -274,7 +280,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             parameters,
             0,
             0,
-            MaxWaitSignalTimeoutMs,
+            3_600_000,
             "timeout_ms");
         if (timeoutMs > 0)
             return timeoutMs;
@@ -283,11 +289,11 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 parameters,
                 out var timeoutSeconds,
                 0,
-                MaxWaitSignalTimeoutSeconds,
+                3_600,
                 "timeout_seconds",
                 "timeout"))
         {
-            return Math.Clamp(timeoutSeconds * 1000, 0, MaxWaitSignalTimeoutMs);
+            return Math.Clamp(timeoutSeconds * 1000, 0, 3_600_000);
         }
 
         return 0;
@@ -334,11 +340,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await SaveStateAsync(state, ctx, ct);
-        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
-            ctx,
-            existingPending.TimeoutLease,
-            $"WaitSignal replaced waiter cleanup run={existingPending.RunId} step={existingPending.StepId} signal={existingPending.SignalName}",
-            ct);
+        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, existingPending.TimeoutLease, ct);
     }
 
     private static Task SaveStateAsync(

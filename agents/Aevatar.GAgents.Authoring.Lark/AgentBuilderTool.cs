@@ -2,7 +2,6 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
@@ -50,7 +49,7 @@ public sealed class AgentBuilderTool : IAgentTool
     public string Description =>
         "List and manage the caller's persistent automation agents. " +
         "Actions: list_agents, agent_status, run_agent, disable_agent, enable_agent, delete_agent. " +
-        "Agent creation is handled by scheduled_agent_creator.";
+        "Agent creation is not handled here — recipes for new agents live as Ornn skills.";
 
     // Note (issue #466): no `owner_nyx_user_id` parameter is exposed. The tool always
     // operates on the caller's own agents; the resolver derives ownership from the
@@ -113,13 +112,6 @@ public sealed class AgentBuilderTool : IAgentTool
         }
 
         var action = args.Str("action", "list_agents");
-        _logger?.LogInformation(
-            "AgentBuilder caller scope resolved: action={Action} platform={Platform} nyxUser={NyxUserId} scope={RegistrationScopeId} sender={SenderId}",
-            action,
-            caller.Platform,
-            caller.NyxUserId,
-            caller.RegistrationScopeId,
-            caller.SenderId);
         return action switch
         {
             "list_agents" => await ListAgentsAsync(_queryPort, _executionQueryPort, caller, ct),
@@ -243,15 +235,6 @@ public sealed class AgentBuilderTool : IAgentTool
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support run_agent" });
 
         var revisionFeedback = NormalizeOptional(args.Str("revision_feedback"));
-        // run_agent is the owner's management-plane trigger: the caller already passed the
-        // owner-scope check above, so it dispatches TriggerAsync directly. It must NOT go
-        // through the external-trigger admission protocol (#1790): admission requires a
-        // pre-registered ExternalTriggerSource on the runner, and agents created via
-        // scheduled_agent_creator register none — routing the owner's own /run-agent through
-        // admission made every manual run end as a committed-but-silent
-        // SkillRunnerExternalTriggerRejectedEvent(unknown_source) while the tool reported
-        // "accepted" (prod 2026-06-11). Admission stays reserved for genuine external
-        // sources (webhook endpoint), which carry their own delivery dedup needs.
         var dispatch = await TryDispatchLifecycleAsync(entry, "run_agent", LifecycleAction.Run, revisionFeedback, skillRunnerPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
@@ -320,11 +303,6 @@ public sealed class AgentBuilderTool : IAgentTool
             scope_id = entry.ScopeId,
             schedule_cron = entry.ScheduleCron,
             schedule_timezone = entry.ScheduleTimezone,
-            schedule_mode = ToScheduleModeJsonValue(entry.ScheduleMode),
-            run_at_utc = entry.RunAt,
-            retired_at_utc = entry.RetiredAt,
-            retirement_reason = entry.RetirementReason,
-            output_format = ToOutputFormatJsonValue(entry.OutputFormat),
             last_run_at = entry.LastRunAt,
             next_scheduled_run = entry.NextRunAt,
             error_count = entry.ErrorCount,
@@ -341,8 +319,7 @@ public sealed class AgentBuilderTool : IAgentTool
         CancellationToken ct)
     {
         var entries = await queryPort.QueryByCallerAsync(caller, ct);
-        var executions = await TryQueryExecutionsByAgentIdsAsync(
-            executionQueryPort,
+        var executions = await executionQueryPort.QueryByAgentIdsAsync(
             entries.Select(static entry => entry.AgentId).ToArray(),
             ct);
         return entries
@@ -355,10 +332,6 @@ public sealed class AgentBuilderTool : IAgentTool
                 status = x.Status,
                 schedule_cron = x.ScheduleCron,
                 schedule_timezone = x.ScheduleTimezone,
-                schedule_mode = ToScheduleModeJsonValue(x.ScheduleMode),
-                run_at_utc = x.RunAt,
-                retired_at_utc = x.RetiredAt,
-                output_format = ToOutputFormatJsonValue(x.OutputFormat),
                 last_run_at = x.LastRunAt,
                 next_scheduled_run = x.NextRunAt,
                 error_count = x.ErrorCount,
@@ -395,7 +368,7 @@ public sealed class AgentBuilderTool : IAgentTool
         CancellationToken ct) =>
         queryPort.GetForCallerAsync(agentId, caller, ct);
 
-    private async Task<UserAgentCatalogReadModelEntry?> QueryAgentForCallerAsync(
+    private static async Task<UserAgentCatalogReadModelEntry?> QueryAgentForCallerAsync(
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerExecutionQueryPort executionQueryPort,
         string agentId,
@@ -406,49 +379,8 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry is null)
             return null;
 
-        return MergeExecution(entry, await TryGetExecutionAsync(executionQueryPort, entry.AgentId, ct));
+        return MergeExecution(entry, await executionQueryPort.GetAsync(entry.AgentId, ct));
     }
-
-    private async Task<IReadOnlyDictionary<string, SkillRunnerExecutionDocument>> TryQueryExecutionsByAgentIdsAsync(
-        ISkillRunnerExecutionQueryPort executionQueryPort,
-        IReadOnlyCollection<string> agentIds,
-        CancellationToken ct)
-    {
-        try
-        {
-            return await executionQueryPort.QueryByAgentIdsAsync(agentIds, ct);
-        }
-        catch (ProjectionIndexSchemaDriftException ex)
-        {
-            LogExecutionProjectionUnavailable(ex);
-            return new Dictionary<string, SkillRunnerExecutionDocument>(StringComparer.Ordinal);
-        }
-    }
-
-    private async Task<SkillRunnerExecutionDocument?> TryGetExecutionAsync(
-        ISkillRunnerExecutionQueryPort executionQueryPort,
-        string agentId,
-        CancellationToken ct)
-    {
-        try
-        {
-            return await executionQueryPort.GetAsync(agentId, ct);
-        }
-        catch (ProjectionIndexSchemaDriftException ex)
-        {
-            LogExecutionProjectionUnavailable(ex);
-            return null;
-        }
-    }
-
-    private void LogExecutionProjectionUnavailable(ProjectionIndexSchemaDriftException ex) =>
-        _logger?.LogWarning(
-            ex,
-            "SkillRunner execution projection is unavailable; returning catalog-only agent data. provider={Provider} alias={IndexAlias} currentPhysical={CurrentPhysicalIndex} expectedPhysical={ExpectedPhysicalIndex}",
-            ex.Provider,
-            ex.IndexAlias,
-            ex.CurrentPhysicalIndex,
-            ex.ExpectedPhysicalIndex);
 
     // Refactor (iter94/cluster-094a):
     //   Old: UserAgentCatalogQueryPort joined catalog and runner execution readmodels, creating a stable cross-authority view inside a query port.
@@ -477,10 +409,6 @@ public sealed class AgentBuilderTool : IAgentTool
             ApiKeyId = catalog.ApiKeyId,
             ScheduleCron = catalog.ScheduleCron,
             ScheduleTimezone = catalog.ScheduleTimezone,
-            ScheduleMode = execution.ScheduleMode,
-            RunAt = execution.RunAtUtc,
-            RetiredAt = execution.RetiredAtUtc,
-            RetirementReason = execution.RetirementReason ?? string.Empty,
             Status = execution.Status ?? string.Empty,
             LastRunAt = execution.LastRunAtUtc,
             NextRunAt = execution.NextRunAtUtc,
@@ -493,7 +421,6 @@ public sealed class AgentBuilderTool : IAgentTool
             LarkReceiveIdType = catalog.LarkReceiveIdType,
             LarkReceiveIdFallback = catalog.LarkReceiveIdFallback,
             LarkReceiveIdTypeFallback = catalog.LarkReceiveIdTypeFallback,
-            OutputFormat = catalog.OutputFormat,
             OwnerScope = catalog.OwnerScope,
             CatalogAuthorityStateVersion = catalog.CatalogAuthorityStateVersion,
             CatalogLastEventId = catalog.CatalogLastEventId,
@@ -501,17 +428,6 @@ public sealed class AgentBuilderTool : IAgentTool
             RunnerLastEventId = execution.LastEventId ?? string.Empty,
         };
     }
-
-    private static string ToOutputFormatJsonValue(SkillRunnerOutputFormat outputFormat) =>
-        outputFormat switch
-        {
-            SkillRunnerOutputFormat.Text => "text",
-            SkillRunnerOutputFormat.FeishuDoc => "feishu_doc",
-            _ => "auto",
-        };
-
-    private static string ToScheduleModeJsonValue(SkillRunnerScheduleMode scheduleMode) =>
-        scheduleMode == SkillRunnerScheduleMode.OneShot ? "one_shot" : "cron";
 
     private static async Task<(bool success, string? error)> TryDispatchLifecycleAsync(
         UserAgentCatalogReadModelEntry entry,

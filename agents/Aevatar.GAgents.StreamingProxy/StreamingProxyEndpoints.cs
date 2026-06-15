@@ -4,7 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
-using Aevatar.Capabilities;
+using Aevatar.Hosting;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -123,7 +123,7 @@ public static class StreamingProxyEndpoints
         {
             var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
             var group = snapshot.Groups.FirstOrDefault(g =>
-                string.Equals(g.AgentKind, StreamingProxyDefaults.GAgentKind, StringComparison.Ordinal));
+                string.Equals(g.GAgentType, StreamingProxyDefaults.GAgentTypeName, StringComparison.Ordinal));
             var roomIds = group?.ActorIds ?? [];
             return Results.Ok(new
             {
@@ -175,7 +175,7 @@ public static class StreamingProxyEndpoints
             await registryCommandPort.UnregisterActorAsync(
                 new GAgentActorRegistration(
                     scopeId,
-                    StreamingProxyDefaults.GAgentKind,
+                    StreamingProxyDefaults.GAgentTypeName,
                     roomId),
                 ct);
         }
@@ -631,7 +631,7 @@ public static class StreamingProxyEndpoints
             new ScopeResourceTarget(
                 scopeId,
                 ScopeResourceKind.GAgentActor,
-                StreamingProxyDefaults.GAgentKind,
+                StreamingProxyDefaults.GAgentTypeName,
                 roomId,
                 operation),
             ct);

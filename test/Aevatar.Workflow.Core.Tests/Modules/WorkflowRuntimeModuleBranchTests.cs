@@ -234,153 +234,6 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldPopulateCallerCredentialFromActorOwnedExecutionState()
-    {
-        var module = new LLMCallModule();
-        var ctx = new RecordingWorkflowContext
-        {
-            ExecutionContextState =
-            {
-                CallerCredential = new WorkflowCallerCredentialState
-                {
-                    BearerToken = " typed-token ",
-                },
-                Llm = new WorkflowLlmExecutionContextState
-                {
-                    RoutePreference = " route-a ",
-                },
-            },
-        };
-        ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["connector.http.authorization"] = "Bearer metadata-token",
-            ["trace-id"] = "trace-1",
-        });
-
-        await module.HandleAsync(
-            Wrap(new StepRequestEvent
-            {
-                StepId = "reply",
-                StepType = "llm_call",
-                RunId = "run-llm-auth",
-                Input = "prompt",
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var intent = DispatchedLlmIntent(ctx);
-        intent.CallerCredential.BearerToken.Should().Be("typed-token");
-        intent.RoutePreference.Should().Be("route-a");
-        intent.Headers.Should().Contain("trace-id", "trace-1");
-        intent.Headers.Should().NotContainKey("connector.http.authorization");
-    }
-
-    [Fact]
-    public async Task LlmCallModule_ShouldPopulateWorkflowRuntimeContextFromActorOwnedExecutionState()
-    {
-        var module = new LLMCallModule();
-        var ctx = new RecordingWorkflowContext
-        {
-            ExecutionContextState =
-            {
-                WorkflowRuntime = new WorkflowToolRuntimeContextState
-                {
-                    ParentActorId = " upstream-parent ",
-                    ParentRunId = " upstream-run ",
-                    ParentStepId = " upstream-step ",
-                    RootRunId = " root-run ",
-                    Depth = 2,
-                },
-            },
-        };
-
-        await module.HandleAsync(
-            Wrap(new StepRequestEvent
-            {
-                StepId = "reply",
-                StepType = "llm_call",
-                RunId = "run-llm-runtime",
-                Input = "prompt",
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var intent = DispatchedLlmIntent(ctx);
-        intent.WorkflowRuntimeContext.Should().NotBeNull();
-        intent.WorkflowRuntimeContext.ParentActorId.Should().Be("agent-1");
-        intent.WorkflowRuntimeContext.ParentRunId.Should().Be("run-llm-runtime");
-        intent.WorkflowRuntimeContext.ParentStepId.Should().Be("reply");
-        intent.WorkflowRuntimeContext.RootRunId.Should().Be("root-run");
-        intent.WorkflowRuntimeContext.Depth.Should().Be(2);
-    }
-
-    [Fact]
-    public async Task LlmCallModule_WhenCompletionReportsManagedHandoff_ShouldLeaveParentStepPending()
-    {
-        var module = new LLMCallModule();
-        var ctx = new RecordingWorkflowContext();
-
-        await module.HandleAsync(
-            Wrap(new StepRequestEvent
-            {
-                StepId = "reply",
-                StepType = "llm_call",
-                RunId = "run-llm-handoff",
-                Input = "prompt",
-            }),
-            ctx,
-            CancellationToken.None);
-        var intent = DispatchedLlmIntent(ctx);
-        var watchdog = ctx.Scheduled.Single();
-
-        await module.HandleAsync(
-            Wrap(new WorkflowLlmInvocationCompletedEvent
-            {
-                SessionId = intent.SessionId,
-                Success = true,
-                ManagedHandoff = new WorkflowManagedHandoffOutcome
-                {
-                    ParentActorId = "agent-1",
-                    ParentRunId = "run-llm-handoff",
-                    ParentStepId = "reply",
-                    InvocationId = "run-llm-handoff:workflow_tool:reply:call-1",
-                    ChildRunId = "run-llm-handoff:workflow_tool:reply:call-1",
-                },
-            }),
-            ctx,
-            CancellationToken.None);
-
-        ctx.Canceled.Should().ContainSingle(x => x.CallbackId == watchdog.CallbackId);
-        ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task LlmCallModule_ShouldIgnoreMetadataOnlyCallerCredential()
-    {
-        var module = new LLMCallModule();
-        var ctx = new RecordingWorkflowContext();
-        ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["connector.http.authorization"] = "Bearer metadata-token",
-        });
-
-        await module.HandleAsync(
-            Wrap(new StepRequestEvent
-            {
-                StepId = "reply",
-                StepType = "llm_call",
-                RunId = "run-llm-auth",
-                Input = "prompt",
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var intent = DispatchedLlmIntent(ctx);
-        intent.CallerCredential.BearerToken.Should().BeEmpty();
-        intent.Headers.Should().NotContainKey("connector.http.authorization");
-    }
-
-    [Fact]
     public async Task LlmCallModule_ShouldForwardSenderNyxIdAccessTokenToIntent()
     {
         var module = new LLMCallModule();
@@ -398,7 +251,10 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ctx,
             CancellationToken.None);
 
-        var intent = DispatchedLlmIntent(ctx);
+        var intent = ctx.Published.Select(x => x.Event)
+            .Concat(ctx.Sent.Select(x => x.Event))
+            .OfType<WorkflowLlmExecutionIntent>()
+            .Single();
         intent.SenderNyxIdAccessToken.Should().Be("sender-token-llm");
     }
 
@@ -501,27 +357,6 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldCopyStepInputFileRefsToExecutionIntent()
-    {
-        var module = new LLMCallModule();
-        var ctx = new RecordingWorkflowContext();
-        var request = new StepRequestEvent
-        {
-            StepId = "llm-files",
-            StepType = "llm_call",
-            RunId = "run-llm-files",
-            Input = "describe this",
-            TargetRole = "reviewer",
-        };
-        request.InputFileRefs.Add(BuildWorkflowFileRef("file-intent"));
-
-        await module.HandleAsync(Wrap(request), ctx, CancellationToken.None);
-
-        var intent = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
-        intent.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-intent");
-    }
-
-    [Fact]
     public async Task EvaluateModule_ShouldPublishDispatchFailure_WhenRoleSendFails()
     {
         var module = new EvaluateModule();
@@ -613,56 +448,6 @@ public sealed class WorkflowRuntimeModuleBranchTests
         completion.BranchKey.Should().Be("revise");
         completion.Annotations["evaluate.score"].Should().Be("2.0");
         completion.Annotations["evaluate.passed"].Should().Be(bool.FalseString);
-    }
-
-    [Fact]
-    public async Task LlmCallModule_ShouldCopyTypedAgentToolScopeToIntent()
-    {
-        var module = new LLMCallModule();
-        var ctx = new RecordingWorkflowContext();
-
-        await module.HandleAsync(
-            Wrap(new StepRequestEvent
-            {
-                StepId = "llm-tool-scope",
-                StepType = "llm_call",
-                RunId = "run-llm-tool-scope",
-                Input = "draft",
-                StepParameters = new WorkflowStepParameters
-                {
-                    AgentToolScope = new WorkflowAgentToolScope
-                    {
-                        AllowedToolNames = { "search" },
-                    },
-                },
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var intent = DispatchedLlmIntent(ctx);
-        intent.AgentToolScope.Should().NotBeNull();
-        intent.AgentToolScope.AllowedToolNames.Should().Equal("search");
-        intent.Annotations.Should().NotContainKey("allowed_tools");
-    }
-
-    [Fact]
-    public async Task LlmCallModule_WithNoAgentToolScope_ShouldLeaveIntentUnrestricted()
-    {
-        var module = new LLMCallModule();
-        var ctx = new RecordingWorkflowContext();
-
-        await module.HandleAsync(
-            Wrap(new StepRequestEvent
-            {
-                StepId = "llm-unrestricted",
-                StepType = "llm_call",
-                RunId = "run-llm-unrestricted",
-                Input = "draft",
-            }),
-            ctx,
-            CancellationToken.None);
-
-        DispatchedLlmIntent(ctx).AgentToolScope.Should().BeNull();
     }
 
     [Fact]
@@ -1093,28 +878,6 @@ public sealed class WorkflowRuntimeModuleBranchTests
         };
     }
 
-    private static WorkflowLlmExecutionIntent DispatchedLlmIntent(RecordingWorkflowContext ctx) =>
-        ctx.Published.Select(x => x.Event)
-            .Concat(ctx.Sent.Select(x => x.Event))
-            .OfType<WorkflowLlmExecutionIntent>()
-            .Single();
-
-    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
-        new()
-        {
-            FileId = fileId,
-            ArtifactId = $"workflow-file://{fileId}",
-            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
-            SourceMessageId = "om_1",
-            SourceResourceKey = "image_key_1",
-            FileName = $"{fileId}.png",
-            MediaType = "image/png",
-            SizeBytes = 3,
-            Sha256 = $"sha-{fileId}",
-            CreatedAtUnixMs = 1710000000000,
-            ExpiresAtUnixMs = 1710003600000,
-        };
-
     private static EnvelopeCallbackContext MetadataFor(
         RecordedCallback callback,
         long? generation = null) =>
@@ -1126,8 +889,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
-    private sealed class RecordingWorkflowContext
-        : IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor, IWorkflowExecutionStateHost
+    private sealed class RecordingWorkflowContext : IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
         private readonly Dictionary<string, long> _callbackGenerations = new(StringComparer.Ordinal);
@@ -1153,10 +915,6 @@ public sealed class WorkflowRuntimeModuleBranchTests
         public ILogger Logger { get; } = NullLogger.Instance;
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
-
-        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
-
-        public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
 
         public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
@@ -1200,77 +958,6 @@ public sealed class WorkflowRuntimeModuleBranchTests
             return Task.CompletedTask;
         }
 
-        public Any? GetExecutionState(string scopeKey) =>
-            _states.GetValueOrDefault(scopeKey);
-
-        public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
-            _states.ToList();
-
-        public Task UpsertExecutionStateAsync(string scopeKey, Any state, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _states[scopeKey] = state;
-            return Task.CompletedTask;
-        }
-
-        public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default) =>
-            ClearStateAsync(scopeKey, ct);
-
-        public Task UpdateExecutionContextAsync(
-            WorkflowRunExecutionContextDelta delta,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (delta.ClearLlm)
-                ExecutionContextState.Llm = null;
-            if (delta.ClearCallerCredential)
-                ExecutionContextState.CallerCredential = null;
-            if (delta.ClearWorkflowRuntime)
-                ExecutionContextState.WorkflowRuntime = null;
-            if (delta.Llm != null)
-            {
-                ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
-                {
-                    ModelOverride = delta.Llm.ModelOverride,
-                    UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
-                    RoutePreference = delta.Llm.RoutePreference,
-                };
-                if (delta.Llm.HasMaxToolRoundsOverride)
-                    ExecutionContextState.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
-            }
-
-            if (delta.CallerCredential != null)
-            {
-                ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
-                {
-                    BearerToken = delta.CallerCredential.BearerToken,
-                };
-            }
-
-            if (delta.WorkflowRuntime != null)
-            {
-                ExecutionContextState.WorkflowRuntime = new WorkflowToolRuntimeContextState
-                {
-                    ParentActorId = delta.WorkflowRuntime.ParentActorId,
-                    ParentRunId = delta.WorkflowRuntime.ParentRunId,
-                    ParentStepId = delta.WorkflowRuntime.ParentStepId,
-                    RootRunId = delta.WorkflowRuntime.RootRunId,
-                    Depth = delta.WorkflowRuntime.Depth,
-                };
-            }
-
-            return Task.CompletedTask;
-        }
-
-        public Task ClearExecutionContextAsync(CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            ExecutionContextState.Llm = null;
-            ExecutionContextState.CallerCredential = null;
-            ExecutionContextState.WorkflowRuntime = null;
-            return Task.CompletedTask;
-        }
-
         public Task PublishAsync<TEvent>(
             TEvent evt,
             TopologyAudience direction = TopologyAudience.Children,
@@ -1311,6 +998,15 @@ public sealed class WorkflowRuntimeModuleBranchTests
             Scheduled.Add(new RecordedCallback(callbackId, generation, evt));
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
         }
+
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            TimeSpan period,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default) =>
+            ScheduleSelfDurableTimeoutAsync(callbackId, dueTime + period, evt, options, ct);
 
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
         {

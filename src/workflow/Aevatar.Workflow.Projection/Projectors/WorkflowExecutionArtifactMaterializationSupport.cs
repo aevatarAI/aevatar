@@ -252,7 +252,6 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         step.BranchKey = evt.BranchKey ?? string.Empty;
         step.AssignedVariable = evt.AssignedVariable ?? string.Empty;
         step.AssignedValue = evt.AssignedValue ?? string.Empty;
-        step.Usage = ToReadModelUsage(evt.Usage);
         ReplaceMap(step.CompletionAnnotations, evt.Annotations);
         AddTimeline(
             readModel.Timeline,
@@ -612,7 +611,6 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             SuspensionPrompt = source.SuspensionPrompt,
             SuspensionTimeoutSeconds = source.SuspensionTimeoutSeconds,
             RequestedVariableName = source.RequestedVariableName,
-            Usage = CloneUsage(source.Usage),
         };
     }
 
@@ -630,52 +628,6 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         {
             summary.StepTypeCounts[group.Key] = group.Count();
         }
-
-        readModel.Usage = BuildRunUsage(readModel.Steps);
-    }
-
-    private static WorkflowUsageMetricsReadModel ToReadModelUsage(WorkflowUsageMetrics? usage) =>
-        usage == null
-            ? new WorkflowUsageMetricsReadModel()
-            : new WorkflowUsageMetricsReadModel
-            {
-                PromptTokens = Math.Max(0, usage.PromptTokens),
-                CompletionTokens = Math.Max(0, usage.CompletionTokens),
-                TotalTokens = Math.Max(0, usage.TotalTokens),
-                Model = usage.Model ?? string.Empty,
-                Cost = Math.Max(0, usage.Cost),
-                LatencyMs = Math.Max(0, usage.LatencyMs),
-            };
-
-    private static WorkflowUsageMetricsReadModel CloneUsage(WorkflowUsageMetricsReadModel? usage) =>
-        usage == null
-            ? new WorkflowUsageMetricsReadModel()
-            : new WorkflowUsageMetricsReadModel
-            {
-                PromptTokens = usage.PromptTokens,
-                CompletionTokens = usage.CompletionTokens,
-                TotalTokens = usage.TotalTokens,
-                Model = usage.Model ?? string.Empty,
-                Cost = usage.Cost,
-                LatencyMs = usage.LatencyMs,
-            };
-
-    private static WorkflowUsageMetricsReadModel BuildRunUsage(IEnumerable<WorkflowExecutionStepTrace> steps)
-    {
-        var result = new WorkflowUsageMetricsReadModel();
-        foreach (var step in steps)
-        {
-            var usage = step.Usage;
-            result.PromptTokens += Math.Max(0, usage.PromptTokens);
-            result.CompletionTokens += Math.Max(0, usage.CompletionTokens);
-            result.TotalTokens += Math.Max(0, usage.TotalTokens);
-            if (!string.IsNullOrWhiteSpace(usage.Model))
-                result.Model = usage.Model;
-            result.Cost += Math.Max(0, usage.Cost);
-            result.LatencyMs += Math.Max(0, usage.LatencyMs);
-        }
-
-        return result;
     }
 
     private static string ResolveWorkflowName(

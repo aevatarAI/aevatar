@@ -3,7 +3,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.Capabilities;
+using Aevatar.Hosting;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -247,7 +247,7 @@ internal sealed class NyxIdChatConversationDeleteCommandTargetResolver
             new ScopeResourceTarget(
                 command.ScopeId,
                 ScopeResourceKind.GAgentActor,
-                NyxIdChatServiceDefaults.GAgentKind,
+                NyxIdChatServiceDefaults.GAgentTypeName,
                 command.ActorId,
                 ScopeResourceOperation.Delete),
             ct);

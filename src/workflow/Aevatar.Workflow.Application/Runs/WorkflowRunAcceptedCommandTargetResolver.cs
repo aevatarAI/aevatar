@@ -1,5 +1,4 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
@@ -29,10 +28,6 @@ internal sealed class WorkflowRunAcceptedCommandTargetResolver
         //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
         //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
         ArgumentNullException.ThrowIfNull(command);
-
-        if (WorkflowCallerCredentialTokens.ParseOptional(command.CallerCredential?.BearerToken).IsInvalid)
-            return CommandTargetResolution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>.Failure(
-                WorkflowChatRunStartError.InvalidCallerCredential);
 
         var actorResolution = await _actorResolver.ResolveOrCreateAsync(command, ct);
         if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Target == null)

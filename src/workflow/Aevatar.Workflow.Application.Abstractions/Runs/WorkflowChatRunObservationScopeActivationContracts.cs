@@ -1,21 +1,17 @@
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
-// Refactor (issue-1687):
-//   Old pattern: workflow draft-run command paths treated session activation as an application-owned pre-dispatch step.
-//   New principle: this port only prepares the observation scope lease required for one interaction attempt.
-//   It is not query priming and does not guarantee read-model freshness.
-public sealed record WorkflowChatRunObservationScopeLeasePreparation(
+public sealed record WorkflowChatRunObservationScopeActivation(
     string ActorId,
     string CommandId);
 
-public interface IWorkflowChatRunObservationScopeLeasePreparationPort
+public interface IWorkflowChatRunObservationScopeActivationPort
 {
-    Task<WorkflowChatRunObservationScopeLeasePreparation?> PrepareAsync(
+    Task<WorkflowChatRunObservationScopeActivation?> ActivateAsync(
         string actorId,
         string commandId,
         CancellationToken ct = default);
 
     Task ReleaseAsync(
-        WorkflowChatRunObservationScopeLeasePreparation preparation,
+        WorkflowChatRunObservationScopeActivation activation,
         CancellationToken ct = default);
 }

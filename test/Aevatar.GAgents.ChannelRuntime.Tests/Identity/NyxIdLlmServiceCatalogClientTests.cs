@@ -47,45 +47,6 @@ public sealed class NyxIdLlmServiceCatalogClientTests
         handler.Paths.Count(path => path == NyxIdLlmCatalogRoutes.ProxyServicesPath)
             .Should()
             .Be(2, "same-token calls should reuse the short-lived proxy-services cache");
-        handler.Paths.Count(path => path == NyxIdLlmCatalogRoutes.UserKeysPath)
-            .Should()
-            .Be(2, "same-token calls should reuse the short-lived user-keys cache");
-    }
-
-    [Fact]
-    public async Task GetServicesAsync_ActiveUserKeyMakesUnconnectedProxyServiceSelectable()
-    {
-        var handler = new RecordingHandler();
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
-            new HttpClient(handler),
-            NullLogger<NyxIdApiClient>.Instance);
-        var memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
-        var client = new NyxIdLlmServiceCatalogClient(
-            nyxClient,
-            memoryCache,
-            NullLogger<NyxIdLlmServiceCatalogClient>.Instance);
-        var query = new UserLlmOptionsQuery(
-            new BindingId { Value = "bnd-1" },
-            new ExternalSubjectRef
-            {
-                Platform = "lark",
-                Tenant = "tenant",
-                ExternalUserId = "user",
-            },
-            RegistrationScopeId: "scope-1");
-
-        var result = await client.GetServicesAsync(query, "token-a", CancellationToken.None);
-
-        var chrono = result.Services.Should()
-            .ContainSingle(service => service.ServiceSlug == "chrono-llm")
-            .Subject;
-        chrono.Allowed.Should().BeTrue(
-            "an active unified key is authoritative evidence the user can call this route, " +
-            "even when proxy/services still reports the legacy connections store as not connected");
-        chrono.Status.Should().Be("ready");
-        chrono.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
-        chrono.UserServiceId.Should().Be("key-chrono");
     }
 
     private sealed class RecordingHandler : HttpMessageHandler
@@ -107,28 +68,7 @@ public sealed class NyxIdLlmServiceCatalogClientTests
                           "slug": "chrono-llm",
                           "name": "Chrono LLM",
                           "description": "Shared LLM route",
-                          "connected": false,
-                          "requires_connection": true,
                           "proxy_url_slug": "https://nyx.test/api/v1/proxy/s/chrono-llm/{path}"
-                        }
-                      ]
-                    }
-                    """,
-                _ when path == NyxIdLlmCatalogRoutes.UserKeysPath => """
-                    {
-                      "keys": [
-                        {
-                          "id": "key-chrono",
-                          "label": "Chrono LLM",
-                          "slug": "chrono-llm",
-                          "endpoint_url": "https://llm.test/v1",
-                          "credential_type": "api_key",
-                          "status": "active",
-                          "catalog_service_id": "svc-chrono",
-                          "catalog_service_slug": "chrono-llm",
-                          "catalog_service_name": "Chrono LLM",
-                          "service_type": "http",
-                          "is_active": true
                         }
                       ]
                     }

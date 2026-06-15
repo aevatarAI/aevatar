@@ -9,6 +9,18 @@ internal static class AevatarInvocationToolSchemas
             ["kind"] = ["text", "image", "audio", "video"],
         };
 
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> ReadModelValues =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            ["readmodel_name"] =
+            [
+                AevatarInvocationReadModels.ServiceRunCurrentState,
+                AevatarInvocationReadModels.GAgentRunTerminal,
+                AevatarInvocationReadModels.WorkflowActorCurrentState,
+                AevatarInvocationReadModels.WorkflowActorTimeline,
+            ],
+        };
+
     public static readonly string InvokeGAgent = ProtoToolSchema.Build(
         InvokeGAgentToolRequest.Descriptor,
         requiredFields: new HashSet<string>(StringComparer.Ordinal) { "payload" },
@@ -16,7 +28,7 @@ internal static class AevatarInvocationToolSchemas
         oneOfRequiredGroups:
         [
             ["actor_id"],
-            ["agent_kind"],
+            ["actor_name"],
         ],
         emitTopLevelOneOf: false);
 
@@ -41,12 +53,16 @@ internal static class AevatarInvocationToolSchemas
 
     public static readonly string ObserveRun = ProtoToolSchema.Build(
         ObserveRunToolRequest.Descriptor,
-        oneOfRequiredGroups:
-        [
-            ["service_run"],
-            ["gagent_terminal_correlation"],
-            ["gagent_terminal_session"],
-            ["workflow_current_state"],
-        ],
-        emitTopLevelOneOf: false);
+        requiredFields: new HashSet<string>(StringComparer.Ordinal) { "run_id" });
+
+    public static readonly string QueryReadModel = ProtoToolSchema.Build(
+        QueryReadModelToolRequest.Descriptor,
+        requiredFields: new HashSet<string>(StringComparer.Ordinal)
+        {
+            "readmodel_name",
+            "query",
+        },
+        stringEnums: ReadModelValues);
+
+    public static IReadOnlyList<string> ReadModelNames => ReadModelValues["readmodel_name"];
 }

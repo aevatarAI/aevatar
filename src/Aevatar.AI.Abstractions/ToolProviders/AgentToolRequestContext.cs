@@ -35,9 +35,6 @@ public static class AgentToolRequestContext
     public static string? ChannelRegistrationScopeId => s_context.Value?.Channel.RegistrationScopeId;
     public static string? ChannelMessageId => s_context.Value?.Channel.MessageId;
     public static string? ChannelPlatformMessageId => s_context.Value?.Channel.PlatformMessageId;
-    public static string? ChannelDeliveryTargetId => s_context.Value?.Channel.DeliveryTargetId;
-    public static AgentToolVisibilityScope ToolVisibility =>
-        s_context.Value?.ToolVisibility ?? AgentToolVisibilityScope.Unrestricted;
 
     public static string? TryGetExternalMetadata(string key)
     {

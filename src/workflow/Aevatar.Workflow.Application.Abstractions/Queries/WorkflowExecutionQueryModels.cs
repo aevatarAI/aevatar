@@ -151,18 +151,7 @@ public sealed class WorkflowRunReport
     public List<WorkflowRunStepTrace> Steps { get; set; } = [];
     public List<WorkflowRunRoleReply> RoleReplies { get; set; } = [];
     public List<WorkflowRunTimelineEvent> Timeline { get; set; } = [];
-    public WorkflowRunUsageMetrics Usage { get; set; } = new();
     public WorkflowRunStatistics Summary { get; set; } = new();
-}
-
-public sealed class WorkflowRunUsageMetrics
-{
-    public int PromptTokens { get; set; }
-    public int CompletionTokens { get; set; }
-    public int TotalTokens { get; set; }
-    public string Model { get; set; } = string.Empty;
-    public double Cost { get; set; }
-    public long LatencyMs { get; set; }
 }
 
 public sealed class WorkflowRunStatistics
@@ -195,7 +184,6 @@ public sealed class WorkflowRunStepTrace
     public string SuspensionPrompt { get; set; } = string.Empty;
     public int? SuspensionTimeoutSeconds { get; set; }
     public string RequestedVariableName { get; set; } = string.Empty;
-    public WorkflowRunUsageMetrics Usage { get; set; } = new();
     public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
         ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
         : null;

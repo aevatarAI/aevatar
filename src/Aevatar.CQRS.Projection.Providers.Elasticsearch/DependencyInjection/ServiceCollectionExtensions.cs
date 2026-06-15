@@ -35,8 +35,6 @@ public static class ElasticsearchProjectionServiceCollectionExtensions
             provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
         services.AddSingleton<IProjectionDocumentReader<TReadModel, TKey>>(provider =>
             provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
-        services.AddSingleton<IProjectionIndexConsistencyProbe<TReadModel>>(provider =>
-            provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
 
         return services;
     }

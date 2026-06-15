@@ -169,7 +169,7 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
         {
             return new StudioMemberImplementationRefResponse(
                 ImplementationKind: implementationKindWire,
-                DiagnosticActorTypeName: document.ImplementationActorTypeName);
+                ActorTypeName: document.ImplementationActorTypeName);
         }
 
         return null;

@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -14,7 +13,6 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// Holds user-scoped credential binding and preferences so <see cref="ConversationGAgent"/> state
 /// stays conversation-scoped. Split out from the legacy <c>ChannelUserGAgent</c> per RFC §5.2b.
 /// </summary>
-[GAgent("channel.runtime.user-binding")]
 public sealed class ChannelUserBindingGAgent : GAgentBase<ChannelUserBindingState>
 {
     /// <inheritdoc />

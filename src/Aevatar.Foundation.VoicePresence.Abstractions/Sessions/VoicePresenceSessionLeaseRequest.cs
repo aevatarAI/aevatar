@@ -10,5 +10,4 @@ public sealed record VoicePresenceSessionLeaseRequest(
     string OwnerId,
     DateTimeOffset ExpiresAtUtc,
     long ObservedStateVersion,
-    VoiceRemoteAudioSupport ObservedRemoteAudioSupport,
-    VoiceSessionOverrides? SessionOverrides = null);
+    VoiceRemoteAudioSupport ObservedRemoteAudioSupport);

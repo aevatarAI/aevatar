@@ -12,9 +12,6 @@ message ConnectorAuthEntry {
   string client_id = 3;
   string client_secret = 4;
   string scope = 5;
-  string secret_ref = 6;
-  string header_name = 7;
-  string header_value_prefix = 8;
 }
 
 message HttpConnectorConfigEntry {
@@ -88,3 +85,4 @@ message ConnectorDraftSavedEvent {
 message ConnectorDraftDeletedEvent {
   optional int64 expected_version = 1;  // unset = skip optimistic concurrency check
 }
+

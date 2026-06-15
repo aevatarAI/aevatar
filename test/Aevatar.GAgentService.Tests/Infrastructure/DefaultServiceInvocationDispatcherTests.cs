@@ -170,43 +170,6 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldMapConnectorAuthorizationToWorkflowCallerCredential()
-    {
-        var workflowPort = new RecordingWorkflowRunActorPort();
-        var dispatchPort = new RecordingDispatchPort();
-        var dispatcher = new DefaultServiceInvocationDispatcher(
-            dispatchPort,
-            new RecordingScriptRuntimeCommandPort(),
-            workflowPort,
-            new RecordingServiceRunRegistrationPort());
-        var target = CreateTarget(
-            ServiceImplementationKind.Workflow,
-            endpointId: "chat",
-            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
-        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
-        {
-            WorkflowName = "wf",
-            WorkflowYaml = "name: wf",
-        };
-
-        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
-        {
-            Identity = GAgentServiceTestKit.CreateIdentity(),
-            EndpointId = "chat",
-            CommandId = "cmd-auth",
-            Payload = Any.Pack(new ChatRequestEvent
-            {
-                Prompt = "hello",
-                ConnectorHttpAuthorization = "Bearer connector-token",
-            }),
-        });
-
-        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
-            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
-        workflowRequest.CallerCredential.BearerToken.Should().Be("connector-token");
-    }
-
-    [Fact]
     public async Task DispatchAsync_ShouldPreferIdentityTenantIdOverPayloadScope()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
