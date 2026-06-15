@@ -201,7 +201,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     [Fact]
-    public async Task FailedCompensation_ShouldPersistFailureAndStopAtFailedSeam()
+    public async Task FailedCompensation_ShouldPersistDeadLetterTerminal()
     {
         var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
         await CompleteStepAsync(harness, "create_order", "order-output");
@@ -223,21 +223,37 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
                 ExecutionId = request.ExecutionId,
             });
         CommittedEvents<WorkflowCompensationCompletedEvent>(harness.CommittedPublisher).Should().BeEmpty();
-        CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher).Should().BeEmpty();
+        var failed = CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        failed.Should().BeEquivalentTo(new WorkflowCompensationFailedEvent
+        {
+            RunId = harness.RunId,
+            FailedCompensationStepId = "refund_payment",
+            RemainingUncompensated = 2,
+            Error = "refund failed",
+        });
         CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
             .Where(x => !x.Success)
             .Should()
             .BeEmpty();
+        harness.Agent.State.Status.Should().Be("failed");
+        harness.Agent.State.SagaStatus.Should().Be("compensation_dead_letter");
+        harness.Agent.State.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        harness.Agent.State.DeadLetterRemainingUncompensated.Should().Be(2);
+        harness.Agent.State.DeadLetterError.Should().Be("refund failed");
         var reactivated = await CreateRunAsync(
             harness.RunId,
             SagaWorkflowYaml(),
             harness.EventStore,
             autoReplaySelfPublished: false);
         CompensationRequests(reactivated.Publisher).Should().BeEmpty();
+        reactivated.Agent.State.SagaStatus.Should().Be("compensation_dead_letter");
     }
 
     [Fact]
-    public async Task FailedCompensation_WithOnErrorFallback_ShouldStillStopAtFailedSeam()
+    public async Task FailedCompensation_WithOnErrorFallback_ShouldDeadLetterWithoutFallback()
     {
         var harness = await CreateStartedRunAsync(CompensationOnErrorWorkflowYaml());
         await CompleteStepAsync(harness, "create_order", "order-output");
@@ -258,6 +274,14 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             .Where(x => !x.Success)
             .Should()
             .BeEmpty();
+        var failed = CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        failed.FailedCompensationStepId.Should().Be("cancel_order");
+        failed.RemainingUncompensated.Should().Be(1);
+        failed.Error.Should().Be("cancel failed");
+        harness.Agent.State.SagaStatus.Should().Be("compensation_dead_letter");
     }
 
     private static async Task CompleteStepAsync(RunHarness harness, string stepId, string output)

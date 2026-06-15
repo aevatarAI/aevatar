@@ -1148,6 +1148,32 @@ public sealed class IdempotentStepExecutionTests
             States.Remove(scopeKey);
             return Task.CompletedTask;
         }
+
+        public Task<WorkflowCompensationTransitionResult> TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            CancellationToken ct = default)
+        {
+            _ = terminalFailure;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
     }
 
     private sealed class StubAgent(string id) : IAgent

@@ -23,6 +23,10 @@ message WorkflowActorSnapshot {
   int32 completed_steps = 13;
   int32 role_reply_count = 14;
   repeated WorkflowRunFileRef input_file_refs = 15;
+  string saga_status = 16;
+  string dead_letter_failed_compensation_step_id = 17;
+  int32 dead_letter_remaining_uncompensated = 18;
+  string dead_letter_error = 19;
 }
 
 message WorkflowRunFileRef {

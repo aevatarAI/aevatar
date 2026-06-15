@@ -10,7 +10,7 @@ internal enum WorkflowCompensationTransitionStatus
     AdvancedAndRequestedNext,
     CompletedAll,
     RejectedStaleOrDuplicate,
-    FailedSeam,
+    CompensationDeadLettered,
 }
 
 internal readonly record struct WorkflowCompensationTransitionResult(
@@ -18,7 +18,6 @@ internal readonly record struct WorkflowCompensationTransitionResult(
     string NextCompensationStepId,   // empty when no next request should be sent
     string IdempotencyKey,
     string CapturedOutput,
-    int CompensationCursor,
     string ExecutionId);
 
 // Refactor (iter115/cluster-3):
@@ -56,24 +55,12 @@ internal interface IWorkflowExecutionStateHost
         CancellationToken ct = default);
 
     Task<WorkflowCompensationTransitionResult> TryStartCompensationAsync(
-        WorkflowCompletedEvent terminalFailure, CancellationToken ct = default) =>
-        Task.FromResult(new WorkflowCompensationTransitionResult(
-            WorkflowCompensationTransitionStatus.NoCompensableLedger,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            0,
-            string.Empty));
+        WorkflowCompletedEvent terminalFailure,
+        CancellationToken ct = default);
 
     Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
-        CompensationStepCompletedEvent completion, CancellationToken ct = default) =>
-        Task.FromResult(new WorkflowCompensationTransitionResult(
-            WorkflowCompensationTransitionStatus.NoCompensableLedger,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            0,
-            string.Empty));
+        CompensationStepCompletedEvent completion,
+        CancellationToken ct = default);
 }
 
 internal interface IWorkflowExecutionStateHostAccessor
