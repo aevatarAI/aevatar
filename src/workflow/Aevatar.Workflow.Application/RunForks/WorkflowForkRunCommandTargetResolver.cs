@@ -102,6 +102,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                 validation.WorkflowName,
                 creationReceipt.CreatedActorIds,
                 source,
+                seedView,
                 variables,
                 scopeId),
             creationReceipt.CreatedActorIds,
@@ -163,6 +164,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
         WorkflowChatSource source,
+        WorkflowRunForkSeedView seedView,
         IReadOnlyDictionary<string, string> variables,
         string scopeId)
     {
@@ -177,7 +179,8 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                 sourceRunId,
                 startAtStepId,
                 variables,
-                Math.Max(0, command.Attempt)),
+                Math.Max(0, command.Attempt),
+                ResolveStartStepIdempotency(seedView, startAtStepId)),
             TargetSeed: new WorkflowRunTargetSeed(
                 actorId,
                 workflowName,
@@ -242,6 +245,21 @@ internal sealed class WorkflowForkRunCommandTargetResolver
         !string.IsNullOrWhiteSpace(commandScopeId)
             ? commandScopeId.Trim()
             : sourceScopeId?.Trim() ?? string.Empty;
+
+    private static WorkflowStepIdempotencyView? ResolveStartStepIdempotency(
+        WorkflowRunForkSeedView seedView,
+        string startAtStepId)
+    {
+        if (seedView.IdempotencyByStepId == null ||
+            string.IsNullOrWhiteSpace(startAtStepId))
+        {
+            return null;
+        }
+
+        return seedView.IdempotencyByStepId.TryGetValue(startAtStepId, out var idempotency)
+            ? idempotency
+            : null;
+    }
 
     private static bool IsTerminal(string status) =>
         !string.IsNullOrWhiteSpace(status) && TerminalStatuses.Contains(status.Trim());

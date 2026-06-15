@@ -63,6 +63,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 Request = credentialContext.Request with
                 {
                     CallId = Normalize(request.CallId),
+                    IdempotencyKey = Normalize(request.IdempotencyKey),
                 },
                 Caller = credentialContext.Caller with
                 {

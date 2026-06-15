@@ -17,6 +17,8 @@ public sealed class HostCallbackConnectorRequest
 
     public string StepId { get; init; } = string.Empty;
 
+    public string IdempotencyKey { get; init; } = string.Empty;
+
     public string Payload { get; init; } = string.Empty;
 
     public IReadOnlyDictionary<string, string> Parameters { get; init; } = new Dictionary<string, string>();

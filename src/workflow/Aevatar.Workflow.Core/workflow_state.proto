@@ -299,6 +299,7 @@ message WorkflowExecutionKernelState
   WorkflowUsageMetricsState usage = 12;
   repeated WorkflowFileRef input_file_refs = 13;
   repeated WorkflowFileRef current_step_input_file_refs = 14;
+  map<string, WorkflowStepIdempotencyState> idempotency_by_step_id = 15;
 }
 
 message WorkflowUsageMetricsState
@@ -394,6 +395,7 @@ message PendingToolCallApprovalState
   string arguments_json = 7;
   string input = 8;
   repeated WorkflowFileRef input_file_refs = 9;
+  string idempotency_key = 10;
 }
 
 message ToolCallModuleState
@@ -563,6 +565,7 @@ message PendingConnectorCallState
   map<string, string> parameters = 14;
   bool secure_step = 15;
   string connector_type = 16;
+  string idempotency_key = 17;
 }
 
 message ConnectorCallModuleState
