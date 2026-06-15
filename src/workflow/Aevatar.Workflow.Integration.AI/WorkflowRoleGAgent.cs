@@ -9,11 +9,12 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Integration.AI;
 
-[GAgent(WorkflowAssistantRoleAgentKind)]
+[GAgent(WorkflowRoleConventions.DefaultAgentKind)]
 public class WorkflowRoleGAgent(
     ILLMProviderFactory? llmProviderFactory = null,
     IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
@@ -34,6 +35,7 @@ public class WorkflowRoleGAgent(
         remoteToolApprovalPort)
 {
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
 
     [EventHandler(AllowSelfHandling = true)]
     public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
@@ -76,7 +78,7 @@ public class WorkflowRoleGAgent(
         try
         {
             var replayRecord = await ExecuteWorkflowIntentStreamingChatAsync(intent, chatRequest, streamCt);
-            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+            var completed = new WorkflowLlmInvocationCompletedEvent
             {
                 RunId = intent.RunId ?? string.Empty,
                 StepId = intent.StepId ?? string.Empty,
@@ -85,7 +87,12 @@ public class WorkflowRoleGAgent(
                 Success = true,
                 Content = replayRecord.Content,
                 ReasoningContent = replayRecord.ReasoningContent,
-            }, TopologyAudience.Parent);
+                Usage = ToWorkflowUsageMetrics(replayRecord.Usage, replayRecord.Model),
+            };
+            var managedHandoff = ToWorkflowManagedHandoffOutcome(replayRecord.ToolReceipts);
+            if (managedHandoff != null)
+                completed.ManagedHandoff = managedHandoff;
+            await PublishAsync(completed, TopologyAudience.Parent);
             await PersistRoleChatSessionCompletionAsync(
                 chatRequest,
                 replayRecord.Content,
@@ -128,25 +135,106 @@ public class WorkflowRoleGAgent(
 
     private static ChatRequestEvent BuildChatRequestFromWorkflowIntent(WorkflowLlmExecutionIntent intent)
     {
+        var workflowRuntimeContext = new AgentWorkflowRuntimeContext(
+            Normalize(intent.WorkflowRuntimeContext?.ParentActorId),
+            Normalize(intent.WorkflowRuntimeContext?.ParentRunId),
+            Normalize(intent.WorkflowRuntimeContext?.ParentStepId),
+            Normalize(intent.WorkflowRuntimeContext?.RootRunId),
+            Math.Max(0, intent.WorkflowRuntimeContext?.Depth ?? 0));
+        var toolContext = WorkflowCallerCredentialToolContextMapper.FromCredential(
+            intent.CallerCredential,
+            workflowRuntimeContext);
+        if (!string.IsNullOrWhiteSpace(intent.RoutePreference))
+        {
+            toolContext = toolContext with
+            {
+                Routing = toolContext.Routing with
+                {
+                    NyxIdRoutePreference = intent.RoutePreference.Trim(),
+                },
+            };
+        }
+        toolContext = ApplyToolVisibility(intent.AgentToolScope, toolContext);
+
         var request = new ChatRequestEvent
         {
             Prompt = intent.Prompt ?? string.Empty,
             SessionId = intent.SessionId ?? string.Empty,
             TimeoutMs = intent.TimeoutMs,
+            ToolContext = AgentToolExecutionContextMapper.ToPayload(toolContext),
             LlmControl = new LLMControlContextPayload
             {
+                NyxIdAccessToken = toolContext.Credentials.NyxIdAccessToken ?? string.Empty,
                 ModelOverride = intent.Model ?? string.Empty,
+                NyxIdRoutePreference = toolContext.Routing.NyxIdRoutePreference ?? string.Empty,
                 UserMemoryPrompt = intent.UserMemoryPrompt ?? string.Empty,
                 SenderNyxIdAccessToken = intent.SenderNyxIdAccessToken ?? string.Empty,
             },
         };
         if (intent.HasMaxToolRounds)
             request.LlmControl.MaxToolRoundsOverride = intent.MaxToolRounds;
-        foreach (var pair in intent.Headers)
-            request.Metadata[pair.Key] = pair.Value;
-        foreach (var pair in intent.Annotations)
-            request.Metadata[pair.Key] = pair.Value;
+        request.InputParts.Add(intent.InputFileRefs.Select(ToChatContentPart));
+        CopyWorkflowIntentMetadata(intent.Headers, request.Metadata);
+        CopyWorkflowIntentMetadata(intent.Annotations, request.Metadata);
         return request;
+    }
+
+    private static ChatContentPart ToChatContentPart(WorkflowFileRef fileRef)
+    {
+        ArgumentNullException.ThrowIfNull(fileRef);
+        return new ChatContentPart
+        {
+            Kind = ResolveChatContentPartKind(fileRef.MediaType),
+            Uri = ResolveFileRefUri(fileRef),
+            MediaType = Normalize(fileRef.MediaType) ?? string.Empty,
+            Name = Normalize(fileRef.FileName) ?? string.Empty,
+        };
+    }
+
+    private static ChatContentPartKind ResolveChatContentPartKind(string? mediaType)
+    {
+        var normalized = Normalize(mediaType);
+        if (normalized is null)
+            return ChatContentPartKind.Unspecified;
+        if (normalized.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            return ChatContentPartKind.Image;
+        if (normalized.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
+            return ChatContentPartKind.Audio;
+        if (normalized.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
+            return ChatContentPartKind.Video;
+        return ChatContentPartKind.Unspecified;
+    }
+
+    private static string ResolveFileRefUri(WorkflowFileRef fileRef) =>
+        Normalize(fileRef.ArtifactId) ??
+        (string.IsNullOrWhiteSpace(fileRef.FileId)
+            ? string.Empty
+            : $"workflow-file://{fileRef.FileId.Trim()}");
+
+    private static AgentToolExecutionContext ApplyToolVisibility(
+        WorkflowAgentToolScope? scope,
+        AgentToolExecutionContext toolContext)
+    {
+        if (scope == null)
+            return toolContext;
+
+        return toolContext with
+        {
+            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(scope.AllowedToolNames),
+        };
+    }
+
+    private static void CopyWorkflowIntentMetadata(
+        IEnumerable<KeyValuePair<string, string>> source,
+        IDictionary<string, string> target)
+    {
+        foreach (var pair in source)
+        {
+            if (string.Equals(pair.Key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal))
+                continue;
+
+            target[pair.Key] = pair.Value;
+        }
     }
 
     private async Task<WorkflowIntentReplayRecord> ExecuteWorkflowIntentStreamingChatAsync(
@@ -156,7 +244,7 @@ public class WorkflowRoleGAgent(
     {
         var inputParts = ResolveWorkflowRequestInputParts(request);
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContext.Empty);
+        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
         var metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
                 new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))
@@ -165,10 +253,15 @@ public class WorkflowRoleGAgent(
         var fullContent = new StringBuilder();
         var fullReasoning = new StringBuilder();
         var toolCalls = new WorkflowToolCallAccumulator();
+        var toolReceipts = new List<AgentToolReceipt>();
         var contentParts = new List<ContentPart>();
+        TokenUsage? usage = null;
 
         await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
         {
+            if (chunk.Usage != null)
+                usage = chunk.Usage;
+
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
                 fullContent.Append(chunk.DeltaContent);
@@ -200,13 +293,19 @@ public class WorkflowRoleGAgent(
 
             if (chunk.DeltaToolCall != null)
                 toolCalls.TrackDelta(chunk.DeltaToolCall);
+
+            if (chunk.ToolReceipt != null)
+                toolReceipts.Add(chunk.ToolReceipt.Clone());
         }
 
         return new WorkflowIntentReplayRecord(
             fullContent.ToString(),
             fullReasoning.ToString(),
             toolCalls.BuildToolCalls(),
+            toolReceipts,
             contentParts,
+            Usage: usage,
+            Model: EffectiveConfig.Model ?? string.Empty,
             ContentEmitted: fullContent.Length > 0);
     }
 
@@ -227,12 +326,49 @@ public class WorkflowRoleGAgent(
     private static string SanitizeWorkflowFailureMessage(string? message) =>
         string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
 
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private sealed record WorkflowIntentReplayRecord(
         string Content,
         string ReasoningContent,
         IReadOnlyList<ToolCall> ToolCalls,
+        IReadOnlyList<AgentToolReceipt> ToolReceipts,
         IReadOnlyList<ContentPart> ContentParts,
+        TokenUsage? Usage,
+        string? Model,
         bool ContentEmitted);
+
+    private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(
+        IReadOnlyList<AgentToolReceipt> toolReceipts)
+    {
+        var handoff = toolReceipts
+            .Select(static receipt => receipt.ManagedWorkflowHandoff)
+            .LastOrDefault(static receipt => receipt != null && !string.IsNullOrWhiteSpace(receipt.InvocationId));
+        if (handoff == null)
+            return null;
+
+        return new WorkflowManagedHandoffOutcome
+        {
+            ParentActorId = handoff.ParentActorId ?? string.Empty,
+            ParentRunId = handoff.ParentRunId ?? string.Empty,
+            ParentStepId = handoff.ParentStepId ?? string.Empty,
+            InvocationId = handoff.InvocationId ?? string.Empty,
+            ChildRunId = handoff.ChildRunId ?? string.Empty,
+            StreamTopic = handoff.StreamTopic ?? string.Empty,
+        };
+    }
+
+    private static WorkflowUsageMetrics? ToWorkflowUsageMetrics(TokenUsage? usage, string? model) =>
+        usage == null
+            ? null
+            : new WorkflowUsageMetrics
+            {
+                PromptTokens = usage.PromptTokens,
+                CompletionTokens = usage.CompletionTokens,
+                TotalTokens = usage.TotalTokens,
+                Model = model ?? string.Empty,
+            };
 
     private sealed class WorkflowToolCallAccumulator
     {

@@ -29,10 +29,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
         "Supports Python, JavaScript, TypeScript, and Bash. " +
         "Returns stdout, stderr, and exit code.";
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
-
-    /// <summary>Code execution is always potentially destructive.</summary>
-    public bool? RequiresApproval(string argumentsJson) => true;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
     public string ParametersSchema => """
         {

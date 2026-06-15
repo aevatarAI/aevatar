@@ -403,6 +403,27 @@ public sealed class AITextStreamRunEventEnvelopeMappingHandler : IWorkflowRunEve
             return true;
         }
 
+        if (payload.Is(Aevatar.AI.Abstractions.ChatTokenUsageEvent.Descriptor))
+        {
+            var evt = payload.Unpack<Aevatar.AI.Abstractions.ChatTokenUsageEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    Usage = new WorkflowUsageEventPayload
+                    {
+                        Available = evt.Usage != null,
+                        PromptTokens = evt.Usage?.PromptTokens ?? 0,
+                        CompletionTokens = evt.Usage?.CompletionTokens ?? 0,
+                        TotalTokens = evt.Usage?.TotalTokens ?? 0,
+                        Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
+                    },
+                },
+            ];
+            return true;
+        }
+
         return false;
     }
 }
@@ -461,6 +482,14 @@ public sealed class WorkflowCompletedRunEventEnvelopeMappingHandler : IWorkflowR
             var threadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
             events =
             [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    Usage = new WorkflowUsageEventPayload
+                    {
+                        Available = false,
+                    },
+                },
                 new WorkflowRunEventEnvelope
                 {
                     Timestamp = ts,
@@ -628,7 +657,6 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
                             ToolName = evt.ToolApproval?.ToolName ?? string.Empty,
                             ToolCallId = evt.ToolApproval?.ToolCallId ?? string.Empty,
                             ApprovalRequestId = evt.ToolApproval?.ApprovalRequestId ?? string.Empty,
-                            ArgumentsJson = evt.ToolApproval?.ArgumentsJson ?? string.Empty,
                         }),
                     },
                 },

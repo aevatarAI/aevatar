@@ -26,6 +26,14 @@ public sealed class AgentDeliveryTargetToolTests
         var tool = CreateTool();
         var act = () => JsonDocument.Parse(tool.ParametersSchema);
         act.Should().NotThrow();
+
+        using var document = JsonDocument.Parse(tool.ParametersSchema);
+        var properties = document.RootElement.GetProperty("properties");
+        properties.TryGetProperty("nyx_api_key", out _).Should().BeFalse();
+        properties.TryGetProperty("api_key_id", out _).Should().BeFalse();
+        properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
+        tool.Description.Should().Contain("scheduled_agent_creator");
+        tool.Description.Should().NotContain("agent_builder tool's job");
     }
 
     [Fact]

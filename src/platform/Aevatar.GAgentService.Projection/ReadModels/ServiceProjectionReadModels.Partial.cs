@@ -25,6 +25,15 @@ public sealed partial class ServiceCatalogReadModel : IProjectionReadModel<Servi
     }
 }
 
+public sealed partial class ServiceCatalogExternalExposureReadModel
+{
+    public DateTimeOffset? RegisteredAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(RegisteredAtUtcValue);
+        set => RegisteredAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+}
+
 public sealed partial class ServiceDeploymentCatalogReadModel : IProjectionReadModel<ServiceDeploymentCatalogReadModel>
 {
     public DateTimeOffset UpdatedAt
@@ -199,6 +208,27 @@ public sealed partial class ServiceTrafficEndpointReadModel
     {
         get => TargetEntries;
         set => ServiceProjectionReadModelSupport.ReplaceCollection(TargetEntries, value);
+    }
+}
+
+public sealed partial class ServiceInvocationCatalogReadModel : IProjectionReadModel<ServiceInvocationCatalogReadModel>
+{
+    public DateTimeOffset UpdatedAt
+    {
+        get => ObservedAt;
+        set => ObservedAt = value;
+    }
+
+    public DateTimeOffset ObservedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(ObservedAtUtcValue);
+        set => ObservedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public IList<ServiceInvocationReadinessEntryReadModel> Entries
+    {
+        get => EntryEntries;
+        set => ServiceProjectionReadModelSupport.ReplaceCollection(EntryEntries, value);
     }
 }
 

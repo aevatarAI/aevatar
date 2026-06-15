@@ -12,11 +12,14 @@ using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Adapters;
+using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.Bootstrap.Hosting;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -48,6 +51,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IServiceServingQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IScopeBindingReadinessQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
+        services.Should().Contain(x => x.ServiceType == typeof(ISkillWorkflowMountPort));
         services.Should().Contain(x => x.ServiceType == typeof(IStaticGAgentStreamInvocationPort<AGUIEvent>));
         services.Should().NotContain(x => x.ServiceType == typeof(ITeamEntryMemberResolver));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceCommandPort));
@@ -72,6 +76,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ImplementationType == typeof(StaticServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(WorkflowServiceImplementationAdapter));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();

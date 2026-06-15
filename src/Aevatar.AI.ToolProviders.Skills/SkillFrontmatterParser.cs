@@ -34,6 +34,9 @@ public sealed class SkillParseResult
     /// <summary>Frontmatter 中的 workflow entry hint.</summary>
     public string? WorkflowEntry { get; init; }
 
+    /// <summary>Frontmatter 中的 script entry behavior type hint.</summary>
+    public string? ScriptEntry { get; init; }
+
     /// <summary>是否存在 frontmatter。</summary>
     public bool HasFrontmatter { get; init; }
 }
@@ -86,7 +89,7 @@ public sealed class SkillFrontmatterParser
         var body = bodyStart < rest.Length ? rest[bodyStart..].TrimStart('\n') : "";
 
         // 解析 frontmatter 键值对
-        string? name = null, description = null, arguments = null, whenToUse = null, workflowEntry = null;
+        string? name = null, description = null, arguments = null, whenToUse = null, workflowEntry = null, scriptEntry = null;
         var isModelInvocable = true;
         var isUserInvocable = true;
 
@@ -128,6 +131,9 @@ public sealed class SkillFrontmatterParser
                 case "workflow" or "workflow-id" or "workflow_id":
                     workflowEntry = value;
                     break;
+                case "script" or "script-entry" or "script_entry" or "scriptentry":
+                    scriptEntry = value;
+                    break;
                 case "disable-model-invocation" or "disable_model_invocation":
                     isModelInvocable = !ParseBool(value);
                     break;
@@ -146,6 +152,7 @@ public sealed class SkillFrontmatterParser
             IsModelInvocable = isModelInvocable,
             IsUserInvocable = isUserInvocable,
             WorkflowEntry = workflowEntry,
+            ScriptEntry = scriptEntry,
             Body = body,
             HasFrontmatter = true,
         };

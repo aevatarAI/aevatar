@@ -12,6 +12,7 @@
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Application\Aevatar.GAgentService.Application.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application\Aevatar.Workflow.Application.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
   </ItemGroup>
   <ItemGroup>

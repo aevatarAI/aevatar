@@ -1,7 +1,11 @@
 using System.Text;
+using System.Text.Json;
+using Aevatar.Capabilities;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -9,6 +13,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -27,6 +32,95 @@ public sealed class ChatQueryEndpointsTests
         var body = await ExecuteAsync(result);
         body.Should().Contain("actor-1");
         service.Calls.Should().ContainSingle().Which.Should().Be("ListAgents");
+    }
+
+    [Fact]
+    public async Task ListAgents_WhenProjectionIndexDrifts_ShouldReturnServiceUnavailableDiagnostic()
+    {
+        var service = new FakeWorkflowExecutionQueryApplicationService
+        {
+            ListAgentsException = CreateProjectionIndexSchemaDriftException(),
+        };
+
+        var result = await ChatQueryEndpoints.ListAgents(service, CancellationToken.None);
+
+        var http = await ExecuteWithContextAsync(result);
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        using var json = JsonDocument.Parse(body);
+        var root = json.RootElement;
+        root.GetProperty("code").GetString()
+            .Should().Be("workflow_execution_current_state_projection_index_drift");
+        root.GetProperty("provider").GetString().Should().Be("Elasticsearch");
+        root.GetProperty("indexAlias").GetString()
+            .Should().Be("aevatar-mainnet-workflow-execution-current-states");
+        root.GetProperty("currentPhysicalIndex").GetString()
+            .Should().Be("aevatar-mainnet-workflow-execution-current-states-v6c660705");
+        root.GetProperty("expectedPhysicalIndex").GetString()
+            .Should().Be("aevatar-mainnet-workflow-execution-current-states-vddd647dc");
+        root.GetProperty("remediation").GetString()
+            .Should().Contain("Rebuild or repoint");
+    }
+
+    [Fact]
+    public async Task ListAgentsRoute_WhenProjectionIndexDrifts_ShouldReturnServiceUnavailableDiagnostic()
+    {
+        var service = new FakeWorkflowExecutionQueryApplicationService
+        {
+            ListAgentsException = CreateProjectionIndexSchemaDriftException(),
+        };
+        await using var app = await CreateRouteAppAsync(service);
+        using var client = CreateClient(app);
+
+        var response = await client.GetAsync("/api/agents");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.ServiceUnavailable, body);
+        using var json = JsonDocument.Parse(body);
+        var root = json.RootElement;
+        root.GetProperty("code").GetString()
+            .Should().Be("workflow_execution_current_state_projection_index_drift");
+        root.GetProperty("indexAlias").GetString()
+            .Should().Be("aevatar-mainnet-workflow-execution-current-states");
+        root.GetProperty("currentPhysicalIndex").GetString()
+            .Should().Be("aevatar-mainnet-workflow-execution-current-states-v6c660705");
+        root.GetProperty("expectedPhysicalIndex").GetString()
+            .Should().Be("aevatar-mainnet-workflow-execution-current-states-vddd647dc");
+    }
+
+    [Fact]
+    public async Task WorkflowCapabilityHealthProbe_WhenProjectionIndexDrifts_ShouldReturnUnhealthyDiagnostic()
+    {
+        var probe = new FakeWorkflowExecutionCurrentStateIndexProbe
+        {
+            Result = new ProjectionIndexConsistencyResult(
+                "Elasticsearch",
+                "aevatar-mainnet-workflow-execution-current-states",
+                "aevatar-mainnet-workflow-execution-current-states-vddd647dc",
+                "aevatar-mainnet-workflow-execution-current-states-v6c660705",
+                ProjectionIndexConsistencyStatus.Drifted,
+                "Projection index schema drift detected: alias points to a physical index with a different schema fingerprint."),
+        };
+        var service = new FakeWorkflowExecutionQueryApplicationService();
+        await using var app = CreateWorkflowCapabilityApp(service, probe);
+        var healthService = CreateHealthService(app);
+
+        var readiness = await healthService.GetReadinessAsync();
+
+        readiness.Ok.Should().BeFalse();
+        readiness.Status.Should().Be("not-ready");
+        var component = readiness.Components.Should()
+            .ContainSingle(x => x.Name == "workflow-bundle")
+            .Subject;
+        component.Status.Should().Be(Aevatar.Capabilities.AevatarHealthStatuses.Unhealthy);
+        component.Message.Should().Contain("schema drift");
+        component.Details["provider"].Should().Be("Elasticsearch");
+        component.Details["indexAlias"].Should().Be("aevatar-mainnet-workflow-execution-current-states");
+        component.Details["currentPhysicalIndex"].Should().Be("aevatar-mainnet-workflow-execution-current-states-v6c660705");
+        component.Details["expectedPhysicalIndex"].Should().Be("aevatar-mainnet-workflow-execution-current-states-vddd647dc");
+        component.Details["remediation"].Should().Contain("Rebuild or repoint");
+        service.Calls.Should().BeEmpty();
+        probe.CheckCalls.Should().Be(1);
     }
 
     [Fact]
@@ -333,6 +427,7 @@ public sealed class ChatQueryEndpointsTests
             RequestServices = new ServiceCollection()
                 .AddLogging()
                 .AddOptions()
+                .Configure<JsonOptions>(options => options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase)
                 .BuildServiceProvider(),
         };
         http.Response.Body = new MemoryStream();
@@ -361,6 +456,44 @@ public sealed class ChatQueryEndpointsTests
         return app;
     }
 
+    private static WebApplication CreateWorkflowCapabilityApp(
+        IWorkflowExecutionQueryApplicationService service,
+        IProjectionIndexConsistencyProbe<WorkflowExecutionCurrentStateDocument>? indexProbe = null)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = [],
+        });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddLogging();
+        builder.Services.AddOptions();
+        builder.Services.AddSingleton(new Aevatar.Capabilities.AevatarHostMetadata
+        {
+            ServiceName = "workflow-test",
+        });
+        builder.Services.AddSingleton<Aevatar.Capabilities.AevatarHostHealthService>();
+        builder.AddWorkflowCapabilityBundle();
+        builder.Services.Replace(ServiceDescriptor.Singleton(service));
+        if (indexProbe != null)
+        {
+            builder.Services.Replace(ServiceDescriptor.Singleton(indexProbe));
+        }
+
+        var app = builder.Build();
+        app.MapWorkflowCapabilityEndpoints();
+        return app;
+    }
+
+    private static AevatarHostHealthService CreateHealthService(WebApplication app)
+    {
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        return new AevatarHostHealthService(
+            app.Services,
+            app.Services.GetServices<AevatarHealthContributorRegistration>(),
+            routeBuilder.DataSources,
+            app.Services.GetRequiredService<AevatarHostMetadata>());
+    }
+
     private static HttpClient CreateClient(WebApplication app)
     {
         var address = app.Services
@@ -376,6 +509,13 @@ public sealed class ChatQueryEndpointsTests
         };
     }
 
+    private static ProjectionIndexSchemaDriftException CreateProjectionIndexSchemaDriftException() =>
+        new(
+            "Elasticsearch",
+            "aevatar-mainnet-workflow-execution-current-states",
+            "aevatar-mainnet-workflow-execution-current-states-v6c660705",
+            "aevatar-mainnet-workflow-execution-current-states-vddd647dc");
+
     private sealed class FakeWorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
     {
         public bool WorkflowActorCurrentStateQueryEnabled => true;
@@ -389,11 +529,15 @@ public sealed class ChatQueryEndpointsTests
         public IReadOnlyList<WorkflowRunTimelineExportItem> Timeline { get; init; } = [];
         public IReadOnlyList<WorkflowRunGraphExportEdge> GraphEdges { get; init; } = [];
         public WorkflowRunGraphExportSubgraph GraphSubgraph { get; init; } = new();
+        public Exception? ListAgentsException { get; init; }
         public List<string> Calls { get; } = [];
 
         public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default)
         {
             Calls.Add("ListAgents");
+            if (ListAgentsException != null)
+                throw ListAgentsException;
+
             return Task.FromResult(Agents);
         }
 
@@ -456,6 +600,27 @@ public sealed class ChatQueryEndpointsTests
         {
             Calls.Add($"GetWorkflowRunGraphExportSubgraph:{actorId}:{depth}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
             return Task.FromResult(GraphSubgraph);
+        }
+    }
+
+    private sealed class FakeWorkflowExecutionCurrentStateIndexProbe
+        : IProjectionIndexConsistencyProbe<WorkflowExecutionCurrentStateDocument>
+    {
+        public ProjectionIndexConsistencyResult Result { get; init; } = new(
+            "Elasticsearch",
+            "workflow-execution-current-states",
+            "workflow-execution-current-states-vexpected",
+            "workflow-execution-current-states-vexpected",
+            ProjectionIndexConsistencyStatus.Consistent,
+            "Projection index alias points to the expected physical index.");
+
+        public int CheckCalls { get; private set; }
+
+        public Task<ProjectionIndexConsistencyResult> CheckIndexConsistencyAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            CheckCalls++;
+            return Task.FromResult(Result);
         }
     }
 }

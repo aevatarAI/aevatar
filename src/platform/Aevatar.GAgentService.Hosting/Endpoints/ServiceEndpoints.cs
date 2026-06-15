@@ -2,6 +2,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Hosting.Endpoints;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
@@ -20,6 +21,7 @@ public static partial class ServiceEndpoints
     {
         var group = app.MapGroup("/api/services");
         group.MapPost(string.Empty, HandleCreateServiceAsync);
+        group.MapPut("/{serviceId}/external-exposure", HandleUpdateServiceExternalExposureAsync);
         group.MapPost("/{serviceId}/revisions", HandleCreateRevisionAsync);
         group.MapPost("/{serviceId}/revisions/{revisionId}:prepare", HandlePrepareRevisionAsync);
         group.MapPost("/{serviceId}/revisions/{revisionId}:publish", HandlePublishRevisionAsync);
@@ -59,15 +61,46 @@ public static partial class ServiceEndpoints
             return denied;
         }
 
+        var spec = new ServiceDefinitionSpec
+        {
+            Identity = identity,
+            DisplayName = request.DisplayName ?? string.Empty,
+            Endpoints = { request.Endpoints.Select(ToEndpointSpec) },
+            PolicyIds = { request.PolicyIds ?? [] },
+        };
+        ApplyExternalExposure(spec, request.ExternalExposure);
+
         var receipt = await commandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
         {
-            Spec = new ServiceDefinitionSpec
-            {
-                Identity = identity,
-                DisplayName = request.DisplayName ?? string.Empty,
-                Endpoints = { request.Endpoints.Select(ToEndpointSpec) },
-                PolicyIds = { request.PolicyIds ?? [] },
-            },
+            Spec = spec,
+        }, ct);
+        return Results.Accepted($"/api/services/{identity.ServiceId}", receipt);
+    }
+
+    private static async Task<IResult> HandleUpdateServiceExternalExposureAsync(
+        HttpContext http,
+        string serviceId,
+        UpdateServiceExternalExposureHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
+        [FromServices] IServiceCommandPort commandPort,
+        CancellationToken ct)
+    {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
+        var receipt = await commandPort.UpdateServiceExternalExposureAsync(new UpdateServiceExternalExposureCommand
+        {
+            Identity = identity,
+            ExternalExposure = ToExternalExposure(request),
         }, ct);
         return Results.Accepted($"/api/services/{identity.ServiceId}", receipt);
     }
@@ -293,6 +326,7 @@ public static partial class ServiceEndpoints
         [AsParameters] ServiceIdentityQuery query,
         [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceLifecycleQueryPort queryPort,
+        [FromServices] IServiceInvocationCatalogQueryReader invocationCatalogQueryReader,
         CancellationToken ct)
     {
         if (!ServiceIdentityEndpointAccess.TryResolveContext(
@@ -307,7 +341,7 @@ public static partial class ServiceEndpoints
         }
 
         var services = await queryPort.ListServicesAsync(context.TenantId, context.AppId, context.Namespace, query.Take, ct);
-        return JsonOrNull(services);
+        return Results.Json(await JoinInvokeReadinessAsync(services, invocationCatalogQueryReader, ct));
     }
 
     private static async Task<IResult> HandleGetServiceAsync(
@@ -316,6 +350,7 @@ public static partial class ServiceEndpoints
         [AsParameters] ServiceIdentityQuery query,
         [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceLifecycleQueryPort queryPort,
+        [FromServices] IServiceInvocationCatalogQueryReader invocationCatalogQueryReader,
         CancellationToken ct)
     {
         if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
@@ -330,7 +365,11 @@ public static partial class ServiceEndpoints
             return denied;
         }
 
-        return JsonOrNull(await queryPort.GetServiceAsync(identity, ct));
+        var service = await queryPort.GetServiceAsync(identity, ct);
+        if (service == null)
+            return JsonOrNull<ServiceWithInvokeReadinessHttpResponse>(null);
+
+        return Results.Json(await JoinInvokeReadinessAsync(service, invocationCatalogQueryReader, ct));
     }
 
     private static async Task<IResult> HandleGetRevisionsAsync(
@@ -365,6 +404,7 @@ public static partial class ServiceEndpoints
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         CancellationToken ct)
     {
         if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
@@ -399,16 +439,24 @@ public static partial class ServiceEndpoints
             });
         }
 
-        var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
+        ServiceInvocationAcceptedReceipt receipt;
+        try
         {
-            Identity = identity,
-            EndpointId = endpointId,
-            CommandId = request.CommandId ?? string.Empty,
-            CorrelationId = request.CorrelationId ?? string.Empty,
-            RevisionId = revisionId,
-            Payload = payload,
-            Caller = ResolveInvocationCaller(identityResolver, request),
-        }, ct);
+            receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
+            {
+                Identity = identity,
+                EndpointId = endpointId,
+                CommandId = request.CommandId ?? string.Empty,
+                CorrelationId = request.CorrelationId ?? string.Empty,
+                RevisionId = revisionId,
+                Payload = payload,
+                Caller = ResolveInvocationCaller(identityResolver, request),
+            }, ct);
+        }
+        catch (ServiceInvokeReadinessException ex)
+        {
+            return Results.BadRequest(readinessErrorMapper.Map(ex));
+        }
         // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
         //   Service invoke is accepted for dispatch; the run resource is the status surface for outcome.
         //   Never point Location at the service definition root because that is not the command/run status.
@@ -492,6 +540,65 @@ public static partial class ServiceEndpoints
             ? Results.Text("null", "application/json")
             : Results.Json(value);
 
+    private static async Task<IReadOnlyList<ServiceWithInvokeReadinessHttpResponse>> JoinInvokeReadinessAsync(
+        IReadOnlyList<ServiceCatalogSnapshot> services,
+        IServiceInvocationCatalogQueryReader invocationCatalogQueryReader,
+        CancellationToken ct)
+    {
+        var responses = new List<ServiceWithInvokeReadinessHttpResponse>(services.Count);
+        foreach (var service in services)
+            responses.Add(await JoinInvokeReadinessAsync(service, invocationCatalogQueryReader, ct));
+
+        return responses;
+    }
+
+    private static async Task<ServiceWithInvokeReadinessHttpResponse> JoinInvokeReadinessAsync(
+        ServiceCatalogSnapshot service,
+        IServiceInvocationCatalogQueryReader invocationCatalogQueryReader,
+        CancellationToken ct)
+    {
+        var catalog = HasCompleteInvocationIdentity(service)
+            ? await invocationCatalogQueryReader.GetAsync(ToIdentity(service.TenantId, service.AppId, service.Namespace, service.ServiceId), ct)
+            : null;
+        var entries = catalog?.Entries ?? [];
+        var ready = entries.Count > 0 &&
+                    entries.All(x => x.ReadinessStatus == ServiceInvokeReadinessStatus.Ready);
+        var status = entries.Count == 0
+            ? ServiceInvokeReadinessStatus.Unspecified
+            : ready
+                ? ServiceInvokeReadinessStatus.Ready
+                : ServiceInvokeReadinessStatus.Unavailable;
+        var reason = status == ServiceInvokeReadinessStatus.Unavailable
+            ? entries.FirstOrDefault(x => x.UnavailableReason != ServiceInvokeUnavailableReason.Unspecified)?.UnavailableReason.ToString()
+            : null;
+
+        return new ServiceWithInvokeReadinessHttpResponse(
+            service.ServiceKey,
+            service.TenantId,
+            service.AppId,
+            service.Namespace,
+            service.ServiceId,
+            service.DisplayName,
+            service.DefaultServingRevisionId,
+            service.ActiveServingRevisionId,
+            service.DeploymentId,
+            service.PrimaryActorId,
+            service.DeploymentStatus,
+            service.Endpoints,
+            service.PolicyIds,
+            service.UpdatedAt,
+            ready,
+            status.ToString(),
+            reason,
+            MapExternalExposure(service.ExternalExposure));
+    }
+
+    private static bool HasCompleteInvocationIdentity(ServiceCatalogSnapshot service) =>
+        !string.IsNullOrWhiteSpace(service.TenantId) &&
+        !string.IsNullOrWhiteSpace(service.AppId) &&
+        !string.IsNullOrWhiteSpace(service.Namespace) &&
+        !string.IsNullOrWhiteSpace(service.ServiceId);
+
     internal static ServiceIdentity ToIdentity(string? tenantId, string? appId, string? @namespace, string serviceId)
     {
         return new ServiceIdentity
@@ -525,6 +632,54 @@ public static partial class ServiceEndpoints
             Description = request.Description ?? string.Empty,
         };
 
+    private static void ApplyExternalExposure(
+        ServiceDefinitionSpec spec,
+        ExternalExposureHttpRequest? externalExposure)
+    {
+        var mapped = ToExternalExposure(externalExposure);
+        if (mapped != null)
+            spec.ExternalExposure = mapped;
+    }
+
+    private static ExternalExposure? ToExternalExposure(ExternalExposureHttpRequest? request)
+    {
+        if (request == null)
+            return null;
+
+        var slug = request.NyxidSlug?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(slug) && request.RegisteredAt == null)
+            return null;
+
+        return new ExternalExposure
+        {
+            NyxidSlug = slug,
+            RegisteredAt = request.RegisteredAt.HasValue
+                ? Timestamp.FromDateTimeOffset(request.RegisteredAt.Value)
+                : null,
+        };
+    }
+
+    private static ExternalExposure ToExternalExposure(UpdateServiceExternalExposureHttpRequest request) =>
+        ToExternalExposure(new ExternalExposureHttpRequest(request.NyxidSlug, request.RegisteredAt))
+        ?? new ExternalExposure();
+
+    private static ExternalExposureHttpResponse? MapExternalExposure(
+        ServiceExternalExposureSnapshot? externalExposure)
+    {
+        if (externalExposure == null)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(externalExposure.NyxidSlug) &&
+            externalExposure.RegisteredAt == null)
+        {
+            return null;
+        }
+
+        return new ExternalExposureHttpResponse(
+            externalExposure.NyxidSlug ?? string.Empty,
+            externalExposure.RegisteredAt);
+    }
+
     private static ServiceImplementationKind ParseImplementationKind(string? rawValue)
     {
         return rawValue?.Trim().ToLowerInvariant() switch
@@ -552,6 +707,26 @@ public static partial class ServiceEndpoints
         string? Namespace,
         int Take = 200);
 
+    public sealed record ServiceWithInvokeReadinessHttpResponse(
+        string ServiceKey,
+        string TenantId,
+        string AppId,
+        string Namespace,
+        string ServiceId,
+        string DisplayName,
+        string DefaultServingRevisionId,
+        string ActiveServingRevisionId,
+        string DeploymentId,
+        string PrimaryActorId,
+        string DeploymentStatus,
+        IReadOnlyList<ServiceEndpointSnapshot> Endpoints,
+        IReadOnlyList<string> PolicyIds,
+        DateTimeOffset UpdatedAt,
+        bool InvokeReady,
+        string InvokeReadinessStatus,
+        string? InvokeUnavailableReason,
+        ExternalExposureHttpResponse? ExternalExposure = null);
+
     public sealed record ServiceIdentityHttpRequest(
         string TenantId,
         string AppId,
@@ -565,6 +740,14 @@ public static partial class ServiceEndpoints
         string ResponseTypeUrl,
         string Description);
 
+    public sealed record ExternalExposureHttpRequest(
+        string? NyxidSlug,
+        DateTimeOffset? RegisteredAt = null);
+
+    public sealed record ExternalExposureHttpResponse(
+        string NyxidSlug,
+        DateTimeOffset? RegisteredAt);
+
     public sealed record CreateServiceHttpRequest(
         string TenantId,
         string AppId,
@@ -572,7 +755,15 @@ public static partial class ServiceEndpoints
         string ServiceId,
         string DisplayName,
         IReadOnlyList<ServiceEndpointHttpRequest> Endpoints,
-        IReadOnlyList<string>? PolicyIds = null);
+        IReadOnlyList<string>? PolicyIds = null,
+        ExternalExposureHttpRequest? ExternalExposure = null);
+
+    public sealed record UpdateServiceExternalExposureHttpRequest(
+        string TenantId,
+        string AppId,
+        string Namespace,
+        string? NyxidSlug,
+        DateTimeOffset? RegisteredAt = null);
 
     public sealed record StaticRevisionHttpRequest(
         string ActorTypeName,

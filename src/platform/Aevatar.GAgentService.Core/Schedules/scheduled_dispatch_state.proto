@@ -41,6 +41,7 @@ enum ScheduledDispatchScheduleKindState
 {
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_GENERIC = 0;
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_WORKFLOW = 1;
+  SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_SKILL_RUNNER = 2;
 }
 
 enum ScheduledDispatchRuntimeCallbackBackendState
@@ -120,6 +121,21 @@ message ScheduledDispatchCreateCommand
 }
 
 message ScheduledDispatchUpdateCommand
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  string target_actor_id = 3;
+  aevatar.EventEnvelope trigger_envelope = 4;
+  string cron_expression = 5;
+  string timezone = 6;
+  bool enabled = 7;
+  map<string, string> headers = 8;
+  string payload_type_url = 9;
+  ScheduledDispatchTargetState target = 10;
+  ScheduledDispatchScheduleKindState schedule_kind = 11;
+}
+
+message ScheduledDispatchEnsureCommand
 {
   string schedule_id = 1;
   string display_name = 2;

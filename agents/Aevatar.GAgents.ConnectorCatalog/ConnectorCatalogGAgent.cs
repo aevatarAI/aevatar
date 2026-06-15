@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -14,6 +15,7 @@ namespace Aevatar.GAgents.ConnectorCatalog;
 ///
 /// Actor ID: <c>connector-catalog</c> (cluster-scoped singleton).
 /// </summary>
+[GAgent("connector.catalog")]
 public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>, IProjectedActor
 {
     public static string ProjectionKind => "connector-catalog";

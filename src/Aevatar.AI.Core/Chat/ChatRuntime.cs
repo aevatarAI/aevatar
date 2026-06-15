@@ -491,7 +491,9 @@ public sealed class ChatRuntime
                             textToolExecutor.AddTool(textToolState, tc);
                         await foreach (var result in textToolExecutor.GetRemainingResultsAsync(textToolState, runToken))
                         {
-                            var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
+                            if (result.Receipt is not null)
+                                yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
+                            var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
                             messages.Add(toolMsg);
                             pendingHistoryMessages.Add(toolMsg);
                         }
@@ -568,7 +570,9 @@ public sealed class ChatRuntime
 
             await foreach (var result in streamingExecutor.GetRemainingResultsAsync(streamingToolState, runToken))
             {
-                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
+                if (result.Receipt is not null)
+                    yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
+                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
             }
@@ -627,7 +631,9 @@ public sealed class ChatRuntime
                     finalToolExecutor.AddTool(finalToolState, tc);
                 await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(finalToolState, runToken))
                 {
-                    var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
+                    if (result.Receipt is not null)
+                        yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
+                    var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
                     messages.Add(toolMsg);
                     pendingHistoryMessages.Add(toolMsg);
                 }
@@ -957,12 +963,26 @@ public sealed class ChatRuntime
             ToolContext = effectiveToolContext,
             RoutingContext = effectiveLlmControl?.ToRoutingContext(baseRequest.RoutingContext) ?? baseRequest.RoutingContext,
             LlmControl = effectiveLlmControl,
-            Tools = baseRequest.Tools,
+            Tools = FilterVisibleTools(baseRequest.Tools, effectiveToolContext.ToolVisibility),
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
             ResponseFormat = baseRequest.ResponseFormat,
         };
+    }
+
+    private static IReadOnlyList<IAgentTool>? FilterVisibleTools(
+        IReadOnlyList<IAgentTool>? tools,
+        AgentToolVisibilityScope visibility)
+    {
+        if (tools is not { Count: > 0 })
+            return null;
+
+        if (!visibility.IsRestricted)
+            return tools;
+
+        var visibleTools = tools.Where(tool => visibility.Allows(tool.Name)).ToList();
+        return visibleTools.Count > 0 ? visibleTools : null;
     }
 
     private static IReadOnlyDictionary<string, string>? MergeMetadata(
@@ -1032,7 +1052,8 @@ public sealed class ChatRuntime
             chunk.DeltaContentPart == null &&
             normalizedToolCall == null &&
             !chunk.IsLast &&
-            chunk.Usage == null)
+            chunk.Usage == null &&
+            chunk.ToolReceipt == null)
         {
             return null;
         }
@@ -1045,6 +1066,7 @@ public sealed class ChatRuntime
             DeltaToolCall = normalizedToolCall,
             Usage = chunk.Usage,
             IsLast = chunk.IsLast,
+            ToolReceipt = chunk.ToolReceipt?.Clone(),
             // Field-level patch (ADR-0021 §6 / canon §8): forward FinishReason so
             // the actor-edge closeout in ConversationReplyGenerator can observe
             // it. ChatRuntime itself remains transitional per aevatar#596 Phase A;

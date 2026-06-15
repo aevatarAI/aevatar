@@ -13,9 +13,36 @@ public sealed record AgentToolExecutionContext(
     AgentToolSenderBindingContext SenderBinding,
     LLMRequestRoutingContext Routing,
     AgentToolConnectedServicesContext ConnectedServices,
+    AgentWorkflowRuntimeContext WorkflowRuntime,
     AgentSkillRecoveryContext SkillRecovery,
     IReadOnlyDictionary<string, string> ExternalMetadata)
 {
+    public AgentToolExecutionContext(
+        AgentToolRequestIdentity Request,
+        AgentToolCredentials Credentials,
+        AgentToolCallerContext Caller,
+        AgentToolChannelContext Channel,
+        AgentToolSenderBindingContext SenderBinding,
+        LLMRequestRoutingContext Routing,
+        AgentToolConnectedServicesContext ConnectedServices,
+        AgentSkillRecoveryContext SkillRecovery,
+        IReadOnlyDictionary<string, string> ExternalMetadata)
+        : this(
+            Request,
+            Credentials,
+            Caller,
+            Channel,
+            SenderBinding,
+            Routing,
+            ConnectedServices,
+            AgentWorkflowRuntimeContext.Empty,
+            SkillRecovery,
+            ExternalMetadata)
+    {
+    }
+
+    public AgentToolVisibilityScope ToolVisibility { get; init; } = AgentToolVisibilityScope.Unrestricted;
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,
@@ -24,6 +51,7 @@ public sealed record AgentToolExecutionContext(
         AgentToolSenderBindingContext.Empty,
         LLMRequestRoutingContext.Empty,
         AgentToolConnectedServicesContext.Empty,
+        AgentWorkflowRuntimeContext.Empty,
         AgentSkillRecoveryContext.Empty,
         new Dictionary<string, string>(StringComparer.Ordinal));
 
@@ -32,6 +60,42 @@ public sealed record AgentToolExecutionContext(
 
     internal static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolNames)
+{
+    public static AgentToolVisibilityScope Unrestricted { get; } = new((IReadOnlySet<string>?)null);
+
+    public static AgentToolVisibilityScope Empty { get; } = new(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+    public bool IsRestricted => AllowedToolNames is not null;
+
+    public bool Allows(string? toolName)
+    {
+        if (AllowedToolNames is null)
+            return true;
+
+        if (string.IsNullOrWhiteSpace(toolName))
+            return false;
+
+        return AllowedToolNames.Contains(toolName.Trim());
+    }
+
+    public static AgentToolVisibilityScope FromAllowedToolNames(IEnumerable<string>? toolNames)
+    {
+        if (toolNames is null)
+            return Unrestricted;
+
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var toolName in toolNames)
+        {
+            var normalized = AgentToolExecutionContext.Normalize(toolName);
+            if (normalized is not null)
+                allowed.Add(normalized);
+        }
+
+        return new AgentToolVisibilityScope(allowed);
+    }
 }
 
 public sealed record AgentToolRequestIdentity(string? RequestId, string? CallId)
@@ -57,9 +121,10 @@ public sealed record AgentToolChannelContext(
     string? SenderId,
     string? RegistrationScopeId,
     string? MessageId,
-    string? PlatformMessageId)
+    string? PlatformMessageId,
+    string? DeliveryTargetId = null)
 {
-    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null);
+    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null);
 }
 
 public sealed record AgentToolSenderBindingContext(string? BindingId)
@@ -72,13 +137,30 @@ public sealed record AgentToolConnectedServicesContext(string? ContextJson)
     public static AgentToolConnectedServicesContext Empty { get; } = new((string?)null);
 }
 
+public sealed record AgentWorkflowRuntimeContext(
+    string? ParentActorId,
+    string? ParentRunId,
+    string? ParentStepId,
+    string? RootRunId,
+    int Depth)
+{
+    public static AgentWorkflowRuntimeContext Empty { get; } = new(null, null, null, null, 0);
+
+    public bool HasManagedParent =>
+        !string.IsNullOrWhiteSpace(ParentActorId) &&
+        !string.IsNullOrWhiteSpace(ParentRunId) &&
+        !string.IsNullOrWhiteSpace(ParentStepId);
+}
+
 public sealed record AgentSkillRecoveryContext(
     bool RequireInitialOrnnSearch,
     bool RequireOrnnSearchOnBlocker,
     string? CommandName,
     string? OriginalCommand,
     string? PrimarySkillName,
-    int MaxOrnnSearchAttempts)
+    int MaxOrnnSearchAttempts,
+    string? CommandArguments = null,
+    bool DiscoveryRequested = false)
 {
     public static AgentSkillRecoveryContext Empty { get; } = new(
         RequireInitialOrnnSearch: false,
@@ -86,5 +168,7 @@ public sealed record AgentSkillRecoveryContext(
         CommandName: null,
         OriginalCommand: null,
         PrimarySkillName: null,
-        MaxOrnnSearchAttempts: 0);
+        MaxOrnnSearchAttempts: 0,
+        CommandArguments: null,
+        DiscoveryRequested: false);
 }

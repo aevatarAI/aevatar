@@ -35,6 +35,7 @@ internal interface IAgentRunStepConversationReplyGenerator : ITypedConversationR
         LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+        ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
         CancellationToken ct);
 
@@ -52,4 +53,10 @@ public sealed record AgentRunReplyStepPlan(
     AgentToolExecutionContext ToolContext,
     IReadOnlyList<ChatMessage> InitialMessages,
     int MaxToolRounds,
-    bool DisableTools = false);
+    bool DisableTools = false,
+    LLMControlContext? OwnerFallbackLlmControl = null,
+    AgentToolExecutionContext? OwnerFallbackToolContext = null);
+
+internal sealed record ChatAttachmentInputContext(
+    IReadOnlyList<RecentConversationAttachmentActivity> RecentAttachmentActivities,
+    string? UserAccessToken);

@@ -800,6 +800,74 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         graph.Edges.Should().Contain(x => x.ToNodeId == "child-1");
     }
 
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldAggregateStepUsageAndClampNegativeMetrics()
+    {
+        var report = new WorkflowRunInsightReportDocument
+        {
+            Id = "root-actor",
+            RootActorId = "root-actor",
+            CommandId = "cmd-usage",
+        };
+        var timestamp = new DateTimeOffset(2026, 3, 18, 6, 15, 0, TimeSpan.Zero);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "step-negative",
+                    Success = true,
+                    Usage = new WorkflowUsageMetrics
+                    {
+                        PromptTokens = -10,
+                        CompletionTokens = -20,
+                        TotalTokens = -30,
+                        Cost = -1,
+                        LatencyMs = -100,
+                    },
+                },
+                28,
+                "evt-usage-negative"),
+            timestamp);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "step-positive",
+                    Success = true,
+                    Usage = new WorkflowUsageMetrics
+                    {
+                        PromptTokens = 11,
+                        CompletionTokens = 7,
+                        TotalTokens = 18,
+                        Model = "gpt-usage",
+                        Cost = 0.42,
+                        LatencyMs = 1234,
+                    },
+                },
+                29,
+                "evt-usage-positive"),
+            timestamp.AddSeconds(1));
+
+        report.Steps.Should().HaveCount(2);
+        report.Steps[0].Usage.PromptTokens.Should().Be(0);
+        report.Steps[0].Usage.CompletionTokens.Should().Be(0);
+        report.Steps[0].Usage.TotalTokens.Should().Be(0);
+        report.Steps[0].Usage.Model.Should().BeEmpty();
+        report.Steps[0].Usage.Cost.Should().Be(0);
+        report.Steps[0].Usage.LatencyMs.Should().Be(0);
+
+        report.Usage.PromptTokens.Should().Be(11);
+        report.Usage.CompletionTokens.Should().Be(7);
+        report.Usage.TotalTokens.Should().Be(18);
+        report.Usage.Model.Should().Be("gpt-usage");
+        report.Usage.Cost.Should().Be(0.42);
+        report.Usage.LatencyMs.Should().Be(1234);
+    }
+
     [Theory]
     [MemberData(nameof(CurrentStateStatusCases))]
     public async Task WorkflowExecutionCurrentStateProjector_ShouldMapCommittedStateSnapshots(
@@ -823,12 +891,20 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     LastCommandId = "cmd-current",
                     DefinitionActorId = "definition-1",
                     WorkflowName = "wf-current",
+                    ScopeId = "scope-current",
                     Status = status,
                     Compiled = true,
                     CompilationError = "none",
                     Input = "hello",
                     FinalOutput = "done",
                     FinalError = "err",
+                    ExecutionStates =
+                    {
+                        ["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
+                        {
+                            InputFileRefs = { BuildWorkflowFileRef("file-current") },
+                        }),
+                    },
                 },
                 includeEnvelopeTimestamp: false));
 
@@ -838,11 +914,26 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.CommandId.Should().Be("cmd-current");
         document.DefinitionActorId.Should().Be("definition-1");
         document.WorkflowName.Should().Be("wf-current");
+        document.ScopeId.Should().Be("scope-current");
         document.Status.Should().Be(status);
         document.Compiled.Should().BeTrue();
-        document.ExecutionStateCount.Should().Be(0);
+        document.ExecutionStateCount.Should().Be(1);
         document.Success.Should().Be(expectedSuccess);
         document.UpdatedAt.Should().Be(new DateTimeOffset(2026, 3, 18, 7, 0, 0, TimeSpan.Zero));
+        var fileRef = document.InputFileRefs.Should().ContainSingle().Subject;
+        fileRef.FileId.Should().Be("file-current");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-current");
+        fileRef.SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_1");
+        fileRef.SourceResourceKey.Should().Be("resource-file-current");
+        fileRef.FileName.Should().Be("file-current.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(1234);
+        fileRef.Sha256.Should().Be("sha-file-current");
+        fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        fileRef.OwnerRunId.Should().Be("run-owner");
+        fileRef.OwnerScopeId.Should().Be("scope-owner");
     }
 
     [Fact]
@@ -1011,6 +1102,15 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 CompletedSteps = 1,
                 RoleReplyCount = 4,
             },
+            Usage = new WorkflowUsageMetricsReadModel
+            {
+                PromptTokens = 25,
+                CompletionTokens = 30,
+                TotalTokens = 55,
+                Model = "gpt-5.4",
+                Cost = 0.66,
+                LatencyMs = 432,
+            },
         };
 
         var snapshot = mapper.ToActorSnapshot(currentState);
@@ -1090,6 +1190,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         mappedReport.Steps[1].RequestedAt.Should().BeNull();
         mappedReport.Steps[1].CompletedAt.Should().BeNull();
         mappedReport.Steps[1].SuspensionTimeoutSeconds.Should().BeNull();
+        mappedReport.Usage.TotalTokens.Should().Be(55);
+        mappedReport.Usage.Model.Should().Be("gpt-5.4");
         mappedReport.RoleReplies[0].Timestamp.Should().Be(new DateTimeOffset(2026, 3, 18, 8, 1, 0, TimeSpan.Zero));
         mappedReport.RoleReplies[1].Timestamp.Should().Be(default);
         mappedReport.Timeline[0].Timestamp.Should().Be(new DateTimeOffset(2026, 3, 18, 8, 2, 0, TimeSpan.Zero));
@@ -1160,6 +1262,24 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             }),
         };
     }
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = $"resource-{fileId}",
+            FileName = $"{fileId}.pdf",
+            MediaType = "application/pdf",
+            SizeBytes = 1234,
+            Sha256 = $"sha-{fileId}",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+            OwnerRunId = "run-owner",
+            OwnerScopeId = "scope-owner",
+        };
 
     private sealed class RecordingWriteDispatcher<TReadModel> : IProjectionWriteDispatcher<TReadModel>
         where TReadModel : class, IProjectionReadModel

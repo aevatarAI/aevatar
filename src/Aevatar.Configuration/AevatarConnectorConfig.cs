@@ -16,6 +16,7 @@ public sealed class ConnectorConfigEntry
     public HttpConnectorConfig Http { get; init; } = new();
     public CliConnectorConfig Cli { get; init; } = new();
     public MCPConnectorConfig MCP { get; init; } = new();
+    public HostCallbackConnectorConfig HostCallback { get; init; } = new();
     public TelegramUserConnectorConfig TelegramUser { get; init; } = new();
 }
 
@@ -56,6 +57,14 @@ public sealed class MCPConnectorConfig
     public ConnectorAuthConfig Auth { get; init; } = new();
 }
 
+/// <summary>Host callback connector policy settings.</summary>
+public sealed class HostCallbackConnectorConfig
+{
+    public string Handler { get; init; } = "";
+    public string[] AllowedOperations { get; init; } = [];
+    public string[] AllowedInputKeys { get; init; } = [];
+}
+
 /// <summary>Connector authentication policy settings.</summary>
 public sealed class ConnectorAuthConfig
 {
@@ -64,6 +73,9 @@ public sealed class ConnectorAuthConfig
     public string ClientId { get; init; } = "";
     public string ClientSecret { get; init; } = "";
     public string Scope { get; init; } = "";
+    public string SecretRef { get; init; } = "";
+    public string HeaderName { get; init; } = "";
+    public string HeaderValuePrefix { get; init; } = "";
 }
 
 /// <summary>Telegram user-account connector settings (MTProto client).</summary>
@@ -179,6 +191,11 @@ public static partial class AevatarConnectorConfig
         var mcp = TryGetPropertyIgnoreCase(obj, "mcp", out var mcpNode)
             ? ParseMCP(mcpNode)
             : new MCPConnectorConfig();
+        var hostCallback = TryGetPropertyIgnoreCase(obj, "hostCallback", out var hostCallbackNode)
+            ? ParseHostCallback(hostCallbackNode)
+            : TryGetPropertyIgnoreCase(obj, "host_callback", out hostCallbackNode)
+                ? ParseHostCallback(hostCallbackNode)
+                : new HostCallbackConnectorConfig();
         var telegramUser = TryGetPropertyIgnoreCase(obj, "telegramUser", out var telegramUserNode)
             ? ParseTelegramUser(telegramUserNode)
             : TryGetPropertyIgnoreCase(obj, "telegram_user", out telegramUserNode)
@@ -195,6 +212,7 @@ public static partial class AevatarConnectorConfig
             Http = http,
             Cli = cli,
             MCP = mcp,
+            HostCallback = hostCallback,
             TelegramUser = telegramUser,
         };
     }
@@ -261,6 +279,22 @@ public static partial class AevatarConnectorConfig
             ClientId = ReadString(obj, "clientId"),
             ClientSecret = ReadString(obj, "clientSecret"),
             Scope = ReadString(obj, "scope"),
+            SecretRef = ReadString(obj, "secretRef"),
+            HeaderName = ReadString(obj, "headerName"),
+            HeaderValuePrefix = ReadString(obj, "headerValuePrefix"),
+        };
+    }
+
+    private static HostCallbackConnectorConfig ParseHostCallback(JsonElement obj)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+            return new HostCallbackConnectorConfig();
+
+        return new HostCallbackConnectorConfig
+        {
+            Handler = ReadString(obj, "handler"),
+            AllowedOperations = ReadStringArray(obj, "allowedOperations"),
+            AllowedInputKeys = ReadStringArray(obj, "allowedInputKeys"),
         };
     }
 

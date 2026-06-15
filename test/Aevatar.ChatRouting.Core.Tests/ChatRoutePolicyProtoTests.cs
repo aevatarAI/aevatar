@@ -1,4 +1,5 @@
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -46,6 +47,12 @@ public sealed class ChatRoutePolicyProtoTests
                     {
                         ActorId = "voice-agent-1",
                         VoiceModuleName = "voice_presence_openai",
+                        SessionOverrides = new VoiceSessionOverrides
+                        {
+                            Voice = "verse",
+                            SampleRateHz = 16000,
+                            TurnDetectionMode = VoiceTurnDetectionMode.Disabled,
+                        },
                     },
                     PrefilledArguments = new Struct
                     {
@@ -70,5 +77,8 @@ public sealed class ChatRoutePolicyProtoTests
             .Be("actor-1");
         parsed.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.ActorId.Should().Be("voice-agent-1");
         parsed.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.VoiceModuleName.Should().Be("voice_presence_openai");
+        parsed.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.SessionOverrides.Voice.Should().Be("verse");
+        parsed.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.SessionOverrides.SampleRateHz.Should().Be(16000);
+        parsed.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.SessionOverrides.TurnDetectionMode.Should().Be(VoiceTurnDetectionMode.Disabled);
     }
 }

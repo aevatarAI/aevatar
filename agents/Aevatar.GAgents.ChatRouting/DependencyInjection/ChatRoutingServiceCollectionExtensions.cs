@@ -2,11 +2,10 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
-using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -29,13 +28,8 @@ public static class ChatRoutingServiceCollectionExtensions
     /// and land in <see cref="ChatRoutePolicyCurrentStateDocument"/>:
     /// <list type="bullet">
     ///   <item>materialization runtime + scope + per-scope lease,</item>
-    ///   <item>the current-state projector as an <see cref="Aevatar.CQRS.Projection.Core.Abstractions.ICurrentStateProjectionMaterializer{TContext}"/> contributor,</item>
-    ///   <item>the document projection store (Elasticsearch in prod, InMemory for dev / tests when no configuration is supplied).</item>
+    ///   <item>the current-state projector as an <see cref="Aevatar.CQRS.Projection.Core.Abstractions.ICurrentStateProjectionMaterializer{TContext}"/> contributor.</item>
     /// </list>
-    /// Pass <paramref name="configuration"/> so the document store choice matches the
-    /// host environment — production must use Elasticsearch (multi-pod safe, persistent
-    /// across restarts); the unconditional InMemory store made policies pod-local and
-    /// vanish on restart.
     /// </summary>
     public static IServiceCollection AddChatRoutingAgents(
         this IServiceCollection services, IConfiguration? configuration = null)
@@ -48,6 +42,7 @@ public static class ChatRoutingServiceCollectionExtensions
         // Shared projection plumbing used by the projector (write dispatcher +
         // clock). Both registrations are TryAdd so they're safe alongside other
         // agents that already wire them.
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ChatRoutePolicyGAgent).Assembly));
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
 
@@ -75,25 +70,6 @@ public static class ChatRoutingServiceCollectionExtensions
             IProjectionActivationPlanProvider,
             ChatRoutePolicyCommittedStateProjectionActivationPlanProvider>());
         services.TryAddSingleton<IChatRoutePolicyCommandPort, ChatRoutePolicyCommandPort>();
-
-        var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
-            configuration,
-            storeName: "ChatRouting");
-
-        if (useElasticsearch)
-        {
-            services.AddElasticsearchDocumentProjectionStore<ChatRoutePolicyCurrentStateDocument, string>(
-                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChatRoutePolicyCurrentStateDocument>>().Metadata,
-                keySelector: static doc => doc.ActorId,
-                keyFormatter: static key => key);
-        }
-        else
-        {
-            services.AddInMemoryDocumentProjectionStore<ChatRoutePolicyCurrentStateDocument, string>(
-                static document => document.ActorId,
-                static key => key);
-        }
 
         return services;
     }

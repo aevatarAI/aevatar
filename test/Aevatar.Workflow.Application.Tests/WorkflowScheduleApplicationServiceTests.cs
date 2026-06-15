@@ -73,6 +73,51 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task WorkflowScheduleCommandPort_EnsureAsync_ShouldMapWorkflowScheduleAndDispatchEnsure()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        var scheduledDispatches = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new FakeScheduledDispatchPreparationService());
+        var port = new WorkflowScheduleCommandPort(scheduledDispatches);
+
+        var receipt = await port.EnsureAsync(new WorkflowScheduleConfiguration(
+            ScheduleId: " daily-report ",
+            DisplayName: " Daily report ",
+            WorkflowName: " direct ",
+            Prompt: " summarize status ",
+            CronExpression: "*/15 * * * *",
+            Timezone: " UTC ",
+            Enabled: true,
+            Headers: new Dictionary<string, string> { [" trace "] = " enabled " },
+            ScopeId: " scope-1 "));
+
+        receipt.ScheduleId.Should().Be("daily-report");
+        actorPort.EnsureScheduleIds.Should().Equal("daily-report");
+        actorPort.Ensured.Should().ContainSingle();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+        queryPort.GetScheduleIds.Should().BeEmpty();
+        var ensured = actorPort.Ensured.Single();
+        ensured.Configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+        ensured.Configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
+        ensured.Configuration.Target.ServiceInvocation.Should().NotBeNull();
+        var invocation = ensured.Configuration.Target.ServiceInvocation!;
+        invocation.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-1",
+            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+            ServiceId = "direct",
+        });
+        invocation.EndpointId.Should().Be("chat");
+        invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
+        invocation.Payload.Unpack<ChatRequestEvent>().Metadata.Should().Contain("trace", "enabled");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldMapWorkflowScheduleAuthToServiceInvocationAuth()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
@@ -713,6 +758,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public List<string> ResolveScheduleIds { get; } = [];
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Created { get; } = [];
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Updated { get; } = [];
+        public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Ensured { get; } = [];
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNowRequests { get; } = [];
@@ -749,6 +795,16 @@ public sealed class WorkflowScheduleApplicationServiceTests
             CancellationToken ct = default)
         {
             Updated.Add((actorId, configuration, dispatch));
+            return Task.FromResult(AdmissionFactory(actorId, dispatch.TriggerEnvelope));
+        }
+
+        public Task<DispatchAdmission> DispatchEnsureAsync(
+            string actorId,
+            ScheduledDispatchConfiguration configuration,
+            PreparedScheduledDispatchTarget dispatch,
+            CancellationToken ct = default)
+        {
+            Ensured.Add((actorId, configuration, dispatch));
             return Task.FromResult(AdmissionFactory(actorId, dispatch.TriggerEnvelope));
         }
 

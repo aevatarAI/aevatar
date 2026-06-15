@@ -1,0 +1,266 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.RunForks;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core.Primitives;
+
+namespace Aevatar.Workflow.Application.RunForks;
+
+internal sealed class WorkflowForkRunCommandTargetResolver
+    : ICommandTargetResolver<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunStartError>
+{
+    private static readonly HashSet<string> TerminalStatuses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "failed",
+        "completed",
+        "stopped",
+    };
+
+    private readonly IWorkflowRunForkSeedQueryPort _seedQueryPort;
+    private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
+    private readonly IWorkflowDefinitionParser _definitionParser;
+    private readonly WorkflowParser _workflowParser = new();
+
+    public WorkflowForkRunCommandTargetResolver(
+        IWorkflowRunForkSeedQueryPort seedQueryPort,
+        IWorkflowRunProvisioningPort runProvisioningPort,
+        IWorkflowDefinitionParser definitionParser)
+    {
+        _seedQueryPort = seedQueryPort ?? throw new ArgumentNullException(nameof(seedQueryPort));
+        _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
+        _definitionParser = definitionParser ?? throw new ArgumentNullException(nameof(definitionParser));
+    }
+
+    public async Task<CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>> ResolveAsync(
+        WorkflowForkRunCommand command,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var sourceRunId = Normalize(command.SourceRunId);
+        var startAtStepId = Normalize(command.StartAtStepId);
+        if (WorkflowCallerCredentialTokens.ParseOptional(command.CallerCredential?.BearerToken).IsInvalid)
+        {
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.InvalidCallerCredential(sourceRunId, startAtStepId));
+        }
+
+        var seedView = await _seedQueryPort.GetForkSeedAsync(sourceRunId, ct).ConfigureAwait(false);
+        if (seedView == null)
+        {
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.SourceRunNotFound(sourceRunId));
+        }
+
+        if (!IsTerminal(seedView.Status))
+        {
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.SourceRunNotTerminal(sourceRunId, seedView.Status));
+        }
+
+        var workflowYaml = ResolveWorkflowYaml(command, seedView);
+        var inlineWorkflowYamls = CopyDictionary(command.InlineSubYamls ?? seedView.InlineWorkflowYamls);
+        var variables = MergeVariables(seedView.Variables, command.VariableOverrides);
+        var validation = await ValidateWorkflowAsync(sourceRunId, startAtStepId, workflowYaml, ct)
+            .ConfigureAwait(false);
+        if (!validation.Succeeded)
+        {
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
+                validation.Error!);
+        }
+
+        WorkflowRunCreationReceipt creationReceipt;
+        var scopeId = ResolveScopeId(command.ScopeId, seedView.ScopeId);
+        try
+        {
+            creationReceipt = await _runProvisioningPort.CreateRunAsync(
+                new WorkflowDefinitionBinding(
+                    DefinitionActorId: string.Empty,
+                    WorkflowName: validation.WorkflowName,
+                    WorkflowYaml: workflowYaml,
+                    InlineWorkflowYamls: inlineWorkflowYamls,
+                    ScopeId: scopeId),
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.RunCreationFailed(sourceRunId, startAtStepId, ex.Message));
+        }
+
+        var source = WorkflowChatSource.DefinitionActor(creationReceipt.ActorId, validation.WorkflowName);
+        var target = new WorkflowForkRunCommandTarget(
+            sourceRunId,
+            startAtStepId,
+            creationReceipt.ActorId,
+            validation.WorkflowName,
+            BuildChatRunRequest(
+                command,
+                sourceRunId,
+                startAtStepId,
+                creationReceipt.ActorId,
+                validation.WorkflowName,
+                creationReceipt.CreatedActorIds,
+                source,
+                variables,
+                scopeId),
+            creationReceipt.CreatedActorIds,
+            _runProvisioningPort);
+
+        return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Success(target);
+    }
+
+    private async Task<WorkflowForkRunValidationResult> ValidateWorkflowAsync(
+        string sourceRunId,
+        string startAtStepId,
+        string workflowYaml,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(workflowYaml))
+        {
+            return WorkflowForkRunValidationResult.Failure(
+                WorkflowForkRunStartError.InvalidWorkflowYaml(
+                    sourceRunId,
+                    startAtStepId,
+                    "Workflow YAML is required."));
+        }
+
+        var parseResult = await _definitionParser.ParseWorkflowYamlAsync(workflowYaml, ct).ConfigureAwait(false);
+        if (!parseResult.Succeeded)
+        {
+            return WorkflowForkRunValidationResult.Failure(
+                WorkflowForkRunStartError.InvalidWorkflowYaml(
+                    sourceRunId,
+                    startAtStepId,
+                    parseResult.Error));
+        }
+
+        WorkflowDefinition workflow;
+        try
+        {
+            workflow = _workflowParser.Parse(workflowYaml);
+        }
+        catch (Exception ex)
+        {
+            return WorkflowForkRunValidationResult.Failure(
+                WorkflowForkRunStartError.InvalidWorkflowYaml(sourceRunId, startAtStepId, ex.Message));
+        }
+
+        if (workflow.GetStep(startAtStepId) == null)
+        {
+            return WorkflowForkRunValidationResult.Failure(
+                WorkflowForkRunStartError.StartStepNotFound(sourceRunId, startAtStepId));
+        }
+
+        return WorkflowForkRunValidationResult.Success(parseResult.WorkflowName);
+    }
+
+    private static WorkflowChatRunRequest BuildChatRunRequest(
+        WorkflowForkRunCommand command,
+        string sourceRunId,
+        string startAtStepId,
+        string actorId,
+        string workflowName,
+        IReadOnlyList<string>? createdActorIds,
+        WorkflowChatSource source,
+        IReadOnlyDictionary<string, string> variables,
+        string scopeId)
+    {
+        return new WorkflowChatRunRequest(
+            Prompt: ResolveResumeInput(variables, command.Input),
+            Source: source,
+            ScopeId: scopeId,
+            CallerCredential: command.CallerCredential,
+            CommandIdSeed: command.CommandId,
+            CorrelationIdSeed: command.CorrelationId,
+            ForkSeed: new WorkflowChatRunForkSeed(
+                sourceRunId,
+                startAtStepId,
+                variables,
+                Math.Max(0, command.Attempt)),
+            TargetSeed: new WorkflowRunTargetSeed(
+                actorId,
+                workflowName,
+                createdActorIds,
+                source));
+    }
+
+    private static IReadOnlyDictionary<string, string> MergeVariables(
+        IReadOnlyDictionary<string, string> seedVariables,
+        IReadOnlyDictionary<string, string>? overrides)
+    {
+        var merged = CopyDictionary(seedVariables);
+        if (overrides == null || overrides.Count == 0)
+            return merged;
+
+        foreach (var (key, value) in overrides)
+        {
+            var normalizedKey = Normalize(key);
+            if (normalizedKey.Length == 0)
+                continue;
+
+            merged[normalizedKey] = value ?? string.Empty;
+        }
+
+        return merged;
+    }
+
+    private static Dictionary<string, string> CopyDictionary(
+        IReadOnlyDictionary<string, string>? source)
+    {
+        var destination = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (source == null || source.Count == 0)
+            return destination;
+
+        foreach (var (key, value) in source)
+        {
+            var normalizedKey = Normalize(key);
+            if (normalizedKey.Length == 0)
+                continue;
+
+            destination[normalizedKey] = value ?? string.Empty;
+        }
+
+        return destination;
+    }
+
+    private static string ResolveWorkflowYaml(
+        WorkflowForkRunCommand command,
+        WorkflowRunForkSeedView seedView) =>
+        string.IsNullOrWhiteSpace(command.InlineYaml)
+            ? seedView.WorkflowYaml
+            : command.InlineYaml!;
+
+    private static string ResolveResumeInput(
+        IReadOnlyDictionary<string, string> variables,
+        string? commandInput) =>
+        variables.TryGetValue("input", out var seedInput)
+            ? seedInput ?? string.Empty
+            : commandInput ?? string.Empty;
+
+    private static string ResolveScopeId(string? commandScopeId, string? sourceScopeId) =>
+        !string.IsNullOrWhiteSpace(commandScopeId)
+            ? commandScopeId.Trim()
+            : sourceScopeId?.Trim() ?? string.Empty;
+
+    private static bool IsTerminal(string status) =>
+        !string.IsNullOrWhiteSpace(status) && TerminalStatuses.Contains(status.Trim());
+
+    private static string Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
+    private sealed record WorkflowForkRunValidationResult(
+        bool Succeeded,
+        string WorkflowName,
+        WorkflowForkRunStartError? Error)
+    {
+        public static WorkflowForkRunValidationResult Success(string workflowName) =>
+            new(true, Normalize(workflowName), null);
+
+        public static WorkflowForkRunValidationResult Failure(WorkflowForkRunStartError error)
+        {
+            ArgumentNullException.ThrowIfNull(error);
+            return new WorkflowForkRunValidationResult(false, string.Empty, error);
+        }
+    }
+}

@@ -93,6 +93,93 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldPrepareObservationScopeBeforeObservationBinding()
+    {
+        var order = new List<string>();
+        var sink = new EventChannel<string>();
+        sink.Push("done:completed");
+        sink.Complete();
+
+        var target = new TestTarget("target-1", sink);
+        var execution = CreateExecution(target, new TestReceipt("target-1", "receipt-1"));
+        var pipeline = new RecordingInteractionPipeline(
+            CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(execution),
+            order);
+        var preparation = new RecordingObservationScopePreparation(order);
+        var observation = new RecordingObservationLifecycle(order);
+        var service = CreateService(
+            pipeline,
+            observationLifecycle: observation,
+            observationScopePreparation: preparation);
+
+        var result = await service.ExecuteAsync(
+            "command-observe",
+            static (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        preparation.Calls.Should().ContainSingle();
+        preparation.Calls[0].Execution.Should().Be(execution);
+        order.Should().StartWith("prepare", "prepare-observation-scope", "observe", "dispatch");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenObservationScopePreparationFails_ShouldReturnFailureWithoutDispatch()
+    {
+        var order = new List<string>();
+        var target = new TestTarget("target-1", new EventChannel<string>());
+        var pipeline = new RecordingInteractionPipeline(
+            CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                CreateExecution(target, new TestReceipt("target-1", "receipt-1"))),
+            order);
+        var preparation = new RecordingObservationScopePreparation(order, failure: "projection_unavailable");
+        var service = CreateService(
+            pipeline,
+            observationScopePreparation: preparation);
+
+        var result = await service.ExecuteAsync(
+            "command-fail",
+            static (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("projection_unavailable");
+        pipeline.DispatchCalls.Should().Be(0);
+        preparation.ReleaseCalls.Should().Be(0);
+        target.ReleaseCalls.Should().BeEmpty();
+        order.Should().Equal("prepare", "prepare-observation-scope");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenObservationBindingFails_ShouldReleasePreparedObservationScope()
+    {
+        var order = new List<string>();
+        var target = new TestTarget("target-1", new EventChannel<string>());
+        var pipeline = new RecordingInteractionPipeline(
+            CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                CreateExecution(target, new TestReceipt("target-1", "receipt-1"))),
+            order);
+        var preparation = new RecordingObservationScopePreparation(order);
+        var observation = new RecordingObservationLifecycle(order, "projection_unavailable");
+        var service = CreateService(
+            pipeline,
+            observationLifecycle: observation,
+            observationScopePreparation: preparation);
+
+        var result = await service.ExecuteAsync(
+            "command-fail",
+            static (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("projection_unavailable");
+        pipeline.DispatchCalls.Should().Be(0);
+        preparation.ReleaseCalls.Should().Be(1);
+        target.ReleaseCalls.Should().BeEmpty();
+        order.Should().Equal("prepare", "prepare-observation-scope", "observe", "release-prepared-observation-scope");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenDispatchFails_ShouldReturnFailure()
     {
         var service = CreateService(
@@ -264,13 +351,53 @@ public sealed class DefaultCommandInteractionServiceTests
         target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenEmitFails_ShouldResolveDurableCompletionAndPreserveExecutionFailureOverCleanupFailure()
+    {
+        var sink = new EventChannel<string>();
+        sink.Push("progress");
+        sink.Complete();
+
+        var target = new TestTarget("target-1", sink)
+        {
+            ReleaseException = new InvalidOperationException("cleanup failed"),
+        };
+        var receipt = new TestReceipt("target-1", "receipt-5");
+        var durableResolver = new RecordingDurableResolver(
+            new CommandDurableCompletionObservation<string>(true, "durable_after_emit_failure"));
+        var service = CreateService(
+            new TestDispatchPipeline(CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                new CommandDispatchExecution<TestTarget, TestReceipt>
+                {
+                    Target = target,
+                    Context = new CommandContext("target-1", "cmd-5", "corr-5", new Dictionary<string, string>()),
+                    Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-5" },
+                    Receipt = receipt,
+                })),
+            durableResolver: durableResolver);
+
+        var act = () => service.ExecuteAsync(
+            "command-5",
+            static (_, _) => throw new InvalidOperationException("emit failed"),
+            ct: CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("emit failed");
+        durableResolver.Calls.Should().Be(1);
+        target.ReleaseCalls.Should().ContainSingle();
+        target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
+        target.ReleaseCalls[0].Cleanup.DurableCompletion.HasTerminalCompletion.Should().BeTrue();
+        target.ReleaseCalls[0].Cleanup.DurableCompletion.Completion.Should().Be("durable_after_emit_failure");
+    }
+
     private static DefaultCommandInteractionService<string, TestTarget, TestReceipt, string, string, string, string> CreateService(
         ICommandDispatchPipeline<string, TestTarget, TestReceipt, string> dispatchPipeline,
         ICommandCompletionPolicy<string, string>? completionPolicy = null,
         ICommandFinalizeEmitter<TestReceipt, string, string>? finalizeEmitter = null,
         ICommandDurableCompletionResolver<TestReceipt, string>? durableResolver = null,
         ICommandObservationLifecycle<string, TestTarget, TestReceipt, string>? observationLifecycle = null,
-        ICommandReceiptFactory<TestTarget, TestReceipt>? receiptFactory = null) =>
+        ICommandReceiptFactory<TestTarget, TestReceipt>? receiptFactory = null,
+        ICommandObservationScopeLeasePreparation<string, TestTarget, TestReceipt, string>? observationScopePreparation = null) =>
         new(
             dispatchPipeline,
             new DefaultEventOutputStream<string, string>(new PassThroughFrameMapper()),
@@ -279,7 +406,8 @@ public sealed class DefaultCommandInteractionServiceTests
             durableResolver ?? new RecordingDurableResolver(CommandDurableCompletionObservation<string>.Incomplete),
             logger: null,
             observationLifecycle,
-            receiptFactory);
+            receiptFactory,
+            observationScopePreparation);
 
     private static CommandDispatchExecution<TestTarget, TestReceipt> CreateExecution(
         TestTarget target,
@@ -418,6 +546,43 @@ public sealed class DefaultCommandInteractionServiceTests
             return Task.FromResult(failure == null
                 ? CommandObservationBindingResult<string>.Success()
                 : CommandObservationBindingResult<string>.Failure(failure));
+        }
+    }
+
+    private sealed class RecordingObservationScopePreparation(List<string> order, string? failure = null)
+        : ICommandObservationScopeLeasePreparation<string, TestTarget, TestReceipt, string>
+    {
+        public List<(string Command, CommandDispatchExecution<TestTarget, TestReceipt> Execution)> Calls { get; } = [];
+        public int ReleaseCalls { get; private set; }
+
+        public Task<CommandObservationScopeLeasePreparationResult<string>> PrepareAsync(
+            string command,
+            CommandDispatchExecution<TestTarget, TestReceipt> execution,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            order.Add("prepare-observation-scope");
+            Calls.Add((command, execution));
+
+            if (failure != null)
+                return Task.FromResult(CommandObservationScopeLeasePreparationResult<string>.Failure(failure));
+
+            return Task.FromResult(CommandObservationScopeLeasePreparationResult<string>.Success(
+                new Handle(() =>
+                {
+                    ReleaseCalls++;
+                    order.Add("release-prepared-observation-scope");
+                    return Task.CompletedTask;
+                })));
+        }
+
+        private sealed class Handle(Func<Task> releaseAsync) : ICommandObservationScopeLeasePreparationHandle
+        {
+            public Task ReleaseAsync(CancellationToken ct = default)
+            {
+                ct.ThrowIfCancellationRequested();
+                return releaseAsync();
+            }
         }
     }
 

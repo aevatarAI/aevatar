@@ -22,7 +22,7 @@ endpoint_lifecycle_hits="$(
   rg -n "EnsureAndAttachLeaseAsync|EnsureChatProjectionAsync|EnsureSubscriptionProjectionAsync|INyxIdChatSessionProjectionPort" \
     agents/Aevatar.GAgents.StreamingProxy/StreamingProxyEndpoints.cs \
     agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs \
-    agents/Aevatar.GAgents.NyxidChat/NyxIdChatStreamingRunner.cs \
+    agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs \
     || true
 )"
 
@@ -43,7 +43,6 @@ command_path_hits="$(
 chat_route_policy_endpoint_hits="$(
   rg -n "ChatRoutePolicyProjectionPort|EnsureProjectionForActorAsync|ActivateAsync|PrimeAsync" \
     src/Aevatar.Mainnet.Host.Api/ChatRouting/ChatRoutePolicyAdminEndpoints.cs \
-    src/Aevatar.Mainnet.Host.Api/Voice/VoiceDemoBootstrapEndpoints.cs \
     | rg -v "Refactor \\(iter32/cluster-034-chat-route-policy-request-path-projection-activation\\)|Old pattern:|New principle:" \
     || true
 )"
@@ -53,7 +52,7 @@ identity_oauth_hits="$(
     agents/Aevatar.GAgents.Channel.Identity \
     agents/Aevatar.GAgents.Channel.Identity.Abstractions \
     test/Aevatar.GAgents.ChannelRuntime.Tests/Identity \
-    test/Aevatar.Hosting.Tests/MainnetHostCompositionTests.cs \
+    test/Aevatar.Capabilities.Tests/MainnetHostCompositionTests.cs \
     | rg -v "Refactor \\(iter27/cluster-028-identity-oauth-endpoint\\)|Old pattern:|New principle:" \
     || true
 )"

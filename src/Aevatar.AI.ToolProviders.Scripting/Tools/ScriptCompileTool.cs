@@ -45,6 +45,10 @@ public sealed class ScriptCompileTool : IAgentTool
               "type": "object",
               "description": "Optional protobuf files keyed by filename",
               "additionalProperties": { "type": "string" }
+            },
+            "entry_behavior_type_name": {
+              "type": "string",
+              "description": "Optional behavior type name to use as the script package entry."
             }
           },
           "required": ["script_id", "source_files"]
@@ -79,6 +83,7 @@ public sealed class ScriptCompileTool : IAgentTool
                 ScriptId = scriptId,
                 SourceFiles = sourceFiles,
                 ProtoFiles = args.StrDict("proto_files"),
+                EntryBehaviorTypeName = args.Str("entry_behavior_type_name"),
             };
 
             var result = await _compilationPort.CompileAsync(request, ct);

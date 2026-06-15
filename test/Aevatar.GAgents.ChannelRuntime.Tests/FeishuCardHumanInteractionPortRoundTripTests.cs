@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Xunit;
@@ -139,6 +140,106 @@ public sealed class FeishuCardHumanInteractionPortRoundTripTests
         command.Approved.Should().BeTrue();
         command.UserInput.Should().Be("final draft");
         command.Feedback.Should().Be("looks good");
+    }
+
+    [Fact]
+    public void Typed_interaction_spec_card_round_trips_to_workflow_resume_command()
+    {
+        var card = FeishuCardHumanInteractionPort.BuildCardJson(new HumanInteractionRequest
+        {
+            ActorId = "actor-T",
+            RunId = "run-T",
+            StepId = "approval-T",
+            SuspensionType = "human_approval",
+            Options = ["approve", "reject"],
+            Prompt = "fallback",
+            InteractionSpec = new InteractionSpec
+            {
+                Title = "Typed approval",
+                Body = "Review typed output",
+                Actions =
+                {
+                    new InteractionAction
+                    {
+                        Kind = InteractionActionKind.FormSubmit,
+                        ActionId = "primary-review-action",
+                        Label = "Approve",
+                        Style = InteractionActionStyle.Primary,
+                        ApprovalDecision = InteractionApprovalDecision.Approve,
+                    },
+                    new InteractionAction
+                    {
+                        Kind = InteractionActionKind.FormSubmit,
+                        ActionId = "danger-review-action",
+                        Label = "Reject",
+                        Style = InteractionActionStyle.Danger,
+                        ApprovalDecision = InteractionApprovalDecision.Reject,
+                    },
+                },
+            },
+        });
+
+        using var document = JsonDocument.Parse(card);
+        var formElements = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[1]
+            .GetProperty("elements");
+        var rejectButton = formElements
+            .EnumerateArray()
+            .First(e => e.GetProperty("tag").GetString() == "button" &&
+                        e.GetProperty("text").GetProperty("content").GetString() == "Reject");
+        var callbackText = JsonSerializer.Serialize(new
+        {
+            value = rejectButton.GetProperty("behaviors")[0].GetProperty("value"),
+            form_value = new Dictionary<string, string>
+            {
+                ["user_input"] = "Needs edits",
+            },
+        });
+        var body = $$"""
+            {
+              "message_id": "msg-card-typed-spec-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": {{JsonSerializer.Serialize(callbackText)}}
+              }
+            }
+            """;
+
+        var parsed = new NyxIdRelayTransport().Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.ActionKind.Should().Be(ActionElementKind.FormSubmit);
+        cardAction.WorkflowResume.ActorId.Should().Be("actor-T");
+        cardAction.WorkflowResume.RunId.Should().Be("run-T");
+        cardAction.WorkflowResume.StepId.Should().Be("approval-T");
+        cardAction.Arguments["action_id"].Should().Be("danger-review-action");
+        cardAction.WorkflowResume.Approved.Should().BeFalse();
+        cardAction.WorkflowResume.UserInput.Should().Be("Needs edits");
+
+        var inbound = new InboundMessage
+        {
+            Platform = "lark",
+            ConversationId = "oc_chat_1",
+            SenderId = "ou_1",
+            SenderName = "User One",
+            Text = string.Empty,
+            MessageId = "evt-card-typed-spec-1",
+            ChatType = "card_action",
+            CardAction = cardAction,
+        };
+        ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var command).Should().BeTrue();
+        command!.ActorId.Should().Be("actor-T");
+        command.RunId.Should().Be("run-T");
+        command.StepId.Should().Be("approval-T");
+        command.Approved.Should().BeFalse();
+        command.UserInput.Should().Be("Needs edits");
+        command.Feedback.Should().Be("Needs edits");
     }
 
     [Fact]

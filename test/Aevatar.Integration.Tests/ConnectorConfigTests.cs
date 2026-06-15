@@ -259,6 +259,50 @@ public class ConnectorConfigTests
     }
 
     [Fact]
+    public void LoadConnectors_ShouldParseSecretRefHeaderAuthWithoutSecretValue()
+    {
+        var path = WriteTempJson("""
+            {
+              "connectors": [
+                {
+                  "name": "twitterapi",
+                  "type": "http",
+                  "http": {
+                    "baseUrl": "https://api.twitterapi.io",
+                    "defaultHeaders": {
+                      "Accept": "application/json"
+                    },
+                    "auth": {
+                      "type": "secret_ref_header",
+                      "secretRef": "secrets://connectors/twitterapi",
+                      "headerName": "X-API-Key",
+                      "headerValuePrefix": "Bearer "
+                    }
+                  }
+                }
+              ]
+            }
+            """);
+
+        try
+        {
+            var connectors = AevatarConnectorConfig.LoadConnectors(path);
+            connectors.Should().ContainSingle();
+
+            var auth = connectors[0].Http.Auth;
+            auth.Type.Should().Be("secret_ref_header");
+            auth.SecretRef.Should().Be("secrets://connectors/twitterapi");
+            auth.HeaderName.Should().Be("X-API-Key");
+            auth.HeaderValuePrefix.Should().Be("Bearer ");
+            connectors[0].Http.DefaultHeaders.Should().NotContainKey("X-API-Key");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void LoadConnectors_ShouldSupportDirectRootShape_EnvironmentExpansion_AndNyxidFields()
     {
         const string proxyBaseUrl = "https://nyxid.example.com";

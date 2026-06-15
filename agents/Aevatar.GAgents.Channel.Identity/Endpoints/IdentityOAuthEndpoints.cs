@@ -623,7 +623,11 @@ public static class IdentityOAuthEndpoints
                 return raw is null || raw.Length <= 6 ? raw : raw[..3] + "…" + raw[^3..];
             }
         }
-        catch (Exception)
+        catch (FormatException)
+        {
+            return null;
+        }
+        catch (System.Text.Json.JsonException)
         {
             return null;
         }

@@ -3,6 +3,7 @@ package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 import "google/protobuf/any.proto";
+import "Interactions/interaction_spec.proto";
 
 enum WorkflowChatInputPartKind {
   WORKFLOW_CHAT_INPUT_PART_KIND_UNSPECIFIED = 0;
@@ -12,6 +13,31 @@ enum WorkflowChatInputPartKind {
   WORKFLOW_CHAT_INPUT_PART_KIND_VIDEO = 4;
 }
 
+enum WorkflowFileSourceKind {
+  WORKFLOW_FILE_SOURCE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_FILE_SOURCE_KIND_CHAT_INPUT = 1;
+  WORKFLOW_FILE_SOURCE_KIND_FORM_UPLOAD = 2;
+  WORKFLOW_FILE_SOURCE_KIND_CONNECTED_SERVICE_RESOURCE = 3;
+  WORKFLOW_FILE_SOURCE_KIND_EXTERNAL_RESOURCE = 4;
+  WORKFLOW_FILE_SOURCE_KIND_GENERATED = 5;
+}
+
+message WorkflowFileRef {
+  string file_id = 1;
+  string artifact_id = 2;
+  WorkflowFileSourceKind source_kind = 3;
+  string source_message_id = 4;
+  string source_resource_key = 5;
+  string file_name = 6;
+  string media_type = 7;
+  int64 size_bytes = 8;
+  string sha256 = 9;
+  int64 created_at_unix_ms = 10;
+  int64 expires_at_unix_ms = 11;
+  string owner_run_id = 12;
+  string owner_scope_id = 13;
+}
+
 message WorkflowChatInputPartPayload {
   WorkflowChatInputPartKind kind = 1;
   string text = 2;
@@ -19,16 +45,45 @@ message WorkflowChatInputPartPayload {
   string media_type = 4;
   string uri = 5;
   string name = 6;
+  WorkflowFileRef file_ref = 7;
 }
 
 message WorkflowLlmControlContext {
   string model_override = 1;
   optional int32 max_tool_rounds_override = 2;
   string user_memory_prompt = 3;
-  string sender_nyx_id_access_token = 4;
+  string route_preference = 4;
+  string sender_nyx_id_access_token = 5;
+}
+
+message WorkflowCallerCredential {
+  string bearer_token = 1;
+}
+
+message WorkflowExternalIngressContext {
+  string route_key = 1;
+  string source_id = 2;
+  string delivery_id = 3;
+  int64 received_at_unix_ms = 4;
+  string content_type = 5;
+  string payload_fingerprint = 6;
+  string auth_scheme = 7;
+  string principal_subject = 8;
+}
+
+message WorkflowWebhookReplayRecord {
+  string route_key = 1;
+  string source_id = 2;
+  string delivery_id = 3;
+  string payload_fingerprint = 4;
+  int64 received_at_unix_ms = 5;
+  string command_id = 6;
+  string correlation_id = 7;
 }
 
 message WorkflowChatRequestEvent {
+  reserved 9;
+  reserved "connector_http_authorization";
   string prompt = 1;
   string session_id = 2;
   map<string, string> headers = 3;
@@ -37,10 +92,37 @@ message WorkflowChatRequestEvent {
   repeated WorkflowChatInputPartPayload input_parts = 6;
   map<string, string> metadata = 7;
   WorkflowLlmControlContext llm_control = 8;
-  string connector_http_authorization = 9;
+  WorkflowCallerCredential caller_credential = 10;
+  WorkflowRunForkSeed fork_seed = 11;
+  WorkflowExternalIngressContext external_ingress = 12;
 }
 
-message StartWorkflowEvent    { string workflow_name = 1; string input = 2; map<string, string> parameters = 3; string run_id = 4; }
+message WorkflowRunForkSeed
+{
+  string source_run_id = 1;
+  string start_at_step_id = 2;
+  map<string, string> variables = 3;
+  int32 attempt = 4;
+}
+
+message WorkflowRunForkRequestedEvent
+{
+  string source_run_id = 1;
+  string start_at_step_id = 2;
+  int32 attempt = 3;
+  string scope_id = 4;
+}
+
+message StartWorkflowEvent
+{
+  string workflow_name = 1;
+  string input = 2;
+  map<string, string> parameters = 3;
+  string run_id = 4;
+  WorkflowRunForkSeed fork_seed = 5;
+  WorkflowToolRuntimeContextPayload workflow_runtime = 6;
+  repeated WorkflowFileRef input_file_refs = 7;
+}
 message BindWorkflowRunDefinitionEvent
 {
   string definition_actor_id = 1;
@@ -66,13 +148,19 @@ message WorkflowRunExecutionStartedEvent
   string definition_actor_id = 4;
   string scope_id = 5;
   WorkflowRunExecutionContextDelta execution_context_delta = 6;
+  int32 attempt = 7;
+  repeated WorkflowFileRef input_file_refs = 8;
 }
 message WorkflowRunExecutionContextDelta
 {
   WorkflowRunLlmExecutionContextDelta llm = 1;
-  WorkflowRunConnectorExecutionContextDelta connector = 2;
+  reserved 2, 4;
+  reserved "connector", "clear_connector";
   bool clear_llm = 3;
-  bool clear_connector = 4;
+  WorkflowCallerCredential caller_credential = 5;
+  bool clear_caller_credential = 6;
+  WorkflowToolRuntimeContextPayload workflow_runtime = 7;
+  bool clear_workflow_runtime = 8;
 }
 message WorkflowRunLlmExecutionContextDelta
 {
@@ -81,10 +169,7 @@ message WorkflowRunLlmExecutionContextDelta
   string model_override = 2;
   optional int32 max_tool_rounds_override = 4;
   string user_memory_prompt = 5;
-}
-message WorkflowRunConnectorExecutionContextDelta
-{
-  string http_authorization = 1;
+  string route_preference = 7;
 }
 message WorkflowRunExecutionContextUpdatedEvent
 {
@@ -101,9 +186,137 @@ message WorkflowExecutionStateUpsertedEvent
 message WorkflowExecutionStateClearedEvent  { string scope_key = 1; }
 message WorkflowStoppedEvent { string workflow_name = 1; string run_id = 2; string reason = 3; }
 message WorkflowCompletedEvent { string workflow_name = 1; bool success = 2; string output = 3; string error = 4; string run_id = 5; }
+
+message WorkflowInteractionNotificationEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string delivery_target_id = 3;
+  oneof payload {
+    aevatar.foundation.interactions.InteractionSpec interaction = 4;
+    aevatar.foundation.interactions.InteractionTemplateSpec interaction_template = 5;
+  }
+}
+
+enum AgreementRuleMode {
+  AGREEMENT_RULE_MODE_UNSPECIFIED = 0;
+  AGREEMENT_RULE_MODE_ALL = 1;
+  AGREEMENT_RULE_MODE_MAJORITY = 2;
+  AGREEMENT_RULE_MODE_QUORUM = 3;
+  AGREEMENT_RULE_MODE_LABEL_COUNT_CONSTRAINTS = 4;
+  AGREEMENT_RULE_MODE_PREDICATE = 5;
+}
+
+enum AgreementVoteLabel {
+  AGREEMENT_VOTE_LABEL_UNSPECIFIED = 0;
+  AGREEMENT_VOTE_LABEL_APPROVE = 1;
+  AGREEMENT_VOTE_LABEL_REJECT = 2;
+  AGREEMENT_VOTE_LABEL_ABSTAIN = 3;
+}
+
+enum AgreementCandidateLabelSource {
+  AGREEMENT_CANDIDATE_LABEL_SOURCE_UNSPECIFIED = 0;
+  AGREEMENT_CANDIDATE_LABEL_SOURCE_SUCCESS = 1;
+  AGREEMENT_CANDIDATE_LABEL_SOURCE_BRANCH_KEY = 2;
+  AGREEMENT_CANDIDATE_LABEL_SOURCE_ANNOTATION = 3;
+}
+
+enum AgreementDecisionKind {
+  AGREEMENT_DECISION_KIND_UNSPECIFIED = 0;
+  AGREEMENT_DECISION_KIND_AGREED = 1;
+  AGREEMENT_DECISION_KIND_REJECTED = 2;
+  AGREEMENT_DECISION_KIND_INCONCLUSIVE = 3;
+}
+
+enum AgreementWinnerPolicy {
+  AGREEMENT_WINNER_POLICY_UNSPECIFIED = 0;
+  AGREEMENT_WINNER_POLICY_FIRST_APPROVED = 1;
+  AGREEMENT_WINNER_POLICY_FIRST_SUCCESS = 2;
+  AGREEMENT_WINNER_POLICY_FIRST = 3;
+}
+
+message AgreementCountConstraint {
+  AgreementVoteLabel label = 1;
+  optional int32 min_count = 2;
+  optional int32 max_count = 3;
+}
+
+message VoteAgreementCandidate {
+  string candidate_id = 1;
+  bool success = 2;
+  string output = 3;
+  string error = 4;
+  string worker_id = 5;
+  string branch_key = 6;
+  map<string, string> annotations = 7;
+  string next_step_id = 8;
+  string assigned_variable = 9;
+  string assigned_value = 10;
+}
+
+message VoteAgreementCandidateSet {
+  repeated VoteAgreementCandidate candidates = 1;
+}
+
+message VoteAgreementRule {
+  AgreementRuleMode mode = 1;
+  AgreementCandidateLabelSource label_source = 2;
+  string label_field = 3;
+  optional int32 quorum_count = 4;
+  optional double quorum_ratio = 5;
+  repeated AgreementCountConstraint count_constraints = 6;
+  string predicate_id = 7;
+  AgreementWinnerPolicy winner_policy = 8;
+  string on_agreed = 9;
+  string on_rejected = 10;
+  string on_inconclusive = 11;
+}
+
+message VoteAgreementDecision {
+  AgreementDecisionKind kind = 1;
+  string branch_key = 2;
+  string winner_candidate_id = 3;
+  string output = 4;
+  string reason = 5;
+  map<string, int32> label_counts = 6;
+}
+
+enum TransformOperationKind {
+  TRANSFORM_OPERATION_KIND_UNSPECIFIED = 0;
+  TRANSFORM_OPERATION_KIND_SUM = 1;
+  TRANSFORM_OPERATION_KIND_SUBTRACT = 2;
+  TRANSFORM_OPERATION_KIND_MULTIPLY = 3;
+  TRANSFORM_OPERATION_KIND_DIVIDE = 4;
+  TRANSFORM_OPERATION_KIND_ROUND = 5;
+  TRANSFORM_OPERATION_KIND_MIN = 6;
+  TRANSFORM_OPERATION_KIND_MAX = 7;
+  TRANSFORM_OPERATION_KIND_GROUP_BY = 8;
+}
+
+enum TransformAggregateKind {
+  TRANSFORM_AGGREGATE_KIND_UNSPECIFIED = 0;
+  TRANSFORM_AGGREGATE_KIND_SUM = 1;
+  TRANSFORM_AGGREGATE_KIND_COUNT = 2;
+  TRANSFORM_AGGREGATE_KIND_AVG = 3;
+}
+
+message TransformOperationSpec {
+  TransformOperationKind kind = 1;
+  optional int32 precision = 2;
+  string key = 3;
+  string value = 4;
+  TransformAggregateKind aggregate = 5;
+}
+
 message WorkflowStepParameters
 {
   map<string, string> parameters = 1;
+  VoteAgreementCandidateSet vote_agreement_candidates = 2;
+  VoteAgreementRule vote_agreement_rule = 3;
+  aevatar.foundation.interactions.InteractionSpec interaction_spec = 4;
+  aevatar.foundation.interactions.InteractionTemplateSpec interaction_template_spec = 5;
+  string delivery_target_id = 6;
+  TransformOperationSpec transform_operation = 7;
+  WorkflowAgentToolScope agent_tool_scope = 8;
 }
 message StepRequestEvent
 {
@@ -115,6 +328,15 @@ message StepRequestEvent
   string run_id = 6;
   string execution_id = 7;
   WorkflowStepParameters step_parameters = 8;
+  repeated WorkflowFileRef input_file_refs = 9;
+}
+message WorkflowUsageMetrics {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+  string model = 4;
+  double cost = 5;
+  int64 latency_ms = 6;
 }
 message StepCompletedEvent {
   string step_id = 1;
@@ -129,6 +351,8 @@ message StepCompletedEvent {
   string assigned_variable = 10;
   string assigned_value = 11;
   string execution_id = 12;
+  WorkflowUsageMetrics usage = 13;
+  VoteAgreementDecision vote_agreement_decision = 14;
 }
 message SubWorkflowInvokeRequestedEvent
 {
@@ -139,6 +363,8 @@ message SubWorkflowInvokeRequestedEvent
   string input = 5;
   string lifecycle = 6;
   string requested_by_actor_id = 7;
+  string root_run_id = 8;
+  int32 requested_depth = 9;
 }
 message WorkflowDefinitionSnapshot
 {
@@ -195,6 +421,8 @@ message SubWorkflowDefinitionResolutionRegisteredEvent
   int32 timeout_callback_backend = 11;
   int32 timeout_ms = 12;
   int32 timeout_callback_slot_epoch = 13;
+  string root_run_id = 14;
+  int32 requested_depth = 15;
 }
 message SubWorkflowDefinitionResolutionClearedEvent
 {
@@ -224,6 +452,8 @@ message SubWorkflowInvocationRegisteredEvent
   string definition_yaml = 12;
   string scope_id = 13;
   map<string, string> inline_workflow_yamls = 14;
+  string root_run_id = 15;
+  int32 depth = 16;
 }
 message SubWorkflowInvocationHandoffAdvancedEvent
 {
@@ -253,6 +483,7 @@ message WorkflowSuspendedEvent
   bool secure = 10;
   string redacted_output = 11;
   WorkflowToolApprovalSuspension tool_approval = 12;
+  aevatar.foundation.interactions.InteractionSpec interaction = 13;
 }
 message WorkflowToolApprovalSuspension
 {
@@ -260,7 +491,14 @@ message WorkflowToolApprovalSuspension
   string tool_name = 2;
   string tool_call_id = 3;
   string approval_request_id = 4;
-  string arguments_json = 5;
+  reserved 5;
+  reserved "arguments_json";
+}
+message WorkflowToolApprovalResume
+{
+  string execution_id = 1;
+  string tool_call_id = 2;
+  string approval_request_id = 3;
 }
 message WorkflowResumedEvent
 {
@@ -271,6 +509,7 @@ message WorkflowResumedEvent
   map<string, string> metadata = 5;
   string edited_content = 6;
   string feedback = 7;
+  WorkflowToolApprovalResume tool_approval = 8;
 }
 message WorkflowHumanApprovalResolvedEvent
 {
@@ -325,6 +564,8 @@ message WorkflowRoleReplyRecordedEvent
 
 message WorkflowLlmExecutionIntent
 {
+  reserved 11;
+  reserved "connector_http_authorization";
   string run_id = 1;
   string step_id = 2;
   string session_id = 3;
@@ -335,7 +576,26 @@ message WorkflowLlmExecutionIntent
   int32 timeout_ms = 8;
   map<string, string> headers = 9;
   map<string, string> annotations = 10;
-  string sender_nyx_id_access_token = 11;
+  WorkflowCallerCredential caller_credential = 12;
+  string route_preference = 13;
+  string sender_nyx_id_access_token = 14;
+  WorkflowToolRuntimeContextPayload workflow_runtime_context = 15;
+  repeated WorkflowFileRef input_file_refs = 16;
+  WorkflowAgentToolScope agent_tool_scope = 17;
+}
+
+message WorkflowToolRuntimeContextPayload
+{
+  string parent_actor_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string root_run_id = 4;
+  int32 depth = 5;
+}
+
+message WorkflowAgentToolScope
+{
+  repeated string allowed_tool_names = 1;
 }
 
 message WorkflowLlmInvocationStartedEvent
@@ -366,6 +626,18 @@ message WorkflowLlmInvocationCompletedEvent
   string content = 6;
   string reasoning_content = 7;
   string error = 8;
+  WorkflowUsageMetrics usage = 9;
+  WorkflowManagedHandoffOutcome managed_handoff = 10;
+}
+
+message WorkflowManagedHandoffOutcome
+{
+  string parent_actor_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string invocation_id = 4;
+  string child_run_id = 5;
+  string stream_topic = 6;
 }
 
 message WorkflowToolCallStartedEvent
@@ -385,6 +657,131 @@ message WorkflowToolCallCompletedEvent
   bool success = 4;
   string result_json = 5;
   string error = 6;
+  WorkflowManagedHandoffOutcome managed_handoff = 7;
+}
+
+enum WorkflowLeaseConflictPolicy {
+  WORKFLOW_LEASE_CONFLICT_POLICY_UNSPECIFIED = 0;
+  WORKFLOW_LEASE_CONFLICT_POLICY_FAIL = 1;
+  WORKFLOW_LEASE_CONFLICT_POLICY_WAIT = 2;
+}
+
+enum WorkflowLeaseOperation {
+  WORKFLOW_LEASE_OPERATION_UNSPECIFIED = 0;
+  WORKFLOW_LEASE_OPERATION_ACQUIRE = 1;
+  WORKFLOW_LEASE_OPERATION_RENEW = 2;
+  WORKFLOW_LEASE_OPERATION_RELEASE = 3;
+}
+
+enum WorkflowLeaseRejectionReason {
+  WORKFLOW_LEASE_REJECTION_REASON_UNSPECIFIED = 0;
+  WORKFLOW_LEASE_REJECTION_REASON_LEASE_BUSY = 1;
+  WORKFLOW_LEASE_REJECTION_REASON_WAIT_QUEUE_FULL = 2;
+  WORKFLOW_LEASE_REJECTION_REASON_WAIT_TIMEOUT = 3;
+  WORKFLOW_LEASE_REJECTION_REASON_STALE_HOLDER = 4;
+  WORKFLOW_LEASE_REJECTION_REASON_INVALID_REQUEST = 5;
+}
+
+message WorkflowLeaseAcquireRequestedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  int32 ttl_ms = 6;
+  WorkflowLeaseConflictPolicy on_conflict = 7;
+  int32 wait_timeout_ms = 8;
+}
+
+message WorkflowLeaseAcquiredEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  string holder_token = 6;
+  int64 generation = 7;
+  int64 expires_at_unix_ms = 8;
+  int32 ttl_ms = 9;
+}
+
+message WorkflowLeaseRenewRequestedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  string holder_token = 6;
+  int64 generation = 7;
+  int32 ttl_ms = 8;
+}
+
+message WorkflowLeaseRenewedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  string holder_token = 6;
+  int64 generation = 7;
+  int64 expires_at_unix_ms = 8;
+  int32 ttl_ms = 9;
+}
+
+message WorkflowLeaseReleaseRequestedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  string holder_token = 6;
+  int64 generation = 7;
+}
+
+message WorkflowLeaseReleasedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  string holder_token = 6;
+  int64 generation = 7;
+}
+
+message WorkflowLeaseRejectedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  WorkflowLeaseOperation operation = 6;
+  WorkflowLeaseRejectionReason reason = 7;
+  string current_holder_run_id = 8;
+  string error = 9;
+}
+
+message WorkflowLeaseExpirationFiredEvent
+{
+  string lease_key = 1;
+  string holder_token = 2;
+  int64 generation = 3;
+  int64 expires_at_unix_ms = 4;
+}
+
+message WorkflowLeaseWaitTimeoutFiredEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
 }
 
 // Replaces an existing workflow actor's definition using runtime-provided YAML and starts execution immediately.

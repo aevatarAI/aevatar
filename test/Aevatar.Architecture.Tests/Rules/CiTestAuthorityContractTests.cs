@@ -159,7 +159,12 @@ public class CiTestAuthorityContractTests
         using var repo = TemporaryCiRepo.Create();
         repo.WriteFoundationRuntimeSource(
             "src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/Callbacks/RuntimeCallbackSchedulerGrain.cs",
-            "private readonly IPersistentState<RuntimeCallbackSchedulerState> _state;\n");
+            """
+            private readonly IPersistentState<RuntimeCallbackSchedulerState> _state;
+            public RuntimeCallbackSchedulerGrain(
+                [PersistentState("runtime-callback-scheduler-v2", OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName)]
+                IPersistentState<RuntimeCallbackSchedulerState> state) {}
+            """);
 
         var result = await repo.RunScriptAsync("tools/ci/runtime_callback_guards.sh");
 
@@ -186,6 +191,25 @@ public class CiTestAuthorityContractTests
         Assert.Equal(1, result.ExitCode);
         Assert.Contains("Durable runtime callback scheduler state must use generated protobuf RuntimeCallbackSchedulerState", result.Output);
         Assert.Contains("EnvelopeBytes", result.Output);
+    }
+
+    [Fact]
+    public async Task RuntimeCallbackGuardRejectsSchedulerStateOnSharedStorage()
+    {
+        using var repo = TemporaryCiRepo.Create();
+        repo.WriteFoundationRuntimeSource(
+            "src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/Callbacks/RuntimeCallbackSchedulerGrain.cs",
+            """
+            private readonly IPersistentState<RuntimeCallbackSchedulerState> _state;
+            public RuntimeCallbackSchedulerGrain(
+                [PersistentState("runtime-callback-scheduler-v2", OrleansRuntimeConstants.GrainStateStorageName)]
+                IPersistentState<RuntimeCallbackSchedulerState> state) {}
+            """);
+
+        var result = await repo.RunScriptAsync("tools/ci/runtime_callback_guards.sh");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Runtime callback scheduler grain must use isolated RuntimeCallbackSchedulerStorageName", result.Output);
     }
 
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";

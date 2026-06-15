@@ -26,6 +26,18 @@ public sealed class StepDefinition
     public Dictionary<string, string> Parameters { get; init; } = [];
 
     /// <summary>
+    /// Typed deterministic transform operation for bounded numeric and grouping transforms.
+    /// </summary>
+    public TransformOperationSpec? TransformOperation { get; init; }
+
+    /// <summary>
+    /// Presentation contract rendered outside the workflow core boundary.
+    /// </summary>
+    public StepPresentation? Presentation { get; init; }
+
+    public WorkflowAgentToolScopeDefinition? AgentToolScope { get; init; }
+
+    /// <summary>
     /// 下一步骤 ID，用于线性流程控制。
     /// </summary>
     public string? Next { get; init; }

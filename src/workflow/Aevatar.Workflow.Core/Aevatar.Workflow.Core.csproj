@@ -23,6 +23,6 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="workflow_state.proto" GrpcServices="None" />
+    <Protobuf Include="workflow_state.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Workflow.Abstractions;..\..\Aevatar.Foundation.Abstractions" />
   </ItemGroup>
 </Project>

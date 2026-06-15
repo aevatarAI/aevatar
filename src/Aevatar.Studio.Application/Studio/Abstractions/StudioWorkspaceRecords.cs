@@ -88,7 +88,10 @@ public sealed record StoredConnectorAuthConfig(
     string TokenUrl,
     string ClientId,
     string ClientSecret,
-    string Scope);
+    string Scope,
+    string SecretRef,
+    string HeaderName,
+    string HeaderValuePrefix);
 
 public sealed record StoredRoleDefinition(
     string Id,

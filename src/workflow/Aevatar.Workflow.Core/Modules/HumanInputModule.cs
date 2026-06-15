@@ -42,6 +42,11 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "human_input") return;
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
+            if (StepPresentation.HasInteractionTemplateSpec(request.StepParameters?.InteractionTemplateSpec))
+            {
+                await PublishUnsupportedInteractionTemplateAsync(request, runId, ctx, ct);
+                return;
+            }
 
             var prompt = WorkflowParameterValueParser.GetString(
                 request.Parameters,
@@ -83,7 +88,8 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
                 VariableName = variable,
             };
             WorkflowSuspensionRequestSupport.ApplyContent(suspended, request.Input);
-            WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
+            ApplyTypedInteraction(suspended, request);
+            ApplyTypedDeliveryTarget(suspended, request);
 
             await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
             return;
@@ -163,6 +169,43 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
 
     private static string BuildPendingKey(string runId, string stepId) =>
         $"{WorkflowRunIdNormalizer.Normalize(runId)}::{stepId}";
+
+    private static void ApplyTypedInteraction(
+        WorkflowSuspendedEvent suspended,
+        StepRequestEvent request)
+    {
+        var interaction = request.StepParameters?.InteractionSpec;
+        if (!StepPresentation.HasInteractionSpec(interaction))
+            return;
+
+        suspended.Interaction = interaction!.Clone();
+    }
+
+    private static void ApplyTypedDeliveryTarget(
+        WorkflowSuspendedEvent suspended,
+        StepRequestEvent request)
+    {
+        var deliveryTargetId = request.StepParameters?.DeliveryTargetId?.Trim();
+        if (!string.IsNullOrWhiteSpace(deliveryTargetId))
+            suspended.DeliveryTargetId = deliveryTargetId;
+    }
+
+    private static Task PublishUnsupportedInteractionTemplateAsync(
+        StepRequestEvent request,
+        string runId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct) =>
+        ctx.PublishAsync(
+            new StepCompletedEvent
+            {
+                StepId = request.StepId,
+                RunId = runId,
+                Success = false,
+                Error = "human_input does not support interaction_template; use interaction_spec.",
+                ExecutionId = request.ExecutionId,
+            },
+            TopologyAudience.Self,
+            ct);
 
     private static Task SaveStateAsync(
         HumanInputModuleState state,

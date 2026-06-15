@@ -436,6 +436,44 @@ public sealed class WorkflowScheduleEndpointsTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldPackEnsureCommandWithConfigurationFields()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(runtime, dispatch);
+        var actorId = "scheduled-dispatch:schedule-1";
+        var triggerEnvelope = new EventEnvelope
+        {
+            Id = "template",
+            Payload = Any.Pack(new Empty()),
+        };
+        var configuration = CreateScheduledDispatchConfiguration(
+            "schedule-1",
+            ScheduledDispatchScheduleKind.Workflow);
+        var prepared = CreatePreparedScheduledDispatchTarget("target-actor", triggerEnvelope);
+
+        var admission = await port.DispatchEnsureAsync(actorId, configuration, prepared);
+
+        admission.ActorId.Should().Be(actorId);
+        dispatch.Envelopes.Should().ContainSingle();
+        dispatch.Envelopes[0].ActorId.Should().Be(actorId);
+        var configure = dispatch.Envelopes[0].Envelope.Payload.Unpack<ScheduledDispatchEnsureCommand>();
+        configure.ScheduleId.Should().Be("schedule-1");
+        configure.DisplayName.Should().Be("Daily");
+        configure.TargetActorId.Should().Be("target-actor");
+        configure.TriggerEnvelope.Payload.TypeUrl.Should().Be(triggerEnvelope.Payload.TypeUrl);
+        configure.CronExpression.Should().Be("0 9 * * *");
+        configure.Timezone.Should().Be("UTC");
+        configure.Enabled.Should().BeTrue();
+        configure.Headers.Should().Contain("trace", "1");
+        configure.PayloadTypeUrl.Should().Be(triggerEnvelope.Payload.TypeUrl);
+        configure.Target.Kind.Should().Be(ScheduledDispatchTargetKindState.Envelope);
+        configure.Target.ActorId.Should().Be("target-actor");
+        configure.Target.Envelope.Payload.TypeUrl.Should().Be(triggerEnvelope.Payload.TypeUrl);
+        configure.ScheduleKind.Should().Be(ScheduledDispatchScheduleKindState.Workflow);
+    }
+
+    [Fact]
     public async Task ScheduledDispatchActorPort_ShouldPackMutationsOnlyWhenActorStateIsConfigured()
     {
         var runtime = new RecordingActorRuntime();
@@ -824,7 +862,9 @@ public sealed class WorkflowScheduleEndpointsTests
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private static ScheduledDispatchConfiguration CreateScheduledDispatchConfiguration(string scheduleId) =>
+    private static ScheduledDispatchConfiguration CreateScheduledDispatchConfiguration(
+        string scheduleId,
+        ScheduledDispatchScheduleKind scheduleKind = ScheduledDispatchScheduleKind.Generic) =>
         new(
             scheduleId,
             "Daily",
@@ -839,7 +879,8 @@ public sealed class WorkflowScheduleEndpointsTests
             "0 9 * * *",
             "UTC",
             true,
-            new Dictionary<string, string> { ["trace"] = "1" });
+            new Dictionary<string, string> { ["trace"] = "1" },
+            scheduleKind);
 
     private static PreparedScheduledDispatchTarget CreatePreparedScheduledDispatchTarget(
         string targetActorId = "target-actor",

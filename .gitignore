@@ -512,6 +512,9 @@ entities.json
 
 # codex-refactor-loop runtime state (worktrees, logs, per-iter prompts, state.json)
 .refactor-loop/
+.worktrees/
+.config/consensus-rnd/host.env*
+.config/consensus-rnd/host.*.env
 
 .vmap/
 
@@ -523,3 +526,4 @@ FIX_REPORT.md
 runs/
 # misrouted per-PR quality reviewer artifacts (should land in runs/, not docs/audit-scorecard/)
 /docs/audit-scorecard/[0-9]*-*.md
+.alma-snapshots/

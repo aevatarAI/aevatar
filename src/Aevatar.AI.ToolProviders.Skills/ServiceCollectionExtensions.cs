@@ -49,6 +49,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<SkillFrontmatterParser>();
         services.TryAddSingleton<SkillDiscovery>();
         services.TryAddSingleton<LocalSkillCatalog>();
+        services.TryAddSingleton<ISkillWorkflowMountPort, NoOpSkillWorkflowMountPort>();
         services.TryAddSingleton<SkillsAgentToolSource>();
         services.TryAddAgentToolSourceAlias<SkillsAgentToolSource>(GetSkillsAgentToolSource);
         return services;

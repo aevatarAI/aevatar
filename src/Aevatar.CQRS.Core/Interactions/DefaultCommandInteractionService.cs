@@ -11,6 +11,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
     where TTarget : class, ICommandEventTarget<TEvent>, ICommandInteractionCleanupTarget<TReceipt, TCompletion>
 {
     private readonly ICommandDispatchPipeline<TCommand, TTarget, TReceipt, TError> _dispatchPipeline;
+    private readonly ICommandObservationScopeLeasePreparation<TCommand, TTarget, TReceipt, TError> _observationScopePreparation;
     private readonly ICommandObservationLifecycle<TCommand, TTarget, TReceipt, TError> _observationLifecycle;
     private readonly ICommandReceiptFactory<TTarget, TReceipt>? _receiptFactory;
     private readonly IEventOutputStream<TEvent, TFrame> _outputStream;
@@ -27,9 +28,12 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         ICommandDurableCompletionResolver<TReceipt, TCompletion> durableCompletionResolver,
         ILogger<DefaultCommandInteractionService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>>? logger = null,
         ICommandObservationLifecycle<TCommand, TTarget, TReceipt, TError>? observationLifecycle = null,
-        ICommandReceiptFactory<TTarget, TReceipt>? receiptFactory = null)
+        ICommandReceiptFactory<TTarget, TReceipt>? receiptFactory = null,
+        ICommandObservationScopeLeasePreparation<TCommand, TTarget, TReceipt, TError>? observationScopePreparation = null)
     {
         _dispatchPipeline = dispatchPipeline ?? throw new ArgumentNullException(nameof(dispatchPipeline));
+        _observationScopePreparation = observationScopePreparation
+            ?? new NoOpCommandObservationScopeLeasePreparation<TCommand, TTarget, TReceipt, TError>();
         _observationLifecycle = observationLifecycle ?? new NoOpCommandObservationLifecycle<TCommand, TTarget, TReceipt, TError>();
         _receiptFactory = receiptFactory;
         _outputStream = outputStream ?? throw new ArgumentNullException(nameof(outputStream));
@@ -57,105 +61,138 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
 
         var execution = prepared.Target;
         var target = execution.Target;
-
-        var observation = await _observationLifecycle.BindAsync(command, execution, ct);
-        if (!observation.Succeeded)
-            return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(observation.Error);
-
-        _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct);
-
-        var receipt = _receiptFactory == null
-            ? execution.Receipt
-            : _receiptFactory.Create(target, execution.Context);
-        var observedCompleted = false;
-        var observedCompletion = _completionPolicy.IncompleteCompletion;
-        var durableCompletion = CommandDurableCompletionObservation<TCompletion>.Incomplete;
-        var durableCompletionAttempted = false;
-        CommandInteractionResult<TReceipt, TError, TCompletion>? interactionResult = null;
-        Exception? executionException = null;
+        var accepted = false;
+        ICommandObservationScopeLeasePreparationHandle? preparedObservationScope = null;
 
         try
         {
-            if (onAcceptedAsync != null)
-                await onAcceptedAsync(receipt, ct);
+            var preparation = await _observationScopePreparation.PrepareAsync(command, execution, ct);
+            if (!preparation.Succeeded)
+                return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(preparation.Error);
 
-            await _outputStream.PumpAsync(
-                target.RequireLiveSink().ReadAllAsync(ct),
-                emitAsync,
-                evt =>
-                {
-                    if (!_completionPolicy.TryResolve(evt, out var completion))
-                        return false;
+            preparedObservationScope = preparation.Handle;
 
-                    observedCompleted = true;
-                    observedCompletion = completion;
-                    return true;
-                },
-                ct);
-
-            if (!observedCompleted)
+            var observation = await _observationLifecycle.BindAsync(command, execution, ct);
+            if (!observation.Succeeded)
             {
-                durableCompletionAttempted = true;
-                durableCompletion = await _durableCompletionResolver.ResolveAsync(receipt, ct);
-                if (durableCompletion.HasTerminalCompletion)
-                {
-                    observedCompleted = true;
-                    observedCompletion = durableCompletion.Completion;
-                }
+                var scopeToRelease = preparedObservationScope;
+                preparedObservationScope = null;
+                await ReleasePreparedObservationScopeAsync(scopeToRelease).ConfigureAwait(false);
+                return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(observation.Error);
             }
 
-            await _finalizeEmitter.EmitAsync(
-                receipt,
-                observedCompletion,
-                observedCompleted,
-                emitAsync,
-                ct);
+            _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct);
 
-            interactionResult = CommandInteractionResult<TReceipt, TError, TCompletion>.Success(
-                receipt,
-                new CommandInteractionFinalizeResult<TCompletion>(observedCompletion, observedCompleted));
-            return interactionResult;
-        }
-        catch (Exception ex)
-        {
-            executionException = ex;
-            throw;
-        }
-        finally
-        {
+            var receipt = _receiptFactory == null
+                ? execution.Receipt
+                : _receiptFactory.Create(target, execution.Context);
+            var observedCompleted = false;
+            var observedCompletion = _completionPolicy.IncompleteCompletion;
+            var durableCompletion = CommandDurableCompletionObservation<TCompletion>.Incomplete;
+            var durableCompletionAttempted = false;
+            CommandInteractionResult<TReceipt, TError, TCompletion>? interactionResult = null;
+            Exception? executionException = null;
+
             try
             {
-                if (!observedCompleted && !durableCompletionAttempted)
+                accepted = true;
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                await _outputStream.PumpAsync(
+                    target.RequireLiveSink().ReadAllAsync(ct),
+                    emitAsync,
+                    evt =>
+                    {
+                        if (!_completionPolicy.TryResolve(evt, out var completion))
+                            return false;
+
+                        observedCompleted = true;
+                        observedCompletion = completion;
+                        return true;
+                    },
+                    ct);
+
+                if (!observedCompleted)
                 {
-                    durableCompletion = await _durableCompletionResolver.ResolveAsync(
-                        receipt,
-                        CancellationToken.None);
+                    durableCompletionAttempted = true;
+                    durableCompletion = await _durableCompletionResolver.ResolveAsync(receipt, ct);
+                    if (durableCompletion.HasTerminalCompletion)
+                    {
+                        observedCompleted = true;
+                        observedCompletion = durableCompletion.Completion;
+                    }
                 }
 
-                await target.ReleaseAfterInteractionAsync(
+                await _finalizeEmitter.EmitAsync(
                     receipt,
-                    new CommandInteractionCleanupContext<TCompletion>(
-                        observedCompleted,
-                        observedCompletion,
-                        durableCompletion),
-                    CancellationToken.None);
+                    observedCompletion,
+                    observedCompleted,
+                    emitAsync,
+                    ct);
+
+                interactionResult = CommandInteractionResult<TReceipt, TError, TCompletion>.Success(
+                    receipt,
+                    new CommandInteractionFinalizeResult<TCompletion>(observedCompletion, observedCompleted));
+                return interactionResult;
             }
-            catch (Exception cleanupException)
+            catch (Exception ex)
             {
-                if (executionException != null)
+                executionException = ex;
+                throw;
+            }
+            finally
+            {
+                try
                 {
-                    _logger.LogWarning(
-                        cleanupException,
-                        "Command interaction cleanup failed after execution failure. command={CommandType}, target={TargetType}",
-                        typeof(TCommand).FullName,
-                        typeof(TTarget).FullName);
+                    if (!observedCompleted && !durableCompletionAttempted)
+                    {
+                        durableCompletion = await _durableCompletionResolver.ResolveAsync(
+                            receipt,
+                            CancellationToken.None);
+                    }
+
+                    await target.ReleaseAfterInteractionAsync(
+                        receipt,
+                        new CommandInteractionCleanupContext<TCompletion>(
+                            observedCompleted,
+                            observedCompletion,
+                            durableCompletion),
+                        CancellationToken.None);
                 }
-                else
+                catch (Exception cleanupException)
                 {
-                    throw;
+                    if (executionException != null)
+                    {
+                        _logger.LogWarning(
+                            cleanupException,
+                            "Command interaction cleanup failed after execution failure. command={CommandType}, target={TargetType}",
+                            typeof(TCommand).FullName,
+                            typeof(TTarget).FullName);
+                    }
+                    else
+                    {
+                        throw;
+                    }
                 }
             }
         }
+        catch
+        {
+            if (!accepted)
+                await ReleasePreparedObservationScopeAsync(preparedObservationScope).ConfigureAwait(false);
+
+            throw;
+        }
+    }
+
+    private static async Task ReleasePreparedObservationScopeAsync(
+        ICommandObservationScopeLeasePreparationHandle? preparedObservationScope)
+    {
+        if (preparedObservationScope == null)
+            return;
+
+        await preparedObservationScope.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     async Task<RealtimeSessionResult<TReceipt, TError, TCompletion>> IRealtimeSession<TCommand, TReceipt, TError, TFrame, TCompletion>.ExecuteAsync(

@@ -1,4 +1,4 @@
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;

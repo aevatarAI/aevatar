@@ -40,6 +40,55 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         snapshot.LastError.Should().Be("err");
     }
 
+    [Fact]
+    public void WorkflowExecutionReadModelMapper_ShouldExposeCurrentStateInputFileDescriptors()
+    {
+        var mapper = new WorkflowExecutionReadModelMapper();
+        var snapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
+        {
+            RootActorId = "actor-1",
+            WorkflowName = "wf",
+            Status = "running",
+            InputFileRefs =
+            {
+                new WorkflowExecutionInputFileRefReadModel
+                {
+                    FileId = "file-1",
+                    ArtifactId = "workflow-file://file-1",
+                    SourceKindValue = (int)Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
+                    SourceMessageId = "om_1",
+                    SourceResourceKey = "file_key_1",
+                    FileName = "invoice.pdf",
+                    MediaType = "application/pdf",
+                    SizeBytes = 2048,
+                    Sha256 = "sha-file-1",
+                    CreatedAtUnixMs = 1710000000000,
+                    ExpiresAtUnixMs = 1710003600000,
+                    OwnerRunId = "run-owner",
+                    OwnerScopeId = "scope-owner",
+                },
+            },
+        });
+
+        var fileRef = snapshot.InputFileRefs.Should().ContainSingle().Subject;
+        fileRef.FileId.Should().Be("file-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-1");
+        fileRef.SourceKind.Should().Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_1");
+        fileRef.SourceResourceKey.Should().Be("file_key_1");
+        fileRef.FileName.Should().Be("invoice.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(2048);
+        fileRef.Sha256.Should().Be("sha-file-1");
+        fileRef.OwnerRunId.Should().Be("run-owner");
+        fileRef.OwnerScopeId.Should().Be("scope-owner");
+        fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        WorkflowRunFileRef.Descriptor.Fields.InDeclarationOrder()
+            .Should()
+            .NotContain(field => field.Name.Contains("base64", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Theory]
     [InlineData(WorkflowExecutionCompletionStatus.Running, WorkflowRunCompletionStatus.Running)]
     [InlineData(WorkflowExecutionCompletionStatus.Completed, WorkflowRunCompletionStatus.Completed)]
