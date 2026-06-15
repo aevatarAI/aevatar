@@ -233,7 +233,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
                 _logger.LogInformation("[code_execute] Probed known sandbox slug: {Slug}", candidate);
                 return candidate;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(
                     ex,

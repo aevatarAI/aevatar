@@ -13,38 +13,43 @@ public static class ScheduledDispatchEndpoints
 {
     public static void Map(RouteGroupBuilder group)
     {
-        group.MapPost("/scheduled-dispatches", Create)
-            .WithTags("Scheduled dispatches")
+        group.MapPost("/schedules", Create)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
-        group.MapPut("/scheduled-dispatches/{scheduleId}", Update)
-            .WithTags("Scheduled dispatches")
+        group.MapPut("/schedules/{scheduleId}", Update)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
-        group.MapPost("/scheduled-dispatches/{scheduleId}/enable", Enable)
-            .WithTags("Scheduled dispatches")
+        group.MapPost("/schedules/{scheduleId}:enable", Enable)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/scheduled-dispatches/{scheduleId}/disable", Disable)
-            .WithTags("Scheduled dispatches")
+        group.MapPost("/schedules/{scheduleId}:disable", Disable)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
-        group.MapGet("/scheduled-dispatches", List)
-            .WithTags("Scheduled dispatches")
+        group.MapDelete("/schedules/{scheduleId}", Delete)
+            .WithTags("Schedules")
+            .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+        group.MapGet("/schedules", List)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchListResult>(StatusCodes.Status200OK);
-        group.MapGet("/scheduled-dispatches/{scheduleId}", Get)
-            .WithTags("Scheduled dispatches")
+        group.MapGet("/schedules/{scheduleId}", Get)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchDetail>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/scheduled-dispatches/preview", Preview)
-            .WithTags("Scheduled dispatches")
+        group.MapPost("/schedules/preview", Preview)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchPreview>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
-        group.MapPost("/scheduled-dispatches/{scheduleId}/run-now", RunNow)
-            .WithTags("Scheduled dispatches")
+        group.MapPost("/schedules/{scheduleId}:run-now", RunNow)
+            .WithTags("Schedules")
             .Produces<ScheduledDispatchRunNowReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
@@ -58,7 +63,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.CreateAsync(input.ToConfiguration(input.ScheduleId), ct);
-            return Results.Accepted($"/api/scheduled-dispatches/{receipt.ScheduleId}", receipt);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -75,7 +80,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.UpdateAsync(scheduleId, input.ToConfiguration(scheduleId), ct);
-            return Results.Accepted($"/api/scheduled-dispatches/{receipt.ScheduleId}", receipt);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -92,7 +97,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.EnableAsync(scheduleId, input?.Reason ?? string.Empty, ct);
-            return Results.Accepted($"/api/scheduled-dispatches/{receipt.ScheduleId}", receipt);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -109,7 +114,25 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.DisableAsync(scheduleId, input?.Reason ?? string.Empty, ct);
-            return Results.Accepted($"/api/scheduled-dispatches/{receipt.ScheduleId}", receipt);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
+        }
+        catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
+        {
+            return result;
+        }
+    }
+
+    internal static async Task<IResult> Delete(
+        string scheduleId,
+        [FromQuery] string? reason,
+        [FromBody] ScheduledDispatchStateChangeHttpRequest? input,
+        [FromServices] IScheduledDispatchApplicationService schedules,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var receipt = await schedules.DeleteAsync(scheduleId, reason ?? input?.Reason ?? string.Empty, ct);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -171,7 +194,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.RunNowAsync(scheduleId, ct);
-            return Results.Accepted($"/api/scheduled-dispatches/{receipt.ScheduleId}", receipt);
+            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {

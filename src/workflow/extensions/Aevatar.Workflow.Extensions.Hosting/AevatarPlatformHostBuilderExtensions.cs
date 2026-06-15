@@ -2,6 +2,8 @@ using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Capabilities;
+using Aevatar.GAgentService.Hosting.DependencyInjection;
+using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Workflow.Extensions.Maker;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -105,6 +107,10 @@ public static class AevatarPlatformHostBuilderExtensions
                 },
             });
             builder.AddWorkflowCapabilityBundle();
+            builder.AddAevatarCapability(
+                "scheduled-dispatch",
+                static (services, configuration) => services.AddScheduledDispatchCapability(configuration),
+                static app => app.MapScheduledDispatchEndpoints());
         }
 
         if (options.EnableScriptingCapability)

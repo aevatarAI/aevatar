@@ -436,6 +436,12 @@ public sealed partial class ScheduledDispatchDocument : IProjectionReadModel<Sch
         set => LastFireAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
     }
 
+    public DateTimeOffset? DeletedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(DeletedAtUtcValue);
+        set => DeletedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
     public IDictionary<string, string> Headers
     {
         get => HeadersMap;

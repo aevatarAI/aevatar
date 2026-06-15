@@ -94,7 +94,8 @@ public sealed record ScheduledDispatchSummary(
     int FailureCount,
     IReadOnlyDictionary<string, string> Headers,
     string ScheduleActorId,
-    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic);
+    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic,
+    bool Deleted = false);
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,
@@ -182,6 +183,11 @@ public interface IScheduledDispatchActorPort
         string reason,
         CancellationToken ct = default);
 
+    Task<DispatchAdmission> DispatchDeleteAsync(
+        string actorId,
+        string reason,
+        CancellationToken ct = default);
+
     Task<DispatchAdmission> DispatchRunNowAsync(
         string actorId,
         DateTimeOffset scheduledFireAt,
@@ -259,6 +265,11 @@ public interface IScheduledDispatchApplicationService
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> DisableAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchMutationReceipt> DeleteAsync(
         string scheduleId,
         string reason,
         CancellationToken ct = default);

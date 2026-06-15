@@ -2,7 +2,6 @@ using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
@@ -30,8 +29,6 @@ public static class WorkflowCapabilityEndpoints
         group.MapPost("/workflow/runs/fork", HandleForkRun)
             .WithName("ForkWorkflowRun");
         WorkflowWebhookIngressEndpoints.Map(group);
-        if (HasWorkflowScheduleDependencies(app.ServiceProvider))
-            WorkflowScheduleEndpoints.Map(group);
 
         return app;
     }
@@ -40,9 +37,6 @@ public static class WorkflowCapabilityEndpoints
     {
         return app;
     }
-
-    private static bool HasWorkflowScheduleDependencies(IServiceProvider services) =>
-        services.GetService<IServiceProviderIsService>()?.IsService(typeof(IScheduledDispatchApplicationService)) == true;
 
     public static async Task HandleChat(
         HttpContext http,
