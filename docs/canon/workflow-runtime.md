@@ -294,6 +294,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, source? }
   │
   ├── WorkflowExecutionKernel 收到 StepCompletedEvent
   │     ├── 有下一步 → 再发 StepRequestEvent（循环）
+  │     ├── 有补偿 ledger 的终止失败 → 发布 CompensationRequestEvent 并进入补偿相位
   │     └── 无下一步 → 发布 WorkflowCompletedEvent
   │
   ├── run actor envelope 流进入统一 Projection Pipeline（一对多分发）
@@ -305,6 +306,26 @@ POST /api/chat { prompt, workflow?, workflowYaml?, source? }
 ```
 
 关键点：**流程控制由模块完成，不写死在单个 Agent 的方法里。**
+
+### Saga 补偿生命周期
+
+Workflow step 可以通过 `compensation` 声明一个已存在的 step id。静态校验阶段会解析该目标，引用不存在的补偿步骤会被拒绝。运行时中，成功完成且声明了补偿的业务 step 会进入 `compensable_ledger`，ledger 归 `WorkflowRunGAgent` 持有，是 run actor 的权威状态。
+
+当后续 step 发生终止失败且 ledger 非空时，run 不直接提交 `WorkflowCompletedEvent(success=false)`。`WorkflowExecutionKernel` 先请求 run actor 开启补偿相位，run actor 按 ledger 反向顺序提交 `CompensationRequestEvent`，再通过 self continuation 派发对应补偿 step。补偿 step 完成后以 `CompensationStepCompletedEvent` 回到 run actor，由 actor 校验 `run_id + compensation_step_id + execution_id`，拒绝陈旧或重复完成事件。
+
+Saga 状态生命周期为：
+
+```text
+running -> compensating -> compensated_failed
+running -> compensating -> compensation_dead_letter
+```
+
+- `running`：正常执行阶段，成功的 compensable step 按完成顺序写入 ledger。
+- `compensating`：终止失败已转入补偿相位，`compensation_cursor` 指向当前待补偿 ledger 项。
+- `compensated_failed`：所有补偿按反向顺序成功，随后发布失败的 `WorkflowCompletedEvent`，表示原业务 run 失败但补偿已完成。
+- `compensation_dead_letter`：某个补偿 step 失败或补偿耗尽，run actor 提交 `WorkflowCompensationFailedEvent`，记录失败补偿 step、剩余未补偿数量和错误；此状态不再走 on_error fallback，也不会静默丢弃。
+
+补偿相位继续遵守 actor 化执行约束：补偿推进只通过 self message 进入 actor inbox，不在 callback 线程或 helper 内 inline 推进；crash/reactivation 时，actor 根据已提交 `CompensationRequestEvent` 和当前 cursor 重发当前 self continuation，不重复提交领域事件。
 
 ## Host Boundary For GitHub / Router / Closure
 
@@ -642,7 +663,7 @@ steps:
 
 ### Q3：模块失败会怎样？
 
-取决于模块实现和步骤配置。`WorkflowLoopModule` 收到 `Success=false` 的 `StepCompletedEvent` 后会直接发布 `WorkflowCompletedEvent(Success=false)`，终止整个 workflow。`ConnectorCallModule` 支持 `on_error: continue` 降级策略。
+取决于模块实现、步骤配置和 saga ledger。`WorkflowExecutionKernel` 收到 `Success=false` 的 `StepCompletedEvent` 后，若当前 run 有非空 `compensable_ledger`，先进入补偿相位；补偿全部成功后才以 `WorkflowCompletedEvent(Success=false)` 结束。没有 compensable ledger 时，失败直接发布 `WorkflowCompletedEvent(Success=false)`。支持 retry/on_error 的 step 会先按对应策略处理，未被策略接管的终止失败才触发上述逻辑。
 
 ### Q4：怎么新增一种步骤类型？
 

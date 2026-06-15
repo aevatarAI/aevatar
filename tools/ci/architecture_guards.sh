@@ -1424,6 +1424,9 @@ bash tools/ci/projection_route_mapping_guard.sh
 echo "Running closed-world workflow guards..."
 bash tools/ci/workflow_closed_world_guards.sh
 
+echo "Running workflow saga compensation guard..."
+bash tools/ci/workflow_saga_compensation_guard.sh
+
 echo "Running workflow run-id guard..."
 bash tools/ci/workflow_runid_guard.sh
 
