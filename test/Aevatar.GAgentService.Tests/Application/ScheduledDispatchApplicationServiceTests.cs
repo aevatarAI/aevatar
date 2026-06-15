@@ -189,13 +189,13 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var act = () => service.CreateAsync(CreateEnvelopeConfiguration(scheduleId));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*letters, digits, '.', '_', ':', and '-'*");
+            .WithMessage("*letters, digits, '.', '_', and '-'*");
     }
 
     [Theory]
     [InlineData("abc")]
     [InlineData("ABC")]
-    [InlineData("abc-123_DEF:ghi.jkl")]
+    [InlineData("abc-123_DEF.ghi.jkl")]
     public void ScheduledDispatchActorIdFormat_ShouldAcceptAsciiScheduleIds(string scheduleId)
     {
         ScheduledDispatchActorId.Format($" {scheduleId} ")
@@ -211,7 +211,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var act = () => ScheduledDispatchActorId.Format(scheduleId);
 
         act.Should().Throw<ArgumentException>()
-            .WithMessage("*letters, digits, '.', '_', ':', and '-'*");
+            .WithMessage("*letters, digits, '.', '_', and '-'*");
     }
 
     [Theory]
@@ -413,7 +413,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task EnableDisableRunNow_ShouldResolveExistingActorAndReturnNotFoundWhenMissing()
+    public async Task EnableDisableDeleteRunNow_ShouldResolveExistingActorAndReturnNotFoundWhenMissing()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
         var service = new ScheduledDispatchApplicationService(
@@ -423,6 +423,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         var enabled = await service.EnableAsync(" schedule-1 ", " resume ");
         var disabled = await service.DisableAsync("schedule-1", null!);
+        var deleted = await service.DeleteAsync(" schedule-1 ", " remove ");
         var runNow = await service.RunNowAsync("schedule-1");
         actorPort.MissingScheduleIds.Add("missing");
         var missing = () => service.RunNowAsync("missing");
@@ -447,6 +448,16 @@ public sealed class ScheduledDispatchApplicationServiceTests
             AckStage = "accepted",
         });
         disabled.AckedAt.Should().NotBe(default);
+        deleted.Should().BeEquivalentTo(new
+        {
+            ScheduleId = "schedule-1",
+            ScheduleActorId = "actor:schedule-1",
+            Accepted = true,
+            CommandId = "cmd-1",
+            CorrelationId = "corr-1",
+            AckStage = "accepted",
+        });
+        deleted.AckedAt.Should().NotBe(default);
         runNow.ScheduleId.Should().Be("schedule-1");
         runNow.ScheduleActorId.Should().Be("actor:schedule-1");
         runNow.CommandId.Should().Be("cmd-1");
@@ -457,8 +468,68 @@ public sealed class ScheduledDispatchApplicationServiceTests
             ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", runNow.ScheduledFireAt));
         actorPort.Enabled.Should().ContainSingle().Which.Should().Be(("actor:schedule-1", "resume"));
         actorPort.Disabled.Should().ContainSingle().Which.Should().Be(("actor:schedule-1", string.Empty));
+        actorPort.Deleted.Should().ContainSingle().Which.Should().Be(("actor:schedule-1", "remove"));
         actorPort.RunNow.Should().ContainSingle().Which.ActorId.Should().Be("actor:schedule-1");
         await missing.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+    }
+
+    [Fact]
+    public async Task GetAndMutations_ShouldTreatDeletedScheduleAsNotFoundAtApplicationBoundary()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = new ScheduledDispatchDetail(
+                new ScheduledDispatchSummary(
+                    "schedule-1",
+                    string.Empty,
+                    ScheduledDispatchTargetKind.Envelope,
+                    "actor-1",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    "0 9 * * *",
+                    "UTC",
+                    false,
+                    DateTimeOffset.Parse("2026-05-29T08:00:00+00:00"),
+                    DateTimeOffset.Parse("2026-05-29T09:00:00+00:00"),
+                    null,
+                    null,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    0,
+                    0,
+                    new Dictionary<string, string>(),
+                    "actor:schedule-1",
+                    Deleted: true),
+                []),
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService());
+
+        var get = await service.GetAsync(" schedule-1 ");
+        var update = () => service.UpdateAsync("schedule-1", CreateEnvelopeConfiguration("schedule-1"));
+        var enable = () => service.EnableAsync("schedule-1", string.Empty);
+        var disable = () => service.DisableAsync("schedule-1", string.Empty);
+        var delete = () => service.DeleteAsync("schedule-1", string.Empty);
+        var runNow = () => service.RunNowAsync("schedule-1");
+
+        get.Should().BeNull();
+        await update.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await disable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await delete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        actorPort.Updated.Should().BeEmpty();
+        actorPort.Enabled.Should().BeEmpty();
+        actorPort.Disabled.Should().BeEmpty();
+        actorPort.Deleted.Should().BeEmpty();
+        actorPort.RunNow.Should().BeEmpty();
     }
 
     [Fact]
@@ -763,6 +834,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Ensured { get; } = [];
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
+        public List<(string ActorId, string Reason)> Deleted { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNow { get; } = [];
 
         public Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default)
@@ -831,6 +903,16 @@ public sealed class ScheduledDispatchApplicationServiceTests
             return Task.FromResult(CreateAdmission(actorId));
         }
 
+        public Task<DispatchAdmission> DispatchDeleteAsync(
+            string actorId,
+            string reason,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deleted.Add((actorId, reason));
+            return Task.FromResult(CreateAdmission(actorId));
+        }
+
         public Task<DispatchAdmission> DispatchRunNowAsync(
             string actorId,
             DateTimeOffset scheduledFireAt,
@@ -867,12 +949,13 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public List<string> GetScheduleIds { get; } = [];
         public List<(int Take, string? Cursor, bool IncludeTotalCount)> ListRequests { get; } = [];
         public List<ScheduledDispatchListQuery> FilteredListRequests { get; } = [];
+        public ScheduledDispatchDetail? Detail { get; set; }
 
         public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             GetScheduleIds.Add(scheduleId);
-            return Task.FromResult<ScheduledDispatchDetail?>(null);
+            return Task.FromResult(Detail);
         }
 
         public Task<ScheduledDispatchListResult> ListAsync(
