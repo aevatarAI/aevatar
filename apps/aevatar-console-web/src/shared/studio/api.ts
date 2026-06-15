@@ -19,6 +19,7 @@ import type {
   StudioMemberBindingRunStatus,
   StudioMemberBindingRunStatusResponse,
   StudioMemberBindingViewResponse,
+  StudioMemberCommandResponse,
   StudioMemberDetail,
   StudioMemberImplementationKind,
   StudioMemberImplementationRef,
@@ -1063,6 +1064,50 @@ function readStudioTeamLifecycle(
   );
 }
 
+function normalizeStudioMemberCommandStatus(
+  value: string | null | undefined
+): StudioMemberCommandResponse["status"] {
+  switch (String(value || "").trim().toLowerCase()) {
+    case "accepted":
+      return "accepted";
+    case "no_change":
+      return "no_change";
+    default:
+      return "unknown";
+  }
+}
+
+function decodeStudioMemberCommandResponse(
+  value: unknown
+): StudioMemberCommandResponse {
+  const record = expectRecord(value, "StudioMemberCommandResponse");
+  return {
+    status: normalizeStudioMemberCommandStatus(
+      readString(
+        record,
+        ["status", "Status"],
+        "StudioMemberCommandResponse.status"
+      )
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberCommandResponse.scopeId"
+    ),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberCommandResponse.memberId"
+    ),
+    ackedAt:
+      readNullableString(
+        record,
+        ["ackedAt", "AckedAt"],
+        "StudioMemberCommandResponse.ackedAt"
+      ) ?? null,
+  };
+}
+
 function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
   const record = expectRecord(value, "StudioMemberSummary");
   return {
@@ -1659,10 +1704,10 @@ export const studioApi = {
     scopeId: string;
     memberId: string;
     teamId: string | null;
-  }): Promise<StudioMemberDetail> {
+  }): Promise<StudioMemberCommandResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
-      decodeStudioMemberDetail,
+      decodeStudioMemberCommandResponse,
       {
         method: "PATCH",
         headers: JSON_HEADERS,
@@ -1673,14 +1718,32 @@ export const studioApi = {
     );
   },
 
+  updateMemberDisplayName(input: {
+    scopeId: string;
+    memberId: string;
+    displayName: string;
+  }): Promise<StudioMemberCommandResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeStudioMemberCommandResponse,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          displayName: input.displayName.trim(),
+        }),
+      }
+    );
+  },
+
   updateMemberImplementationRef(input: {
     scopeId: string;
     memberId: string;
     implementationRef: StudioMemberImplementationRef;
-  }): Promise<StudioMemberDetail> {
+  }): Promise<StudioMemberCommandResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
-      decodeStudioMemberDetail,
+      decodeStudioMemberCommandResponse,
       {
         method: "PATCH",
         headers: JSON_HEADERS,

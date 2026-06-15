@@ -847,6 +847,57 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     [queryClient],
   );
+  const updateMemberDisplayNameCache = React.useCallback(
+    (
+      scopeId: string,
+      teamId: string,
+      memberId: string,
+      displayName: string,
+    ) => {
+      queryClient.setQueryData<StudioMemberDetail | undefined>(
+        getTeamMemberWorkflowStudioMemberQueryKey(scopeId, memberId),
+        (current) =>
+          current
+            ? {
+                ...current,
+                summary: {
+                  ...current.summary,
+                  displayName,
+                },
+              }
+            : current,
+      );
+      const patchRoster = (current: unknown) => {
+        if (
+          !current ||
+          typeof current !== "object" ||
+          !Array.isArray((current as { members?: unknown }).members)
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          members: (current as { members: unknown[] }).members.map((member) =>
+            member &&
+            typeof member === "object" &&
+            (member as { memberId?: unknown }).memberId === memberId
+              ? {
+                  ...member,
+                  displayName,
+                }
+              : member,
+          ),
+        };
+      };
+      queryClient.setQueryData(
+        ["teams", "team-members", scopeId, teamId],
+        patchRoster,
+      );
+      queryClient.setQueryData(["teams", "members", scopeId], patchRoster);
+    },
+    [queryClient],
+  );
   const workspaceSettingsQuery = useQuery({
     enabled: Boolean(route.scopeId),
     queryKey: [
@@ -1054,13 +1105,59 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       workflowQueryKey,
     ],
   );
+  const renameExistingMemberFromTitle = React.useCallback(
+    async (displayName: string) => {
+      const scopeId = trimOptional(route.scopeId);
+      const teamId = trimOptional(route.teamId);
+      const memberId = trimOptional(route.memberId);
+      const normalizedDisplayName = trimOptional(displayName);
+      const currentDisplayName = trimOptional(
+        memberQuery.data?.summary.displayName,
+      );
+      if (
+        route.mode !== "existing" ||
+        !scopeId ||
+        !teamId ||
+        !memberId ||
+        !normalizedDisplayName ||
+        normalizedDisplayName === currentDisplayName
+      ) {
+        return;
+      }
+
+      await studioApi.updateMemberDisplayName({
+        scopeId,
+        memberId,
+        displayName: normalizedDisplayName,
+      });
+      updateMemberDisplayNameCache(
+        scopeId,
+        teamId,
+        memberId,
+        normalizedDisplayName,
+      );
+      await refreshTeamMemberSurfaces(scopeId, teamId);
+    },
+    [
+      memberQuery.data?.summary.displayName,
+      refreshTeamMemberSurfaces,
+      route.memberId,
+      route.mode,
+      route.scopeId,
+      route.teamId,
+      updateMemberDisplayNameCache,
+    ],
+  );
 
   const saveMutation = useMutation({
-    mutationFn: (variables: SaveWorkflowDraftVariables) =>
-      saveWorkflowDraft({
+    mutationFn: async (variables: SaveWorkflowDraftVariables) => {
+      const saved = await saveWorkflowDraft({
         ...variables,
         routeScopeId: route.scopeId,
-      }),
+      });
+      await renameExistingMemberFromTitle(saved.title);
+      return saved;
+    },
     onError: (error) => {
       void message.error(
         error instanceof Error ? error.message : "Failed to save workflow draft.",
@@ -1242,6 +1339,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           workflowId: savedWorkflowId,
         },
       });
+      await renameExistingMemberFromTitle(normalizedTitle);
 
       history.replace(
         buildTeamMemberWorkflowStudioHref({
@@ -1472,6 +1570,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         },
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
+      await renameExistingMemberFromTitle(titleForPublish);
       const receipt = await studioApi.bindMemberWorkflow({
         scopeId: route.scopeId,
         memberId: route.memberId,

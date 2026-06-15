@@ -477,6 +477,15 @@ export interface StudioMemberSummary {
   readonly updatedAt: string;
 }
 
+export type StudioMemberCommandStatus = 'accepted' | 'no_change' | 'unknown';
+
+export interface StudioMemberCommandResponse {
+  readonly status: StudioMemberCommandStatus;
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly ackedAt?: string | null;
+}
+
 export interface StudioMemberImplementationRef {
   readonly implementationKind: StudioMemberImplementationKind;
   readonly workflowId?: string | null;
