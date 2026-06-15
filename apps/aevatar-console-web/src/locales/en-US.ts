@@ -11,27 +11,112 @@ const enUSMessages = {
   'common.user.settings': 'Settings',
   'menu.Connectors': 'Connectors',
   'menu.Create Team': 'Create Team',
-  'menu.Deployments': 'Deployments',
-  'menu.Event Stream': 'Event Stream',
+  'menu.Access & Rules': 'Access & Rules',
+  'menu.Capabilities': 'Capabilities',
   'menu.Files': 'Files',
-  'menu.Governance': 'Governance',
   'menu.Members': 'Members',
   'menu.Mission Control': 'Mission Control',
   'menu.My Teams': 'My Teams',
-  'menu.Services': 'Services',
+  'menu.Overview': 'Overview',
+  'menu.Releases': 'Releases',
+  'menu.Runs': 'Runs',
+  'menu.Runtime Map': 'Runtime Map',
   'menu.Settings': 'Settings',
   'menu.Team Details': 'Team Details',
-  'menu.Topology': 'Topology',
   'nav.groups.platform': 'Platform',
   'nav.groups.settings': 'Settings',
   'nav.groups.teams': 'Teams',
-  'nav.items.deployments': 'Deployments',
-  'nav.items.eventStream': 'Event Stream',
-  'nav.items.governance': 'Governance',
+  'nav.items.deployments': 'Releases',
+  'nav.items.eventStream': 'Runs',
+  'nav.items.governance': 'Access & Rules',
   'nav.items.myTeams': 'My Teams',
-  'nav.items.services': 'Services',
+  'nav.items.overview': 'Overview',
+  'nav.items.services': 'Capabilities',
   'nav.items.settings': 'Settings',
-  'nav.items.topology': 'Topology',
+  'nav.items.topology': 'Runtime Map',
+  'platform.overview.breadcrumb': 'Aevatar / Platform',
+  'platform.overview.description':
+    'Publish capabilities, govern access, release changes, inspect runs, and understand runtime relationships from one task-oriented entry point.',
+  'platform.overview.footer.description':
+    'Existing links for capabilities, access rules, releases, runs, and the runtime map remain available; this page only adds a task-first starting point.',
+  'platform.overview.footer.title': 'Deep links stay unchanged',
+  'platform.overview.metrics.capabilities': 'Capabilities',
+  'platform.overview.metrics.releases': 'Serving',
+  'platform.overview.metrics.rules': 'Governed',
+  'platform.overview.metrics.updated': 'Updated {time}',
+  'platform.overview.modules.accessRules.cta': 'Review access and rules',
+  'platform.overview.modules.accessRules.description':
+    'Control which callers, bindings, and exposed endpoints can invoke a capability.',
+  'platform.overview.modules.accessRules.summary':
+    '{policyCount} policies and {bindingCount} active bindings on the first visible capability.',
+  'platform.overview.modules.accessRules.summaryDetail': 'Sampled from {serviceName}.',
+  'platform.overview.modules.accessRules.summaryFallback':
+    'Choose a capability to inspect who can call it and which rules apply.',
+  'platform.overview.modules.accessRules.summaryUnavailable':
+    'Access and rule catalogs are temporarily unavailable.',
+  'platform.overview.modules.accessRules.title': 'Access & Rules',
+  'platform.overview.modules.capabilities.cta': 'Open capabilities',
+  'platform.overview.modules.capabilities.description':
+    'Review callable capabilities, their revisions, endpoints, and serving ownership.',
+  'platform.overview.modules.capabilities.summary':
+    '{serviceCount} capabilities, {servingCount} currently attached to serving.',
+  'platform.overview.modules.capabilities.summaryDetail':
+    '{endpointCount} callable endpoints are listed across the catalog.',
+  'platform.overview.modules.capabilities.summaryEmpty':
+    'No capabilities are visible in the current workspace yet.',
+  'platform.overview.modules.capabilities.summaryFallback':
+    'Capabilities appear here after services are published into the catalog.',
+  'platform.overview.modules.capabilities.summaryUnavailable':
+    'Capability catalog is temporarily unavailable.',
+  'platform.overview.modules.capabilities.title': 'Capabilities',
+  'platform.overview.modules.releases.cta': 'Manage releases',
+  'platform.overview.modules.releases.description':
+    'Promote revisions, inspect rollout state, and verify traffic target evidence.',
+  'platform.overview.modules.releases.summary':
+    '{deploymentCount} deployments are visible for the first capability.',
+  'platform.overview.modules.releases.summaryDetail':
+    'Traffic evidence covers {trafficTargetCount} active target links.',
+  'platform.overview.modules.releases.summaryFallback':
+    'Release controls appear after a capability has a serving target.',
+  'platform.overview.modules.releases.summaryUnavailable':
+    'Release and traffic evidence are temporarily unavailable.',
+  'platform.overview.modules.releases.title': 'Releases',
+  'platform.overview.modules.runtimeMap.cta': 'Open runtime map',
+  'platform.overview.modules.runtimeMap.description':
+    'Trace actors, relationships, and runtime ownership when you need operational context.',
+  'platform.overview.modules.runtimeMap.summary':
+    'Runtime map can start from the current capability owner.',
+  'platform.overview.modules.runtimeMap.summaryDetail':
+    'First visible capability has an actor seed ready for map inspection.',
+  'platform.overview.modules.runtimeMap.summaryFallback':
+    'Open the runtime map to inspect actors and relationships after a run exists.',
+  'platform.overview.modules.runtimeMap.summaryUnavailable':
+    'Runtime map seed signals are temporarily unavailable.',
+  'platform.overview.modules.runtimeMap.title': 'Runtime Map',
+  'platform.overview.modules.runs.cta': 'Inspect runs',
+  'platform.overview.modules.runs.description':
+    'Inspect run records, streamed events, prompts, and human handoff state.',
+  'platform.overview.modules.runs.summary':
+    '{runCount} recent local runs, latest status {status}.',
+  'platform.overview.modules.runs.summaryDetail': 'Latest local record: {time}.',
+  'platform.overview.modules.runs.summaryFallback':
+    'No recent local run handoff has been recorded in this browser.',
+  'platform.overview.modules.runs.title': 'Runs',
+  'platform.overview.modules.title': 'Platform modules',
+  'platform.overview.summary.catalogReady':
+    'Summaries use existing frontend reads and local run handoffs, so weak signals stay labeled as guidance.',
+  'platform.overview.summary.catalogUnavailable':
+    'Current workspace summary is using guidance because the capability catalog could not be read.',
+  'platform.overview.summary.eyebrow': 'Publish and run workflow',
+  'platform.overview.summary.heading':
+    'Move from callable capability to observable runtime without switching mental models.',
+  'platform.overview.summary.loading': 'Reading current workspace signals.',
+  'platform.overview.summary.status.fallback': 'Guidance',
+  'platform.overview.summary.status.loading': 'Loading',
+  'platform.overview.summary.status.ready': 'Live signal',
+  'platform.overview.summary.status.unavailable': 'Unavailable',
+  'platform.overview.summary.title': 'Platform summary',
+  'platform.overview.title': 'Platform overview',
   'teams.home.actions.createTeam': 'Create team',
   'teams.home.actions.createMember': 'Create member',
   'teams.home.actions.editEntryMember': 'Edit entry member',

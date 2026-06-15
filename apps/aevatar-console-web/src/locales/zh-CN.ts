@@ -11,27 +11,112 @@ const zhCNMessages = {
   'common.user.settings': '设置',
   'menu.Connectors': '连接器',
   'menu.Create Team': '创建团队',
-  'menu.Deployments': '部署',
-  'menu.Event Stream': '事件流',
+  'menu.Access & Rules': '访问与规则',
+  'menu.Capabilities': '能力',
   'menu.Files': '文件',
-  'menu.Governance': '治理',
   'menu.Members': '成员',
   'menu.Mission Control': '任务控制',
   'menu.My Teams': '我的团队',
-  'menu.Services': '服务',
+  'menu.Overview': '总览',
+  'menu.Releases': '发布',
+  'menu.Runs': '运行记录',
+  'menu.Runtime Map': '运行拓扑',
   'menu.Settings': '设置',
   'menu.Team Details': '团队详情',
-  'menu.Topology': '拓扑',
   'nav.groups.platform': '平台',
   'nav.groups.settings': '设置',
   'nav.groups.teams': '团队',
-  'nav.items.deployments': '部署',
-  'nav.items.eventStream': '事件流',
-  'nav.items.governance': '治理',
+  'nav.items.deployments': '发布',
+  'nav.items.eventStream': '运行记录',
+  'nav.items.governance': '访问与规则',
   'nav.items.myTeams': '我的团队',
-  'nav.items.services': '服务',
+  'nav.items.overview': '总览',
+  'nav.items.services': '能力',
   'nav.items.settings': '设置',
-  'nav.items.topology': '拓扑',
+  'nav.items.topology': '运行拓扑',
+  'platform.overview.breadcrumb': 'Aevatar / 平台',
+  'platform.overview.description':
+    '从一个任务化入口发布能力、治理访问、推进发布、查看运行记录，并理解运行时关系。',
+  'platform.overview.footer.description':
+    '能力、访问规则、发布、运行记录和运行拓扑的既有链接保持可用；此页面只新增任务优先的起点。',
+  'platform.overview.footer.title': '深链保持不变',
+  'platform.overview.metrics.capabilities': '能力',
+  'platform.overview.metrics.releases': '服务态',
+  'platform.overview.metrics.rules': '已治理',
+  'platform.overview.metrics.updated': '更新于 {time}',
+  'platform.overview.modules.accessRules.cta': '查看访问与规则',
+  'platform.overview.modules.accessRules.description':
+    '控制哪些调用方、绑定和已暴露入口可以调用某个能力。',
+  'platform.overview.modules.accessRules.summary':
+    '第一个可见能力上有 {policyCount} 条策略和 {bindingCount} 个活跃绑定。',
+  'platform.overview.modules.accessRules.summaryDetail': '样本来自 {serviceName}。',
+  'platform.overview.modules.accessRules.summaryFallback':
+    '选择一个能力后，可以查看谁能调用它以及应用了哪些规则。',
+  'platform.overview.modules.accessRules.summaryUnavailable':
+    '访问与规则目录暂时不可用。',
+  'platform.overview.modules.accessRules.title': '访问与规则',
+  'platform.overview.modules.capabilities.cta': '打开能力',
+  'platform.overview.modules.capabilities.description':
+    '查看可调用能力、版本、入口和服务态归属。',
+  'platform.overview.modules.capabilities.summary':
+    '{serviceCount} 个能力，其中 {servingCount} 个已经挂到服务态。',
+  'platform.overview.modules.capabilities.summaryDetail':
+    '目录中列出 {endpointCount} 个可调用入口。',
+  'platform.overview.modules.capabilities.summaryEmpty':
+    '当前工作区还没有可见能力。',
+  'platform.overview.modules.capabilities.summaryFallback':
+    '服务发布到目录后，能力会出现在这里。',
+  'platform.overview.modules.capabilities.summaryUnavailable':
+    '能力目录暂时不可用。',
+  'platform.overview.modules.capabilities.title': '能力',
+  'platform.overview.modules.releases.cta': '管理发布',
+  'platform.overview.modules.releases.description':
+    '推进版本、查看发布状态，并校验流量目标证据。',
+  'platform.overview.modules.releases.summary':
+    '第一个能力下可见 {deploymentCount} 个部署。',
+  'platform.overview.modules.releases.summaryDetail':
+    '流量证据覆盖 {trafficTargetCount} 条活跃目标链接。',
+  'platform.overview.modules.releases.summaryFallback':
+    '能力拥有服务态目标后，发布控制会在这里出现。',
+  'platform.overview.modules.releases.summaryUnavailable':
+    '发布和流量证据暂时不可用。',
+  'platform.overview.modules.releases.title': '发布',
+  'platform.overview.modules.runtimeMap.cta': '打开运行拓扑',
+  'platform.overview.modules.runtimeMap.description':
+    '需要运行上下文时，追踪 Actor、关系和运行时归属。',
+  'platform.overview.modules.runtimeMap.summary':
+    '运行拓扑可以从当前能力拥有者开始查看。',
+  'platform.overview.modules.runtimeMap.summaryDetail':
+    '第一个可见能力已经有可用于拓扑查看的 Actor 种子。',
+  'platform.overview.modules.runtimeMap.summaryFallback':
+    '运行存在后，可打开运行拓扑检查 Actor 与关系。',
+  'platform.overview.modules.runtimeMap.summaryUnavailable':
+    '运行拓扑种子信号暂时不可用。',
+  'platform.overview.modules.runtimeMap.title': '运行拓扑',
+  'platform.overview.modules.runs.cta': '查看运行记录',
+  'platform.overview.modules.runs.description':
+    '查看运行记录、流式事件、提示词和人工交接状态。',
+  'platform.overview.modules.runs.summary':
+    '本地有 {runCount} 条最近运行记录，最新状态为 {status}。',
+  'platform.overview.modules.runs.summaryDetail': '最新本地记录：{time}。',
+  'platform.overview.modules.runs.summaryFallback':
+    '当前浏览器还没有最近运行交接记录。',
+  'platform.overview.modules.runs.title': '运行记录',
+  'platform.overview.modules.title': '平台模块',
+  'platform.overview.summary.catalogReady':
+    '摘要使用既有前端读取和本地运行交接记录；弱信号会明确标记为指引。',
+  'platform.overview.summary.catalogUnavailable':
+    '能力目录读取失败，当前工作区摘要正在使用指引信息。',
+  'platform.overview.summary.eyebrow': '发布与运行工作流',
+  'platform.overview.summary.heading':
+    '从可调用能力进入可观察运行时，无需切换理解模型。',
+  'platform.overview.summary.loading': '正在读取当前工作区信号。',
+  'platform.overview.summary.status.fallback': '指引',
+  'platform.overview.summary.status.loading': '加载中',
+  'platform.overview.summary.status.ready': '实时信号',
+  'platform.overview.summary.status.unavailable': '不可用',
+  'platform.overview.summary.title': '平台摘要',
+  'platform.overview.title': '平台总览',
   'teams.home.actions.createTeam': '组建新团队',
   'teams.home.actions.createMember': '创建成员',
   'teams.home.actions.editEntryMember': '编辑入口成员',

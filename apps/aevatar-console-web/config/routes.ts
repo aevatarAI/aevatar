@@ -92,9 +92,9 @@ export default [
     hideInMenu: true,
   },
   {
-    path: "/runtime/runs",
-    name: "Event Stream",
-    component: "./runs",
+    path: "/platform",
+    name: "Overview",
+    component: "./platform",
     menuGroupKey: "platform",
   },
   {
@@ -105,7 +105,7 @@ export default [
   },
   {
     path: "/services",
-    name: "Services",
+    name: "Capabilities",
     component: "./services",
     menuGroupKey: "platform",
   },
@@ -117,7 +117,7 @@ export default [
   },
   {
     path: "/governance",
-    name: "Governance",
+    name: "Access & Rules",
     component: "./governance",
     menuGroupKey: "platform",
   },
@@ -147,13 +147,19 @@ export default [
   },
   {
     path: "/deployments",
-    name: "Deployments",
+    name: "Releases",
     component: "./Deployments",
     menuGroupKey: "platform",
   },
   {
+    path: "/runtime/runs",
+    name: "Runs",
+    component: "./runs",
+    menuGroupKey: "platform",
+  },
+  {
     path: "/runtime/explorer",
-    name: "Topology",
+    name: "Runtime Map",
     component: "./actors",
     menuGroupKey: "platform",
   },

@@ -15,6 +15,10 @@ describe("getNavigationSelectedKeys", () => {
     ]);
   });
 
+  it("selects the platform overview as a first-class menu item", () => {
+    expect(getNavigationSelectedKeys("/platform")).toEqual(["/platform"]);
+  });
+
   it("returns no selected key for hidden routes without a menu parent", () => {
     expect(getNavigationSelectedKeys("/studio")).toEqual([]);
   });
