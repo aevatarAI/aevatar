@@ -8959,22 +8959,15 @@ const StudioPage: React.FC = () => {
   const selectedInventoryIsEntryMember =
     Boolean(selectedInventoryEntryMemberId) &&
     selectedInventoryEntryMemberId === studioTeamEntryMemberId;
-  const selectedInventoryEntryMemberSummary =
-    workbenchStudioMember?.memberId === selectedInventoryEntryMemberId
-      ? workbenchStudioMember
-      : workbenchStudioMemberSummary?.memberId === selectedInventoryEntryMemberId
-        ? workbenchStudioMemberSummary
-        : null;
-  const selectedInventoryEntryMemberReady =
-    normalizeStudioMemberLifecycleStage(
-      selectedInventoryEntryMemberSummary?.lifecycleStage,
-    ) === 'bind_ready' &&
-    Boolean(trimOptional(selectedInventoryEntryMemberSummary?.publishedServiceId));
+  const selectedInventoryEntryMemberResolved =
+    Boolean(selectedInventoryEntryMemberId) &&
+    trimOptional(workbenchStudioMemberSummary?.memberId) ===
+      selectedInventoryEntryMemberId;
   const canSetSelectedInventoryEntryMember = Boolean(
     resolvedStudioScopeId &&
       resolvedStudioTeamId &&
       selectedInventoryEntryMemberId &&
-      selectedInventoryEntryMemberReady,
+      selectedInventoryEntryMemberResolved,
   );
   const handleSetSelectedInventoryEntryMember = useCallback(async () => {
     if (
@@ -9022,7 +9015,6 @@ const StudioPage: React.FC = () => {
     resolvedStudioScopeId,
     resolvedStudioTeamId,
     selectedInventoryEntryMemberId,
-    selectedInventoryEntryMemberReady,
     selectedInventoryIsEntryMember,
     studioTeamSummaryQueryKey,
   ]);

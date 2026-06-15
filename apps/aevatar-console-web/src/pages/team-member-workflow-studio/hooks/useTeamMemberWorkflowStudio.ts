@@ -89,6 +89,8 @@ type CreatedWorkflowMember = {
   readonly workflowId: string;
 };
 
+type PendingCreatedWorkflowMemberLink = CreatedWorkflowMember;
+
 type CreatedUnlinkedMemberDraft = {
   readonly savedDraft: SavedWorkflowDraft;
   readonly workflowId: string;
@@ -99,6 +101,13 @@ function getTeamMemberWorkflowStudioTeamQueryKey(
   teamId: string,
 ) {
   return ["team-member-workflow-studio", "team", scopeId, teamId] as const;
+}
+
+function getTeamMemberWorkflowStudioMemberQueryKey(
+  scopeId: string,
+  memberId: string,
+) {
+  return ["team-member-workflow-studio", "member", scopeId, memberId] as const;
 }
 
 function getTeamMemberWorkflowStudioWorkflowQueryKey(
@@ -130,6 +139,9 @@ type TeamMemberWorkflowStudioState = {
   readonly publishPending: boolean;
   readonly publishPlaceholderReason: string;
   readonly publishTone: WorkflowPublishTone;
+  readonly refreshPublishStatus: () => void;
+  readonly refreshPublishStatusPending: boolean;
+  readonly showRefreshPublishStatus: boolean;
   readonly backHref: string;
   readonly navigateToTeam: () => void;
   readonly navigateToAutomations: () => void;
@@ -200,6 +212,8 @@ const AVAILABLE_STEP_TYPES = STUDIO_GRAPH_CATEGORIES.flatMap(
 );
 const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
 const MEMBER_BINDING_RUN_POLL_DELAY_MS = 900;
+const CREATED_MEMBER_MATERIALIZATION_ATTEMPTS = 8;
+const CREATED_MEMBER_MATERIALIZATION_DELAY_MS = 450;
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -411,6 +425,91 @@ function waitForBindingRunPollTick(): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, MEMBER_BINDING_RUN_POLL_DELAY_MS);
   });
+}
+
+function waitForCreatedMemberMaterializationTick(): Promise<void> {
+  return new Promise((resolve) => {
+    const testEnvironment =
+      typeof process !== "undefined" && process.env.NODE_ENV === "test";
+    window.setTimeout(
+      resolve,
+      testEnvironment ? 0 : CREATED_MEMBER_MATERIALIZATION_DELAY_MS,
+    );
+  });
+}
+
+async function waitForCreatedMemberVisible(input: {
+  readonly memberId: string;
+  readonly scopeId: string;
+}): Promise<StudioMemberDetail> {
+  let lastNotFound: unknown = null;
+
+  for (
+    let attempt = 0;
+    attempt < CREATED_MEMBER_MATERIALIZATION_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      return await studioApi.getMember(input.scopeId, input.memberId);
+    } catch (error) {
+      if (!isStudioApiStatus(error, 404)) {
+        throw error;
+      }
+
+      lastNotFound = error;
+      if (attempt < CREATED_MEMBER_MATERIALIZATION_ATTEMPTS - 1) {
+        await waitForCreatedMemberMaterializationTick();
+      }
+    }
+  }
+
+  throw lastNotFound instanceof Error
+    ? new Error(
+        `Workflow member ${input.memberId} was created but is not visible yet. Retry saving in a moment.`,
+        { cause: lastNotFound },
+      )
+    : new Error(
+        `Workflow member ${input.memberId} was created but is not visible yet. Retry saving in a moment.`,
+      );
+}
+
+async function linkCreatedWorkflowMemberDraft(input: {
+  readonly memberId: string;
+  readonly scopeId: string;
+  readonly workflowId: string;
+}): Promise<void> {
+  await waitForCreatedMemberVisible({
+    memberId: input.memberId,
+    scopeId: input.scopeId,
+  });
+
+  try {
+    await studioApi.updateMemberImplementationRef({
+      scopeId: input.scopeId,
+      memberId: input.memberId,
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: input.workflowId,
+      },
+    });
+  } catch (error) {
+    if (!isStudioApiStatus(error, 404)) {
+      throw error;
+    }
+
+    await waitForCreatedMemberVisible({
+      memberId: input.memberId,
+      scopeId: input.scopeId,
+    });
+    await studioApi.updateMemberImplementationRef({
+      scopeId: input.scopeId,
+      memberId: input.memberId,
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: input.workflowId,
+      },
+    });
+  }
 }
 
 function isTerminalBindingRun(
@@ -701,6 +800,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     React.useState<StudioExecutionDetail | null>(null);
   const [executionError, setExecutionError] = React.useState("");
   const [executionRunMessage, setExecutionRunMessage] = React.useState("");
+  const [pendingCreatedWorkflowMemberLink, setPendingCreatedWorkflowMemberLink] =
+    React.useState<PendingCreatedWorkflowMemberLink | null>(null);
   const [publishBindingRun, setPublishBindingRun] =
     React.useState<StudioMemberBindingRunStatusResponse | null>(null);
   const [publishError, setPublishError] = React.useState("");
@@ -766,12 +867,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   });
   const memberQuery = useQuery({
     enabled: route.mode === "existing" && Boolean(route.scopeId && route.memberId),
-    queryKey: [
-      "team-member-workflow-studio",
-      "member",
+    queryKey: getTeamMemberWorkflowStudioMemberQueryKey(
       route.scopeId,
       route.memberId,
-    ],
+    ),
     queryFn: () => studioApi.getMember(route.scopeId, route.memberId),
   });
   const routeDraftWorkflowId =
@@ -833,10 +932,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const loadedDocument =
     normalizeWorkflowDocument(workflowQuery.data?.document) ??
     normalizeWorkflowDocument(parseQuery.data?.document);
+  const workflowDraftTitle =
+    route.mode === "existing"
+      ? trimOptional(workflowQuery.data?.name) ||
+        trimOptional(loadedDocument?.name)
+      : "";
   const routeFallbackTitle =
     route.mode === "new"
       ? "Untitled member"
-      : trimOptional(memberQuery.data?.summary.displayName) ||
+      : workflowDraftTitle ||
+        trimOptional(memberQuery.data?.summary.displayName) ||
         route.memberId ||
         "Workflow member";
   const activeMemberTitle =
@@ -864,6 +969,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         ? [
             "workflow",
             workflowQuery.data.workflowId,
+            workflowQuery.data.name,
             workflowQuery.data.updatedAtUtc,
             workflowQuery.data.yaml,
             parseQuery.data ? "parsed" : "document",
@@ -893,9 +999,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       cloneWorkflowDocument(sourceDocument) ??
       buildBlankWorkflowDocument(routeFallbackTitle);
     const nextTitle =
-      route.mode === "existing"
-        ? routeFallbackTitle
-        : trimOptional(nextDocument.name) || routeFallbackTitle;
+      workflowDraftTitle ||
+      trimOptional(nextDocument.name) ||
+      routeFallbackTitle;
     sourceKeyRef.current = sourceKey;
     setEditableDocument({
       ...nextDocument,
@@ -910,7 +1016,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setYamlImportError("");
     setYamlPanelOpen(false);
     setDirty(false);
-  }, [routeFallbackTitle, sourceDocument, sourceKey, workflowQuery.data?.layout]);
+  }, [
+    routeFallbackTitle,
+    sourceDocument,
+    sourceKey,
+    workflowDraftTitle,
+    workflowQuery.data?.layout,
+  ]);
 
   const graph = React.useMemo(
     () => buildStudioGraphElements(editableDocument, editableLayout),
@@ -983,6 +1095,33 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         throw new Error("Resolve a Team workspace before creating a workflow member.");
       }
 
+      if (pendingCreatedWorkflowMemberLink) {
+        const savedDraft = await saveWorkflowDraft({
+          document,
+          layout,
+          routeScopeId: route.scopeId,
+          title,
+          workflow: pendingCreatedWorkflowMemberLink.savedDraft.workflow,
+        });
+        const savedWorkflowId = trimOptional(savedDraft.workflow.workflowId);
+        if (!savedWorkflowId) {
+          throw new Error("Workflow draft save did not return a stable workflow id.");
+        }
+
+        const currentLink: PendingCreatedWorkflowMemberLink = {
+          memberId: pendingCreatedWorkflowMemberLink.memberId,
+          savedDraft,
+          workflowId: savedWorkflowId,
+        };
+        setPendingCreatedWorkflowMemberLink(currentLink);
+        await linkCreatedWorkflowMemberDraft({
+          scopeId: route.scopeId,
+          memberId: currentLink.memberId,
+          workflowId: currentLink.workflowId,
+        });
+        return currentLink;
+      }
+
       const normalizedTitle =
         trimOptional(title) || trimOptional(document.name) || "Untitled member";
       const directoryId = resolveNewWorkflowDirectoryId({
@@ -1028,19 +1167,18 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       if (!createdMemberId) {
         throw new Error("Workflow member creation did not return a stable member id.");
       }
-      await studioApi.updateMemberImplementationRef({
-        scopeId: route.scopeId,
-        memberId: createdMemberId,
-        implementationRef: {
-          implementationKind: "workflow",
-          workflowId: savedWorkflowId,
-        },
-      });
-      return {
+      const createdLink: PendingCreatedWorkflowMemberLink = {
         memberId: createdMemberId,
         savedDraft,
         workflowId: savedWorkflowId,
       };
+      setPendingCreatedWorkflowMemberLink(createdLink);
+      await linkCreatedWorkflowMemberDraft({
+        scopeId: route.scopeId,
+        memberId: createdMemberId,
+        workflowId: savedWorkflowId,
+      });
+      return createdLink;
     },
     onError: (error) => {
       void message.error(
@@ -1050,6 +1188,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       );
     },
     onSuccess: ({ memberId, savedDraft, workflowId }) => {
+      setPendingCreatedWorkflowMemberLink(null);
       applySavedDraft(savedDraft);
       void refreshTeamMemberSurfaces(route.scopeId, route.teamId);
       void message.success("Workflow member created.");
@@ -1217,7 +1356,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
 
       const normalizedTitle = trimOptional(title) || "Workflow draft";
-      const resolvedRunMessage = trimOptional(runMessage) || `Run ${normalizedTitle}`;
+      const userRunMessage = trimOptional(runMessage);
       const serialized = await studioApi.serializeYaml({
         document: {
           ...document,
@@ -1242,7 +1381,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           error,
           executionId,
           frames,
-          runMessage: resolvedRunMessage,
+          runMessage: userRunMessage,
           serviceId: "",
           startedAtUtc,
           status,
@@ -1255,7 +1394,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         const response = await runtimeRunsApi.streamDraftRun(
           route.scopeId,
           {
-            prompt: resolvedRunMessage,
+            prompt: userRunMessage,
             workflowYamls: [serialized.yaml],
           },
           controller.signal,
@@ -1532,6 +1671,26 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       : memberIsPublished
         ? "Published member workflow is serviceable."
         : "Draft member workflow is not published to the active member yet.");
+  const showRefreshPublishStatus = Boolean(
+    route.mode === "existing" &&
+      route.scopeId &&
+      route.memberId &&
+      publishBindingStillInProgress &&
+      !publishPending,
+  );
+  const refreshPublishStatusPending = Boolean(
+    memberQuery.isFetching || workflowQuery.isFetching,
+  );
+  const refreshPublishStatus = React.useCallback(() => {
+    if (route.mode !== "existing" || !route.scopeId || !route.memberId) {
+      return;
+    }
+
+    void memberQuery.refetch();
+    if (routeDraftWorkflowId) {
+      void workflowQuery.refetch();
+    }
+  }, [memberQuery, route.memberId, route.mode, route.scopeId, routeDraftWorkflowId, workflowQuery]);
   const executionStatus = activeMemberRunMutation.isPending
     ? "running"
     : resolveWorkflowExecutionStatus(executionDetail);
@@ -1911,6 +2070,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     publishPending,
     publishPlaceholderReason,
     publishTone,
+    refreshPublishStatus,
+    refreshPublishStatusPending,
+    showRefreshPublishStatus,
     backHref,
     navigateToTeam: () => {
       if (!dirty || confirmDiscardUnsavedChanges()) {
@@ -1961,14 +2123,20 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           ? "No workflow draft is linked to this member yet. Build or paste a workflow, then save to create a reusable draft."
           : "Start this workflow by adding the first step.",
     runActiveMember: () => {
-      if (route.memberId && editableDocument) {
-        activeMemberRunMutation.mutate({
-          document: editableDocument,
-          memberId: route.memberId,
-          runMessage: trimOptional(executionRunMessage),
-          title: activeMemberTitle,
-        });
+      if (
+        !route.memberId ||
+        !editableDocument ||
+        activeMemberRunMutation.isPending
+      ) {
+        return;
       }
+
+      activeMemberRunMutation.mutate({
+        document: editableDocument,
+        memberId: route.memberId,
+        runMessage: trimOptional(executionRunMessage),
+        title: activeMemberTitle,
+      });
     },
     activeMemberRunPending: activeMemberRunMutation.isPending,
     activeMemberRunPlaceholderReason,

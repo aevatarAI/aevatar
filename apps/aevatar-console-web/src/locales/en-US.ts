@@ -763,16 +763,27 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
     'Usage, snapshots, and raw observed events will appear here when the backend emits them.',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Run logs will appear here after the workflow draft returns events.',
+    'Step outputs will appear here after the workflow draft runs.',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
+    'No user input provided.',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
+    'No output captured.',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
     'Output will appear after the draft run emits a result.',
   'teamMemberWorkflowStudio.executionPanel.evidence': 'Evidence frames',
   'teamMemberWorkflowStudio.executionPanel.events': 'Events',
   'teamMemberWorkflowStudio.executionPanel.items': 'items',
   'teamMemberWorkflowStudio.executionPanel.logs': 'Logs',
+  'teamMemberWorkflowStudio.executionPanel.node': 'Node',
+  'teamMemberWorkflowStudio.executionPanel.nodeInput': 'Input',
+  'teamMemberWorkflowStudio.executionPanel.nodeInteraction': 'Interaction',
+  'teamMemberWorkflowStudio.executionPanel.nodeOutput': 'Output',
+  'teamMemberWorkflowStudio.executionPanel.nodePrompt': 'Prompt',
+  'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
+    '{stepId} node run',
   'teamMemberWorkflowStudio.executionPanel.output': 'Output',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '{count} run event(s) received, but no step logs are available yet.',
+    '{count} run event(s) received, but no step output is available yet.',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': 'Result',
   'teamMemberWorkflowStudio.executionPanel.runLog': 'Run log',
   'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
@@ -804,11 +815,20 @@ const enUSMessages = {
     'Save this member before adding recurring work.',
   'teamMemberWorkflowStudio.header.back': 'Back',
   'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
+  'teamMemberWorkflowStudio.header.confirmDeleteConnection':
+    'Delete the selected connection? This cannot be undone.',
+  'teamMemberWorkflowStudio.header.confirmDeleteNode':
+    'Delete the selected node? This cannot be undone.',
   'teamMemberWorkflowStudio.header.deleteConnection': 'Delete connection',
   'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
+  'teamMemberWorkflowStudio.header.deleteSelectedConnection':
+    'Delete selected connection',
+  'teamMemberWorkflowStudio.header.deleteSelectedNode': 'Delete selected node',
   'teamMemberWorkflowStudio.header.editWorkflowName': 'Edit workflow name',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow identity',
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
+  'teamMemberWorkflowStudio.header.more': 'More',
+  'teamMemberWorkflowStudio.header.moreActions': 'More workflow actions',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow draft and node actions',
   'teamMemberWorkflowStudio.header.openAutomations':
@@ -817,7 +837,10 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
   'teamMemberWorkflowStudio.header.prepareDraftRun': 'Prepare draft run',
+  'teamMemberWorkflowStudio.header.publish': 'Publish',
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
+  'teamMemberWorkflowStudio.header.refreshPublishStatus': 'Refresh status',
+  'teamMemberWorkflowStudio.header.run': 'Run',
   'teamMemberWorkflowStudio.header.runActiveMember': 'Run draft',
   'teamMemberWorkflowStudio.header.runDraft': 'Run draft',
   'teamMemberWorkflowStudio.header.recurringWork': 'Recurring work',
@@ -831,6 +854,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.publish.error': 'Error',
   'teamMemberWorkflowStudio.header.publish.published': 'Published',
   'teamMemberWorkflowStudio.header.publish.publishing': 'Publishing',
+  'teamMemberWorkflowStudio.header.publish.publishingStatus': 'Publishing',
   'teamMemberWorkflowStudio.header.publishMember': 'Publish member workflow',
   'teamMemberWorkflowStudio.header.publishMemberShort': 'Publish member',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
@@ -840,6 +864,10 @@ const enUSMessages = {
     'Load the workflow draft before viewing YAML.',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
+  'teamMemberWorkflowStudio.header.yaml': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActions': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActionsTitle':
+    'View or import workflow YAML',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
     'Advanced raw configuration',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
@@ -881,6 +909,10 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
   'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
+  'teamMemberWorkflowStudio.draftRunPanel.closeAria':
+    'Close draft run panel',
+  'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
+    'Leave blank to run this draft without user input.',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':

@@ -707,16 +707,27 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
     '后端返回 Usage、Snapshot 或原始观察事件后，这里会展示对应证据。',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Workflow 草稿返回事件后，这里会展示运行日志。',
+    'Workflow 草稿运行后，这里会展示每个步骤的输出。',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
+    '未提供用户输入。',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
+    '未捕获输出。',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
     '草稿运行返回结果后，这里会展示输出。',
   'teamMemberWorkflowStudio.executionPanel.evidence': '证据帧',
   'teamMemberWorkflowStudio.executionPanel.events': '事件',
   'teamMemberWorkflowStudio.executionPanel.items': '条',
   'teamMemberWorkflowStudio.executionPanel.logs': '日志',
+  'teamMemberWorkflowStudio.executionPanel.node': '节点',
+  'teamMemberWorkflowStudio.executionPanel.nodeInput': '输入',
+  'teamMemberWorkflowStudio.executionPanel.nodeInteraction': '交互',
+  'teamMemberWorkflowStudio.executionPanel.nodeOutput': '输出',
+  'teamMemberWorkflowStudio.executionPanel.nodePrompt': '提示',
+  'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
+    '{stepId} 节点运行',
   'teamMemberWorkflowStudio.executionPanel.output': '输出',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '已收到 {count} 个运行事件，但暂时还没有步骤日志。',
+    '已收到 {count} 个运行事件，但暂时还没有步骤输出。',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': '结果',
   'teamMemberWorkflowStudio.executionPanel.runLog': '运行日志',
   'teamMemberWorkflowStudio.executionPanel.steps': '步骤',
@@ -748,11 +759,20 @@ const zhCNMessages = {
     '先保存这个成员，再添加周期任务。',
   'teamMemberWorkflowStudio.header.back': '返回',
   'teamMemberWorkflowStudio.header.currentTeam': '当前团队',
+  'teamMemberWorkflowStudio.header.confirmDeleteConnection':
+    '确定删除当前选中的连接吗？此操作不可撤销。',
+  'teamMemberWorkflowStudio.header.confirmDeleteNode':
+    '确定删除当前选中的节点吗？此操作不可撤销。',
   'teamMemberWorkflowStudio.header.deleteConnection': '删除连接',
   'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
+  'teamMemberWorkflowStudio.header.deleteSelectedConnection':
+    '删除选中的连接',
+  'teamMemberWorkflowStudio.header.deleteSelectedNode': '删除选中的节点',
   'teamMemberWorkflowStudio.header.editWorkflowName': '编辑 Workflow 名称',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
   'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
+  'teamMemberWorkflowStudio.header.more': '更多',
+  'teamMemberWorkflowStudio.header.moreActions': '更多 Workflow 操作',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow 草稿和节点操作',
   'teamMemberWorkflowStudio.header.openAutomations':
@@ -761,7 +781,10 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow 主操作',
   'teamMemberWorkflowStudio.header.prepareDraftRun': '准备草稿运行',
+  'teamMemberWorkflowStudio.header.publish': '发布',
   'teamMemberWorkflowStudio.header.runMessage': '运行消息',
+  'teamMemberWorkflowStudio.header.refreshPublishStatus': '刷新状态',
+  'teamMemberWorkflowStudio.header.run': '运行',
   'teamMemberWorkflowStudio.header.runActiveMember': '运行草稿',
   'teamMemberWorkflowStudio.header.runDraft': '运行草稿',
   'teamMemberWorkflowStudio.header.recurringWork': '周期任务',
@@ -775,6 +798,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.publish.error': '错误',
   'teamMemberWorkflowStudio.header.publish.published': '已发布',
   'teamMemberWorkflowStudio.header.publish.publishing': '发布中',
+  'teamMemberWorkflowStudio.header.publish.publishingStatus': '发布中',
   'teamMemberWorkflowStudio.header.publishMember': '发布成员 Workflow',
   'teamMemberWorkflowStudio.header.publishMemberShort': '发布成员',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': '团队',
@@ -784,6 +808,10 @@ const zhCNMessages = {
     '加载 Workflow 草稿后才能查看 YAML。',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow 视图',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow 标题',
+  'teamMemberWorkflowStudio.header.yaml': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActions': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActionsTitle':
+    '查看或导入 Workflow YAML',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
     '高级原始配置',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
@@ -824,6 +852,9 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.title': '节点库',
   'teamMemberWorkflowStudio.resize.executionPanel': '调整运行控制台大小',
   'teamMemberWorkflowStudio.resize.sidePanel': '调整侧边面板大小',
+  'teamMemberWorkflowStudio.draftRunPanel.closeAria': '关闭草稿运行面板',
+  'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
+    '留空则不携带用户输入运行。',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     '草稿运行输入',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':

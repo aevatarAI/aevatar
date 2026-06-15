@@ -644,7 +644,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             display: "flex",
             gap: token.paddingSM,
             justifyContent: "space-between",
-            padding: `${toPx(token.padding)} ${toPx(token.paddingLG)}`,
+            padding: "16px 20px 14px",
           }}
         >
           <div style={{ minWidth: 0 }}>
@@ -665,6 +665,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             icon={<CloseOutlined />}
             onClick={onClose}
             size="small"
+            style={{ height: 28, width: 28 }}
             type="text"
           />
         </header>
