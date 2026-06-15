@@ -634,17 +634,20 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenRequiredServicesSpanOwners_ShouldFailCrossOwnerWithoutCreatingKey()
+    public async Task ExecuteAsync_WhenRequiredServicesSpanOwners_ShouldMintPersonalAllowAllKey()
     {
-        // Mixed ownership (one org service + one personal service) cannot be expressed as a single
-        // scoped key, since NyxID validates every allowed_service_id against one owner. Fail up
-        // front with an actionable error instead of an opaque NyxID 400.
+        // Mixed ownership (org-shared api-lark-bot + personal services) cannot be expressed as a
+        // single *restricted* key, since NyxID validates every allowed_service_id against one owner
+        // (the HTTP 400 behind the 2026-06-15 Lark incident). Mint a personal allow-all key instead:
+        // NyxID resolves each call personal-first then falls back to the caller's org memberships,
+        // so one key reaches services across both owners without listing the org id under a personal
+        // owner. The tight allowlist and target_org_id are therefore omitted.
         var handler = CreateSuccessHandler(serviceListJson: """
             {
               "keys": [
-                {"id":"svc-ornn","slug":"ornn-api","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI"}},
-                {"id":"svc-lark","slug":"api-lark-bot"},
-                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI"}}
+                {"id":"svc-ornn","slug":"ornn-api"},
+                {"id":"svc-lark","slug":"api-lark-bot","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI","allowed":true}},
+                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
               ]
             }
             """);
@@ -655,10 +658,42 @@ public sealed class ScheduledAgentCreatorToolTests
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("required_services_cross_owner");
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeTrue();
+            createBody.RootElement.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
+            createBody.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRequiredOrgServiceIsViewerOnly_ShouldFailUnreachableWithoutCreatingKey()
+    {
+        // A personal caller can mint an allow-all key spanning owners, but only for org services it
+        // can actually proxy. An org service the caller merely views (allowed=false) would 403 on
+        // every run, so refuse up front instead of minting a doomed key.
+        var handler = CreateSuccessHandler(serviceListJson: """
+            {
+              "keys": [
+                {"id":"svc-ornn","slug":"ornn-api"},
+                {"id":"svc-lark","slug":"api-lark-bot","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI","allowed":false}},
+                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
+              ]
+            }
+            """);
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("required_service_unreachable");
             document.RootElement.GetProperty("detail").GetString().Should().Contain("api-lark-bot");
-            document.RootElement.GetProperty("detail").GetString().Should().Contain("personal");
-            document.RootElement.GetProperty("hint").GetString().Should().Contain("same owner");
+            document.RootElement.GetProperty("hint").GetString().Should().Contain("member");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),

@@ -64,14 +64,17 @@ internal sealed class ScheduledAgentApiKeyIssuer
                 name = $"aevatar-scheduled-agent-{agentId}",
                 scopes = "read write proxy",
                 platform = "generic",
-                allow_all_services = false,
+                // Single-owner runs keep a tight allowlist (least privilege). Mixed-owner runs mint a
+                // personal allow-all key instead, because NyxID rejects an org service id in a
+                // personal key's allowed_service_ids (the HTTP 400 behind the 2026-06-15 Lark
+                // incident); the allowlist is then omitted and each service is resolved per request.
+                allow_all_services = resolution.AllowAllServices,
                 allow_all_nodes = true,
-                allowed_service_ids = resolution.ServiceIds,
+                allowed_service_ids = resolution.AllowAllServices ? (IReadOnlyList<string>?)null : resolution.ServiceIds,
                 // When every required service is shared through one organization, the scoped key
-                // must be created under that org (its user_id). NyxID validates each allowed
-                // service id against the key owner, so a personal-owned key referencing org-owned
-                // services is rejected with HTTP 400 (surfaced as api_key_create_failed). Null for
-                // all-personal services and omitted from the payload by CreateKeyJsonOptions.
+                // must be created under that org (its user_id) so NyxID's per-owner allowed_service_id
+                // check passes. Null for all-personal and mixed-owner (personal allow-all) runs, and
+                // omitted from the payload by CreateKeyJsonOptions.
                 target_org_id = resolution.TargetOrgId,
             }, CreateKeyJsonOptions),
             ct);
@@ -336,22 +339,34 @@ internal sealed class ScheduledAgentApiKeyIssuer
         if (resolvedIds.Count == 0)
             return ScheduledAgentServiceResolution.Failed("required_service_ids_empty");
 
-        // A NyxID API key has a single owner and every allowed_service_id is validated against it,
-        // so the required services must share one owner. Otherwise no single scoped key can
-        // authorize the whole run, and surfacing that up front beats an opaque NyxID 400.
+        // A NyxID API key has a single owner and every allowed_service_id is validated against it.
+        // When the required services span owners (e.g. personal ornn-api/api-github/chrono-llm plus an
+        // org-shared api-lark-bot), no single *restricted* key can list them all. Rather than failing,
+        // mint a personal-owned key with allow_all_services=true: NyxID resolves each call personal-
+        // first then falls back to the caller's org memberships, so the key reaches every service the
+        // caller can. This only holds if the caller can actually proxy each one — an org service the
+        // caller merely views (allowed=false) would 403 on every run, so refuse up front instead of
+        // minting a doomed key.
         if (distinctOwners.Count > 1)
         {
-            var summary = string.Join(
-                ", ",
-                ownerBySlug.Select(static entry => $"{entry.Slug} => {entry.Owner.DisplayName}"));
-            return ScheduledAgentServiceResolution.Failed(
-                "required_services_cross_owner",
-                $"The scheduled agent requires services owned by different NyxID accounts, so a single scoped key cannot authorize all of them: {summary}.",
-                "Make every required service belong to the same owner — share them all through one organization (and be an admin of it), or keep them all personal — then recreate the scheduled agent.");
+            var unreachable = ownerBySlug
+                .Where(static entry => !entry.Owner.Reachable)
+                .Select(static entry => entry.Slug)
+                .ToArray();
+            if (unreachable.Length > 0)
+            {
+                return ScheduledAgentServiceResolution.Failed(
+                    "required_service_unreachable",
+                    $"The scheduled agent requires org services the caller cannot proxy (view-only access): {string.Join(", ", unreachable)}.",
+                    "Ask an organization admin to grant you member (not viewer) access to these services, then recreate the scheduled agent.");
+            }
+
+            return ScheduledAgentServiceResolution.AllowAll(resolvedIds);
         }
 
-        // null for all-personal services; the org's user_id when every service is shared through it.
-        return new ScheduledAgentServiceResolution(resolvedIds, distinctOwners.Values.Single().OrgId, null);
+        // Single owner: keep the tight allowlist (least privilege). Null target_org_id for all-personal
+        // services; the org's user_id when every service is shared through one org.
+        return new ScheduledAgentServiceResolution(resolvedIds, distinctOwners.Values.Single().OrgId, false, null);
     }
 
     private static ServiceOwner ReadServiceOwner(JsonElement item)
@@ -359,16 +374,20 @@ internal sealed class ScheduledAgentApiKeyIssuer
         if (!item.TryGetProperty("credential_source", out var source) || source.ValueKind != JsonValueKind.Object)
             return ServiceOwner.Personal;
 
-        // NyxID serializes provenance as { "type": "personal" | "org", "org_id": ..., "org_name": ... }.
+        // NyxID serializes provenance as
+        // { "type": "personal" | "org", "org_id": ..., "org_name": ..., "allowed": true|false }.
         if (!string.Equals(ReadString(source, "type"), "org", StringComparison.OrdinalIgnoreCase))
             return ServiceOwner.Personal;
 
         var orgId = ReadString(source, "org_id");
         // An org provenance without a usable org id cannot be targeted; treat it as personal so the
         // ownership check fails loudly at NyxID rather than silently dropping the field.
-        return string.IsNullOrWhiteSpace(orgId)
-            ? ServiceOwner.Personal
-            : ServiceOwner.ForOrg(orgId, ReadString(source, "org_name"));
+        if (string.IsNullOrWhiteSpace(orgId))
+            return ServiceOwner.Personal;
+
+        // allowed=false marks a viewer membership NyxID will not proxy; absent or true means reachable.
+        var reachable = !(source.TryGetProperty("allowed", out var allowed) && allowed.ValueKind == JsonValueKind.False);
+        return ServiceOwner.ForOrg(orgId, ReadString(source, "org_name"), reachable);
     }
 
     private static ScheduledAgentApiKeyIssueResult ExtractIssuedKey(string response)
@@ -509,12 +528,21 @@ internal sealed class ScheduledAgentApiKeyIssuer
     private sealed record ScheduledAgentServiceResolution(
         IReadOnlyList<string> ServiceIds,
         string? TargetOrgId,
+        bool AllowAllServices,
         string? Error,
         string? Detail = null,
         string? Hint = null)
     {
         public static ScheduledAgentServiceResolution Failed(string error, string? detail = null, string? hint = null) =>
-            new([], null, error, detail, hint);
+            new([], null, false, error, detail, hint);
+
+        // Mixed-owner case: a single restricted key cannot list services across owners (NyxID
+        // validates every allowed_service_id against the key's one owner). A personal-owned key with
+        // allow_all_services=true instead reaches every service the caller can — personal directly,
+        // org-shared via membership fallback — resolved per request by NyxID, so no allowlist or
+        // target_org_id is sent.
+        public static ScheduledAgentServiceResolution AllowAll(IReadOnlyList<string> serviceIds) =>
+            new(serviceIds, null, true, null);
     }
 
     private sealed record ResolvedService(string Id, ServiceOwner Owner);
@@ -523,12 +551,15 @@ internal sealed class ScheduledAgentApiKeyIssuer
     /// Owner of a resolved NyxID service: personal (<see cref="OrgId"/> is <c>null</c>) or an
     /// organization identified by its user id. Used to decide the <c>target_org_id</c> the scoped
     /// key must be created under so NyxID's per-owner <c>allowed_service_ids</c> check passes.
+    /// <see cref="Reachable"/> is <c>false</c> for an org service the caller only views
+    /// (<c>allowed=false</c>) and therefore cannot proxy.
     /// </summary>
-    private sealed record ServiceOwner(string? OrgId, string? OrgName)
+    private sealed record ServiceOwner(string? OrgId, string? OrgName, bool Reachable)
     {
-        public static readonly ServiceOwner Personal = new((string?)null, null);
+        public static readonly ServiceOwner Personal = new((string?)null, null, true);
 
-        public static ServiceOwner ForOrg(string orgId, string? orgName) => new(orgId, orgName);
+        public static ServiceOwner ForOrg(string orgId, string? orgName, bool reachable) =>
+            new(orgId, orgName, reachable);
 
         public string Key => OrgId is null ? "personal" : $"org:{OrgId}";
 
