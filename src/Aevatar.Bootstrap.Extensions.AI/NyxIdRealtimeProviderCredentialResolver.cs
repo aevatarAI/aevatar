@@ -121,9 +121,10 @@ public sealed class NyxIdRealtimeProviderCredentialResolver : IRealtimeProviderC
                 return nestedValue.GetString();
             }
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return null;
+            throw new RealtimeProviderCredentialException(
+                "NyxID realtime credential mint returned a non-JSON response.", ex);
         }
 
         return null;
