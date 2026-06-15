@@ -249,6 +249,18 @@ function readActiveMemberBindingRunId(
   return trimOptional(detail?.currentBindingRun?.bindingRunId);
 }
 
+function readFallbackBindingRun(
+  detail: StudioMemberDetail | null | undefined,
+  bindingRunId: string,
+): StudioMemberBindingRunStatusResponse | null {
+  const currentRun = detail?.currentBindingRun ?? null;
+  if (!isSameBindingRun(currentRun, bindingRunId)) {
+    return null;
+  }
+
+  return currentRun;
+}
+
 function readPathSegments(): {
   canonicalHref: string;
   memberId: string;
@@ -1744,6 +1756,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     memberQuery.data,
   );
   const publishBindingRunTerminal = isTerminalBindingRun(publishBindingRun);
+  const publishBindingRunFailed = Boolean(
+    publishBindingRun?.status === "failed" ||
+      publishBindingRun?.status === "rejected",
+  );
   const authoritativeBindingRunInProgress = Boolean(
     authoritativeBindingRunId &&
       (!publishBindingRunTerminal ||
@@ -1763,7 +1779,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const publishPending = publishMutation.isPending;
   const memberPublished = memberIsPublished;
   const publishVisibleError =
-    memberIsPublished || publishStatusStillInProgress ? "" : publishError;
+    publishError &&
+    (publishBindingRunFailed ||
+      (!memberIsPublished && !publishStatusStillInProgress))
+      ? publishError
+      : "";
   const publishDisabled = Boolean(
     route.mode === "new" ||
       linkedWorkflowMissing ||
@@ -1842,11 +1862,26 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     const refreshedMember = memberResult.data;
     const activeRunId = readActiveMemberBindingRunId(refreshedMember);
     if (activeRunId) {
-      const refreshedRun = await studioApi.getMemberBindingRun(
-        route.scopeId,
-        route.memberId,
-        activeRunId,
-      );
+      let refreshedRun: StudioMemberBindingRunStatusResponse | null = null;
+      try {
+        refreshedRun = await studioApi.getMemberBindingRun(
+          route.scopeId,
+          route.memberId,
+          activeRunId,
+        );
+      } catch (error) {
+        if (!isStudioApiStatus(error, 404)) {
+          throw error;
+        }
+
+        refreshedRun = readFallbackBindingRun(refreshedMember, activeRunId);
+      }
+
+      if (!refreshedRun) {
+        void message.info("Publish status is not materialized yet. Try refreshing again.");
+        return;
+      }
+
       setPublishBindingRun(refreshedRun);
       if (refreshedRun.status === "failed" || refreshedRun.status === "rejected") {
         setPublishError(readBindingRunFailureMessage(refreshedRun));
