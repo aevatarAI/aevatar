@@ -653,18 +653,30 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.addNode': '添加节点',
   'teamMemberWorkflowStudio.header.back': '返回',
   'teamMemberWorkflowStudio.header.currentTeam': '当前团队',
+  'teamMemberWorkflowStudio.header.confirmDeleteConnection':
+    '确定删除当前选中的连接吗？此操作不可撤销。',
+  'teamMemberWorkflowStudio.header.confirmDeleteNode':
+    '确定删除当前选中的节点吗？此操作不可撤销。',
   'teamMemberWorkflowStudio.header.deleteConnection': '删除连接',
   'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
+  'teamMemberWorkflowStudio.header.deleteSelectedConnection':
+    '删除选中的连接',
+  'teamMemberWorkflowStudio.header.deleteSelectedNode': '删除选中的节点',
   'teamMemberWorkflowStudio.header.editWorkflowName': '编辑 Workflow 名称',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
   'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
+  'teamMemberWorkflowStudio.header.more': '更多',
+  'teamMemberWorkflowStudio.header.moreActions': '更多 Workflow 操作',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow 草稿和节点操作',
   'teamMemberWorkflowStudio.header.pasteYaml': '粘贴 YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow 主操作',
   'teamMemberWorkflowStudio.header.prepareDraftRun': '准备草稿运行',
+  'teamMemberWorkflowStudio.header.publish': '发布',
   'teamMemberWorkflowStudio.header.runMessage': '运行消息',
+  'teamMemberWorkflowStudio.header.refreshPublishStatus': '刷新状态',
+  'teamMemberWorkflowStudio.header.run': '运行',
   'teamMemberWorkflowStudio.header.runActiveMember': '运行草稿',
   'teamMemberWorkflowStudio.header.runDraft': '运行草稿',
   'teamMemberWorkflowStudio.header.save': '保存',
@@ -677,6 +689,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.publish.error': '错误',
   'teamMemberWorkflowStudio.header.publish.published': '已发布',
   'teamMemberWorkflowStudio.header.publish.publishing': '发布中',
+  'teamMemberWorkflowStudio.header.publish.publishingStatus': '发布中',
   'teamMemberWorkflowStudio.header.publishMember': '发布成员 Workflow',
   'teamMemberWorkflowStudio.header.publishMemberShort': '发布成员',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': '团队',
@@ -686,6 +699,10 @@ const zhCNMessages = {
     '加载 Workflow 草稿后才能查看 YAML。',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow 视图',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow 标题',
+  'teamMemberWorkflowStudio.header.yaml': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActions': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActionsTitle':
+    '查看或导入 Workflow YAML',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
     '高级原始配置',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':

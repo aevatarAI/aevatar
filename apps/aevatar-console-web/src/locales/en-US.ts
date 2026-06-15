@@ -694,18 +694,30 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.addNode': 'Add node',
   'teamMemberWorkflowStudio.header.back': 'Back',
   'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
+  'teamMemberWorkflowStudio.header.confirmDeleteConnection':
+    'Delete the selected connection? This cannot be undone.',
+  'teamMemberWorkflowStudio.header.confirmDeleteNode':
+    'Delete the selected node? This cannot be undone.',
   'teamMemberWorkflowStudio.header.deleteConnection': 'Delete connection',
   'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
+  'teamMemberWorkflowStudio.header.deleteSelectedConnection':
+    'Delete selected connection',
+  'teamMemberWorkflowStudio.header.deleteSelectedNode': 'Delete selected node',
   'teamMemberWorkflowStudio.header.editWorkflowName': 'Edit workflow name',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow identity',
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
+  'teamMemberWorkflowStudio.header.more': 'More',
+  'teamMemberWorkflowStudio.header.moreActions': 'More workflow actions',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow draft and node actions',
   'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
   'teamMemberWorkflowStudio.header.prepareDraftRun': 'Prepare draft run',
+  'teamMemberWorkflowStudio.header.publish': 'Publish',
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
+  'teamMemberWorkflowStudio.header.refreshPublishStatus': 'Refresh status',
+  'teamMemberWorkflowStudio.header.run': 'Run',
   'teamMemberWorkflowStudio.header.runActiveMember': 'Run draft',
   'teamMemberWorkflowStudio.header.runDraft': 'Run draft',
   'teamMemberWorkflowStudio.header.save': 'Save',
@@ -718,6 +730,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.publish.error': 'Error',
   'teamMemberWorkflowStudio.header.publish.published': 'Published',
   'teamMemberWorkflowStudio.header.publish.publishing': 'Publishing',
+  'teamMemberWorkflowStudio.header.publish.publishingStatus': 'Publishing',
   'teamMemberWorkflowStudio.header.publishMember': 'Publish member workflow',
   'teamMemberWorkflowStudio.header.publishMemberShort': 'Publish member',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
@@ -727,6 +740,10 @@ const enUSMessages = {
     'Load the workflow draft before viewing YAML.',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
+  'teamMemberWorkflowStudio.header.yaml': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActions': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActionsTitle':
+    'View or import workflow YAML',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
     'Advanced raw configuration',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
