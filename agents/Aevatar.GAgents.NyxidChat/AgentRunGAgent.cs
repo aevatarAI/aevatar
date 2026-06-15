@@ -314,7 +314,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             await ProduceAndDispatchAsync(
                 request,
                 command.RunId,
-                "Sorry, I wasn't able to generate a response. Please try again.",
+                ResolveTerminalFailureReply(errorSummary),
                 null,
                 LlmReplyTerminalState.Failed,
                 errorCode,
@@ -607,6 +607,28 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState.AppendedHistory.ToArray(),
             stepState.ToolReceipts.ToArray(),
             stepState.PendingToolCalls.ToArray());
+    }
+
+    // When an LLM turn fails terminally, surface an actionable hint for the one failure the user
+    // can actually fix — an expired / unauthorized NyxID session. The upstream 401/403 classifier
+    // (NyxIdLLMProvider) emits the stable phrase "session may have expired" and the proxy body
+    // carries `token_expired`; match either and tell the user to re-auth instead of the generic
+    // echo. Fail-safe: an unrecognized summary keeps the generic message, so this never regresses
+    // other failures.
+    internal static string ResolveTerminalFailureReply(string? errorSummary)
+    {
+        const string generic = "Sorry, I wasn't able to generate a response. Please try again.";
+        if (string.IsNullOrWhiteSpace(errorSummary))
+            return generic;
+
+        if (errorSummary.Contains("session may have expired", StringComparison.OrdinalIgnoreCase)
+            || errorSummary.Contains("token_expired", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Your NyxID session has expired or is no longer authorized — please sign in to "
+                + "NyxID again and resend your message. 登录会话已过期或失效，请重新登录 NyxID 后再发送一次。";
+        }
+
+        return generic;
     }
 
     // Diagnostic context for the otherwise-silent empty-reply terminal path. Reads only

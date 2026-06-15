@@ -677,8 +677,7 @@ public sealed class ChatRuntime
         }
 
         runContext.Result = finalContent;
-        foreach (var msg in pendingHistoryMessages)
-            _history.Add(msg);
+        _history.AddRange(pendingHistoryMessages);
 
         await RunStopHookAsync(runContext.Result, pendingHistoryMessages, runToken);
 
@@ -944,7 +943,7 @@ public sealed class ChatRuntime
         var messages = new List<ChatMessage>();
         if (!string.IsNullOrEmpty(systemPrompt))
             messages.Add(ChatMessage.System(systemPrompt));
-        messages.AddRange(_history.Messages);
+        messages.AddRange(ChatMessageToolCallTranscript.WithoutInvalidToolCallPairs(_history.Messages));
         messages.Add(pendingUserMessage);
         return messages;
     }

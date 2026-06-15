@@ -17,7 +17,7 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Hosting.Endpoints;
-using Aevatar.Hosting.ExecutionActivity;
+using Aevatar.Capabilities.ExecutionActivity;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf.WellKnownTypes;

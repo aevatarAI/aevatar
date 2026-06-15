@@ -426,6 +426,90 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenOwnerPinsCustomLlmProxyRoute_ShouldGrantScopedKeyAccessToThatService()
+    {
+        // Regression for the scheduled-run 403 incident: the bot owner pre-configured a custom
+        // NyxID LLM route (`/api/v1/proxy/s/chrono-llm`, model gpt-5.5). The scoped key was minted
+        // with allow_all_services=false but its allowlist omitted chrono-llm, so the schedule fired
+        // yet every run failed NyxID's proxy scope check with HTTP 403 api_key_scope_forbidden.
+        // The issued key must be authorized for the owner's pinned LLM route.
+        var handler = CreateSuccessHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/keys", """
+            {
+              "keys": [
+                {"id":"svc-ornn","slug":"ornn-api"},
+                {"id":"svc-lark","slug":"api-lark-bot"},
+                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"},
+                {"id":"svc-chrono","slug":"chrono-llm"}
+              ]
+            }
+            """);
+
+        var ownerLlmConfigSource = Substitute.For<IOwnerLlmConfigSource>();
+        ownerLlmConfigSource.GetForScopeAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new OwnerLlmConfig("gpt-5.5", "/api/v1/proxy/s/chrono-llm", 0)));
+
+        var harness = CreateHarness(handler: handler, ownerLlmConfigSource: ownerLlmConfigSource);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+
+            await ownerLlmConfigSource.Received().GetForScopeAsync("scope-bot-1", Arg.Any<CancellationToken>());
+
+            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+            createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
+                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure", "svc-chrono");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenOwnerUsesGatewayRoute_ShouldNotWidenScopedKeyAllowlist()
+    {
+        // The shared gateway route uses the bearer token directly and needs no per-service grant,
+        // so a gateway/empty PreferredLlmRoute must leave the scoped allowlist unchanged.
+        var handler = CreateSuccessHandler();
+        var ownerLlmConfigSource = Substitute.For<IOwnerLlmConfigSource>();
+        ownerLlmConfigSource.GetForScopeAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new OwnerLlmConfig("gpt-5.5", null, 0)));
+
+        var harness = CreateHarness(handler: handler, ownerLlmConfigSource: ownerLlmConfigSource);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+
+            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
+                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
+        });
+    }
+
+    [Theory]
+    [InlineData("/api/v1/proxy/s/chrono-llm", "chrono-llm")]
+    [InlineData("/api/v1/proxy/s/chrono-llm/v1", "chrono-llm")]
+    [InlineData("  /api/v1/proxy/s/Custom-LLM  ", "Custom-LLM")]
+    [InlineData("chrono-llm", "chrono-llm")]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("   ", null)]
+    [InlineData("/api/v1/llm/gateway/v1", null)]
+    [InlineData("https://nyx.example.com/api/v1/proxy/s/chrono-llm", null)]
+    public void ExtractProxyServiceSlug_ShouldReturnSlugOnlyForProxyServiceRoutes(string? route, string? expected)
+    {
+        ScheduledAgentApiKeyIssuer.ExtractProxyServiceSlug(route).Should().Be(expected);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenDeclaredRuntimeServiceMissing_ShouldFailBeforeKeyCreation()
     {
         var handler = CreateSuccessHandler();
@@ -839,7 +923,8 @@ public sealed class ScheduledAgentCreatorToolTests
     private static CreatorHarness CreateHarness(
         RoutingJsonHandler? handler = null,
         OwnerScope? scope = null,
-        bool callerScopeUnavailable = false)
+        bool callerScopeUnavailable = false,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
     {
         handler ??= CreateSuccessHandler();
 
@@ -871,6 +956,8 @@ public sealed class ScheduledAgentCreatorToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(new ScheduledAgentCreatorOptions());
         services.AddSingleton<ScheduledAgentCreateRequestMapper>();
+        if (ownerLlmConfigSource is not null)
+            services.AddSingleton(ownerLlmConfigSource);
         services.AddSingleton<ScheduledAgentApiKeyIssuer>();
 
         var provider = services.BuildServiceProvider();

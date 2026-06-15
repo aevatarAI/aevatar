@@ -4416,6 +4416,33 @@ public sealed class AgentRunGAgentTests
             return await pendingReply.Task;
         }
     }
+
+    [Theory]
+    [InlineData(
+        "Upstream LLM route '/api/v1/proxy/s/chrono-llm' rejected the request with HTTP 401 for model 'gpt-5.5'. Your session may have expired — try signing in again. Upstream said: {\"error\":\"token_expired\",\"error_code\":2001}",
+        true)]
+    [InlineData("Upstream said: {\"error\":\"token_expired\"}", true)]
+    [InlineData("Reply generator returned an empty response (finishReason=length).", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void ResolveTerminalFailureReply_SurfacesReauthHintOnlyForExpiredSession(
+        string? errorSummary,
+        bool expectReauth)
+    {
+        const string generic = "Sorry, I wasn't able to generate a response. Please try again.";
+        var reply = AgentRunGAgent.ResolveTerminalFailureReply(errorSummary);
+
+        if (expectReauth)
+        {
+            reply.Should().NotBe(generic);
+            reply.Should().Contain("sign in to NyxID again");
+            reply.Should().Contain("重新登录");
+        }
+        else
+        {
+            reply.Should().Be(generic);
+        }
+    }
 }
 
 internal static class AgentRunGAgentTestExtensions

@@ -92,6 +92,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
     public async Task ListAsync_ShouldReturnOnlyMembersInScope()
     {
         var inScopeA = NewDocument(scopeId: ScopeId, memberId: "m-1", includeImplementationRef: true);
+        inScopeA.DisplayName = "Renamed Member";
         var inScopeB = NewDocument(scopeId: ScopeId, memberId: "m-2");
         var inOtherScope = NewDocument(scopeId: "scope-other", memberId: "m-3");
 
@@ -103,6 +104,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
         roster.ScopeId.Should().Be(ScopeId);
         roster.Members.Select(m => m.MemberId).Should().BeEquivalentTo("m-1", "m-2");
         var workflowMember = roster.Members.Single(m => m.MemberId == "m-1");
+        workflowMember.DisplayName.Should().Be("Renamed Member");
         workflowMember.ImplementationRef.Should().NotBeNull();
         workflowMember.ImplementationRef!.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
         workflowMember.ImplementationRef.WorkflowId.Should().Be("wf-1");
@@ -263,12 +265,14 @@ public sealed class ProjectionStudioMemberQueryPortTests
             memberId: "m-1",
             includeImplementationRef: false,
             includeLastBinding: false);
+        document.DisplayName = "Renamed Detail";
 
         var reader = new StubDocumentReader([document]);
         var port = new ProjectionStudioMemberQueryPort(reader);
 
         var detail = await port.GetAsync(ScopeId, "m-1");
 
+        detail!.Summary.DisplayName.Should().Be("Renamed Detail");
         detail!.ImplementationRef.Should().BeNull();
         detail.LastBinding.Should().BeNull();
     }

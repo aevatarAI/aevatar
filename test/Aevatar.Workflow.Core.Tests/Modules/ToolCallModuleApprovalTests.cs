@@ -28,8 +28,16 @@ public sealed class ToolCallModuleApprovalTests
         var tool = new ScriptedWorkflowTool("danger", _ => new WorkflowToolExecutionResult(string.Empty, PendingApproval: pending));
         var module = CreateModule(tool);
         var ctx = new RecordingWorkflowContext();
+        var fileRef = BuildWorkflowFileRef("file-approval");
 
-        await ExecuteToolCallAsync(module, ctx, tool.Name, "danger_step", """{"danger":true}""", "exec-1");
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            "danger_step",
+            """{"danger":true}""",
+            "exec-1",
+            [fileRef]);
 
         ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallStartedEvent>().Should().ContainSingle();
         ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Should().BeEmpty();
@@ -45,6 +53,8 @@ public sealed class ToolCallModuleApprovalTests
         suspended.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
         var state = ctx.LoadState<ToolCallModuleState>("tool_call");
         state.PendingApprovals.Should().ContainKey("run-1:danger_step:exec-1:workflow:run-1:danger_step:exec-1:approval-1");
+        var pendingState = state.PendingApprovals.Values.Should().ContainSingle().Subject;
+        pendingState.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-approval");
     }
 
     [Fact]
@@ -65,8 +75,16 @@ public sealed class ToolCallModuleApprovalTests
                 : WorkflowToolExecutionResult.Success("""{"executed":true}"""));
         var module = CreateModule(tool);
         var ctx = new RecordingWorkflowContext();
+        var fileRef = BuildWorkflowFileRef("file-replay");
 
-        await ExecuteToolCallAsync(module, ctx, tool.Name, "danger_step", """{"danger":true}""", "exec-1");
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            "danger_step",
+            """{"danger":true}""",
+            "exec-1",
+            [fileRef]);
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -87,6 +105,7 @@ public sealed class ToolCallModuleApprovalTests
 
         tool.Requests.Should().HaveCount(2);
         tool.Requests[1].ArgumentsJson.Should().Be("""{"danger":true}""");
+        tool.Requests[1].InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-replay");
         tool.Requests[1].ApprovalGrant.Should().NotBeNull();
         var grant = tool.Requests[1].ApprovalGrant!;
         grant.ApprovalRequestId.Should().Be("approval-1");
@@ -191,21 +210,35 @@ public sealed class ToolCallModuleApprovalTests
         string toolName,
         string stepId,
         string input,
-        string executionId)
+        string executionId,
+        IReadOnlyList<WorkflowFileRef>? inputFileRefs = null)
     {
+        var request = new StepRequestEvent
+        {
+            StepId = stepId,
+            StepType = "tool_call",
+            RunId = ctx.RunId,
+            ExecutionId = executionId,
+            Input = input,
+            Parameters = { ["tool"] = toolName },
+        };
+        request.InputFileRefs.Add(inputFileRefs?.Select(static fileRef => fileRef.Clone()) ?? []);
+
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
-            {
-                StepId = stepId,
-                StepType = "tool_call",
-                RunId = ctx.RunId,
-                ExecutionId = executionId,
-                Input = input,
-                Parameters = { ["tool"] = toolName },
-            }),
+            Envelope(request),
             ctx,
             CancellationToken.None);
     }
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"artifact-{fileId}",
+            SourceKind = WorkflowFileSourceKind.ChatInput,
+            FileName = $"{fileId}.txt",
+            MediaType = "text/plain",
+        };
 
     private static EventEnvelope Envelope(IMessage evt) =>
         new()

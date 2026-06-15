@@ -9,7 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime.Hosting\Aevatar.Foundation.Runtime.Hosting.csproj" />
-    <ProjectReference Include="..\Aevatar.Hosting\Aevatar.Hosting.csproj" />
+    <ProjectReference Include="..\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

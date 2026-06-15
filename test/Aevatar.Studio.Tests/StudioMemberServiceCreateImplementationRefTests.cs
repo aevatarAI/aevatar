@@ -178,6 +178,13 @@ public sealed class StudioMemberServiceCreateImplementationRefTests
             string? targetTeamId,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("create must not patch team assignment.");
+
+        public Task RenameAsync(
+            string scopeId,
+            string memberId,
+            string displayName,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("create must not rename members.");
     }
 
     private sealed record CreateCall(string ScopeId, CreateStudioMemberRequest Request);

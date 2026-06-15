@@ -29,12 +29,23 @@ internal static class SkillRunnerExternalTriggerEndpoints
         string agentId,
         string sourceId,
         [FromServices] ISkillRunnerCommandPort commandPort,
+        [FromServices] INyxIdCurrentUserResolver currentUserResolver,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(commandPort);
+        ArgumentNullException.ThrowIfNull(currentUserResolver);
 
-        if (!HasAdmissionAuthentication(http))
+        // This endpoint is AllowAnonymous because NyxID issues opaque API keys, not JWTs,
+        // so the host's JwtBearer fallback policy would 401 valid callers. Authenticate by
+        // resolving the caller against NyxID: a missing/invalid/expired bearer resolves to
+        // no user and is rejected. Header presence alone is NOT proof of identity.
+        var bearerToken = ExtractBearerToken(http);
+        if (string.IsNullOrWhiteSpace(bearerToken))
+            return Results.Unauthorized();
+
+        var callerUserId = await currentUserResolver.ResolveCurrentUserIdAsync(bearerToken, ct);
+        if (string.IsNullOrWhiteSpace(callerUserId))
             return Results.Unauthorized();
 
         var deliveryId = ResolveDeliveryId(http);
@@ -99,16 +110,16 @@ internal static class SkillRunnerExternalTriggerEndpoints
         }
     }
 
-    private static bool HasAdmissionAuthentication(HttpContext http)
+    private static string? ExtractBearerToken(HttpContext http)
     {
         var authorization = http.Request.Headers.Authorization.ToString();
-        if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrWhiteSpace(authorization["Bearer ".Length..]))
-        {
-            return true;
-        }
+        if (string.IsNullOrWhiteSpace(authorization))
+            return null;
 
-        return !string.IsNullOrWhiteSpace(http.Request.Headers["X-Aevatar-External-Trigger-Signature"].ToString());
+        const string prefix = "Bearer ";
+        return authorization.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? authorization[prefix.Length..].Trim()
+            : null;
     }
 
     private static string? ResolveDeliveryId(HttpContext http) =>

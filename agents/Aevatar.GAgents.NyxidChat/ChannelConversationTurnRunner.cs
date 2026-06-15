@@ -1828,7 +1828,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             Credentials = new AgentToolCredentials(token, token, null),
             Caller = new AgentToolCallerContext(
                 inboundEvent.RegistrationScopeId,
-                null,
+                inboundEvent.RegistrationScopeId,
                 inboundEvent.MessageId),
             Channel = new AgentToolChannelContext(
                 inboundEvent.Platform,
@@ -2040,7 +2040,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             Caller = new AgentToolCallerContext(
                 inboundEvent.RegistrationScopeId,
-                null,
+                inboundEvent.RegistrationScopeId,
                 inboundEvent.MessageId),
             Channel = new AgentToolChannelContext(
                 inboundEvent.Platform,
@@ -2445,10 +2445,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             _logger.LogDebug(
                 "Lark typing reaction task did not complete within timeout before clear; proceeding anyway");
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // The typing task already logged its own exception — proceed with the clear so any
-            // already-visible Typing reaction is still removed whenever possible.
+            _logger.LogWarning(
+                ex,
+                "Lark typing reaction task failed before clear; proceeding with clear");
         }
 
         await TryClearTypingReactionAsync(inbound, registration, ct);
@@ -2546,7 +2547,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(
+                    _logger.LogWarning(
                         ex,
                         "Lark typing reaction delete threw: provider={ProviderSlug}, message={MessageId}, reaction={ReactionId}",
                         providerSlug,

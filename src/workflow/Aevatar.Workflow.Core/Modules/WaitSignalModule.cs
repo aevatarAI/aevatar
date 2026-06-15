@@ -221,19 +221,11 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
 
         if (pendingStateForSignal.TimeoutLease != null)
         {
-            try
-            {
-                await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pendingStateForSignal.TimeoutLease, CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                ctx.Logger.LogDebug(
-                    ex,
-                    "WaitSignal: failed to cancel timeout after signal completion run={RunId} step={StepId} signal={Signal}",
-                    pendingStateForSignal.RunId,
-                    pendingStateForSignal.StepId,
-                    pendingStateForSignal.SignalName);
-            }
+            await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                ctx,
+                pendingStateForSignal.TimeoutLease,
+                $"WaitSignal timeout cleanup run={pendingStateForSignal.RunId} step={pendingStateForSignal.StepId} signal={pendingStateForSignal.SignalName}",
+                CancellationToken.None);
         }
     }
 
@@ -342,7 +334,11 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await SaveStateAsync(state, ctx, ct);
-        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, existingPending.TimeoutLease, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            existingPending.TimeoutLease,
+            $"WaitSignal replaced waiter cleanup run={existingPending.RunId} step={existingPending.StepId} signal={existingPending.SignalName}",
+            ct);
     }
 
     private static Task SaveStateAsync(

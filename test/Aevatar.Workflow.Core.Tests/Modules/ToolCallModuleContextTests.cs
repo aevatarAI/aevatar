@@ -168,6 +168,27 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_ShouldPassCurrentStepInputFileRefsToDirectTool()
+    {
+        var tool = new CapturingWorkflowTool("document_extract");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+        var fileRef = BuildWorkflowFileRef("file-step");
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            inputFileRefs: [fileRef]);
+
+        tool.LastRequest.Should().NotBeNull();
+        var requestFileRef = tool.LastRequest!.InputFileRefs.Should().ContainSingle().Subject;
+        requestFileRef.FileId.Should().Be("file-step");
+        requestFileRef.Should().NotBeSameAs(fileRef);
+        LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ToolCallModule_WhenToolReturnsManagedHandoff_ShouldLeaveParentStepPending()
     {
         var handoff = new WorkflowManagedHandoffOutcome
@@ -247,21 +268,35 @@ public sealed class ToolCallModuleContextTests
         string toolName,
         string stepId = "call_proxy",
         string input = "{}",
-        string executionId = "")
+        string executionId = "",
+        IReadOnlyList<WorkflowFileRef>? inputFileRefs = null)
     {
+        var request = new StepRequestEvent
+        {
+            StepId = stepId,
+            StepType = "tool_call",
+            RunId = ctx.RunId,
+            ExecutionId = executionId,
+            Input = input,
+            Parameters = { ["tool"] = toolName },
+        };
+        request.InputFileRefs.Add(inputFileRefs?.Select(static fileRef => fileRef.Clone()) ?? []);
+
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
-            {
-                StepId = stepId,
-                StepType = "tool_call",
-                RunId = ctx.RunId,
-                ExecutionId = executionId,
-                Input = input,
-                Parameters = { ["tool"] = toolName },
-            }),
+            Envelope(request),
             ctx,
             CancellationToken.None);
     }
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"artifact-{fileId}",
+            SourceKind = WorkflowFileSourceKind.ChatInput,
+            FileName = $"{fileId}.txt",
+            MediaType = "text/plain",
+        };
 
     private static StepCompletedEvent LastCompleted(RecordingWorkflowContext ctx) =>
         ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Last();

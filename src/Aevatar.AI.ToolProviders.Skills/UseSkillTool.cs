@@ -64,7 +64,7 @@ public sealed class UseSkillTool : IAgentTool
             "args": { "type": "string", "description": "Optional arguments for the skill" },
             "mount_workflows": {
               "type": "boolean",
-              "description": "When true, mount the skill's workflow YAML bundles into the current scope as callable workflows. Default false."
+              "description": "When true, mount the skill's workflow YAML bundles into the current scope as callable workflows. When omitted, hosts with workflow mounting support mount workflow skills automatically."
             }
           },
           "required": ["skill"]
@@ -80,7 +80,7 @@ public sealed class UseSkillTool : IAgentTool
         var arguments = ParseArguments(argumentsJson);
         var skillName = arguments.SkillName;
         var args = arguments.Args;
-        var mountWorkflows = arguments.MountWorkflows;
+        var requestedMountWorkflows = arguments.MountWorkflows;
 
         if (string.IsNullOrWhiteSpace(skillName))
             return BuildLoadResult(
@@ -106,7 +106,7 @@ public sealed class UseSkillTool : IAgentTool
                 status: "success",
                 text: BuildSkillResponse(skill, args),
                 skill: skill,
-                mountWorkflows: mountWorkflows,
+                mountWorkflows: ShouldMountWorkflows(skill, requestedMountWorkflows),
                 ct: ct);
 
         if (_remoteFetcher != null)
@@ -137,7 +137,7 @@ public sealed class UseSkillTool : IAgentTool
                         status: "success",
                         text: BuildSkillResponse(skill, args),
                         skill: skill,
-                        mountWorkflows: mountWorkflows,
+                        mountWorkflows: ShouldMountWorkflows(skill, requestedMountWorkflows),
                         ct: ct);
                 }
             }
@@ -330,7 +330,7 @@ public sealed class UseSkillTool : IAgentTool
     {
         string skillName = "";
         string args = "";
-        var mountWorkflows = false;
+        bool? mountWorkflows = null;
 
         try
         {
@@ -349,6 +349,11 @@ public sealed class UseSkillTool : IAgentTool
 
         return new UseSkillArguments(skillName, args, mountWorkflows);
     }
+
+    private bool ShouldMountWorkflows(SkillDefinition skill, bool? requestedMountWorkflows) =>
+        requestedMountWorkflows ??
+        skill.Workflows.Count > 0 &&
+        (_workflowMountPort is not NoOpSkillWorkflowMountPort || _scopeWorkflowCommandPort is not null);
 
     private static string BuildSkillResponse(SkillDefinition skill, string args)
     {
@@ -391,7 +396,7 @@ public sealed class UseSkillTool : IAgentTool
             sb.AppendLine();
             sb.AppendLine("## aevatar_start_workflow Handoff");
             sb.AppendLine();
-            sb.AppendLine("Call `aevatar_start_workflow` with this inline workflow bundle before treating workflow YAMLs as ordinary reference files.");
+            sb.AppendLine("Call `aevatar_start_workflow` with `workflow_id` after the workflow is mounted. Use `workflow_yamls` only if the Mounted Workflows section says mounting was unavailable.");
 
             foreach (var workflow in skill.Workflows)
             {
@@ -607,7 +612,7 @@ public sealed class UseSkillTool : IAgentTool
         object Payload,
         string Text);
 
-    private readonly record struct UseSkillArguments(string SkillName, string Args, bool MountWorkflows);
+    private readonly record struct UseSkillArguments(string SkillName, string Args, bool? MountWorkflows);
 
     private static readonly JsonSerializerOptions SnakeCaseJson = new()
     {

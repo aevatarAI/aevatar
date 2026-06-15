@@ -1284,18 +1284,12 @@ internal sealed class SubWorkflowOrchestrator
         if (lease == null)
             return;
 
-        try
-        {
-            await _cancelDurableCallbackAsync(lease, ct);
-        }
-        catch (Exception ex)
-        {
-            _loggerAccessor().LogDebug(
-                ex,
-                "Ignore workflow_call definition timeout cancellation failure. callback={CallbackId} generation={Generation}",
-                lease.CallbackId,
-                lease.Generation);
-        }
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            _cancelDurableCallbackAsync,
+            _loggerAccessor(),
+            lease,
+            "workflow_call definition timeout cleanup",
+            ct);
     }
 
     private string BuildSubWorkflowActorId(WorkflowDefinitionSnapshot definition, string lifecycle)

@@ -270,6 +270,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         IEnumerable<Aevatar.AI.Abstractions.LLMProviders.ChatMessage> messages,
         ILogger logger)
     {
+        messages = ChatMessageToolCallTranscript.WithoutInvalidToolCallPairs(messages);
         var result = new List<Microsoft.Extensions.AI.ChatMessage>();
 
         foreach (var msg in messages)

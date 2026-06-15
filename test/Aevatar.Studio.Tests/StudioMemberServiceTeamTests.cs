@@ -135,16 +135,21 @@ public sealed class StudioMemberServiceTeamTests
     }
 
     [Fact]
-    public async Task UpdateAsync_ShouldThrow_WhenMemberNotFound()
+    public async Task UpdateAsync_ShouldAcceptTeamPatch_WhenMemberReadModelIsMissing()
     {
-        var service = NewService(memberQueryPort: new InMemoryMemberQueryPort(null));
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(
+            commandPort: commandPort,
+            memberQueryPort: new InMemoryMemberQueryPort(null));
 
-        var act = () => service.UpdateAsync(
+        var response = await service.UpdateAsync(
             ScopeId,
             "missing-member",
             new UpdateStudioMemberRequest(TeamId: PatchValue<string>.Of("t-1")));
 
-        await act.Should().ThrowAsync<StudioMemberNotFoundException>();
+        response.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
+        commandPort.PatchTeamAssignmentCalls.Should().Be(1);
+        commandPort.LastTargetTeamId.Should().Be("t-1");
     }
 
     private static StudioMemberService NewService(
@@ -269,6 +274,13 @@ public sealed class StudioMemberServiceTeamTests
         public Task UpdateImplementationAsync(
             string scopeId, string memberId,
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task RenameAsync(
+            string scopeId,
+            string memberId,
+            string displayName,
+            CancellationToken ct = default) =>
             Task.CompletedTask;
 
         public Task StartBindingRunAsync(

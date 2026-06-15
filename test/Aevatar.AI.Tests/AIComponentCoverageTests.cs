@@ -667,12 +667,11 @@ public class AIComponentCoverageTests
 
         mappedRequest.Model.Should().NotBeNull();
         mappedRequest.Model!.GetType().Name.Should().Contain("ChatModel");
-        mappedRequest.Messages.Should().HaveCount(5);
+        mappedRequest.Messages.Should().HaveCount(4);
         mappedRequest.Messages[0].Role.Should().Be(ChatMessageRoles.System);
         mappedRequest.Messages[1].Role.Should().Be(ChatMessageRoles.User);
         mappedRequest.Messages[2].Role.Should().Be(ChatMessageRoles.Assistant);
-        mappedRequest.Messages[3].Role.Should().Be(ChatMessageRoles.Tool);
-        mappedRequest.Messages[4].Role.Should().Be(ChatMessageRoles.User);
+        mappedRequest.Messages[3].Role.Should().Be(ChatMessageRoles.User);
         mappedRequest.Temperature.Should().Be(0.4);
         mappedRequest.MaxTokens.Should().Be(128);
         mappedRequest.Metadata.Should().NotBeNull();

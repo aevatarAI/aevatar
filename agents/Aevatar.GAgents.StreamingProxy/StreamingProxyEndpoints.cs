@@ -4,7 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;

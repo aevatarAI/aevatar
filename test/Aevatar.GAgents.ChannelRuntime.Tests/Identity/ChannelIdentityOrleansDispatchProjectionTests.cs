@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -220,7 +221,12 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
                     var forwardingObserver = new ObservingStreamForwardingRegistry();
                     services.AddSingleton(forwardingObserver);
                     services.AddChannelIdentity();
-                    services.AddChannelIdentityProjectionStores();
+                    services.AddInMemoryDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
+                        static document => document.Id,
+                        static key => key);
+                    services.AddInMemoryDocumentProjectionStore<AevatarOAuthClientDocument, string>(
+                        static document => document.Id,
+                        static key => key);
                     services.DecorateStreamForwardingRegistry(forwardingObserver);
                     services.DecorateExternalIdentityBindingWriter(observer);
                 });

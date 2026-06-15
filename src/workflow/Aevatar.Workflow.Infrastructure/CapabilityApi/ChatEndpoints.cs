@@ -122,11 +122,12 @@ public static class WorkflowCapabilityEndpoints
             logger?.LogError(ex, "Workflow chat execution failed.");
             if (!writer.Started)
             {
+                var (code, message) = WorkflowExecutionErrorMapper.ToError(ex);
                 await WriteJsonErrorResponseAsync(
                     http,
                     StatusCodes.Status500InternalServerError,
-                    "EXECUTION_FAILED",
-                    "Workflow execution failed.",
+                    code,
+                    message,
                     CancellationToken.None);
                 return;
             }
@@ -649,33 +650,71 @@ public static class WorkflowCapabilityEndpoints
     {
         try
         {
+            var (code, message) = WorkflowExecutionErrorMapper.ToError(ex);
             await writer.WriteAsync(
                 new WorkflowRunEventEnvelope
                 {
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     RunError = new WorkflowRunErrorEventPayload
                     {
-                        Code = "EXECUTION_FAILED",
-                        Message = $"Workflow execution failed: {SanitizeErrorMessage(ex.Message)}",
+                        Code = code,
+                        Message = message,
                     },
                 },
                 ct);
         }
-        catch (Exception writeEx)
+        catch (IOException writeEx)
         {
             logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
         }
+        catch (ObjectDisposedException writeEx)
+        {
+            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
+        }
+        catch (InvalidOperationException writeEx)
+        {
+            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
+        }
+        catch (OperationCanceledException writeEx)
+        {
+            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
+        }
+        catch (Exception writeEx)
+        {
+            logger?.LogWarning(writeEx, "Unexpected failure while writing SSE error frame.");
+        }
     }
 
-    private static string SanitizeErrorMessage(string? message)
+    public static class WorkflowExecutionErrorMapper
     {
-        if (string.IsNullOrWhiteSpace(message))
-            return "unknown error";
+        public const string CompatibilityErrorCode = "WORKFLOW_REVISION_INCOMPATIBLE";
+        private const string DescriptorMissingMarker = "Type registry has no descriptor for type name";
 
-        return message
-            .Replace("\r", " ", StringComparison.Ordinal)
-            .Replace("\n", " ", StringComparison.Ordinal)
-            .Trim();
+        public static (string Code, string Message) ToError(Exception ex)
+        {
+            ArgumentNullException.ThrowIfNull(ex);
+
+            return IsCompatibilityFailure(ex)
+                ? (
+                    CompatibilityErrorCode,
+                    "Workflow revision is incompatible with this backend. Re-publish or migrate the workflow/service revision.")
+                : (
+                    "EXECUTION_FAILED",
+                    "Workflow execution failed.");
+        }
+
+        public static bool IsCompatibilityFailure(Exception ex)
+        {
+            ArgumentNullException.ThrowIfNull(ex);
+
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (current.Message.Contains(DescriptorMissingMarker, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
     }
 
     internal static async Task HandleChatWebSocket(
@@ -773,7 +812,7 @@ public static class WorkflowCapabilityEndpoints
         }
         catch (Exception ex)
         {
-            logger?.LogDebug(ex, "Failed to resolve workflow runtime default metadata from configuration.");
+            logger?.LogWarning(ex, "Failed to resolve workflow runtime default metadata from configuration.");
             return new Dictionary<string, string>(StringComparer.Ordinal);
         }
     }

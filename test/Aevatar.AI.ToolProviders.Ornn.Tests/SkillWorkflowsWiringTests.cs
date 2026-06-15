@@ -122,7 +122,7 @@ public sealed class SkillWorkflowsWiringTests
         });
 
         var tool = new UseSkillTool(catalog);
-        var output = await tool.ExecuteAsync("""{"skill":"translator"}""");
+        var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":false}""");
         var text = ExtractText(output);
 
         text.Should().Contain("## aevatar_start_workflow Handoff");
@@ -246,7 +246,7 @@ public sealed class SkillWorkflowsWiringTests
         tool.RequiresApproval("""{"skill":"translator"}""").Should().BeFalse();
         tool.RequiresApproval("""{"skill":"translator","mount_workflows":false}""").Should().BeFalse();
 
-        var output = await tool.ExecuteAsync("""{"skill":"translator"}""");
+        var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":false}""");
 
         output.Should().Contain("## aevatar_start_workflow Handoff");
         output.Should().NotContain("## Mounted Workflows");
