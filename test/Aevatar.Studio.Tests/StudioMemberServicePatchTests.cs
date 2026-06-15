@@ -18,15 +18,8 @@ public sealed class StudioMemberServicePatchTests
     [Fact]
     public async Task PatchAsync_DisplayName_ShouldDispatchRenameAndPreserveOtherFields()
     {
-        var original = NewDetail(MemberImplementationKindNames.Workflow);
-        var updatedSummary = original.Summary with
-        {
-            DisplayName = "Renamed Workflow",
-            Description = "existing description",
-        };
         var commandPort = new RecordingMemberCommandPort();
-        var queryPort = new InMemoryQueryPort(original with { Summary = updatedSummary });
-        var service = NewService(commandPort, queryPort);
+        var service = NewService(commandPort, NewQueryPort(MemberImplementationKindNames.Workflow));
 
         var response = await service.UpdateAsync(
             ScopeId,
@@ -39,10 +32,12 @@ public sealed class StudioMemberServicePatchTests
             .Which.Should().Be(new RenameUpdate(ScopeId, MemberId, "Renamed Workflow"));
         commandPort.ImplementationUpdates.Should().BeEmpty();
         commandPort.RecordedBindings.Should().BeEmpty();
-        response.Summary.DisplayName.Should().Be("Renamed Workflow");
-        response.Summary.Description.Should().Be("existing description");
-        response.Summary.MemberId.Should().Be(MemberId);
-        response.Summary.PublishedServiceId.Should().Be(PublishedServiceId);
+        response.Should().Be(new StudioMemberCommandResponse(
+            StudioMemberCommandStatusNames.Accepted,
+            ScopeId,
+            MemberId,
+            response.AckedAt));
+        response.AckedAt.Should().NotBeNull();
     }
 
     [Theory]
@@ -83,6 +78,55 @@ public sealed class StudioMemberServicePatchTests
     }
 
     [Fact]
+    public async Task PatchAsync_ShouldValidateTeamIdBeforeDispatchingRename()
+    {
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(
+            commandPort,
+            NewQueryPort(MemberImplementationKindNames.Workflow));
+
+        var act = () => service.UpdateAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberRequest(
+                DisplayName: PatchValue<string>.Of("Renamed Workflow"),
+                TeamId: PatchValue<string>.Of("   ")),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*teamId must not be empty*");
+        commandPort.Renames.Should().BeEmpty();
+        commandPort.ImplementationUpdates.Should().BeEmpty();
+        commandPort.RecordedBindings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PatchAsync_ShouldValidateImplementationRefBeforeDispatchingRename()
+    {
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(
+            commandPort,
+            NewQueryPort(MemberImplementationKindNames.Workflow));
+
+        var act = () => service.UpdateAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberRequest(
+                DisplayName: PatchValue<string>.Of("Renamed Workflow"),
+                ImplementationRef: PatchValue<StudioMemberImplementationRefResponse>.Of(
+                    new StudioMemberImplementationRefResponse(
+                        ImplementationKind: MemberImplementationKindNames.Workflow,
+                        WorkflowId: "   "))),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*implementationRef.workflowId is required*");
+        commandPort.Renames.Should().BeEmpty();
+        commandPort.ImplementationUpdates.Should().BeEmpty();
+        commandPort.RecordedBindings.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task PatchAsync_WorkflowImplementationRef_ShouldUpdateMemberAuthorityOnly()
     {
         var commandPort = new RecordingMemberCommandPort();
@@ -106,7 +150,9 @@ public sealed class StudioMemberServicePatchTests
             ImplementationKind: MemberImplementationKindNames.Workflow,
             WorkflowId: "wf-alpha"));
         commandPort.RecordedBindings.Should().BeEmpty();
-        response.Summary.MemberId.Should().Be(MemberId);
+        response.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
+        response.ScopeId.Should().Be(ScopeId);
+        response.MemberId.Should().Be(MemberId);
     }
 
     [Fact]

@@ -419,12 +419,12 @@ internal static class StudioMemberEndpoints
 
         try
         {
-            var detail = await memberService.UpdateAsync(
+            var receipt = await memberService.UpdateAsync(
                 scopeId,
                 memberId,
                 new UpdateStudioMemberRequest(displayNamePatch, teamIdPatch, implementationRefPatch),
                 ct);
-            return Results.Ok(detail);
+            return Results.Accepted(BuildMemberLocation(scopeId, memberId), receipt);
         }
         catch (StudioMemberNotFoundException ex)
         {
@@ -435,6 +435,9 @@ internal static class StudioMemberEndpoints
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
         }
     }
+
+    private static string BuildMemberLocation(string scopeId, string memberId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
 
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });

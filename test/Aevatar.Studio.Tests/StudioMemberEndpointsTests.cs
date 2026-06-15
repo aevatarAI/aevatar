@@ -168,20 +168,13 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
-    public async Task HandlePatchAsync_ShouldReturnOk_OnTeamPatch()
+    public async Task HandlePatchAsync_ShouldReturnAccepted_OnTeamPatch()
     {
-        var patched = new StudioMemberDetailResponse(
-            NewSummary() with { MemberId = "m-alpha", TeamId = "team-alpha" },
-            ImplementationRef: null,
-            LastBinding: null);
         var request = new StudioMemberEndpoints.StudioMemberPatchBody
         {
             TeamId = System.Text.Json.JsonSerializer.SerializeToElement("team-alpha"),
         };
-        var service = new RecordingMemberService
-        {
-            UpdateResponse = patched,
-        };
+        var service = new RecordingMemberService();
 
         var result = await InvokeHandle<IResult>(
             "HandlePatchAsync",
@@ -192,8 +185,9 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Ok<StudioMemberDetailResponse>>()
-            .Which.Value.Should().BeSameAs(patched);
+        var accepted = result.Should().BeOfType<Accepted<StudioMemberCommandResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/members/m-alpha");
+        accepted.Value!.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
         service.UpdateInvoked.Should().BeTrue();
         service.UpdateRequest!.TeamId.HasValue.Should().BeTrue();
         service.UpdateRequest.TeamId.Value.Should().Be("team-alpha");
@@ -205,18 +199,11 @@ public sealed class StudioMemberEndpointsTests
         var implementationRef = new StudioMemberImplementationRefResponse(
             ImplementationKind: MemberImplementationKindNames.Workflow,
             WorkflowId: "wf-alpha");
-        var patched = new StudioMemberDetailResponse(
-            NewSummary() with { MemberId = "m-alpha" },
-            ImplementationRef: implementationRef,
-            LastBinding: null);
         var request = new StudioMemberEndpoints.StudioMemberPatchBody
         {
             ImplementationRef = System.Text.Json.JsonSerializer.SerializeToElement(implementationRef),
         };
-        var service = new RecordingMemberService
-        {
-            UpdateResponse = patched,
-        };
+        var service = new RecordingMemberService();
 
         var result = await InvokeHandle<IResult>(
             "HandlePatchAsync",
@@ -227,8 +214,9 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Ok<StudioMemberDetailResponse>>()
-            .Which.Value.Should().BeSameAs(patched);
+        var accepted = result.Should().BeOfType<Accepted<StudioMemberCommandResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/members/m-alpha");
+        accepted.Value!.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
         service.UpdateInvoked.Should().BeTrue();
         service.UpdateRequest!.ImplementationRef.HasValue.Should().BeTrue();
         service.UpdateRequest.ImplementationRef.Value.Should().Be(implementationRef);
@@ -237,14 +225,7 @@ public sealed class StudioMemberEndpointsTests
     [Fact]
     public async Task HandlePatchAsync_ShouldForwardDisplayNamePatch()
     {
-        var patched = new StudioMemberDetailResponse(
-            NewSummary() with { DisplayName = "Renamed Workflow" },
-            ImplementationRef: null,
-            LastBinding: null);
-        var service = new RecordingMemberService
-        {
-            UpdateResponse = patched,
-        };
+        var service = new RecordingMemberService();
 
         var result = await InvokeHandle<IResult>(
             "HandlePatchAsync",
@@ -258,8 +239,9 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Ok<StudioMemberDetailResponse>>()
-            .Which.Value.Should().BeSameAs(patched);
+        var accepted = result.Should().BeOfType<Accepted<StudioMemberCommandResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/members/m-alpha");
+        accepted.Value!.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
         service.UpdateRequest!.DisplayName.HasValue.Should().BeTrue();
         service.UpdateRequest.DisplayName.Value.Should().Be("Renamed Workflow");
         service.UpdateRequest.TeamId.HasValue.Should().BeFalse();
@@ -975,7 +957,7 @@ public sealed class StudioMemberEndpointsTests
             return Task.FromResult(RetireResponse!);
         }
 
-        public Task<StudioMemberDetailResponse> UpdateAsync(
+        public Task<StudioMemberCommandResponse> UpdateAsync(
             string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default)
         {
             UpdateInvoked = true;
@@ -983,14 +965,18 @@ public sealed class StudioMemberEndpointsTests
             UpdateMemberId = memberId;
             UpdateRequest = request;
             if (UpdateException != null) throw UpdateException;
-            return Task.FromResult(UpdateResponse!);
+            return Task.FromResult(UpdateResponse ?? new StudioMemberCommandResponse(
+                StudioMemberCommandStatusNames.Accepted,
+                scopeId,
+                memberId,
+                DateTimeOffset.UtcNow));
         }
 
         public bool UpdateInvoked { get; set; }
         public string? UpdateScopeId { get; set; }
         public string? UpdateMemberId { get; set; }
         public UpdateStudioMemberRequest? UpdateRequest { get; set; }
-        public StudioMemberDetailResponse? UpdateResponse { get; set; }
+        public StudioMemberCommandResponse? UpdateResponse { get; set; }
         public Exception? UpdateException { get; set; }
     }
 

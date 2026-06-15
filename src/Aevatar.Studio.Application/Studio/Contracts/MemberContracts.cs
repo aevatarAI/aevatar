@@ -196,6 +196,18 @@ public sealed record UpdateStudioMemberRequest(
     PatchValue<string> TeamId = default,
     PatchValue<StudioMemberImplementationRefResponse> ImplementationRef = default);
 
+public static class StudioMemberCommandStatusNames
+{
+    public const string Accepted = "accepted";
+    public const string NoChange = "no_change";
+}
+
+public sealed record StudioMemberCommandResponse(
+    string Status,
+    string ScopeId,
+    string MemberId,
+    DateTimeOffset? AckedAt = null);
+
 /// <summary>
 /// Centralized input bounds applied at the create boundary so a single
 /// request cannot push 10MB of displayName / description / memberId all the
