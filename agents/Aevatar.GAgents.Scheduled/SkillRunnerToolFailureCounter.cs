@@ -12,13 +12,19 @@ internal sealed class SkillRunnerToolFailureCounter
 {
     private int _failureCount;
     private int _successCount;
+    private SkillRunnerToolFailureSample? _firstFailure;
+    private SkillRunnerToolFailureSample? _latestFailure;
 
     public int FailureCount => Volatile.Read(ref _failureCount);
 
     public int SuccessCount => Volatile.Read(ref _successCount);
 
+    public SkillRunnerToolFailureSample? FirstFailure => Volatile.Read(ref _firstFailure);
+
+    public SkillRunnerToolFailureSample? LatestFailure => Volatile.Read(ref _latestFailure);
+
     /// <summary>
-    /// Two non-atomic field writes. Safe in practice because the runner only calls
+    /// Non-atomic field writes. Safe in practice because the runner only calls
     /// <c>Reset()</c> from <c>ExecuteSkillAsync</c> at the top of a run, when no
     /// concurrent middleware invocation can be in flight (the prior <c>ChatStreamAsync</c>
     /// has fully drained or this is the first run). A reader observing a transient
@@ -29,9 +35,44 @@ internal sealed class SkillRunnerToolFailureCounter
     {
         Volatile.Write(ref _failureCount, 0);
         Volatile.Write(ref _successCount, 0);
+        Volatile.Write(ref _firstFailure, null);
+        Volatile.Write(ref _latestFailure, null);
     }
 
-    public void RecordFailure() => Interlocked.Increment(ref _failureCount);
+    public void RecordFailure(SkillRunnerToolFailureSample? failure = null)
+    {
+        Interlocked.Increment(ref _failureCount);
+        if (failure is null)
+            return;
+
+        Interlocked.CompareExchange(ref _firstFailure, failure, null);
+        Volatile.Write(ref _latestFailure, failure);
+    }
 
     public void RecordSuccess() => Interlocked.Increment(ref _successCount);
+}
+
+internal sealed record SkillRunnerToolFailureSample(
+    string? ServiceSlug,
+    string? Method,
+    string? Path,
+    int? Status,
+    string? Detail)
+{
+    public string ToDiagnosticString()
+    {
+        var target = string.IsNullOrWhiteSpace(ServiceSlug)
+            ? "nyxid_proxy"
+            : ServiceSlug.Trim();
+        var method = string.IsNullOrWhiteSpace(Method)
+            ? string.Empty
+            : $" {Method.Trim().ToUpperInvariant()}";
+        var path = string.IsNullOrWhiteSpace(Path)
+            ? string.Empty
+            : $" {Path.Trim()}";
+        var status = Status.HasValue ? $" -> HTTP {Status.Value}" : string.Empty;
+        var detail = string.IsNullOrWhiteSpace(Detail) ? string.Empty : $": {Detail.Trim()}";
+
+        return $"{target}{method}{path}{status}{detail}";
+    }
 }

@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.LLMProviders;
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -34,6 +35,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private const string LarkDocxCreateToolName = "lark_docx_create";
 
     private readonly NyxIdApiClient? _nyxIdApiClient;
+    private readonly ILarkCardKitClient? _larkCardKitClient;
     private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
@@ -44,6 +46,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
     // #439 — see EnsureToolStatusAllowsCompletion.
     private readonly SkillRunnerToolFailureCounter _toolFailureCounter;
+    private readonly SkillRunnerInteractiveDeliveryTracker _interactiveDeliveryTracker;
     private string? _systemPromptOverride;
     private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _oneShotLease;
     private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _retryLease;
@@ -61,7 +64,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService = null,
         IToolApprovalHandler? approvalHandler = null,
         IClock? clock = null,
-        ILarkOutboundDispatcher? larkOutboundDispatcher = null)
+        ILarkOutboundDispatcher? larkOutboundDispatcher = null,
+        ILarkCardKitClient? larkCardKitClient = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -75,7 +79,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             workflowDispatchService,
             approvalHandler,
             clock,
-            larkOutboundDispatcher)
+            larkOutboundDispatcher,
+            larkCardKitClient)
     {
     }
 
@@ -92,7 +97,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService,
         IToolApprovalHandler? approvalHandler,
         IClock? clock,
-        ILarkOutboundDispatcher? larkOutboundDispatcher)
+        ILarkOutboundDispatcher? larkOutboundDispatcher,
+        ILarkCardKitClient? larkCardKitClient)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -104,16 +110,19 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     {
         _nyxIdApiClient = nyxIdApiClient;
         _larkOutboundDispatcher = larkOutboundDispatcher;
+        _larkCardKitClient = larkCardKitClient;
         _ownerLlmConfigSource = ownerLlmConfigSource;
         _remoteSkillFetcher = remoteSkillFetcher;
         _workflowDispatchService = workflowDispatchService;
         _clock = clock ?? new SystemClock();
         _toolFailureCounter = toolMiddlewareChain.Counter;
+        _interactiveDeliveryTracker = toolMiddlewareChain.InteractiveDeliveryTracker;
     }
 
     private readonly record struct ToolMiddlewareChain(
         IReadOnlyList<IToolCallMiddleware> Middlewares,
-        SkillRunnerToolFailureCounter Counter);
+        SkillRunnerToolFailureCounter Counter,
+        SkillRunnerInteractiveDeliveryTracker InteractiveDeliveryTracker);
 
     private sealed record SkillRunnerExecutionPlan(
         SkillRunnerExecutionKind Kind,
@@ -184,6 +193,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         public string WorkflowId { get; }
     }
 
+    private sealed class SkillRunnerVisibleDeliveryException : InvalidOperationException
+    {
+        public SkillRunnerVisibleDeliveryException(string message)
+            : base(message)
+        {
+        }
+    }
+
     /// <summary>Test-only accessor for the per-run nyxid_proxy counter.</summary>
     internal SkillRunnerToolFailureCounter ToolFailureCounterForTesting => _toolFailureCounter;
 
@@ -191,9 +208,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IToolCallMiddleware>? input)
     {
         var counter = new SkillRunnerToolFailureCounter();
+        var interactiveDeliveryTracker = new SkillRunnerInteractiveDeliveryTracker();
         var combined = (input ?? Array.Empty<IToolCallMiddleware>()).ToList();
         combined.Add(new NyxIdProxyToolFailureCountingMiddleware(counter));
-        return new ToolMiddlewareChain(combined, counter);
+        combined.Add(new SkillRunnerInteractiveDeliveryTrackingMiddleware(interactiveDeliveryTracker));
+        return new ToolMiddlewareChain(combined, counter, interactiveDeliveryTracker);
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -443,7 +462,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 Id,
                 command.RetryAttempt);
 
-            if (command.RetryAttempt < SkillRunnerDefaults.MaxRetryAttempts)
+            // If Lark already has a visible card, retrying the whole run would create a
+            // second card/message. Persist the failure immediately and let the failure
+            // notification carry the recovery signal instead of duplicating the report.
+            if (ex is not SkillRunnerVisibleDeliveryException &&
+                command.RetryAttempt < SkillRunnerDefaults.MaxRetryAttempts)
             {
                 await ScheduleRetryAsync(command, command.RetryAttempt + 1, CancellationToken.None);
                 return;
@@ -624,6 +647,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         // The counter is populated by NyxIdProxyToolFailureCountingMiddleware as the LLM
         // fans out nyxid_proxy calls inside the ChatStreamAsync loop.
         _toolFailureCounter.Reset();
+        _interactiveDeliveryTracker.Reset();
 
         if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot &&
             !string.IsNullOrWhiteSpace(State.OneShotMessage) &&
@@ -715,7 +739,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             EnsureToolStatusAllowsCompletion(
                 _toolFailureCounter.FailureCount,
                 _toolFailureCounter.SuccessCount,
-                State.RequiresNyxidProxySuccess);
+                State.RequiresNyxidProxySuccess,
+                _toolFailureCounter.LatestFailure ?? _toolFailureCounter.FirstFailure);
+
+            if (_interactiveDeliveryTracker.HasSuccessfulInteractiveDelivery)
+            {
+                Logger.LogInformation(
+                    "Skill runner {ActorId} skipped outer Lark reply because the skill already delivered a successful interactive/card message.",
+                    Id);
+                return output;
+            }
 
             var chunks = await BuildOutputChunksAsync(
                 output,
@@ -724,7 +757,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 toolContext,
                 metadata,
                 ct);
-            await DispatchOutputChunksAsync(streamingState, chunks, ct);
+            await DispatchOutputChunksAsync(
+                streamingState,
+                chunks,
+                preferCardKit: ShouldPreferCardKitOutput(),
+                ct);
 
             return output;
         }
@@ -795,49 +832,120 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     }
 
     /// <summary>
-    /// Sends the chunk sequence produced by <see cref="SkillRunnerOutputChunker.Split"/>:
-    /// chunk[0] flows through the streaming-edit sink (so the in-flight message the user has
-    /// been watching grow lands cleanly as "part 1"); chunks 1..N go as fresh one-shot POSTs
-    /// through the primary <see cref="SendOutputAsync(string, CancellationToken)"/> path
-    /// since edit-in-place only applies to the message captured at sink-creation time.
+    /// Sends the chunk sequence produced by <see cref="SkillRunnerOutputChunker.Split"/>.
+    /// Default Auto output prefers a single CardKit interactive message after the run has
+    /// passed the tool-success safety net; explicit Text output can still use the legacy
+    /// streaming-edit sink for chunk[0]. Overflow chunks are posted as plain text.
     /// </summary>
     /// <remarks>
     /// Failure semantics match the pre-chunking single-message path: any send rejection
     /// throws and propagates to <c>HandleTriggerAsync</c>'s retry/persist contract. A failure
     /// on chunk N &gt; 0 means chunks 0..N-1 already landed in chat — that's intentional
     /// partial visibility. Atomic multi-message delivery would require either a Lark-side
-    /// transactional API (none exists) or buffering until all chunks succeed (loses the
-    /// streaming-edit UX), neither of which is worth the complexity here.
+    /// transactional API (none exists) or buffering until all chunks succeed.
     /// </remarks>
     private async Task DispatchOutputChunksAsync(
         SkillRunnerStreamingRunState? streamingState,
         IReadOnlyList<string> chunks,
+        bool preferCardKit,
         CancellationToken ct)
     {
         if (chunks.Count == 0)
             return;
 
         if (streamingState is not null)
+        {
             await streamingState.FinalizeAsync(chunks[0], ct);
+        }
+        else if (preferCardKit && chunks.Count == 1 && await TryDispatchCardKitOutputAsync(chunks[0], ct))
+        {
+            return;
+        }
         else
-            // No streaming sink (no NyxID client, missing outbound config, or tests injecting
-            // a null client). Fall back to a one-shot send so the user still receives the
-            // report and tests that don't construct a sink keep working.
+        {
+            // No CardKit/text streaming sink (explicit text mode, no NyxID client, missing
+            // outbound config, or tests injecting a null client). Fall back to a one-shot
+            // text send so the user still receives the report.
             await SendTextOutputAsync(chunks[0], ct);
+        }
 
         for (var i = 1; i < chunks.Count; i++)
             await SendTextOutputAsync(chunks[i], ct);
     }
 
+    private bool ShouldPreferCardKitOutput() =>
+        State.OutboundConfig?.OutputFormat is null or SkillRunnerOutputFormat.Auto;
+
+    private async Task<bool> TryDispatchCardKitOutputAsync(string output, CancellationToken ct)
+    {
+        var sink = TryCreateCardKitSink();
+        if (sink is null)
+            return false;
+
+        var result = await sink.SendFinalAsync(output, ct);
+        if (result.Succeeded)
+            return true;
+
+        if (!result.VisibleMessageCreated)
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} CardKit delivery failed before any visible Lark card was sent; falling back to text. card_id={CardId}, lark_code={LarkCode}, detail={Detail}",
+                Id,
+                result.CardId,
+                result.LarkCode,
+                result.Detail);
+            return false;
+        }
+
+        throw new SkillRunnerVisibleDeliveryException(BuildLarkRejectionMessage(result.LarkCode, result.Detail));
+    }
+
+    private SkillRunnerCardKitReplySink? TryCreateCardKitSink()
+    {
+        if (!ShouldPreferCardKitOutput())
+            return null;
+
+        var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
+        if (client is null)
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} has no NyxIdApiClient registered; CardKit delivery is disabled, falling back to text.",
+                Id);
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxApiKey) ||
+            string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
+            string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} has incomplete outbound config (NyxApiKey/NyxProviderSlug/ConversationId); CardKit delivery is disabled, falling back to text.",
+                Id);
+            return null;
+        }
+
+        var primary = LarkConversationTargets.Resolve(
+            State.OutboundConfig.LarkReceiveId,
+            State.OutboundConfig.LarkReceiveIdType,
+            State.OutboundConfig.ConversationId);
+
+        return new SkillRunnerCardKitReplySink(
+            ResolveLarkCardKitClient(client, State.OutboundConfig.NyxProviderSlug),
+            ResolveLarkOutboundDispatcher(client),
+            new LarkSendNewMessageRequest(
+                State.OutboundConfig.NyxApiKey,
+                State.OutboundConfig.NyxProviderSlug,
+                MessageType: "interactive",
+                ContentJson: string.Empty,
+                PrimaryTarget: primary,
+                FallbackTarget: ResolveFallbackTarget()),
+            Logger);
+    }
+
     /// <summary>
-    /// Constructs the streaming-edit sink for this run, or returns null when streaming cannot be
-    /// configured. The sink writes the first non-empty delta as a Lark
-    /// <c>POST /open-apis/im/v1/messages</c> (capturing the returned <c>message_id</c>) and edits
-    /// the same message via <c>PUT /open-apis/im/v1/messages/{id}</c> for every later delta —
-    /// so the user sees the skill output land and grow in place rather than receiving one wall of
-    /// text after the LLM finishes. PUT is the correct verb for editing text/post messages;
-    /// <c>PATCH</c> on the same path is reserved for editing interactive cards (see
-    /// <c>SkillRunnerStreamingReplySink.EditAsync</c> for the verb-split rationale).
+    /// Constructs the legacy text streaming-edit sink for explicit text output. Auto output
+    /// now uses CardKit after the run passes the tool-success safety net, which avoids Lark's
+    /// text-message edit cap and prevents partial hallucinated reports from becoming visible.
     /// </summary>
     private SkillRunnerStreamingReplySink? TryCreateStreamingSink()
     {
@@ -853,7 +961,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         if (State.RequiresNyxidProxySuccess)
             return null;
 
-        if (State.OutboundConfig?.OutputFormat == SkillRunnerOutputFormat.FeishuDoc)
+        if (State.OutboundConfig?.OutputFormat != SkillRunnerOutputFormat.Text)
             return null;
 
         var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
@@ -1006,21 +1114,25 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     internal static void EnsureToolStatusAllowsCompletion(
         int failureCount,
         int successCount,
-        bool requiresNyxidProxySuccess)
+        bool requiresNyxidProxySuccess,
+        SkillRunnerToolFailureSample? latestFailure = null)
     {
         if (failureCount > 0 && successCount == 0)
         {
+            var diagnostic = latestFailure?.ToDiagnosticString();
+            var diagnosticSentence = string.IsNullOrWhiteSpace(diagnostic)
+                ? string.Empty
+                : $" 最近失败：{diagnostic}.";
             throw new InvalidOperationException(
-                $"All {failureCount} nyxid_proxy tool call(s) in this run failed; refusing to record an empty-day report as a successful execution. " +
-                "Inspect the previous attempt's tool output for the underlying NyxID/upstream error envelope.");
+                $"定时任务的数据源请求全部失败（nyxid_proxy {failureCount} 次），已拒绝把这次执行记录成空报告。{diagnosticSentence} " +
+                "通常是 Ornn skill 里的目标服务、仓库、组织或 API 路径写错，也可能是上游服务暂时不可用；请检查 skill 指令或重新配置该定时任务。");
         }
 
         if (requiresNyxidProxySuccess && successCount == 0)
         {
             throw new InvalidOperationException(
-                "Skill requires at least one successful nyxid_proxy tool call but completed with zero. " +
-                "The LLM produced output without fetching source data (e.g. hallucinated a report from prior context). " +
-                "Refusing to record this run as a successful execution.");
+                "这个定时任务要求至少成功读取一次数据源，但本次执行没有任何成功的 nyxid_proxy 调用。 " +
+                "模型生成了输出，却没有取到实时数据；已拒绝把这次执行记录成成功。请检查 Ornn skill 指令和任务的数据源配置。");
         }
     }
 
@@ -1480,7 +1592,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var llmControl = await BuildExecutionLlmControlAsync(ct);
         var toolContext = llmControl.ToToolContext(BuildExecutionToolContext(requestId, metadata));
         var chunks = await BuildOutputChunksAsync(output, requestId, llmControl, toolContext, metadata, ct);
-        await DispatchOutputChunksAsync(streamingState: null, chunks, ct);
+        await DispatchOutputChunksAsync(
+            streamingState: null,
+            chunks,
+            preferCardKit: false,
+            ct);
     }
 
     private Task SendTextOutputAsync(string output, CancellationToken ct) =>
@@ -1565,6 +1681,24 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher(NyxIdApiClient client) =>
         _larkOutboundDispatcher ?? Services.GetService<ILarkOutboundDispatcher>() ?? new LarkOutboundDispatcher(client, Logger);
+
+    /// <summary>
+    /// Resolves the CardKit client for a scheduled run. Prefers an injected/DI instance; falls
+    /// back to a per-agent <see cref="LarkCardKitClient"/> bound to this agent's own Nyx provider
+    /// slug so the CardKit wire protocol stays the single shared implementation used by both the
+    /// scheduled and direct-chat paths.
+    /// </summary>
+    private ILarkCardKitClient ResolveLarkCardKitClient(NyxIdApiClient client, string providerSlug)
+    {
+        if (_larkCardKitClient is { } injected)
+            return injected;
+
+        if (Services.GetService<ILarkCardKitClient>() is { } fromDi)
+            return fromDi;
+
+        var effectiveSlug = string.IsNullOrWhiteSpace(providerSlug) ? "api-lark-bot" : providerSlug;
+        return new LarkCardKitClient(new LarkToolOptions { ProviderSlug = effectiveSlug }, client);
+    }
 
     private static string BuildLarkRejectionMessage(int? larkCode, string detail)
     {

@@ -132,6 +132,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
+        services.AddAevatarAgentKindRegistry(builder => builder.Register<ScheduledDispatchGAgent>());
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();

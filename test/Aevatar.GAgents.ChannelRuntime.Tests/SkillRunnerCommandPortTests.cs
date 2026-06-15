@@ -617,6 +617,12 @@ public sealed class SkillRunnerCommandPortTests
             return Task.FromResult(CreateReceipt(scheduleId));
         }
 
+        public Task<ScheduledDispatchMutationReceipt> DeleteAsync(
+            string scheduleId,
+            string reason,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default) =>
             throw new NotSupportedException();
 

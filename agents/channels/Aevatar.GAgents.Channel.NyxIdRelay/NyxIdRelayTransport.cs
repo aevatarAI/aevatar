@@ -39,6 +39,14 @@ public sealed class NyxIdRelayTransport
 
         var text = payload.Content?.Text?.Trim();
         var platform = NormalizePlatform(payload.Platform);
+        if (!isCardAction && string.IsNullOrWhiteSpace(text) && IsLark(platform))
+        {
+            // NyxID only normalizes Lark `text`/`image`/`file` messages; a rich-text `post`
+            // (图文夹杂) arrives as content_type=unknown with no normalized text, so recover
+            // the user's words from the raw post body or the turn is dropped as empty_text
+            // and the bot never replies.
+            text = NormalizeOptional(ExtractLarkRawText(payload));
+        }
         var attachments = BuildAttachments(payload, platform);
         if (!isCardAction && string.IsNullOrWhiteSpace(text) && attachments.Count == 0)
             return NyxIdRelayParseResult.IgnoredPayload(payload, "empty_text", "Relay payload does not contain text content.");
@@ -267,21 +275,32 @@ public sealed class NyxIdRelayTransport
     private static IEnumerable<LarkAttachmentCandidate> EnumerateLarkRawAttachmentCandidates(
         NyxIdRelayCallbackPayload payload)
     {
-        if (payload.RawPlatformData is not { } raw || raw.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        if (!raw.TryGetProperty("event", out var evt) || evt.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        if (!evt.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        if (!TryReadLarkMessageContentObject(message, out var content))
+        if (!TryGetLarkRawMessageContent(payload, out var content))
             yield break;
 
         foreach (var candidate in EnumerateLarkAttachmentCandidates(content))
             yield return candidate;
     }
+
+    private static bool TryGetLarkRawMessageContent(NyxIdRelayCallbackPayload payload, out JsonElement content)
+    {
+        content = default;
+        if (payload.RawPlatformData is not { } raw || raw.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (!raw.TryGetProperty("event", out var evt) || evt.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (!evt.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object)
+            return false;
+
+        return TryReadLarkMessageContentObject(message, out content);
+    }
+
+    private static string? ExtractLarkRawText(NyxIdRelayCallbackPayload payload) =>
+        TryGetLarkRawMessageContent(payload, out var content)
+            ? ExtractLarkPostText(content)
+            : null;
 
     private static bool TryReadLarkMessageContentObject(JsonElement message, out JsonElement content)
     {
@@ -319,6 +338,7 @@ public sealed class NyxIdRelayTransport
 
     private static IEnumerable<LarkAttachmentCandidate> EnumerateLarkAttachmentCandidates(JsonElement content)
     {
+        // Plain image/file messages carry the identifier at the content root.
         if (TryReadString(content, "image_key", out var imageKey))
         {
             yield return new LarkAttachmentCandidate(
@@ -340,6 +360,157 @@ public sealed class NyxIdRelayTransport
                     ?? ReadOptionalStringProperty(content, "name"),
                 ReadOptionalInt64Property(content, "file_size"));
         }
+
+        // Rich-text (post / 富文本): images and media are nested inside the 2D `content`
+        // paragraph array, so the root-level checks above never see them.
+        foreach (var segment in EnumerateLarkPostSegments(content))
+        {
+            if (!TryReadString(segment, "tag", out var tag))
+                continue;
+
+            if (string.Equals(tag, "img", StringComparison.OrdinalIgnoreCase) &&
+                TryReadString(segment, "image_key", out var postImageKey))
+            {
+                yield return new LarkAttachmentCandidate(
+                    postImageKey,
+                    AttachmentKind.Image,
+                    "image",
+                    ReadOptionalStringProperty(segment, "file_name")
+                        ?? ReadOptionalStringProperty(segment, "name"),
+                    ReadOptionalInt64Property(segment, "file_size"));
+            }
+            else if (string.Equals(tag, "media", StringComparison.OrdinalIgnoreCase) &&
+                     TryReadString(segment, "file_key", out var postFileKey))
+            {
+                yield return new LarkAttachmentCandidate(
+                    postFileKey,
+                    AttachmentKind.Video,
+                    ReadOptionalStringProperty(segment, "mime_type") ?? "video",
+                    ReadOptionalStringProperty(segment, "file_name")
+                        ?? ReadOptionalStringProperty(segment, "name"),
+                    ReadOptionalInt64Property(segment, "file_size"));
+            }
+        }
+    }
+
+    // ─── Lark rich-text (post) extraction ───
+    //
+    // A Lark `post` message (the shape produced by mixing text + inline images, 图文夹杂)
+    // nests both text runs and media inside a 2D `content` array:
+    //   { "title": "..", "content": [ [ {"tag":"text","text":".."}, {"tag":"img","image_key":".."} ], .. ] }
+    // NyxID forwards this verbatim under raw_platform_data but cannot normalize it, so the
+    // transport recovers text and attachments here. Handles both the flat receive form and a
+    // locale-wrapped ({ "zh_cn": { "content": [..] } }) form.
+
+    private static IEnumerable<JsonElement> EnumerateLarkPostSegments(JsonElement content)
+    {
+        if (!TryGetLarkPostParagraphs(content, out var paragraphs))
+            yield break;
+
+        foreach (var paragraph in paragraphs.EnumerateArray())
+        {
+            if (paragraph.ValueKind != JsonValueKind.Array)
+                continue;
+
+            foreach (var segment in paragraph.EnumerateArray())
+            {
+                if (segment.ValueKind == JsonValueKind.Object)
+                    yield return segment;
+            }
+        }
+    }
+
+    private static bool TryGetLarkPostParagraphs(JsonElement content, out JsonElement paragraphs)
+    {
+        paragraphs = default;
+        if (content.ValueKind != JsonValueKind.Object)
+            return false;
+
+        // Flat receive form: { "title": "..", "content": [[..],[..]] }.
+        if (content.TryGetProperty("content", out var direct) && direct.ValueKind == JsonValueKind.Array)
+        {
+            paragraphs = direct;
+            return true;
+        }
+
+        // Locale-wrapped form: { "zh_cn": { "content": [[..]] }, "en_us": {..} }.
+        foreach (var property in content.EnumerateObject())
+        {
+            if (property.Value.ValueKind == JsonValueKind.Object &&
+                property.Value.TryGetProperty("content", out var nested) &&
+                nested.ValueKind == JsonValueKind.Array)
+            {
+                paragraphs = nested;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? ExtractLarkPostText(JsonElement content)
+    {
+        if (!TryGetLarkPostParagraphs(content, out var paragraphs))
+            return null;
+
+        var lines = new List<string>();
+        foreach (var paragraph in paragraphs.EnumerateArray())
+        {
+            if (paragraph.ValueKind != JsonValueKind.Array)
+                continue;
+
+            var builder = new StringBuilder();
+            foreach (var segment in paragraph.EnumerateArray())
+            {
+                if (segment.ValueKind == JsonValueKind.Object)
+                    AppendLarkPostSegmentText(segment, builder);
+            }
+
+            var line = builder.ToString().Trim();
+            if (line.Length > 0)
+                lines.Add(line);
+        }
+
+        // Lark posts carry an optional title; surface it as the leading line so the model
+        // sees the same heading the user typed.
+        var title = ReadOptionalStringProperty(content, "title");
+        if (title is not null)
+            lines.Insert(0, title);
+
+        return lines.Count == 0 ? null : string.Join("\n", lines);
+    }
+
+    private static void AppendLarkPostSegmentText(JsonElement segment, StringBuilder builder)
+    {
+        if (!TryReadString(segment, "tag", out var tag))
+            return;
+
+        switch (tag.ToLowerInvariant())
+        {
+            case "text":
+            case "a":
+                // Preserve internal whitespace so adjacent runs don't get glued together.
+                if (TryReadRawString(segment, "text", out var text))
+                    builder.Append(text);
+                break;
+            case "at":
+                var name = ReadOptionalStringProperty(segment, "user_name");
+                builder.Append(name is null ? "@" : $"@{name}");
+                break;
+        }
+    }
+
+    private static bool TryReadRawString(JsonElement element, string propertyName, out string value)
+    {
+        value = string.Empty;
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = property.GetString() ?? string.Empty;
+        return true;
     }
 
     private static AttachmentKind MapAttachmentKind(string? value)

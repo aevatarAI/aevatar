@@ -412,6 +412,8 @@ message ScheduledDispatchDocument {
   string service_id = 28;
   string service_endpoint_id = 29;
   string schedule_kind = 30;
+  bool deleted = 31;
+  google.protobuf.Timestamp deleted_at_utc_value = 32;
 }
 
 message ScheduledDispatchFireRecordDocument {

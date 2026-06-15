@@ -165,6 +165,16 @@ public static class ServiceCollectionExtensions
         if (registrations.Count == 0)
             return;
 
+        // Refactor (cluster-voice-nyxid-ephemeral-broker): when the OpenAI realtime credential is
+        // brokered through NyxID, register the resolver so the provider mints a per-session ephemeral
+        // instead of reading a static OPENAI_API_KEY. Requires NyxID tools (INyxIdApiClientFactory) wired.
+        var nyxIdRealtimeCredentialOptions = BuildNyxIdRealtimeCredentialOptions(configuration);
+        if (nyxIdRealtimeCredentialOptions.Enabled)
+        {
+            services.TryAddSingleton(nyxIdRealtimeCredentialOptions);
+            services.TryAddSingleton<IRealtimeProviderCredentialResolver, NyxIdRealtimeProviderCredentialResolver>();
+        }
+
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, VoicePresenceTransportAttachmentPort>();
@@ -220,12 +230,13 @@ public static class ServiceCollectionExtensions
         var voiceOptions = options.VoicePresence;
         var openAIProviderConfig = BuildOpenAIVoiceProviderConfig(configuration, options);
         var miniCpmProviderConfig = BuildMiniCpmVoiceProviderConfig(configuration, options);
+        var nyxIdRealtimeBrokerEnabled = IsNyxIdRealtimeBrokerEnabled(configuration);
         var resolvedDefaultProvider = ResolveVoicePresenceDefaultProvider(
             voiceOptions.DefaultProvider,
             openAIProviderConfig,
             miniCpmProviderConfig);
 
-        if (IsOpenAIVoiceConfigured(openAIProviderConfig))
+        if (IsOpenAIVoiceConfigured(openAIProviderConfig) || nyxIdRealtimeBrokerEnabled)
         {
             registrations.Add(new VoicePresenceModuleRegistration(
                 BuildVoicePresenceModuleNames(
@@ -235,7 +246,8 @@ public static class ServiceCollectionExtensions
                 (serviceProvider, resolvedModuleName) => new VoicePresenceModule(
                     new OpenAIRealtimeProvider(
                         voiceOptions.OpenAIProviderOptions,
-                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>()),
+                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>(),
+                        serviceProvider.GetService<IRealtimeProviderCredentialResolver>()),
                     openAIProviderConfig.Clone(),
                     BuildOpenAIVoiceSessionConfig(configuration, options),
                     CloneVoicePresenceModuleOptions(voiceOptions.Module, resolvedModuleName),
@@ -246,7 +258,8 @@ public static class ServiceCollectionExtensions
                     handle,
                     new OpenAIRealtimeProvider(
                         voiceOptions.OpenAIProviderOptions,
-                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>()),
+                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>(),
+                        serviceProvider.GetService<IRealtimeProviderCredentialResolver>()),
                     openAIProviderConfig.Clone(),
                     BuildOpenAIVoiceSessionConfig(configuration, options),
                     serviceProvider.GetService<IVoiceToolCatalog>(),
@@ -394,6 +407,28 @@ public static class ServiceCollectionExtensions
             names.Add(providerName == "openai" ? "voice_presence_openai" : "voice_presence_minicpm");
 
         return names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool IsNyxIdRealtimeBrokerEnabled(IConfiguration configuration) =>
+        !string.IsNullOrWhiteSpace(configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]);
+
+    private static NyxIdRealtimeProviderCredentialOptions BuildNyxIdRealtimeCredentialOptions(
+        IConfiguration configuration)
+    {
+        var options = new NyxIdRealtimeProviderCredentialOptions
+        {
+            ServiceSlug = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]?.Trim() ?? string.Empty,
+        };
+
+        var mintPath = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:MintPath"];
+        if (!string.IsNullOrWhiteSpace(mintPath))
+            options.MintPath = mintPath.Trim();
+
+        var model = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:Model"];
+        if (!string.IsNullOrWhiteSpace(model))
+            options.Model = model.Trim();
+
+        return options;
     }
 
     private static VoiceProviderConfig BuildOpenAIVoiceProviderConfig(

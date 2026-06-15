@@ -400,6 +400,96 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleDeleteAsync_WhenConfiguredEnabled_ShouldPersistDeletedStateAndCancelNextFireLease()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+        var previousLease = agent.State.NextFireLease!.Clone();
+
+        await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand
+        {
+            Reason = "remove",
+        });
+
+        agent.State.Deleted.Should().BeTrue();
+        agent.State.DeletedAt.Should().NotBeNull();
+        agent.State.Enabled.Should().BeFalse();
+        agent.State.NextFireAt.Should().BeNull();
+        agent.State.NextFireLease.Should().BeNull();
+        agent.State.PendingNextFireAt.Should().BeNull();
+        scheduler.Canceled.Should().ContainSingle();
+        scheduler.Canceled[0].ActorId.Should().Be(ScheduleActorId);
+        scheduler.Canceled[0].CallbackId.Should().Be(NextFireCallbackId);
+        scheduler.Canceled[0].Generation.Should().Be(previousLease.Generation);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchDeletedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .ContainSingle()
+            .Which.EventData.Unpack<ScheduledDispatchDeletedEvent>().Reason.Should().Be("remove");
+    }
+
+    [Fact]
+    public async Task DeletedSchedule_ShouldRejectMutationsAndManualFireWithoutDispatch()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+        await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand());
+
+        var enable = () => agent.HandleEnableAsync(new ScheduledDispatchEnableCommand());
+        var disable = () => agent.HandleDisableAsync(new ScheduledDispatchDisableCommand());
+        var update = () => agent.HandleConfigureAsync(CreateUpdateCommand(enabled: false));
+        var manualFire = () => agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)),
+            Manual = true,
+        });
+
+        await enable.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not configured*");
+        await disable.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not configured*");
+        await update.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*deleted*");
+        await manualFire.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not configured*");
+        dispatch.Dispatches.Should().BeEmpty();
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchFireStartedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleEventAsync_WhenLateNonManualCallbackArrivesAfterDelete_ShouldIgnoreWithoutDispatchOrFireStartedEvent()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+        var request = scheduler.TimeoutRequests.Single();
+        await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand());
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(request, generation: 1, fireIndex: 1));
+
+        dispatch.Dispatches.Should().BeEmpty();
+        agent.State.FireRecords.Should().BeEmpty();
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchFireStartedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleEventAsync_WhenDueCallbackArrives_ShouldDispatchNonManualFireAndScheduleNext()
     {
         var eventStore = new TestEventStore();

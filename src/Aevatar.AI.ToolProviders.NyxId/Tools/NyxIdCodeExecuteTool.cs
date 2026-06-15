@@ -29,6 +29,12 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
         "Supports Python, JavaScript, TypeScript, and Bash. " +
         "Returns stdout, stderr, and exit code.";
 
+    // Approval intentionally not required (by design): code runs entirely in the
+    // remote, isolated chrono-sandbox service (see class summary) — never on this
+    // host — and only { language, script } is forwarded, so no caller token,
+    // secrets, or env enter the sandbox runtime. The sandbox is the isolation
+    // boundary, so a host-side approval gate adds nothing here. Contrast
+    // NyxIdSshExecTool, which targets a real host and so keeps ApprovalMode.Auto.
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
     public string ParametersSchema => """
@@ -227,9 +233,12 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
                 _logger.LogInformation("[code_execute] Probed known sandbox slug: {Slug}", candidate);
                 return candidate;
             }
-            catch
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Network/timeout error — try next candidate
+                _logger.LogWarning(
+                    ex,
+                    "[code_execute] Failed to probe known sandbox slug: {Slug}",
+                    candidate);
             }
         }
 

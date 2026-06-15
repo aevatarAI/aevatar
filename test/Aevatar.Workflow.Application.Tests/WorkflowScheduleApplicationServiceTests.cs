@@ -241,7 +241,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var act = () => service.CreateAsync(CreateConfiguration(scheduleId));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*letters, digits, '.', '_', ':', and '-'*");
+            .WithMessage("*letters, digits, '.', '_', and '-'*");
     }
 
     [Fact]
@@ -761,6 +761,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Ensured { get; } = [];
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
+        public List<(string ActorId, string Reason)> Deleted { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNowRequests { get; } = [];
         public string? ResolveActorId { get; set; }
         public Func<string, EventEnvelope, DispatchAdmission> AdmissionFactory { get; set; } =
@@ -823,6 +824,15 @@ public sealed class WorkflowScheduleApplicationServiceTests
             CancellationToken ct = default)
         {
             Disabled.Add((actorId, reason));
+            return Task.FromResult(AdmissionFactory(actorId, CreateAdmissionEnvelope()));
+        }
+
+        public Task<DispatchAdmission> DispatchDeleteAsync(
+            string actorId,
+            string reason,
+            CancellationToken ct = default)
+        {
+            Deleted.Add((actorId, reason));
             return Task.FromResult(AdmissionFactory(actorId, CreateAdmissionEnvelope()));
         }
 

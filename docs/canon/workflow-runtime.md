@@ -100,7 +100,7 @@ BindWorkflowDefinition(yaml)
 
 ### Scheduled Dispatch API
 
-第一版定时触发只提供 API 配置面，不提供 UI。主 API 路径为 `/api/scheduled-dispatches`，支持 create/update/enable/disable/list/get/preview/run-now。`/api/workflow-schedules` 仅作为 workflow 兼容入口，内部映射到统一 scheduled dispatch 应用契约。
+第一版定时触发只提供 API 配置面，不提供 UI。主 API 路径为 `/api/schedules`，支持 create/update/enable/disable/delete/list/get/preview/run-now。旧 `/api/workflow-schedules` 兼容入口已删除；workflow 内部调度只通过 actor-owned scheduled dispatch 应用契约进入统一主链路。
 
 运行边界：
 

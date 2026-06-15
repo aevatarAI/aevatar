@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
@@ -340,7 +341,8 @@ public sealed class AgentBuilderTool : IAgentTool
         CancellationToken ct)
     {
         var entries = await queryPort.QueryByCallerAsync(caller, ct);
-        var executions = await executionQueryPort.QueryByAgentIdsAsync(
+        var executions = await TryQueryExecutionsByAgentIdsAsync(
+            executionQueryPort,
             entries.Select(static entry => entry.AgentId).ToArray(),
             ct);
         return entries
@@ -393,7 +395,7 @@ public sealed class AgentBuilderTool : IAgentTool
         CancellationToken ct) =>
         queryPort.GetForCallerAsync(agentId, caller, ct);
 
-    private static async Task<UserAgentCatalogReadModelEntry?> QueryAgentForCallerAsync(
+    private async Task<UserAgentCatalogReadModelEntry?> QueryAgentForCallerAsync(
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerExecutionQueryPort executionQueryPort,
         string agentId,
@@ -404,8 +406,49 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry is null)
             return null;
 
-        return MergeExecution(entry, await executionQueryPort.GetAsync(entry.AgentId, ct));
+        return MergeExecution(entry, await TryGetExecutionAsync(executionQueryPort, entry.AgentId, ct));
     }
+
+    private async Task<IReadOnlyDictionary<string, SkillRunnerExecutionDocument>> TryQueryExecutionsByAgentIdsAsync(
+        ISkillRunnerExecutionQueryPort executionQueryPort,
+        IReadOnlyCollection<string> agentIds,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await executionQueryPort.QueryByAgentIdsAsync(agentIds, ct);
+        }
+        catch (ProjectionIndexSchemaDriftException ex)
+        {
+            LogExecutionProjectionUnavailable(ex);
+            return new Dictionary<string, SkillRunnerExecutionDocument>(StringComparer.Ordinal);
+        }
+    }
+
+    private async Task<SkillRunnerExecutionDocument?> TryGetExecutionAsync(
+        ISkillRunnerExecutionQueryPort executionQueryPort,
+        string agentId,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await executionQueryPort.GetAsync(agentId, ct);
+        }
+        catch (ProjectionIndexSchemaDriftException ex)
+        {
+            LogExecutionProjectionUnavailable(ex);
+            return null;
+        }
+    }
+
+    private void LogExecutionProjectionUnavailable(ProjectionIndexSchemaDriftException ex) =>
+        _logger?.LogWarning(
+            ex,
+            "SkillRunner execution projection is unavailable; returning catalog-only agent data. provider={Provider} alias={IndexAlias} currentPhysical={CurrentPhysicalIndex} expectedPhysical={ExpectedPhysicalIndex}",
+            ex.Provider,
+            ex.IndexAlias,
+            ex.CurrentPhysicalIndex,
+            ex.ExpectedPhysicalIndex);
 
     // Refactor (iter94/cluster-094a):
     //   Old: UserAgentCatalogQueryPort joined catalog and runner execution readmodels, creating a stable cross-authority view inside a query port.
