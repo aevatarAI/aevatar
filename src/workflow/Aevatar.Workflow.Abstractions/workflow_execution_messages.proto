@@ -833,3 +833,34 @@ message StaleStepCompletionRejectedEvent
   string expected_execution_id = 3;
   string received_execution_id = 4;
 }
+
+message CompensationRequestEvent
+{
+  string run_id = 1;
+  string failed_step_id = 2;
+  string compensation_step_id = 3;
+  string idempotency_key = 4;
+  string captured_output = 5;
+}
+
+message CompensationStepCompletedEvent
+{
+  string run_id = 1;
+  string compensation_step_id = 2;
+  bool success = 3;
+  string error = 4;
+}
+
+message WorkflowCompensationCompletedEvent
+{
+  string run_id = 1;
+  int32 compensated_steps = 2;
+}
+
+message WorkflowCompensationFailedEvent
+{
+  string run_id = 1;
+  string failed_compensation_step_id = 2;
+  int32 remaining_uncompensated = 3;
+  string error = 4;
+}

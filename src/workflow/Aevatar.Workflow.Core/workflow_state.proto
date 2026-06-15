@@ -155,6 +155,9 @@ message WorkflowRunState
   int32 fork_attempt = 22;
   int32 max_sub_workflow_depth = 23;
   int32 max_active_sub_workflows = 24;
+  repeated CompletedStepLedgerEntry compensable_ledger = 25;
+  int32 compensation_cursor = 26;
+  string saga_status = 27;
 }
 
 message WorkflowRunExecutionContextState
@@ -648,4 +651,13 @@ message BackpressureQueueState
   int32 max_concurrent_workers = 3;
   int32 head_index = 4;
   int32 min_concurrent_workers = 5;
+}
+
+message CompletedStepLedgerEntry
+{
+  string step_id = 1;
+  string compensation_step_id = 2;
+  string idempotency_key = 3;
+  string captured_output = 4;
+  int64 committed_at_unix_ms = 5;
 }

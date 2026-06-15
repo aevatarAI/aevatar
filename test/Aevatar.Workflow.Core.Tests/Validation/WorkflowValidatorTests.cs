@@ -103,6 +103,52 @@ public sealed class WorkflowValidatorTests
                                      x.Contains("notify", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Validate_WhenCompensationTargetExistsInSameWorkflow_ShouldAccept()
+    {
+        var errors = WorkflowValidator.Validate(new WorkflowDefinition
+        {
+            Name = "saga_validation",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "create_order",
+                    Type = "tool_call",
+                    Compensation = "cancel_order",
+                },
+                Step("cancel_order", "tool_call", new()),
+            ],
+        });
+
+        errors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_WhenCompensationTargetIsMissing_ShouldReject()
+    {
+        var errors = WorkflowValidator.Validate(new WorkflowDefinition
+        {
+            Name = "saga_validation",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "create_order",
+                    Type = "tool_call",
+                    Compensation = "cancel_order",
+                },
+            ],
+        });
+
+        errors.Should().ContainSingle(error =>
+            error.Contains("create_order", StringComparison.Ordinal) &&
+            error.Contains("compensation", StringComparison.Ordinal) &&
+            error.Contains("cancel_order", StringComparison.Ordinal));
+    }
+
     private static WorkflowDefinition WorkflowWith(StepDefinition step) =>
         new()
         {
