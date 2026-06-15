@@ -761,6 +761,7 @@ const TeamDetailPage: React.FC = () => {
           description: trimText(member.description),
           canInvokeAsEntry: isBoundMember,
           canInvokeMember: isWorkflowMember && isBoundMember,
+          canSetAsEntry: Boolean(trimText(member.memberId)),
           editStudioHref: isWorkflowMember ? workflowStudioHref : "",
           implementationKind: formatCompositionKind(member.implementationKind),
           invokeHref: isWorkflowMember ? memberInvokeHref : "",
