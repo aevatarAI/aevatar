@@ -34,6 +34,23 @@ public sealed class WorkflowSagaContractTests
     }
 
     [Fact]
+    public void WorkflowRunState_ShouldExposeCompensationDeadLetterContract()
+    {
+        var state = new WorkflowRunState
+        {
+            SagaStatus = "compensation_dead_letter",
+            DeadLetterFailedCompensationStepId = "refund_payment",
+            DeadLetterRemainingUncompensated = 2,
+            DeadLetterError = "refund failed",
+        };
+
+        state.SagaStatus.Should().Be("compensation_dead_letter");
+        state.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        state.DeadLetterRemainingUncompensated.Should().Be(2);
+        state.DeadLetterError.Should().Be("refund failed");
+    }
+
+    [Fact]
     public void WorkflowExecutionMessages_ShouldExposeCompensationEventContracts()
     {
         new CompensationRequestEvent

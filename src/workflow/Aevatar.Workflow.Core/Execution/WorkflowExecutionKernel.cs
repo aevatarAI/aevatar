@@ -373,7 +373,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 if (await TryRetryAsync(current, evt, state, ctx, ct))
                     return;
 
-                await TryRecordFailedCompensationSeamAsync(evt, compensationExecutionId, state, ctx, ct);
+                await TryRecordFailedCompensationDeadLetterAsync(evt, compensationExecutionId, state, ctx, ct);
                 return;
             }
 
@@ -408,7 +408,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 runId,
                 evt.StepId,
                 evt.Error);
-            if (await TryRecordFailedCompensationSeamAsync(evt, compensationExecutionId, state, ctx, ct))
+            if (await TryRecordFailedCompensationDeadLetterAsync(evt, compensationExecutionId, state, ctx, ct))
                 return;
 
             await TryStartCompensationOrPublishTerminalFailureAsync(
@@ -577,7 +577,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             ct);
     }
 
-    private async Task<bool> TryRecordFailedCompensationSeamAsync(
+    private async Task<bool> TryRecordFailedCompensationDeadLetterAsync(
         StepCompletedEvent evt,
         string compensationExecutionId,
         WorkflowExecutionKernelState state,
@@ -646,7 +646,14 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     ct);
                 return true;
             case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
-            case WorkflowCompensationTransitionStatus.FailedSeam:
+                return true;
+            case WorkflowCompensationTransitionStatus.CompensationDeadLettered:
+                await CleanupRunAsync(
+                    LoadState(ctx),
+                    ctx,
+                    ct,
+                    preserveTerminalFacts: true,
+                    preserveCurrentStepInputVariable: true);
                 return true;
             case WorkflowCompensationTransitionStatus.NoCompensableLedger:
                 return false;
@@ -687,7 +694,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 await PublishWorkflowCompletedAsync(ctx, terminalFailure, ct);
                 return;
             case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
-            case WorkflowCompensationTransitionStatus.FailedSeam:
+            case WorkflowCompensationTransitionStatus.CompensationDeadLettered:
             default:
                 return;
         }
