@@ -1026,6 +1026,15 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
+        var state = HydrateRuntimeStateFromActor(ctx);
+
+        // Refactor (cluster-voice-tool-caller-credential): the voice tool call runs on this actor turn,
+        // which has no caller AsyncLocal context. Re-establish it from the per-session credential store so
+        // the tool invoker (nyxid_proxy etc.) and the tool-result provider reconnect authenticate as the
+        // caller. Degrades to no-credential behavior when nothing is stashed.
+        var callerToken = ResolveCallerToken(ctx, state);
+        using var credentialScope = VoiceCallerCredentialScope.Push(callerToken);
+
         var invoker = _toolInvoker ?? ctx.Services.GetService<IVoiceToolInvoker>();
         var resultJson = "{}";
 
@@ -1073,9 +1082,17 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             }
         }
 
-        var state = HydrateRuntimeStateFromActor(ctx);
         await using var providerSession = await ConnectProviderSessionAsync(state, ct);
         await providerSession.SendToolResultAsync(request.CallId, resultJson, ct);
+    }
+
+    private static string? ResolveCallerToken(IEventHandlerContext ctx, VoicePresenceRuntimeState state)
+    {
+        var store = ctx.Services.GetService<IVoiceSessionCredentialStore>();
+        if (store == null || string.IsNullOrWhiteSpace(state.ActiveSessionId))
+            return null;
+
+        return store.TryGet(state.ActiveSessionId, out var token) ? token : null;
     }
 
     private async Task<VoiceSessionConfig?> BuildEffectiveSessionConfigAsync(

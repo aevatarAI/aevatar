@@ -53,8 +53,8 @@ src/Aevatar.Foundation.VoicePresence/Transport/WebRtcVoiceTransport.cs	111	empty
 src/Aevatar.Foundation.VoicePresence/Transport/WebRtcVoiceTransport.cs	127	empty broad catch block
 src/Aevatar.Foundation.VoicePresence/Transport/WebSocketVoiceTransport.cs	161	empty broad catch block
 src/Aevatar.Foundation.VoicePresence/Transport/WebSocketVoiceTransport.cs	265	empty broad catch block
-src/Aevatar.Mainnet.Host.Api/Voice/PolicyAwareVoiceEndpoints.cs	288	empty broad catch block
-src/Aevatar.Mainnet.Host.Api/Voice/PolicyAwareVoiceEndpoints.cs	314	empty broad catch block
+src/Aevatar.Mainnet.Host.Api/Voice/PolicyAwareVoiceEndpoints.cs	298	empty broad catch block
+src/Aevatar.Mainnet.Host.Api/Voice/PolicyAwareVoiceEndpoints.cs	324	empty broad catch block
 src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent.cs	423	empty broad catch block
 src/Aevatar.Scripting.Infrastructure/Compilation/CachedScriptBehaviorArtifactResolver.cs	295	empty broad catch block
 src/Aevatar.Scripting.Infrastructure/Compilation/GrpcToolsScriptProtoCompiler.cs	131	empty broad catch block

@@ -142,6 +142,14 @@ public static class PolicyAwareVoiceEndpoints
         if (accepted is null)
             return;
 
+        // Refactor (cluster-voice-tool-caller-credential): stash the caller's NyxID bearer for this
+        // session so the actor turn can authenticate voice tool calls (nyxid_proxy etc.) as the caller.
+        // In-memory only (never persisted); evicted on session end.
+        var credentialStore = http.RequestServices.GetService<IVoiceSessionCredentialStore>();
+        var callerBearer = ExtractCallerBearer(http);
+        if (credentialStore is not null && !string.IsNullOrWhiteSpace(callerBearer))
+            credentialStore.Set(accepted.LeaseHandle.SessionId, callerBearer, accepted.LeaseHandle.ExpiresAtUtc);
+
         var ws = await http.WebSockets.AcceptWebSocketAsync();
         var transport = new WebSocketVoiceTransport(ws);
         var attached = false;
@@ -188,6 +196,8 @@ public static class PolicyAwareVoiceEndpoints
         }
         finally
         {
+            credentialStore?.Remove(accepted.LeaseHandle.SessionId);
+
             if (realtimeSubscription != null)
                 await realtimeSubscription.DisposeAsync();
 
