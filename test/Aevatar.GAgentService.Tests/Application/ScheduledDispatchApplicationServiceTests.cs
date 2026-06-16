@@ -17,7 +17,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     [Fact]
     public async Task CreateAsync_ShouldNormalizeGeneratedEnvelopeScheduleAndDispatchCreate()
     {
-        var actorPort = new RecordingScheduledDispatchActorPort();
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
         var queryPort = new RecordingScheduledDispatchQueryPort();
         var service = new ScheduledDispatchApplicationService(
             actorPort,
@@ -60,9 +60,44 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldPreserveServiceInvocationAuthInActorCommand()
+    public async Task CreateAsync_ShouldCheckActorExistenceWithoutQueryingReadModel()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService());
+
+        await service.CreateAsync(CreateEnvelopeConfiguration("schedule-1"));
+
+        actorPort.ResolvedScheduleIds.Should().ContainSingle().Which.Should().Be("schedule-1");
+        actorPort.Created.Should().ContainSingle();
+        queryPort.GetScheduleIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenActorAlreadyExists_ShouldThrowConflictWithoutPreparingTarget()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
+        actorPort.ExistingScheduleIds.Add("schedule-1");
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+
+        var act = () => service.CreateAsync(CreateEnvelopeConfiguration("schedule-1"));
+
+        await act.Should().ThrowAsync<ScheduledDispatchConflictException>()
+            .WithMessage("*already exists*");
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldPreserveServiceInvocationAuthInActorCommand()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
@@ -834,7 +869,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
     private sealed class RecordingScheduledDispatchActorPort : IScheduledDispatchActorPort
     {
         public List<string> EnsuredScheduleIds { get; } = [];
+        public List<string> ResolvedScheduleIds { get; } = [];
         public HashSet<string> MissingScheduleIds { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> ExistingScheduleIds { get; } = new(StringComparer.Ordinal);
+        public bool ResolveUnknownAsMissing { get; init; }
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Created { get; } = [];
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Updated { get; } = [];
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Ensured { get; } = [];
@@ -853,7 +891,11 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(MissingScheduleIds.Contains(scheduleId) ? null : $"actor:{scheduleId}");
+            ResolvedScheduleIds.Add(scheduleId);
+            if (MissingScheduleIds.Contains(scheduleId) || ResolveUnknownAsMissing)
+                return Task.FromResult<string?>(null);
+
+            return Task.FromResult<string?>($"actor:{scheduleId}");
         }
 
         public Task<DispatchAdmission> DispatchCreateAsync(

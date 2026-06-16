@@ -285,14 +285,8 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             return;
 
         var consistency = await _indexManager.CheckConsistencyAsync(_indexName, _indexMetadata, ct);
-        if (consistency.IsConsistent)
+        if (consistency.IsConsistent || consistency.Status == ProjectionIndexConsistencyStatus.Missing)
             return;
-
-        if (consistency.Status == ProjectionIndexConsistencyStatus.Missing)
-        {
-            await _indexManager.EnsureIndexAsync(_indexName, _indexMetadata, ct);
-            return;
-        }
 
         throw new ProjectionIndexSchemaDriftException(
             consistency.Provider,
