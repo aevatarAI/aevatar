@@ -1486,7 +1486,14 @@ public sealed class AgentRunGAgentTests
             {
                 SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
             }).ToPayload(),
-            LlmControl = ControlForAgentRun(rounds: 6).ToPayload(),
+            LlmControl = new LLMControlContext(
+                NyxIdAccessToken: null,
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: "sender-session-jwt",
+                ModelOverride: null,
+                NyxIdRoutePreference: null,
+                MaxToolRoundsOverride: 6,
+                UserMemoryPrompt: null).ToPayload(),
             Metadata =
             {
                 [ChannelMetadataKeys.Platform] = "lark",

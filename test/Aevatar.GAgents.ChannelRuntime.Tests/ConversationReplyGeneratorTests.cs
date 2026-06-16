@@ -1584,7 +1584,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_UsesOwnerPrefsImmediatelyWhenSenderRouteHasNoToken()
+    public async Task GenerateReplyAsync_WhenSenderRouteHasNoToken_ShouldKeepSenderBindingAndFallbackOnlyLlmRoute()
     {
         var providerFactory = new RecordingProviderFactory();
         var prefsStore = new ScopedStubPreferencesStore
@@ -1612,16 +1612,51 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        var ownerRequest = providerFactory.Requests.Should().ContainSingle().Subject;
-        ownerRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        var ownerToolContext = ownerRequest.ToolContext!;
-        ownerToolContext.Routing.ModelOverride.Should().Be("owner-model");
-        ownerToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
-        ownerToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
-        ownerToolContext.Credentials.NyxIdAccessToken.Should().Be("owner-token");
-        ownerToolContext.Credentials.NyxIdOrgToken.Should().Be("owner-token");
-        ownerToolContext.SenderBinding.BindingId.Should().BeNull();
-        ownerToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        var requestToolContext = request.ToolContext!;
+        requestToolContext.Routing.ModelOverride.Should().Be("sender-model");
+        requestToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        requestToolContext.Routing.MaxToolRoundsOverride.Should().Be(7);
+        requestToolContext.Credentials.NyxIdAccessToken.Should().Be("owner-token");
+        requestToolContext.Credentials.NyxIdOrgToken.Should().Be("owner-token");
+        requestToolContext.SenderBinding.BindingId.Should().Be("bnd_sender");
+        requestToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WhenSenderHasNoRoutePreference_ShouldStillPromoteSenderTokenForTools()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore
+        {
+            ByBinding =
+            {
+                ["bnd_sender"] = new NyxIdUserLlmPreferences("sender-model", string.Empty, MaxToolRounds: 0),
+            },
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-sender-token-no-route-pref",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(),
+            Control("owner-model", "/api/v1/proxy/s/owner", 5, "owner-token", " sender-token "),
+            ToolContext("bnd_sender"),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var toolContext = providerFactory.Requests.Should().ContainSingle().Subject.ToolContext!;
+        toolContext.Routing.ModelOverride.Should().Be("sender-model");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("sender-token");
+        toolContext.Credentials.NyxIdOrgToken.Should().Be("sender-token");
+        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        toolContext.SenderBinding.BindingId.Should().Be("bnd_sender");
     }
 
     // ─── Issue #513 phase 3 — explicit 3 binding × 3 owner-prefs override matrix ───
@@ -1633,9 +1668,8 @@ public sealed class ConversationReplyGeneratorTests
     // crossed with the owner-prefs axis (none / partial=model-only / full).
     // Sender prefs in the bound-set row deliberately set ONLY DefaultModel so
     // we exercise the "sender supplies a subset, owner fills the rest" path
-    // without crossing the route-applied + no-sender-token branch (which
-    // silently swaps in the owner snapshot — orthogonal to the matrix and
-    // already covered by UsesOwnerPrefsImmediatelyWhenSenderRouteHasNoToken).
+    // without crossing the route-applied + no-sender-token branch, which
+    // now falls back only the LLM route while preserving sender binding.
     public const string MatrixUnbound = "unbound";
     public const string MatrixBoundEmpty = "bound_empty_prefs";
     public const string MatrixBoundModelOnly = "bound_model_only";
