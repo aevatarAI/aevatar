@@ -25,6 +25,7 @@ import React from "react";
 import {
   scheduledDispatchApi,
   type ScheduledDispatchConfigurationInput,
+  type ScheduledDispatchListResult,
   type ScheduledDispatchPreview,
   type ScheduledDispatchSummary,
 } from "@/shared/api/scheduledDispatchApi";
@@ -52,6 +53,7 @@ export type TeamAutomationMemberRow = {
   readonly name: string;
   readonly serviceId: string;
   readonly serviceIdentity?: ServiceIdentity;
+  readonly serviceRevisionId?: string;
   readonly workflowSupported: boolean;
 };
 
@@ -73,6 +75,10 @@ type AutomationFormState = {
 };
 
 const scheduleListTake = 200;
+const scheduleListRetryLimit = 4;
+const scheduleListRetryBaseMs = 600;
+const scheduleListRetryMaxMs = 2_500;
+const scheduleMutationRefreshDelayMs = 1_000;
 const customPreset = "custom";
 const defaultPreset = "weekdays-0900";
 const defaultCronExpression = "0 9 * * 1-5";
@@ -80,18 +86,76 @@ const defaultCronExpression = "0 9 * * 1-5";
 const pageGridStyle: React.CSSProperties = {
   alignItems: "start",
   display: "grid",
-  gap: 18,
-  gridTemplateColumns: "minmax(0, 1fr) minmax(300px, 360px)",
+  gap: 16,
+  gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 340px)",
+  minWidth: 0,
+  width: "100%",
 };
 
 const responsiveStyle = `
-@media (max-width: 960px) {
+.team-automations-layout,
+.team-automations-layout * {
+  box-sizing: border-box;
+}
+
+.team-automation-row {
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.team-automation-row:hover {
+  background: rgba(22, 119, 255, 0.035);
+}
+
+.team-automation-action-button {
+  transition: background-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.team-automation-action-button:hover,
+.team-automation-action-button:focus-visible {
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08) !important;
+  transform: translateY(-1px);
+}
+
+@media (max-width: 1180px) {
   .team-automations-layout {
     grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .team-automations-panel-header {
+    align-items: stretch !important;
+  }
+
+  .team-automations-create-button {
+    width: 100%;
   }
 
   .team-automation-row {
     grid-template-columns: minmax(0, 1fr) !important;
+    gap: 12px !important;
+    padding: 14px 0 !important;
+  }
+
+  .team-automation-actions {
+    justify-content: flex-start !important;
+    width: 100%;
+  }
+
+  .team-automation-form-schedule-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (max-width: 520px) {
+  .team-automation-actions {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .team-automation-actions .ant-btn {
+    min-width: 0 !important;
+    width: 100% !important;
   }
 }
 `;
@@ -103,6 +167,19 @@ const panelHeaderStyle: React.CSSProperties = {
   gap: 12,
   justifyContent: "space-between",
   minWidth: 0,
+};
+
+const primaryHeaderButtonStyle: React.CSSProperties = {
+  borderRadius: 10,
+  boxShadow: "none",
+  fontWeight: 700,
+  height: 36,
+  paddingInline: 14,
+};
+
+const inspectorActionButtonStyle: React.CSSProperties = {
+  ...primaryHeaderButtonStyle,
+  height: 38,
 };
 
 const titleGroupStyle: React.CSSProperties = {
@@ -125,13 +202,35 @@ const commitmentGridStyle: React.CSSProperties = {
 };
 
 const commitmentRowStyle: React.CSSProperties = {
-  alignItems: "start",
+  alignItems: "center",
   display: "grid",
   gap: 14,
   gridTemplateColumns:
-    "minmax(220px, 1fr) minmax(170px, 0.68fr) minmax(155px, 0.58fr) max-content",
+    "minmax(180px, 1.16fr) minmax(132px, 0.72fr) minmax(112px, 0.48fr) minmax(142px, max-content)",
   minWidth: 0,
-  padding: "16px 0",
+  padding: "14px 0",
+};
+
+const automationActionGroupBaseStyle: React.CSSProperties = {
+  alignItems: "center",
+  borderRadius: 12,
+  display: "flex",
+  gap: 4,
+  justifyContent: "flex-end",
+  justifySelf: "end",
+  minWidth: 0,
+  padding: 4,
+};
+
+const automationActionButtonBaseStyle: React.CSSProperties = {
+  border: "none",
+  borderRadius: 8,
+  boxShadow: "none",
+  height: 32,
+  lineHeight: 1,
+  minWidth: 32,
+  paddingInline: 0,
+  width: 32,
 };
 
 const upcomingRowStyle: React.CSSProperties = {
@@ -145,6 +244,18 @@ const upcomingRowStyle: React.CSSProperties = {
 const modalFieldStyle: React.CSSProperties = {
   display: "grid",
   gap: 8,
+};
+
+const enabledFieldStyle: React.CSSProperties = {
+  ...modalFieldStyle,
+  alignContent: "start",
+  justifyItems: "start",
+};
+
+const enabledSwitchStyle: React.CSSProperties = {
+  justifySelf: "start",
+  minWidth: 44,
+  width: 44,
 };
 
 function trimText(value: string | null | undefined): string {
@@ -172,6 +283,13 @@ function sortByNextFire(
   return leftTime - rightTime;
 }
 
+function scheduleListRetryDelay(attemptIndex: number): number {
+  return Math.min(
+    scheduleListRetryBaseMs * 2 ** attemptIndex,
+    scheduleListRetryMaxMs,
+  );
+}
+
 const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   members = [],
   scopeId,
@@ -194,6 +312,11 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const [editingSchedule, setEditingSchedule] =
     React.useState<ScheduledDispatchSummary | null>(null);
   const [preview, setPreview] = React.useState<ScheduledDispatchPreview | null>(null);
+  const [locallyDeletedScheduleIds, setLocallyDeletedScheduleIds] =
+    React.useState<ReadonlySet<string>>(() => new Set());
+  const delayedScheduleRefreshRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const [formState, setFormState] = React.useState<AutomationFormState>(() => ({
     cronExpression: defaultCronExpression,
     displayName: "",
@@ -226,17 +349,20 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         take: scheduleListTake,
       }),
     queryKey: scheduleQueryKey,
-    retry: false,
+    retry: (failureCount) => failureCount < scheduleListRetryLimit,
+    retryDelay: scheduleListRetryDelay,
   });
   const teamSchedules = React.useMemo(
     () =>
       (schedulesQuery.data?.items ?? [])
         .filter(
           (schedule) =>
-            !schedule.deleted && serviceIdToMember.has(trimText(schedule.serviceId)),
+            !schedule.deleted &&
+            !locallyDeletedScheduleIds.has(trimText(schedule.scheduleId)) &&
+            serviceIdToMember.has(trimText(schedule.serviceId)),
         )
         .sort(sortByNextFire),
-    [schedulesQuery.data?.items, serviceIdToMember],
+    [locallyDeletedScheduleIds, schedulesQuery.data?.items, serviceIdToMember],
   );
   const activeFormMember =
     automatableMembers.find((member) => member.memberId === formState.memberId) ??
@@ -294,6 +420,78 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       queryKey: ["scheduled-dispatches"],
     });
   }, [queryClient]);
+  const scheduleDelayedRefresh = React.useCallback(() => {
+    if (delayedScheduleRefreshRef.current) {
+      clearTimeout(delayedScheduleRefreshRef.current);
+    }
+
+    delayedScheduleRefreshRef.current = setTimeout(() => {
+      delayedScheduleRefreshRef.current = null;
+      void invalidateSchedules();
+    }, scheduleMutationRefreshDelayMs);
+  }, [invalidateSchedules]);
+  const removeScheduleFromCache = React.useCallback(
+    (scheduleId: string) => {
+      const normalizedScheduleId = trimText(scheduleId);
+      if (!normalizedScheduleId) {
+        return;
+      }
+
+      queryClient.setQueriesData<ScheduledDispatchListResult>(
+        { queryKey: ["scheduled-dispatches"] },
+        (current) => {
+          if (!current) {
+            return current;
+          }
+
+          const nextItems = current.items.filter(
+            (schedule) => trimText(schedule.scheduleId) !== normalizedScheduleId,
+          );
+          if (nextItems.length === current.items.length) {
+            return current;
+          }
+
+          return {
+            ...current,
+            items: nextItems,
+            totalCount:
+              typeof current.totalCount === "number"
+                ? Math.max(0, current.totalCount - 1)
+                : current.totalCount,
+          };
+        },
+      );
+    },
+    [queryClient],
+  );
+  const hideDeletedSchedule = React.useCallback(
+    (scheduleId: string) => {
+      const normalizedScheduleId = trimText(scheduleId);
+      if (!normalizedScheduleId) {
+        return;
+      }
+
+      setLocallyDeletedScheduleIds((current) => {
+        if (current.has(normalizedScheduleId)) {
+          return current;
+        }
+
+        const next = new Set(current);
+        next.add(normalizedScheduleId);
+        return next;
+      });
+      removeScheduleFromCache(normalizedScheduleId);
+    },
+    [removeScheduleFromCache],
+  );
+  React.useEffect(
+    () => () => {
+      if (delayedScheduleRefreshRef.current) {
+        clearTimeout(delayedScheduleRefreshRef.current);
+      }
+    },
+    [],
+  );
 
   const previewMutation = useMutation({
     mutationFn: scheduledDispatchApi.preview,
@@ -325,7 +523,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         ),
       );
     },
-    onSuccess: async () => {
+    onSuccess: () => {
       void message.success(
         intl.formatMessage({
           id: "teams.automations.messages.createSuccess",
@@ -334,7 +532,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       );
       setCreateOpen(false);
       setPreview(null);
-      await invalidateSchedules();
+      scheduleDelayedRefresh();
     },
   });
   const updateMutation = useMutation({
@@ -414,14 +612,15 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         scheduleId,
         "Deleted from Team Automations",
       ),
-    onSuccess: async () => {
+    onSuccess: (_receipt, scheduleId) => {
+      hideDeletedSchedule(scheduleId);
       void message.success(
         intl.formatMessage({
           id: "teams.automations.messages.deleteSuccess",
           defaultMessage: "Automation deleted.",
         }),
       );
-      await invalidateSchedules();
+      scheduleDelayedRefresh();
     },
   });
 
@@ -500,9 +699,16 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     previewMutation,
   ]);
 
+  const handlePreviewNextRuns = React.useCallback(() => {
+    previewNextRuns().catch(() => {
+      // The mutation onError path owns the user-visible failure message.
+    });
+  }, [previewNextRuns]);
+
   const saveAutomation = React.useCallback(async () => {
     const member = activeFormMember;
     const serviceIdentity = member?.serviceIdentity;
+    const serviceRevisionId = trimText(member?.serviceRevisionId);
     const prompt = formState.prompt.trim();
     const cronExpression = formState.cronExpression.trim();
     if (!member || !serviceIdentity) {
@@ -558,6 +764,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       workflowChatTarget: {
         identity: serviceIdentity,
         prompt,
+        ...(serviceRevisionId ? { revisionId: serviceRevisionId } : {}),
       },
     };
 
@@ -585,6 +792,12 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     updateMutation,
   ]);
 
+  const handleSaveAutomation = React.useCallback(() => {
+    saveAutomation().catch(() => {
+      // The mutation onError path owns the user-visible failure message.
+    });
+  }, [saveAutomation]);
+
   const renderStatusPill = (schedule: ScheduledDispatchSummary) => {
     const attention = !schedule.enabled || Boolean(trimText(schedule.lastError));
     return (
@@ -611,6 +824,63 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       />
     );
   };
+
+  const buildAutomationActionButtonStyle = (
+    tone: "default" | "danger" | "primary" = "default",
+  ): React.CSSProperties => {
+    if (tone === "danger") {
+      return {
+        ...automationActionButtonBaseStyle,
+        background: token.colorErrorBg,
+        color: token.colorError,
+      };
+    }
+
+    if (tone === "primary") {
+      return {
+        ...automationActionButtonBaseStyle,
+        background: token.colorPrimaryBg,
+        color: token.colorPrimary,
+      };
+    }
+
+    return {
+      ...automationActionButtonBaseStyle,
+      background: token.colorBgContainer,
+      color: token.colorTextSecondary,
+    };
+  };
+
+  const renderAutomationActionButton = ({
+    danger,
+    icon,
+    label,
+    loading,
+    onClick,
+    primary,
+  }: {
+    readonly danger?: boolean;
+    readonly icon: React.ReactNode;
+    readonly label: string;
+    readonly loading?: boolean;
+    readonly onClick: () => void;
+    readonly primary?: boolean;
+  }) => (
+    <Tooltip title={label}>
+      <Button
+        className="team-automation-action-button"
+        aria-label={label}
+        danger={danger}
+        icon={icon}
+        loading={loading}
+        onClick={onClick}
+        size="small"
+        style={buildAutomationActionButtonStyle(
+          danger ? "danger" : primary ? "primary" : "default",
+        )}
+      />
+    </Tooltip>
+  );
 
   const renderAutomationRows = () => {
     if (schedulesQuery.isLoading) {
@@ -676,6 +946,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               key={scheduleId}
               style={{
                 ...commitmentRowStyle,
+                borderRadius: 12,
                 borderTop:
                   index === 0
                     ? "none"
@@ -683,7 +954,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               }}
             >
               <div style={{ display: "grid", gap: 7, minWidth: 0 }}>
-                <Typography.Text strong>
+                <Typography.Text ellipsis strong>
                   {trimText(schedule.displayName) ||
                     intl.formatMessage({
                       id: "teams.automations.untitled",
@@ -719,25 +990,27 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 </Space>
               </div>
               <div style={{ display: "grid", gap: 5, minWidth: 0 }}>
-                <Typography.Text strong>
+                <Typography.Text ellipsis strong>
                   {member?.name ||
                     intl.formatMessage({
                       id: "teams.automations.member.unknown",
                       defaultMessage: "Unknown member",
                     })}
                 </Typography.Text>
-                <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                  {intl.formatMessage(
+                <FactLine
+                  rows={2}
+                  secondary
+                  text={intl.formatMessage(
                     {
                       id: "teams.automations.preview.runsThroughService",
                       defaultMessage: "Runs through {serviceId}",
                     },
                     { serviceId: schedule.serviceId },
                   )}
-                </Typography.Text>
+                />
               </div>
               <div style={{ display: "grid", gap: 5, minWidth: 0 }}>
-                <Typography.Text strong>{schedule.cronExpression}</Typography.Text>
+                <FactLine text={schedule.cronExpression} />
                 <Typography.Text style={{ fontSize: 12 }} type="secondary">
                   {schedule.nextFireAt
                     ? intl.formatMessage(
@@ -755,47 +1028,42 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                       })}
                 </Typography.Text>
               </div>
-              <Space size={6} wrap>
-                <Button
-                  icon={<EditOutlined />}
-                  onClick={() => openEdit(schedule)}
-                  size="small"
-                >
-                  {intl.formatMessage({
+              <div
+                className="team-automation-actions"
+                style={{
+                  ...automationActionGroupBaseStyle,
+                  background: token.colorFillQuaternary,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                }}
+              >
+                {renderAutomationActionButton({
+                  icon: <EditOutlined />,
+                  label: intl.formatMessage({
                     id: "teams.automations.actions.edit",
                     defaultMessage: "Edit",
-                  })}
-                </Button>
-                <Button
-                  icon={<PlayCircleOutlined />}
-                  loading={
-                    runNowMutation.isPending &&
-                    runNowMutation.variables === scheduleId
-                  }
-                  onClick={() => runNowMutation.mutate(scheduleId)}
-                  size="small"
-                >
-                  {intl.formatMessage({
+                  }),
+                  onClick: () => openEdit(schedule),
+                })}
+                {renderAutomationActionButton({
+                  icon: <PlayCircleOutlined />,
+                  label: intl.formatMessage({
                     id: "teams.automations.actions.runNow",
                     defaultMessage: "Run now",
-                  })}
-                </Button>
-                <Button
-                  icon={
+                  }),
+                  loading:
+                    runNowMutation.isPending &&
+                    runNowMutation.variables === scheduleId,
+                  onClick: () => runNowMutation.mutate(scheduleId),
+                  primary: true,
+                })}
+                {renderAutomationActionButton({
+                  icon:
                     schedule.enabled ? (
                       <PauseCircleOutlined />
                     ) : (
                       <PlayCircleOutlined />
-                    )
-                  }
-                  loading={
-                    statusMutation.isPending &&
-                    statusMutation.variables === scheduleId
-                  }
-                  onClick={() => statusMutation.mutate(scheduleId)}
-                  size="small"
-                >
-                  {schedule.enabled
+                    ),
+                  label: schedule.enabled
                     ? intl.formatMessage({
                         id: "teams.automations.actions.pause",
                         defaultMessage: "Pause",
@@ -803,26 +1071,25 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                     : intl.formatMessage({
                         id: "teams.automations.actions.resume",
                         defaultMessage: "Resume",
-                      })}
-                </Button>
-                <Tooltip
-                  title={intl.formatMessage({
+                      }),
+                  loading:
+                    statusMutation.isPending &&
+                    statusMutation.variables === scheduleId,
+                  onClick: () => statusMutation.mutate(scheduleId),
+                })}
+                {renderAutomationActionButton({
+                  danger: true,
+                  icon: <DeleteOutlined />,
+                  label: intl.formatMessage({
                     id: "teams.automations.actions.delete",
                     defaultMessage: "Delete",
-                  })}
-                >
-                  <Button
-                    danger
-                    icon={<DeleteOutlined />}
-                    loading={
-                      deleteMutation.isPending &&
-                      deleteMutation.variables === scheduleId
-                    }
-                    onClick={() => deleteMutation.mutate(scheduleId)}
-                    size="small"
-                  />
-                </Tooltip>
-              </Space>
+                  }),
+                  loading:
+                    deleteMutation.isPending &&
+                    deleteMutation.variables === scheduleId,
+                  onClick: () => deleteMutation.mutate(scheduleId),
+                })}
+              </div>
             </div>
           );
         })}
@@ -858,7 +1125,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     <div className="team-automations-layout" style={pageGridStyle}>
       <style>{responsiveStyle}</style>
       <AevatarPanel>
-        <div style={panelHeaderStyle}>
+        <div className="team-automations-panel-header" style={panelHeaderStyle}>
           <div style={titleGroupStyle}>
             <Typography.Title level={3} style={titleStyle}>
               {intl.formatMessage({
@@ -875,10 +1142,11 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             </Typography.Text>
           </div>
           <Button
+            className="team-automations-create-button"
             disabled={!selectedMember}
             icon={<PlusOutlined />}
             onClick={openCreate}
-            style={{ borderRadius: 999, fontWeight: 650 }}
+            style={primaryHeaderButtonStyle}
             type="primary"
           >
             {intl.formatMessage({
@@ -919,10 +1187,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   padding: 14,
                 }}
               >
-                <Typography.Text strong>{selectedMember.name}</Typography.Text>
-                <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                  {selectedMember.serviceId}
+                <Typography.Text ellipsis strong>
+                  {selectedMember.name}
                 </Typography.Text>
+                <FactLine secondary text={selectedMember.serviceId} />
                 <DetailPill
                   compact
                   style={selectedMember.lifecycleStyle}
@@ -948,6 +1216,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               disabled={!selectedMember}
               icon={<ClockCircleOutlined />}
               onClick={openCreate}
+              style={inspectorActionButtonStyle}
               type="primary"
             >
               {intl.formatMessage({
@@ -1049,7 +1318,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             !activeFormMember ||
             !formState.prompt.trim() ||
             !formState.cronExpression.trim() ||
-                (!canCreateAutomation && !serviceIdentitiesLoading),
+            !canCreateAutomation,
         }}
         okText={formOkText}
         onCancel={() => {
@@ -1059,7 +1328,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             setPreview(null);
           }
         }}
-        onOk={() => void saveAutomation()}
+        onOk={handleSaveAutomation}
         open={createOpen}
         title={formTitle}
         width={720}
@@ -1157,6 +1426,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           </div>
 
           <div
+            className="team-automation-form-schedule-grid"
             style={{
               display: "grid",
               gap: 12,
@@ -1190,7 +1460,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 value={formState.preset}
               />
             </div>
-            <div style={modalFieldStyle}>
+            <div style={enabledFieldStyle}>
               <Typography.Text strong>
                 {intl.formatMessage({
                   id: "teams.automations.form.enabled",
@@ -1198,9 +1468,14 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 })}
               </Typography.Text>
               <Switch
+                aria-label={intl.formatMessage({
+                  id: "teams.automations.form.enabled",
+                  defaultMessage: "Enabled",
+                })}
                 checked={formState.enabled}
                 disabled={formSubmitting}
                 onChange={(enabled) => updateForm({ enabled })}
+                style={enabledSwitchStyle}
               />
             </div>
           </div>
@@ -1260,7 +1535,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               <Button
                 icon={<ClockCircleOutlined />}
                 loading={previewMutation.isPending}
-                onClick={() => void previewNextRuns()}
+                onClick={handlePreviewNextRuns}
               >
                 {intl.formatMessage({
                   id: "teams.automations.form.preview",

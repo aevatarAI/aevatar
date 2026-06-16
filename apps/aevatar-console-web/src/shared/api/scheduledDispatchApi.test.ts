@@ -3,6 +3,7 @@ import {
   decodeScheduledDispatchSummary,
   scheduledDispatchApi,
 } from "./scheduledDispatchApi";
+import { encodeChatRequestEventBase64 } from "@/shared/runs/protobufPayload";
 
 describe("scheduledDispatchApi", () => {
   const originalFetch = global.fetch;
@@ -118,7 +119,7 @@ describe("scheduledDispatchApi", () => {
     );
   });
 
-  it("posts workflow chat target identity when creating a schedule", async () => {
+  it("posts workflow chat as base64 service invocation when creating a schedule with a revision", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 202,
@@ -165,6 +166,46 @@ describe("scheduledDispatchApi", () => {
       headers: {
         source: "team-automations",
       },
+      serviceInvocation: {
+        identity: {
+          tenantId: "scope-1",
+          appId: "default",
+          namespace: "default",
+          serviceId: "svc-alpha",
+        },
+        endpointId: "chat",
+        payloadTypeUrl: "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+        payloadBase64: encodeChatRequestEventBase64({
+          prompt: "Summarize escalations.",
+          sessionId: "session-alpha",
+          scopeId: "scope-1",
+        }),
+        revisionId: "rev-alpha",
+      },
+    });
+    expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payload");
+    expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payloadJson");
+    expect(String(init.body)).not.toContain("memberId");
+    expect(String(init.body)).not.toContain("workflowId");
+    expect(String(init.body)).not.toContain("workflowChatTarget");
+  });
+
+  it("posts workflow chat as base64 service invocation when creating without a revision", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => createReceipt(),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.create({
+      displayName: "Daily escalation digest",
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      enabled: true,
+      headers: {
+        source: "team-automations",
+      },
       workflowChatTarget: {
         identity: {
           tenantId: "scope-1",
@@ -174,14 +215,31 @@ describe("scheduledDispatchApi", () => {
         },
         prompt: "Summarize escalations.",
         sessionId: "session-alpha",
-        revisionId: "rev-alpha",
       },
     });
-    expect(String(init.body)).not.toContain("memberId");
-    expect(String(init.body)).not.toContain("workflowId");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.serviceInvocation).toEqual({
+      identity: {
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "svc-alpha",
+      },
+      endpointId: "chat",
+      payloadTypeUrl: "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+      payloadBase64: encodeChatRequestEventBase64({
+        prompt: "Summarize escalations.",
+        sessionId: "session-alpha",
+        scopeId: "scope-1",
+      }),
+    });
+    expect(body.serviceInvocation).not.toHaveProperty("payloadJson");
+    expect(body.serviceInvocation).not.toHaveProperty("revisionId");
   });
 
-  it("puts workflow chat target identity when updating a schedule", async () => {
+  it("puts workflow chat as base64 service invocation when updating without a revision", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 202,
@@ -226,18 +284,27 @@ describe("scheduledDispatchApi", () => {
       headers: {
         source: "team-automations",
       },
-      workflowChatTarget: {
+      serviceInvocation: {
         identity: {
           tenantId: "scope-1",
           appId: "default",
           namespace: "default",
           serviceId: "alpha-service",
         },
-        prompt: "Summarize changed escalations.",
+        endpointId: "chat",
+        payloadTypeUrl: "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+        payloadBase64: encodeChatRequestEventBase64({
+          prompt: "Summarize changed escalations.",
+          scopeId: "scope-1",
+        }),
       },
     });
+    expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payload");
+    expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payloadJson");
+    expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("revisionId");
     expect(String(init.body)).not.toContain("memberId");
     expect(String(init.body)).not.toContain("workflowId");
+    expect(String(init.body)).not.toContain("workflowChatTarget");
   });
 
   it("previews cron fire times through the preview endpoint", async () => {

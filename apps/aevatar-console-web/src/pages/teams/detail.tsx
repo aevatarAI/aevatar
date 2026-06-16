@@ -544,7 +544,7 @@ const TeamDetailPage: React.FC = () => {
     queryKey: ["teams", "services", scopeId],
     retry: false,
   });
-  const automationServiceIdentityByServiceId = React.useMemo(() => {
+  const automationServiceRuntimeByServiceId = React.useMemo(() => {
     const services =
       activeTab === "automations"
         ? automationsServicesQuery.data ?? servicesQuery.data ?? []
@@ -554,10 +554,14 @@ const TeamDetailPage: React.FC = () => {
         .map((service) => [
           trimText(service.serviceId),
           {
-            appId: service.appId,
-            namespace: service.namespace,
-            serviceId: service.serviceId,
-            tenantId: service.tenantId,
+            activeServingRevisionId: service.activeServingRevisionId,
+            defaultServingRevisionId: service.defaultServingRevisionId,
+            identity: {
+              appId: service.appId,
+              namespace: service.namespace,
+              serviceId: service.serviceId,
+              tenantId: service.tenantId,
+            },
           },
         ] as const)
         .filter(([serviceId]) => serviceId.length > 0),
@@ -778,6 +782,8 @@ const TeamDetailPage: React.FC = () => {
         const isBoundMember =
           normalizeStatus(member.lifecycleStage) === "bind_ready" &&
           publishedServiceId.length > 0;
+        const automationServiceRuntime =
+          automationServiceRuntimeByServiceId.get(publishedServiceId);
         const memberDraftWorkflowId =
           trimText(member.implementationRef?.implementationKind).toLowerCase() ===
           "workflow"
@@ -822,8 +828,10 @@ const TeamDetailPage: React.FC = () => {
             trimText(member.displayName) ||
             intl.formatMessage({ id: "teams.members.unnamed" }),
           serviceId: publishedServiceId || "--",
-          serviceIdentity:
-            automationServiceIdentityByServiceId.get(publishedServiceId),
+          serviceIdentity: automationServiceRuntime?.identity,
+          serviceRevisionId:
+            trimText(automationServiceRuntime?.activeServingRevisionId) ||
+            trimText(automationServiceRuntime?.defaultServingRevisionId),
           studioHref: isWorkflowMember ? workflowStudioHref : "",
           canAutomateMember: isWorkflowMember && isBoundMember,
           automationDisabledReason: !isWorkflowMember
@@ -841,7 +849,7 @@ const TeamDetailPage: React.FC = () => {
       selectedTeamId,
       routeState.memberId,
       routeState.workflowId,
-      automationServiceIdentityByServiceId,
+      automationServiceRuntimeByServiceId,
       teamMembersQuery.data?.members,
       token,
     ],
@@ -1608,6 +1616,7 @@ const TeamDetailPage: React.FC = () => {
           name: row.name,
           serviceId: row.serviceId,
           serviceIdentity: row.serviceIdentity,
+          serviceRevisionId: row.serviceRevisionId,
           workflowSupported: row.workflowSupported,
         }))}
         scopeId={scopeId}

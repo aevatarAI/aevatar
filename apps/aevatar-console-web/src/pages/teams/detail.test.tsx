@@ -2098,12 +2098,85 @@ describe("TeamDetailPage", () => {
     });
   });
 
+  it("retries schedule list while the schedule read model catches up", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.list as jest.Mock)
+      .mockRejectedValueOnce(new Error("Projection is still materializing."))
+      .mockResolvedValueOnce({
+        items: [mockCreateScheduledDispatchSummary()],
+        nextCursor: null,
+        totalCount: 1,
+      });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    await waitFor(() => {
+      expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByText("无法加载自动化")).toBeNull();
+  });
+
+  it("hides a deleted automation immediately and refreshes after the read model catches up", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.list as jest.Mock).mockImplementation(async () => ({
+      items: [mockCreateScheduledDispatchSummary()],
+      nextCursor: null,
+      totalCount: 1,
+    }));
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.delete).toHaveBeenCalledWith(
+        "sch-alpha",
+        "Deleted from Team Automations",
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Daily escalation digest")).toBeNull();
+    });
+    expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(1);
+
+    await waitFor(
+      () => {
+        expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2_000 },
+    );
+    expect(screen.queryByText("Daily escalation digest")).toBeNull();
+    expect(message.success).toHaveBeenCalledWith("自动化已删除。");
+  });
+
   it("creates member recurring work with the published service identity", async () => {
     window.history.replaceState(
       {},
       "",
       "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
     );
+    (scheduledDispatchApi.list as jest.Mock)
+      .mockResolvedValueOnce({
+        items: [],
+        nextCursor: null,
+        totalCount: 0,
+      })
+      .mockResolvedValue({
+        items: [mockCreateScheduledDispatchSummary()],
+        nextCursor: null,
+        totalCount: 1,
+      });
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -2120,6 +2193,7 @@ describe("TeamDetailPage", () => {
     fireEvent.change(screen.getByLabelText("时区"), {
       target: { value: "Asia/Shanghai" },
     });
+    expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
 
     await waitFor(() => {
@@ -2143,12 +2217,139 @@ describe("TeamDetailPage", () => {
             serviceId: "alpha-service",
           },
           prompt: "Summarize escalations and follow-up owners.",
+          revisionId: "rev-2",
         },
       }),
     );
     expect(JSON.stringify(payload)).not.toContain("member-team-alpha");
     expect(JSON.stringify(payload)).not.toContain("wf-team-alpha");
     expect(message.success).toHaveBeenCalledWith("自动化已创建。");
+    expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Daily escalation digest")).toBeNull();
+
+    await waitFor(
+      () => {
+        expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2_000 },
+    );
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+  });
+
+  it("creates member recurring work with the default service revision when the active serving revision is missing", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce(
+      mockCreateServiceCatalog().map((service) =>
+        service.serviceId === "alpha-service"
+          ? {
+              ...service,
+              activeServingRevisionId: "",
+            }
+          : service,
+      ),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    expect(
+      await screen.findByText("目标服务为 alpha-service。"),
+    ).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("自动化名称"), {
+      target: { value: "Daily escalation digest" },
+    });
+    fireEvent.change(screen.getByLabelText("周期 Prompt"), {
+      target: { value: "Summarize escalations and follow-up owners." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+    });
+    const payload = (scheduledDispatchApi.create as jest.Mock).mock.calls[0][0];
+    expect(payload.workflowChatTarget).toEqual(
+      expect.objectContaining({
+        revisionId: "rev-2",
+      }),
+    );
+    expect(message.success).toHaveBeenCalledWith("自动化已创建。");
+  });
+
+  it("creates member recurring work without a revision when no serving revision is available", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce(
+      mockCreateServiceCatalog().map((service) =>
+        service.serviceId === "alpha-service"
+          ? {
+              ...service,
+              activeServingRevisionId: "",
+              defaultServingRevisionId: "",
+            }
+          : service,
+      ),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    expect(
+      await screen.findByText("目标服务为 alpha-service。"),
+    ).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("周期 Prompt"), {
+      target: { value: "Summarize escalations and follow-up owners." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+    });
+    const payload = (scheduledDispatchApi.create as jest.Mock).mock.calls[0][0];
+    expect(payload.workflowChatTarget).toEqual({
+      identity: {
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "alpha-service",
+      },
+      prompt: "Summarize escalations and follow-up owners.",
+    });
+    expect(message.success).toHaveBeenCalledWith("自动化已创建。");
+  });
+
+  it("keeps schedule create failures inside the automations flow", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (scheduledDispatchApi.create as jest.Mock).mockRejectedValueOnce(
+      new Error(
+        "One or more validation errors occurred.: $.serviceInvocation.payload.value: The JSON value could not be converted to Google.Protobuf.ByteString.",
+      ),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    fireEvent.change(await screen.findByLabelText("周期 Prompt"), {
+      target: { value: "Summarize escalations and follow-up owners." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
+
+    await waitFor(() => {
+      expect(message.error).toHaveBeenCalledWith(
+        "自动化未创建：One or more validation errors occurred.: $.serviceInvocation.payload.value: The JSON value could not be converted to Google.Protobuf.ByteString.",
+      );
+    });
+    expect(message.success).not.toHaveBeenCalledWith("自动化已创建。");
   });
 
   it("edits member recurring work with the published service identity", async () => {
@@ -2213,6 +2414,7 @@ describe("TeamDetailPage", () => {
             serviceId: "alpha-service",
           },
           prompt: "Summarize edited escalations and owners.",
+          revisionId: "rev-2",
         },
       }),
     );

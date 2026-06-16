@@ -10,6 +10,11 @@ import {
   readStringRecord,
 } from "./http/decoders";
 import type { ServiceIdentity } from "@/shared/models/services";
+import {
+  encodeChatRequestEventBase64,
+  getChatEndpointId,
+  getChatRequestEventTypeUrl,
+} from "@/shared/runs/protobufPayload";
 
 export type ScheduledDispatchTargetKind = "envelope" | "service_invocation";
 export type ScheduledDispatchScheduleKind = "generic" | "workflow";
@@ -365,6 +370,20 @@ function decodeScheduledDispatchListResult(
 }
 
 function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
+  const identity = {
+    tenantId: input.workflowChatTarget.identity.tenantId.trim(),
+    appId: input.workflowChatTarget.identity.appId.trim(),
+    namespace: input.workflowChatTarget.identity.namespace.trim(),
+    serviceId: input.workflowChatTarget.identity.serviceId.trim(),
+  };
+  const prompt = input.workflowChatTarget.prompt.trim();
+  const revisionId = trimOptional(input.workflowChatTarget.revisionId);
+  const chatRequest = {
+    prompt,
+    sessionId: trimOptional(input.workflowChatTarget.sessionId),
+    scopeId: identity.tenantId,
+  };
+
   return {
     scheduleId: trimOptional(input.scheduleId),
     displayName: trimOptional(input.displayName) ?? "",
@@ -372,16 +391,12 @@ function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
     timezone: trimOptional(input.timezone),
     enabled: input.enabled ?? true,
     headers: input.headers ?? {},
-    workflowChatTarget: {
-      identity: {
-        tenantId: input.workflowChatTarget.identity.tenantId.trim(),
-        appId: input.workflowChatTarget.identity.appId.trim(),
-        namespace: input.workflowChatTarget.identity.namespace.trim(),
-        serviceId: input.workflowChatTarget.identity.serviceId.trim(),
-      },
-      prompt: input.workflowChatTarget.prompt.trim(),
-      sessionId: trimOptional(input.workflowChatTarget.sessionId),
-      revisionId: trimOptional(input.workflowChatTarget.revisionId),
+    serviceInvocation: {
+      identity,
+      endpointId: getChatEndpointId(),
+      payloadTypeUrl: getChatRequestEventTypeUrl(),
+      payloadBase64: encodeChatRequestEventBase64(chatRequest),
+      ...(revisionId ? { revisionId } : {}),
     },
   };
 }
