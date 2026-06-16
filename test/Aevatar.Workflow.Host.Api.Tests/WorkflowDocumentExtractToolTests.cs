@@ -120,6 +120,45 @@ public sealed class WorkflowDocumentExtractToolTests
     }
 
     [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldTruncateImageTextToRequestedMaxChars()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-image-truncation-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var imageBytes = new byte[] { 137, 80, 78, 71, 1, 2, 3, 4 };
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                imageBytes,
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "receipt.png",
+                MediaType: "image/png"));
+            var llmProvider = new RecordingImageLlmProvider(["receipt total 42"]);
+            var tool = await GetDocumentExtractToolAsync(port, llmProvider);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildDocumentExtractArguments(result.FileRef, maxChars: 7),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            var rootElement = document.RootElement;
+            rootElement.GetProperty("text").GetString().Should().Be("receipt");
+            rootElement.GetProperty("truncated").GetBoolean().Should().BeTrue();
+            rootElement.GetProperty("extracted_chars").GetInt32().Should().Be(7);
+            llmProvider.Requests.Should().ContainSingle();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WorkflowDocumentExtractTool_ShouldReturnUnavailableWhenImageProviderMissing()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-image-unavailable-tests", Guid.NewGuid().ToString("N"));
@@ -224,6 +263,38 @@ public sealed class WorkflowDocumentExtractToolTests
     }
 
     [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldRejectImagesWhenStreamExceedsFiveMiB()
+    {
+        var fileRef = new ApplicationWorkflowFileRef
+        {
+            FileId = "underreported-image",
+            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            FileName = "underreported.png",
+            MediaType = "image/png",
+            SizeBytes = 0,
+        };
+        var port = new StaticWorkflowFileArtifactReadPort(
+            fileRef,
+            new MemoryStream(new byte[(5 * 1024 * 1024) + 1]));
+        var llmProvider = new RecordingImageLlmProvider(["unused"]);
+        var tool = await GetDocumentExtractToolAsync(port, llmProvider);
+
+        var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            BuildDocumentExtractArguments(fileRef),
+            "run-1",
+            "extract",
+            "exec-1",
+            "call-1",
+            "scope-1",
+            new ProtoWorkflowCallerCredential()));
+
+        using var document = JsonDocument.Parse(output.ResultJson);
+        document.RootElement.GetProperty("error").GetString().Should().Be("image_too_large");
+        document.RootElement.GetProperty("detail").GetString().Should().Contain("5242880");
+        llmProvider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WorkflowDocumentExtractTool_ShouldSanitizeProviderFailures()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-image-failure-tests", Guid.NewGuid().ToString("N"));
@@ -322,7 +393,7 @@ public sealed class WorkflowDocumentExtractToolTests
         return tools.Should().ContainSingle(x => x.Name == "document_extract").Subject;
     }
 
-    private static string BuildDocumentExtractArguments(ApplicationWorkflowFileRef fileRef)
+    private static string BuildDocumentExtractArguments(ApplicationWorkflowFileRef fileRef, int? maxChars = null)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -339,8 +410,25 @@ public sealed class WorkflowDocumentExtractToolTests
                 ["expires_at_unix_ms"] = fileRef.ExpiresAtUnixMs,
             },
         };
+        if (maxChars != null)
+            payload["max_chars"] = maxChars.Value;
 
         return JsonSerializer.Serialize(payload);
+    }
+
+    private sealed class StaticWorkflowFileArtifactReadPort(
+        ApplicationWorkflowFileRef fileRef,
+        Stream content) : IWorkflowFileArtifactReadPort
+    {
+        public ValueTask<ApplicationWorkflowFileRef> DescribeAsync(
+            ApplicationWorkflowFileRef requestedFileRef,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(fileRef);
+
+        public ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
+            ApplicationWorkflowFileRef requestedFileRef,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(new WorkflowFileArtifactContent(fileRef, content));
     }
 
     private sealed class RecordingImageLlmProvider(IReadOnlyList<string> chunks) : ILLMProvider, ILLMProviderFactory
