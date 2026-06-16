@@ -1303,6 +1303,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
                        inboundEvent,
                        activity,
+                       registration,
                        ResolveUserAccessToken(activity, runtimeContext),
                        metadata)))
             {
@@ -1818,6 +1819,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static AgentToolExecutionContext BuildAgentBuilderToolContext(
         ChannelInboundEvent inboundEvent,
         ChatActivity activity,
+        ChannelBotRegistrationEntry registration,
         string? userAccessToken,
         IReadOnlyDictionary<string, string> metadata)
     {
@@ -1835,7 +1837,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 inboundEvent.SenderId,
                 inboundEvent.RegistrationScopeId,
                 inboundEvent.MessageId,
-                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId)),
+                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
+                null,
+                NormalizeOptional(registration.NyxReplyCredentialRef)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
     }
@@ -2047,7 +2051,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 inboundEvent.SenderId,
                 inboundEvent.RegistrationScopeId,
                 inboundEvent.MessageId,
-                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId)),
+                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
+                null,
+                NormalizeOptional(registration.NyxReplyCredentialRef)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
         }).ToPayload();
 
