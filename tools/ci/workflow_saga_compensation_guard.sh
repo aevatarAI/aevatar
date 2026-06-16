@@ -28,6 +28,19 @@ ci_extract_method() {
   ' "${file}"
 }
 
+ci_extract_case() {
+  local text="$1"
+  local case_label="$2"
+
+  printf '%s\n' "${text}" | awk -v case_label="${case_label}" '
+    index($0, case_label) > 0 { capture = 1 }
+    capture { print }
+    capture && capture_count > 0 && /^[[:space:]]*case / { exit }
+    capture && /^[[:space:]]*default:/ { exit }
+    capture { capture_count++ }
+  '
+}
+
 ci_require_pattern() {
   local text="$1"
   local pattern="$2"
@@ -75,12 +88,21 @@ ci_file "${run_agent_file}"
 ci_file "${validator_file}"
 
 step_completed_method="$(ci_extract_method "${kernel_file}" "private async Task HandleStepCompletedAsync(")"
+compensation_transition_method="$(ci_extract_method "${kernel_file}" "private async Task<bool> HandleCompensationTransitionAsync(")"
 try_start_method="$(ci_extract_method "${kernel_file}" "private async Task TryStartCompensationOrPublishTerminalFailureAsync(")"
 publish_compensation_method="$(ci_extract_method "${kernel_file}" "private static Task PublishCompensationRequestAsync(")"
 record_completion_method="$(ci_extract_method "${run_agent_file}" "async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.RecordCompensationStepCompletionAsync(")"
 
-if [ -z "${step_completed_method}" ] || [ -z "${try_start_method}" ] || [ -z "${publish_compensation_method}" ] || [ -z "${record_completion_method}" ]; then
+if [ -z "${step_completed_method}" ] || [ -z "${compensation_transition_method}" ] || [ -z "${try_start_method}" ] || [ -z "${publish_compensation_method}" ] || [ -z "${record_completion_method}" ]; then
   echo "Unable to locate saga compensation methods; guard fails closed."
+  exit 1
+fi
+
+transition_dead_letter_case="$(ci_extract_case "${compensation_transition_method}" "WorkflowCompensationTransitionStatus.CompensationDeadLettered")"
+try_start_dead_letter_case="$(ci_extract_case "${try_start_method}" "WorkflowCompensationTransitionStatus.CompensationDeadLettered")"
+
+if [ -z "${transition_dead_letter_case}" ] || [ -z "${try_start_dead_letter_case}" ]; then
+  echo "Unable to locate saga compensation dead-letter cases; guard fails closed."
   exit 1
 fi
 
@@ -103,6 +125,16 @@ ci_require_pattern \
   "${try_start_method}" \
   "(?s)WorkflowCompensationTransitionStatus\\.NoCompensableLedger[[:space:]]*:.*PublishWorkflowCompletedAsync[[:space:]]*\\([[:space:]]*ctx,[[:space:]]*terminalFailure" \
   "Failed WorkflowCompletedEvent may only be published directly when no compensable ledger exists."
+
+ci_require_pattern \
+  "${transition_dead_letter_case}" \
+  "PublishWorkflowCompletedAsync[[:space:]]*\\(" \
+  "Dead-lettered compensation transition must publish failed WorkflowCompletedEvent to notify callers."
+
+ci_require_pattern \
+  "${try_start_dead_letter_case}" \
+  "PublishWorkflowCompletedAsync[[:space:]]*\\(" \
+  "Dead-lettered compensation start result must publish failed WorkflowCompletedEvent to notify callers."
 
 ci_require_pattern \
   "${publish_compensation_method}" \
