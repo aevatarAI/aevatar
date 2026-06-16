@@ -61,7 +61,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             .Should()
             .ContainSingle()
             .Which.RunId.Should().Be(harness.RunId);
-        harness.Agent.State.SagaStatus.Should().Be("compensated_failed");
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensatedFailed);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             harness.EventStore,
             autoReplaySelfPublished: false);
 
-        reactivated.Agent.State.SagaStatus.Should().Be("compensating");
+        reactivated.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
         reactivated.Agent.State.CompensationCursor.Should().Be(1);
         reactivated.Agent.State.CompensationExecutionId.Should().Be(originalRequests[0].ExecutionId);
         var replayed = CompensationRequests(reactivated.Publisher).Should().ContainSingle().Subject;
@@ -110,7 +110,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             harness.EventStore,
             autoReplaySelfPublished: false);
 
-        reactivated.Agent.State.SagaStatus.Should().Be("compensating");
+        reactivated.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
         reactivated.Agent.State.CompensationCursor.Should().Be(0);
         var replayed = CompensationRequests(reactivated.Publisher).Should().ContainSingle().Subject;
         replayed.CompensationStepId.Should().Be("cancel_order");
@@ -280,7 +280,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             .BeEmpty();
         CommittedEvents<WorkflowCompensationCompletedEvent>(harness.CommittedPublisher).Should().BeEmpty();
         harness.Agent.State.Status.Should().Be("failed");
-        harness.Agent.State.SagaStatus.Should().Be("compensation_dead_letter");
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
         harness.Agent.State.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
         harness.Agent.State.DeadLetterRemainingUncompensated.Should().Be(2);
         harness.Agent.State.DeadLetterError.Should().Be("refund failed");
@@ -290,7 +290,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             harness.EventStore,
             autoReplaySelfPublished: false);
         CompensationRequests(reactivated.Publisher).Should().BeEmpty();
-        reactivated.Agent.State.SagaStatus.Should().Be("compensation_dead_letter");
+        reactivated.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
     }
 
     [Fact]
@@ -322,7 +322,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         failed.FailedCompensationStepId.Should().Be("cancel_order");
         failed.RemainingUncompensated.Should().Be(1);
         failed.Error.Should().Be("cancel failed");
-        harness.Agent.State.SagaStatus.Should().Be("compensation_dead_letter");
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
     }
 
     private static async Task CompleteStepAsync(RunHarness harness, string stepId, string output)

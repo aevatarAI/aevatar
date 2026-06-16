@@ -97,8 +97,8 @@ Runtime semantics:
 
 - A successful step with a valid `compensation` declaration is added to the run actor's `compensable_ledger`.
 - If a later terminal failure occurs while the ledger is non-empty, compensation runs in reverse ledger order.
-- The saga status moves `running -> compensating -> compensated_failed` when every compensation step succeeds.
-- If a compensation step fails, the run moves to `compensation_dead_letter` and emits `WorkflowCompensationFailedEvent` with the failed compensation step, remaining uncompensated count, and error.
+- The typed `WorkflowSagaStatus` moves `WORKFLOW_SAGA_STATUS_UNSPECIFIED -> WORKFLOW_SAGA_STATUS_COMPENSATING -> WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED` when every compensation step succeeds (a non-compensating run stays `UNSPECIFIED`; there is no distinct `running` saga status).
+- If a compensation step fails, the run moves to `WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER` and emits `WorkflowCompensationFailedEvent` with the failed compensation step, remaining uncompensated count, and error.
 - Compensation dispatch uses self continuation. Stale or duplicate compensation completions are rejected by execution id and do not advance the cursor.
 
 ## 2. Data 原语

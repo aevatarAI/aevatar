@@ -14,7 +14,7 @@ public sealed class WorkflowSagaContractTests
         var state = new WorkflowRunState
         {
             CompensationCursor = 1,
-            SagaStatus = "compensating",
+            SagaStatus = WorkflowSagaStatus.Compensating,
         };
         state.CompensableLedger.Add(new CompletedStepLedgerEntry
         {
@@ -32,7 +32,7 @@ public sealed class WorkflowSagaContractTests
         state.CompensableLedger[0].CapturedOutput.Should().Be("""{"orderId":"order-1"}""");
         state.CompensableLedger[0].CommittedAtUnixMs.Should().Be(123456789);
         state.CompensationCursor.Should().Be(1);
-        state.SagaStatus.Should().Be("compensating");
+        state.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
     }
 
     [Fact]
@@ -40,13 +40,13 @@ public sealed class WorkflowSagaContractTests
     {
         var state = new WorkflowRunState
         {
-            SagaStatus = "compensation_dead_letter",
+            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
             DeadLetterFailedCompensationStepId = "refund_payment",
             DeadLetterRemainingUncompensated = 2,
             DeadLetterError = "refund failed",
         };
 
-        state.SagaStatus.Should().Be("compensation_dead_letter");
+        state.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
         state.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
         state.DeadLetterRemainingUncompensated.Should().Be(2);
         state.DeadLetterError.Should().Be("refund failed");

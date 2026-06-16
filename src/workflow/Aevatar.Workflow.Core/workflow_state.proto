@@ -157,7 +157,7 @@ message WorkflowRunState
   int32 max_active_sub_workflows = 24;
   repeated CompletedStepLedgerEntry compensable_ledger = 25;
   int32 compensation_cursor = 26;
-  string saga_status = 27;
+  WorkflowSagaStatus saga_status = 27;
   string compensation_execution_id = 28;
   string dead_letter_failed_compensation_step_id = 29;
   int32 dead_letter_remaining_uncompensated = 30;

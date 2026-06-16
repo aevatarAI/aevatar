@@ -54,7 +54,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
             Input = state.Input ?? string.Empty,
             FinalOutput = state.FinalOutput ?? string.Empty,
             FinalError = state.FinalError ?? string.Empty,
-            SagaStatus = state.SagaStatus ?? string.Empty,
+            SagaStatus = state.SagaStatus,
             DeadLetterFailedCompensationStepId = state.DeadLetterFailedCompensationStepId ?? string.Empty,
             DeadLetterRemainingUncompensated = state.DeadLetterRemainingUncompensated,
             DeadLetterError = state.DeadLetterError ?? string.Empty,
