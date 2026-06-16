@@ -1,6 +1,5 @@
 path	line	message
 agents/Aevatar.GAgents.NyxidChat/AgentRunReplyGenerationExecutor.cs	155	empty broad catch block
-agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs	908	empty broad catch block
 agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.ConnectedServices.cs	109	empty broad catch block
 agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs	376	empty broad catch block
 agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.cs	333	broad catch returns null without visible failure signal
