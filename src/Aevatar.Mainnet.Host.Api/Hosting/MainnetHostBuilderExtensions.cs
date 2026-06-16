@@ -209,6 +209,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
         builder.Services.AddLarkAgentAuthoring();
         builder.Services.AddSkillBackedHumanInteractionDelivery();
+        builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();
         builder.Services.AddLarkPlatform();
         builder.Services.AddTelegramPlatform();

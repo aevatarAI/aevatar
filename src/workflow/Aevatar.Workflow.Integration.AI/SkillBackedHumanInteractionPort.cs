@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Integration.AI;
@@ -12,16 +11,13 @@ public sealed class SkillBackedHumanInteractionPort : IHumanInteractionPort
 
     private readonly IEnumerable<IAgentToolSource> _toolSources;
     private readonly SkillBackedHumanInteractionPortOptions _options;
-    private readonly ILogger<SkillBackedHumanInteractionPort> _logger;
 
     public SkillBackedHumanInteractionPort(
         IEnumerable<IAgentToolSource> toolSources,
-        IOptions<SkillBackedHumanInteractionPortOptions>? options = null,
-        ILogger<SkillBackedHumanInteractionPort>? logger = null)
+        IOptions<SkillBackedHumanInteractionPortOptions>? options = null)
     {
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
         _options = options?.Value ?? new SkillBackedHumanInteractionPortOptions();
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SkillBackedHumanInteractionPort>.Instance;
     }
 
     public Task DeliverSuspensionAsync(
@@ -68,12 +64,7 @@ public sealed class SkillBackedHumanInteractionPort : IHumanInteractionPort
     {
         var tool = await ResolveToolAsync(configuredToolName, capability, ct).ConfigureAwait(false);
         if (tool == null)
-        {
-            _logger.LogWarning(
-                "No human interaction delivery tool found for capability={Capability}",
-                capability);
-            return;
-        }
+            throw MissingTool(configuredToolName, capability);
 
         await tool.ExecuteAsync(JsonSerializer.Serialize(payload, JsonOptions), ct).ConfigureAwait(false);
     }
@@ -113,6 +104,18 @@ public sealed class SkillBackedHumanInteractionPort : IHumanInteractionPort
     private static bool ContainsCapability(string? value, string capability) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Contains(capability, StringComparison.OrdinalIgnoreCase);
+
+    private static InvalidOperationException MissingTool(string? configuredToolName, string capability)
+    {
+        if (string.IsNullOrWhiteSpace(configuredToolName))
+        {
+            return new InvalidOperationException(
+                $"No human interaction delivery tool found for capability '{capability}'.");
+        }
+
+        return new InvalidOperationException(
+            $"No human interaction delivery tool found for capability '{capability}' and configured tool name '{configuredToolName.Trim()}'.");
+    }
 
     private sealed record HumanInteractionDeliveryEnvelope
     {

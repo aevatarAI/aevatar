@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Integration.Tests;
@@ -12,6 +13,36 @@ namespace Aevatar.Integration.Tests;
 [Trait("Feature", "SkillBackedHumanInteractionPort")]
 public sealed class SkillBackedHumanInteractionPortTests
 {
+    [Fact]
+    public void AddSkillBackedHumanInteractionDelivery_ShouldNotRegisterHumanInteractionChannelToolSource()
+    {
+        var services = new ServiceCollection();
+
+        services.AddSkillBackedHumanInteractionDelivery();
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IHumanInteractionPort>()
+            .Should()
+            .BeOfType<SkillBackedHumanInteractionPort>();
+        provider.GetServices<IAgentToolSource>()
+            .Should()
+            .NotContain(source => source is HumanInteractionChannelToolSource);
+    }
+
+    [Fact]
+    public void AddChannelBackedHumanInteractionTools_ShouldRegisterHumanInteractionChannelToolSource()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IChannelInteractionNotificationPort>(new RecordingNotificationPort());
+
+        services.AddChannelBackedHumanInteractionTools();
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetServices<IAgentToolSource>()
+            .Should()
+            .ContainSingle(source => source is HumanInteractionChannelToolSource);
+    }
+
     [Fact]
     public async Task DeliverSuspensionAsync_ShouldInvokeCapabilityMatchedToolWithStructuredPayload()
     {
@@ -82,6 +113,54 @@ public sealed class SkillBackedHumanInteractionPortTests
         call.InteractionSpec.Actions.Should().Contain(action =>
             action.Kind == InteractionActionKind.FormSubmit &&
             action.ApprovalDecision == InteractionApprovalDecision.Reject);
+    }
+
+    [Fact]
+    public async Task DeliverSuspensionAsync_ShouldThrowWhenDeliveryToolIsMissing()
+    {
+        var port = new SkillBackedHumanInteractionPort(
+            [new RecordingToolSource()],
+            Options.Create(new SkillBackedHumanInteractionPortOptions
+            {
+                DeliveryToolName = "configured-delivery-tool",
+            }));
+
+        var act = () => port.DeliverSuspensionAsync(
+            new HumanInteractionRequest
+            {
+                ActorId = "workflow-actor",
+                RunId = "run-1",
+                StepId = "approval",
+                SuspensionType = "human_approval",
+                Prompt = "Approve?",
+            },
+            "delivery-target-1",
+            CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*human_interaction.delivery*configured-delivery-tool*");
+    }
+
+    [Fact]
+    public async Task DeliverApprovalResolutionAsync_ShouldThrowWhenResolutionToolIsMissing()
+    {
+        var port = new SkillBackedHumanInteractionPort([new RecordingToolSource()]);
+
+        var act = () => port.DeliverApprovalResolutionAsync(
+            new HumanApprovalResolution
+            {
+                ActorId = "workflow-actor",
+                RunId = "run-2",
+                StepId = "approval",
+                Approved = false,
+            },
+            "delivery-target-2",
+            CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*human_interaction.resolution_update*");
     }
 
     [Fact]

@@ -16,8 +16,15 @@ public static class ServiceCollectionExtensions
         if (configure != null)
             services.Configure(configure);
 
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, HumanInteractionChannelToolSource>());
         services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, SkillBackedHumanInteractionPort>());
+        return services;
+    }
+
+    public static IServiceCollection AddChannelBackedHumanInteractionTools(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, HumanInteractionChannelToolSource>());
         return services;
     }
 }

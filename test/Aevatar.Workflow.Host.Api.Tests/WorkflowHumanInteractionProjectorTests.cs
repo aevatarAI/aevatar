@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
@@ -5,6 +6,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Projection;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -121,6 +123,36 @@ public sealed class WorkflowHumanInteractionProjectorTests
         request.InteractionSpec.Should().NotBeNull();
         request.InteractionSpec!.Actions.Select(action => action.ActionId)
             .Should().Equal("approve", "reject");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldDeliverSuspension_FromCommittedStatePublication()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanInteractionProjector(port);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            BuildCommittedStateEnvelope(
+                "outer-human-committed",
+                "evt-human-committed",
+                new WorkflowSuspendedEvent
+                {
+                    RunId = "run-committed",
+                    StepId = "approval-committed",
+                    SuspensionType = "human_approval",
+                    Prompt = "Approve committed event?",
+                    DeliveryTargetId = "agent-delivery-committed",
+                    TimeoutSeconds = 120,
+                }),
+            CancellationToken.None);
+
+        port.Calls.Should().ContainSingle();
+        var call = port.Calls[0];
+        call.deliveryTargetId.Should().Be("agent-delivery-committed");
+        call.request.RunId.Should().Be("run-committed");
+        call.request.StepId.Should().Be("approval-committed");
+        call.request.Options.Should().Equal("approve", "reject");
     }
 
     [Fact]
@@ -288,6 +320,36 @@ public sealed class WorkflowHumanInteractionProjectorTests
     }
 
     [Fact]
+    public async Task ApprovalResolutionProjector_ShouldDeliverResolution_FromCommittedStatePublication()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanApprovalResolutionProjector(port);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            BuildCommittedStateEnvelope(
+                "outer-human-resolution-committed",
+                "evt-human-resolution-committed",
+                new WorkflowHumanApprovalResolvedEvent
+                {
+                    RunId = "run-resolution-committed",
+                    StepId = "approval-resolution-committed",
+                    Approved = true,
+                    DeliveryTargetId = "agent-delivery-resolution-committed",
+                    ResolvedContent = "Approved content",
+                }),
+            CancellationToken.None);
+
+        port.ResolutionCalls.Should().ContainSingle();
+        var call = port.ResolutionCalls[0];
+        call.deliveryTargetId.Should().Be("agent-delivery-resolution-committed");
+        call.resolution.RunId.Should().Be("run-resolution-committed");
+        call.resolution.StepId.Should().Be("approval-resolution-committed");
+        call.resolution.Approved.Should().BeTrue();
+        call.resolution.ResolvedContent.Should().Be("Approved content");
+    }
+
+    [Fact]
     public async Task ApprovalResolutionProjector_ShouldIgnoreResolution_WhenDeliveryTargetMissing()
     {
         var port = new RecordingHumanInteractionPort();
@@ -316,6 +378,24 @@ public sealed class WorkflowHumanInteractionProjectorTests
         SessionId = "cmd-1",
         RootActorId = "workflow-actor-1",
         ProjectionKind = "workflow-execution-session",
+    };
+
+    private static EventEnvelope BuildCommittedStateEnvelope(
+        string envelopeId,
+        string eventId,
+        IMessage payload) => new()
+    {
+        Id = envelopeId,
+        Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-interaction-test"),
+        Payload = Any.Pack(new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = eventId,
+                Version = 12,
+                EventData = Any.Pack(payload),
+            },
+        }),
     };
 
     private sealed class RecordingHumanInteractionPort : IHumanInteractionPort
