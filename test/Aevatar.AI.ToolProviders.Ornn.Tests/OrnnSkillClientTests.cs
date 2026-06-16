@@ -296,6 +296,38 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task GetSkillJsonAsync_WhenOrnnReturnsNestedPermissionError_ShouldSurfaceUpstreamReason()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": { "code": "permission_denied", "message": "Missing ornn:skill:read permission" } }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillJsonAsync("sender-token", "private-skill");
+
+        var assertion = await act.Should().ThrowAsync<RemoteSkillFetchException>();
+        assertion.Which.HttpStatus.Should().Be(403);
+        assertion.Which.Message.Should().Contain("permission_denied: Missing ornn:skill:read permission");
+        assertion.Which.Message.Should().NotContain("missing proxy scope");
+    }
+
+    [Fact]
+    public async Task GetSkillJsonAsync_WhenOrnnReturnsProblemJsonPermissionError_ShouldSurfaceDetail()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "status": 403, "code": "permission_denied", "detail": "You do not have permission to read this skill" }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillJsonAsync("sender-token", "private-skill");
+
+        var assertion = await act.Should().ThrowAsync<RemoteSkillFetchException>();
+        assertion.Which.HttpStatus.Should().Be(403);
+        assertion.Which.Message.Should().Contain("You do not have permission to read this skill");
+        assertion.Which.Message.Should().NotContain("missing proxy scope");
+    }
+
+    [Fact]
     public async Task GetSkillJsonAsync_ReturnsNullWhenPerCallTimeoutFiresOnSlowUpstream()
     {
         // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied call to
