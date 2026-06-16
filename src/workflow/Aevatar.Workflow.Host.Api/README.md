@@ -5,7 +5,7 @@
 能力文档入口：
 
 - Host 快速入口：`CHAT_API_CAPABILITIES.md`
-- 框架完整说明（单一事实源）：`docs/workflow-chat-ws-api-capability.md`
+- 框架完整说明（单一事实源）：`docs/canon/chat-api.md`
 
 ## 职责边界
 
@@ -86,6 +86,6 @@ Host 只做“协议 + 组合”，核心用例在 `workflow/*` 能力实现层�
 
 ## 能力文档维护策略
 
-- `docs/workflow-chat-ws-api-capability.md`：完整说明（权威版本）
+- `docs/canon/chat-api.md`：完整说明（权威版本）
 - `CHAT_API_CAPABILITIES.md`：Host 入口摘要
 - 本 README：Host 宿主职责与接入说明

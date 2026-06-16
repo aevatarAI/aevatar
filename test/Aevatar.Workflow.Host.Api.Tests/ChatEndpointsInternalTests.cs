@@ -666,7 +666,6 @@ public sealed class ChatEndpointsInternalTests
             http,
             interactionService,
             parser,
-            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         ingressPort.Requests.Should().ContainSingle();
@@ -706,13 +705,90 @@ public sealed class ChatEndpointsInternalTests
             http,
             new FakeCommandInteractionService(),
             parser,
-            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         body.Should().Contain("INVALID_CALLER_CREDENTIAL");
         ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleChatPost_ShouldDeserializeJsonBodyBeforeDispatchingWorkflowCommand()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var parser = new WorkflowMultipartChatRequestParser(
+            new RecordingWorkflowFileIngressPort(),
+            new ChatFormRunRequestParser(),
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.Request.ContentType = "application/json";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
+            """
+            {
+              "prompt": "describe the release plan",
+              "workflow": "direct",
+              "sessionId": "session-1",
+              "scopeId": "scope-1"
+            }
+            """));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            interactionService,
+            parser,
+            CancellationToken.None);
+
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.Prompt.Should().Be("describe the release plan");
+        capturedCommand.Source.WorkflowName.Should().Be("direct");
+        capturedCommand.SessionId.Should().Be("session-1");
+        capturedCommand.ScopeId.Should().Be("scope-1");
+        capturedCommand.CallerCredential!.BearerToken.Should().Be("trusted-token");
+    }
+
+    [Fact]
+    public async Task HandleChatPost_ShouldReturnInvalidChatInputAndSkipDispatch_WhenJsonBodyIsMalformed()
+    {
+        var called = false;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) =>
+            {
+                called = true;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var parser = new WorkflowMultipartChatRequestParser(
+            new RecordingWorkflowFileIngressPort(),
+            new ChatFormRunRequestParser(),
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.Request.ContentType = "application/json";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("""{ "prompt": """));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            interactionService,
+            parser,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_CHAT_INPUT");
+        called.Should().BeFalse();
     }
 
     [Fact]
@@ -729,7 +805,6 @@ public sealed class ChatEndpointsInternalTests
             http,
             new FakeCommandInteractionService(),
             parser,
-            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var body = await ReadBodyAsync(http.Response);

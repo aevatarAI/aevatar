@@ -49,7 +49,6 @@ public static class WorkflowCapabilityEndpoints
         HttpContext http,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartChatRequestParser multipartParser,
-        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(http);

@@ -2,7 +2,7 @@
 
 本文件是 Host 侧入口说明。完整且唯一的能力文档请查看：
 
-- `docs/workflow-chat-ws-api-capability.md`
+- `docs/canon/chat-api.md`
 
 ## 快速结论
 
@@ -21,5 +21,5 @@
 
 ## 文档统一约定
 
-- 规范内容以 `docs/workflow-chat-ws-api-capability.md` 为准。
+- 规范内容以 `docs/canon/chat-api.md` 为准。
 - 本文件与 `README.md` 仅保留入口与摘要，避免多处重复维护导致漂移。
