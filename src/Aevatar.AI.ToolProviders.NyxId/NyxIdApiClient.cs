@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -210,6 +211,7 @@ public sealed class NyxIdApiClient : IDisposable
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         }
 
+        ApplyIdempotencyKey(request, httpMethod);
         return await SendAsync(request, ct);
     }
 
@@ -243,6 +245,7 @@ public sealed class NyxIdApiClient : IDisposable
                 Headers = { ContentType = MediaTypeHeaderValue.Parse(contentType) },
             };
 
+        ApplyIdempotencyKey(request, httpMethod);
         return await SendAsync(request, ct);
     }
 
@@ -288,6 +291,7 @@ public sealed class NyxIdApiClient : IDisposable
             request.Content = multipart;
         }
 
+        ApplyIdempotencyKey(request, httpMethod);
         return await SendAsync(request, ct);
     }
 
@@ -860,6 +864,21 @@ public sealed class NyxIdApiClient : IDisposable
         }
 
         return callerSpecifiedUserAgent;
+    }
+
+    private static void ApplyIdempotencyKey(HttpRequestMessage request, HttpMethod httpMethod)
+    {
+        if (httpMethod == HttpMethod.Get ||
+            httpMethod == HttpMethod.Head ||
+            httpMethod == HttpMethod.Options ||
+            request.Headers.Contains("Idempotency-Key"))
+        {
+            return;
+        }
+
+        var key = AgentToolRequestContext.IdempotencyKey;
+        if (!string.IsNullOrWhiteSpace(key))
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", key.Trim());
     }
 
     internal async Task<string> GetAsync(string token, string path, CancellationToken ct)
