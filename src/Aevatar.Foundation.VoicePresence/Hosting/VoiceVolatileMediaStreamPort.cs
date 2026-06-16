@@ -175,6 +175,7 @@ public sealed class VoiceVolatileMediaStreamPort(
                     OwnerId = sessionKey.OwnerId,
                     TransportLeaseId = sessionKey.TransportLeaseId,
                     LeaseExpiresAt = sessionKey.LeaseExpiresAt?.Clone(),
+                    LeaseEpoch = sessionKey.LeaseEpoch,
                     ProviderEvent = providerEvent.Clone(),
                 }),
             ct);
@@ -195,6 +196,7 @@ public sealed class VoiceVolatileMediaStreamPort(
                     OwnerId = handle.OwnerId,
                     TransportLeaseId = handle.ActiveTransportLeaseId ?? string.Empty,
                     LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                    LeaseEpoch = handle.LeaseEpoch,
                     ControlFrame = controlFrame.Clone(),
                 }),
             ct);
@@ -214,6 +216,7 @@ public sealed class VoiceVolatileMediaStreamPort(
                     OwnerId = handle.OwnerId,
                     TransportLeaseId = handle.ActiveTransportLeaseId ?? string.Empty,
                     LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                    LeaseEpoch = handle.LeaseEpoch,
                     InputImage = inputImage.Clone(),
                 }),
             ct);
@@ -227,6 +230,7 @@ public sealed class VoiceVolatileMediaStreamPort(
             OwnerId = handle.OwnerId,
             TransportLeaseId = handle.ActiveTransportLeaseId ?? string.Empty,
             LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+            LeaseEpoch = handle.LeaseEpoch,
             Reason = reason,
         };
 
