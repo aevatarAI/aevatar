@@ -17,4 +17,6 @@ public sealed record HumanApprovalResolution
     public string? Feedback { get; init; }
 
     public string? ResolvedContent { get; init; }
+
+    public bool TimedOut { get; init; }
 }

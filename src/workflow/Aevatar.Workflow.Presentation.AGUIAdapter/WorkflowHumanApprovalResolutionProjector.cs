@@ -46,6 +46,7 @@ public sealed class WorkflowHumanApprovalResolutionProjector
                 EditedContent = string.IsNullOrWhiteSpace(evt.EditedContent) ? null : evt.EditedContent,
                 Feedback = string.IsNullOrWhiteSpace(evt.Feedback) ? null : evt.Feedback,
                 ResolvedContent = string.IsNullOrWhiteSpace(evt.ResolvedContent) ? null : evt.ResolvedContent,
+                TimedOut = evt.ResolutionSource == WorkflowHumanApprovalResolutionSource.Timeout,
             },
             evt.DeliveryTargetId,
             ct);

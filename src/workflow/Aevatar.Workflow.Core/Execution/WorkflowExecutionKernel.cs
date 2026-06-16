@@ -1580,6 +1580,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
 
         ApplyTransformOperation(request, step.TransformOperation, state);
+        ApplyHumanApprovalOptions(request, step.HumanApprovalOptions);
         ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
@@ -1601,6 +1602,38 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         spec.Value = _expressionEvaluator.Evaluate(spec.Value, state.Variables);
         (request.StepParameters ??= new WorkflowStepParameters()).TransformOperation = spec;
     }
+
+    private static void ApplyHumanApprovalOptions(
+        StepRequestEvent request,
+        HumanApprovalOptionsDefinition? options)
+    {
+        if (options == null)
+            return;
+
+        var decision = ParseHumanApprovalTimeoutDefaultDecision(options.TimeoutDefaultDecision);
+        if (decision == WorkflowHumanApprovalTimeoutDefaultDecision.Unspecified)
+            return;
+
+        (request.StepParameters ??= new WorkflowStepParameters()).HumanApproval = new WorkflowHumanApprovalOptions
+        {
+            TimeoutDefaultDecision = decision,
+        };
+    }
+
+    private static WorkflowHumanApprovalTimeoutDefaultDecision ParseHumanApprovalTimeoutDefaultDecision(string? value) =>
+        NormalizeOptionToken(value) switch
+        {
+            "approve" => WorkflowHumanApprovalTimeoutDefaultDecision.Approve,
+            "approved" => WorkflowHumanApprovalTimeoutDefaultDecision.Approve,
+            "reject" => WorkflowHumanApprovalTimeoutDefaultDecision.Reject,
+            "rejected" => WorkflowHumanApprovalTimeoutDefaultDecision.Reject,
+            _ => WorkflowHumanApprovalTimeoutDefaultDecision.Unspecified,
+        };
+
+    private static string NormalizeOptionToken(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim().Replace("-", string.Empty, StringComparison.Ordinal).Replace("_", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
 
     private static void ApplyAgentToolScope(
         StepRequestEvent request,

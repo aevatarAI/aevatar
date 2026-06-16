@@ -415,6 +415,10 @@ message PendingApprovalState
   string input = 3;
   string on_reject = 4;
   string delivery_target_id = 5;
+  WorkflowHumanApprovalTimeoutDefaultDecision timeout_default_decision = 6;
+  int32 timeout_seconds = 7;
+  WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
+  string timeout_callback_id = 9;
 }
 
 message HumanApprovalModuleState

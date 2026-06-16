@@ -268,6 +268,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
                     Feedback = "Need stronger CTA",
                     DeliveryTargetId = "agent-delivery-4",
                     ResolvedContent = "Draft needs stronger CTA",
+                    ResolutionSource = WorkflowHumanApprovalResolutionSource.Timeout,
                 }),
             },
             CancellationToken.None);
@@ -283,6 +284,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.resolution.EditedContent.Should().Be("Edited but rejected");
         call.resolution.Feedback.Should().Be("Need stronger CTA");
         call.resolution.ResolvedContent.Should().Be("Draft needs stronger CTA");
+        call.resolution.TimedOut.Should().BeTrue();
     }
 
     [Fact]
