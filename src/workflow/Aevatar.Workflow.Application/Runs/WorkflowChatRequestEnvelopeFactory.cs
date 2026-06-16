@@ -66,6 +66,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 Application.Abstractions.Runs.WorkflowChatInputPartKind.Image => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image,
                 Application.Abstractions.Runs.WorkflowChatInputPartKind.Audio => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio,
                 Application.Abstractions.Runs.WorkflowChatInputPartKind.Video => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video,
+                Application.Abstractions.Runs.WorkflowChatInputPartKind.File => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.File,
                 _ => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified,
             },
             Text = source.Text ?? string.Empty,

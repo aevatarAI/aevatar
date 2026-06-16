@@ -16,5 +16,11 @@ public sealed class WorkflowMultipartFileIngressOptions
         "audio/wave",
         "audio/x-wav",
         "video/mp4",
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/csv",
+        "text/plain",
+        "text/markdown",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ];
 }

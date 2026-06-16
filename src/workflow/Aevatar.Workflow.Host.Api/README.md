@@ -38,6 +38,7 @@
 | 指定 Actor + inline YAML bundle | `{ "prompt": "...", "source": { "kind": "inline_yaml_bundle", "inlineBundle": { "actorId": "actor-123", "yamlDocuments": [{ "yaml": "..." }] } } }` |
 | `workflow` + `workflowYamls` 同传 | 固定以 `workflowYamls` 路径为准，`workflow` 被忽略 |
 | 表单上传文件并启动 run | `multipart/form-data`：`file=@cat.png;type=image/png`、`prompt=describe this`、`workflow=direct` |
+| 表单上传文档并启动 run | `multipart/form-data`：`file=@invoice.pdf;type=application/pdf`、`prompt=summarize this`、`workflow=direct`；允许的非媒体文件统一映射为 `inputParts[].type = "file"` |
 
 常见错误码：
 
@@ -66,7 +67,7 @@
 - Webhook ingress 只在 Host/Adapter 处理 raw JSON、HMAC 与 binding mapping；应用层接收 typed `WorkflowExternalIngressContext`，防重放依赖 `IWorkflowWebhookReplayStore`，生产启用但缺少 durable store 时 fail closed。
 - Workflow file tools 只通过 workflow-owned tool source 暴露：`workflow_connected_service_resource_fetch` 按 provider/operation/resource_kind allowlist 读取 connected-service 二进制资源，并且只通过 `IWorkflowFileIngressPort` 以 `SourceKind=ConnectedServiceResource` 写入 artifact store；结果只返回 sanitized `WorkflowFileRef`，不回显 bytes/base64。Connected-service 包只注册窄 adapter，例如 Lark 的 `lark/message_resource_download/image|file`。
 - `document_extract` 读取 artifact store 中的 typed file ref 并返回 bounded text；`workflow_file_submit` 只提交到固定 Lark Drive media 或 Lark approval file upload 目标，结果只包含 `file_token`/`file_code` 等 typed facts，不回显 bytes/base64。
-- `multipart/form-data` 文件上传只在 Host/API 边界读取文件 bytes；Host 先校验 caller credential、表单 shape、文件大小与媒体类型，再通过 `IWorkflowFileIngressPort` 写入 artifact store。后续 `WorkflowChatRunRequest` 只携带 typed `WorkflowFileRef` input part，`SourceKind=FormUpload`，不把 bytes/base64 带入 actor-facing command、state、readmodel 或日志。
+- `multipart/form-data` 文件上传只在 Host/API 边界读取文件 bytes；Host 先校验 caller credential、表单 shape、文件大小与媒体类型，再通过 `IWorkflowFileIngressPort` 写入 artifact store。默认允许 image/audio/video 与 PDF、DOCX、CSV、plain text、markdown、XLSX；非 image/audio/video 的允许类型统一作为 `file` input part。后续 `WorkflowChatRunRequest` 只携带 typed `WorkflowFileRef` input part，`SourceKind=FormUpload`，不把 bytes/base64 带入 actor-facing command、state、readmodel 或日志。
 - 命令最终会被包装成 `EventEnvelope`；目标 Actor 的获取/创建由 `IActorRuntime` 负责，envelope 投递由 `IActorDispatchPort` 完成，CQRS 侧由 `ActorCommandTargetDispatcher` 承接 target dispatch。
 - 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - 命令主链路不额外经过 ingress queue/stream；stream 仅用于 actor envelope 的投影与实时输出。

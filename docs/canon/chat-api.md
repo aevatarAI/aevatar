@@ -120,14 +120,14 @@ owner: eanzhao
 | Option | Default |
 |---|---|
 | `WorkflowMultipartFileIngress:MaxFileBytes` | `10485760` |
-| `WorkflowMultipartFileIngress:AllowedMediaTypes` | `image/png`, `image/jpeg`, `image/webp`, `audio/mpeg`, `audio/wav`, `audio/wave`, `audio/x-wav`, `video/mp4` |
+| `WorkflowMultipartFileIngress:AllowedMediaTypes` | `image/png`, `image/jpeg`, `image/webp`, `audio/mpeg`, `audio/wav`, `audio/wave`, `audio/x-wav`, `video/mp4`, `application/pdf`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `text/csv`, `text/plain`, `text/markdown`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
 
 成功路径：
 
 1. Host 先校验 caller credential；无效 bearer 不读取文件、不写 artifact store。
 2. Host 校验 multipart shape、文件数量、字段名、大小、media type。
 3. Host 调用 `IWorkflowFileIngressPort.IngestAsync(...)`，`SourceKind=FormUpload`。
-4. parser 把返回的 typed `WorkflowFileRef` 构造成既有 `ChatInputContentPart.fileRef`。
+4. parser 把返回的 typed `WorkflowFileRef` 构造成既有 `ChatInputContentPart.fileRef`；`image/*`、`audio/*`、`video/*` 分别映射为 `type=image/audio/video`，其余已允许的 document/text/spreadsheet 类型统一映射为 `type=file`。
 5. `ChatRunRequestNormalizer` 继续生成 `WorkflowChatRunRequest`，后续 CQRS command skeleton 不区分 JSON producer 与 form producer。
 
 actor-facing command、state、readmodel、stream frame 与日志都不得携带上传文件 bytes/base64；它们只携带 `WorkflowFileRef` 或由它派生出的 URI/metadata。
@@ -151,21 +151,21 @@ WebSocket 不接收 `multipart/form-data`。文件输入应先经 HTTP artifact 
 `inputParts` 支持两类文件载体：
 
 1. `inlineFile`：只用于小型 inline bytes。`inlineFile.sizeBytes` 是可选校验字段，服务端只用它和 decoded base64 长度比对；它不是客户端声明的 workflow 文件事实。Host API 会把 decoded bytes 写入 workflow file ingress store，并把 command input part 替换为 typed `WorkflowFileRef`，因此 actor-facing request 不长期携带 inline base64。
-2. `fileRef`：用于已经由外部 ingress、connected service 或后续 artifact store 产生的稳定文件引用。API 会归一化为 typed `WorkflowFileRef` 并写入 command envelope，同时保留旧的 `uri/name/mediaType` 镜像字段供现有消费者兼容。
+2. `fileRef`：用于已经由外部 ingress、connected service 或后续 artifact store 产生的稳定文件引用。API 会归一化为 typed `WorkflowFileRef` 并写入 command envelope，同时保留旧的 `uri/name/mediaType` 镜像字段供现有消费者兼容。`type` 可为 `image`、`audio`、`video` 或 `file`；`file` 表示通用文件/文档引用，不再拆成多个 actor-facing 行为枚举。
 
 ```json
 {
   "inputParts": [
     {
-      "type": "image",
+      "type": "file",
       "fileRef": {
         "fileId": "file-1",
         "artifactId": "artifact-1",
         "sourceKind": "connected_service_resource",
         "sourceMessageId": "om_1",
-        "sourceResourceKey": "image_key_1",
-        "fileName": "invoice.png",
-        "mediaType": "image/png",
+        "sourceResourceKey": "file_key_1",
+        "fileName": "invoice.pdf",
+        "mediaType": "application/pdf",
         "sha256": "redacted",
         "createdAtUnixMs": 1710000000000,
         "expiresAtUnixMs": 1710003600000
